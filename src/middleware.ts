@@ -1,0 +1,27 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { shouldBlockCrossSiteMutation } from "@/lib/security/csrf";
+import { applySecurityHeaders } from "@/lib/security/headers";
+
+export function middleware(request: NextRequest) {
+  if (
+    shouldBlockCrossSiteMutation({
+      method: request.method,
+      url: request.url,
+      origin: request.headers.get("origin"),
+      referer: request.headers.get("referer"),
+      secFetchSite: request.headers.get("sec-fetch-site")
+    })
+  ) {
+    const response = NextResponse.json({ error: "Cross-site write requests are not allowed", code: "CSRF_BLOCKED" }, { status: 403 });
+    applySecurityHeaders(response.headers);
+    return response;
+  }
+
+  const response = NextResponse.next();
+  applySecurityHeaders(response.headers);
+  return response;
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]
+};

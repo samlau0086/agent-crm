@@ -1,0 +1,464 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Workspace {
+  id                  String               @id @default(cuid())
+  name                String
+  slug                String               @unique
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  users               User[]
+  teams               Team[]
+  roles               Role[]
+  objectDefinitions   ObjectDefinition[]
+  fieldDefinitions    FieldDefinition[]
+  relationDefinitions RelationDefinition[]
+  records             CrmRecord[]
+  pipelines           Pipeline[]
+  activities          Activity[]
+  auditLogs           AuditLog[]
+  savedViews          SavedView[]
+  importJobs          ImportJob[]
+  importPresets       ImportPreset[]
+  apiKeys             ApiKey[]
+  webhooks            WebhookEndpoint[]
+  webhookDeliveries   WebhookDelivery[]
+  emailAccounts       EmailAccount[]
+  emailThreads        EmailThread[]
+  emailMessages       EmailMessage[]
+  knowledgeArticles   KnowledgeArticle[]
+  emailAiSettings     EmailAiSettings?
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  workspaceId         String
+  email               String
+  name                String
+  passwordHash        String
+  roleId              String?
+  teamId              String?
+  active              Boolean              @default(true)
+  disabledAt          DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  workspace           Workspace            @relation(fields: [workspaceId], references: [id])
+  role                Role?                @relation(fields: [roleId], references: [id])
+  team                Team?                @relation(fields: [teamId], references: [id])
+  sessions            Session[]
+  passwordSetupTokens PasswordSetupToken[]
+  apiKeys             ApiKey[]
+  webhooksCreated     WebhookEndpoint[]
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId, teamId])
+  @@index([workspaceId, roleId])
+  @@index([workspaceId, active])
+}
+
+model Team {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  users       User[]
+
+  @@index([workspaceId, name])
+}
+
+model Role {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  permissions String[]
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  users       User[]
+
+  @@index([workspaceId, name])
+}
+
+model ObjectDefinition {
+  id          String            @id @default(cuid())
+  workspaceId String
+  key         String
+  label       String
+  pluralLabel String
+  description String?
+  icon        String?
+  isSystem    Boolean           @default(false)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id])
+  fields      FieldDefinition[]
+  views       SavedView[]
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, isSystem, createdAt])
+}
+
+model FieldDefinition {
+  id                 String           @id @default(cuid())
+  workspaceId        String
+  objectDefinitionId String
+  key                String
+  label              String
+  type               String
+  required           Boolean          @default(false)
+  unique             Boolean          @default(false)
+  options            Json?
+  defaultValue       Json?
+  isSystem           Boolean          @default(false)
+  position           Int              @default(0)
+  workspace          Workspace        @relation(fields: [workspaceId], references: [id])
+  objectDefinition   ObjectDefinition @relation(fields: [objectDefinitionId], references: [id])
+
+  @@unique([objectDefinitionId, key])
+  @@index([workspaceId, objectDefinitionId, position])
+  @@index([workspaceId, type])
+}
+
+model RelationDefinition {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  fromObjectKey String
+  toObjectKey   String
+  key           String
+  label         String
+  cardinality   String
+  workspace     Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId, fromObjectKey])
+  @@index([workspaceId, toObjectKey])
+}
+
+model CrmRecord {
+  id          String     @id @default(cuid())
+  workspaceId String
+  objectKey   String
+  title       String
+  stageKey    String?
+  ownerId     String?
+  data        Json
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id])
+  activities  Activity[]
+
+  @@index([workspaceId, objectKey])
+  @@index([workspaceId, objectKey, updatedAt])
+  @@index([workspaceId, objectKey, ownerId])
+  @@index([workspaceId, objectKey, stageKey])
+  @@index([workspaceId, ownerId])
+}
+
+model Pipeline {
+  id          String    @id @default(cuid())
+  workspaceId String
+  objectKey   String
+  name        String
+  isDefault   Boolean   @default(false)
+  stages      Json
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, objectKey])
+  @@index([workspaceId, objectKey, isDefault])
+}
+
+model Activity {
+  id          String     @id @default(cuid())
+  workspaceId String
+  recordId    String?
+  type        String
+  title       String
+  body        String?
+  actorId     String?
+  dueAt       DateTime?
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id])
+  record      CrmRecord? @relation(fields: [recordId], references: [id])
+
+  @@index([workspaceId, recordId, createdAt])
+  @@index([workspaceId, type, completedAt, dueAt])
+  @@index([workspaceId, actorId, createdAt])
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  workspaceId String
+  actorId     String?
+  action      String
+  entityType  String
+  entityId    String?
+  objectKey   String?
+  summary     String
+  details     Json?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, entityType, entityId])
+  @@index([workspaceId, objectKey, createdAt])
+  @@index([workspaceId, actorId, createdAt])
+  @@index([workspaceId, action, createdAt])
+}
+
+model SavedView {
+  id                 String           @id @default(cuid())
+  workspaceId        String
+  objectDefinitionId String
+  name               String
+  columns            String[]
+  filters            Json?
+  sort               Json?
+  isDefault          Boolean          @default(false)
+  workspace          Workspace        @relation(fields: [workspaceId], references: [id])
+  objectDefinition   ObjectDefinition @relation(fields: [objectDefinitionId], references: [id])
+
+  @@index([workspaceId, objectDefinitionId, isDefault])
+  @@index([workspaceId, objectDefinitionId, name])
+}
+
+model ImportJob {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  objectKey     String
+  status        String
+  strategy      String
+  totalRows     Int       @default(0)
+  createdCount  Int       @default(0)
+  errorCount    Int       @default(0)
+  aborted       Boolean   @default(false)
+  errorMessage  String?
+  preview       Json?
+  result        Json?
+  sourcePayload Json?
+  requestedById String?
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  completedAt   DateTime?
+  workspace     Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, objectKey, createdAt])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, requestedById, createdAt])
+}
+
+model ImportPreset {
+  id          String    @id @default(cuid())
+  workspaceId String
+  objectKey   String
+  name        String
+  strategy    String
+  mapping     Json?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, objectKey, name])
+  @@index([workspaceId, objectKey, updatedAt])
+  @@index([workspaceId, createdById, createdAt])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model PasswordSetupToken {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  tokenHash   String    @unique
+  purpose     String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, userId, purpose, expiresAt])
+  @@index([expiresAt, usedAt])
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  tokenHash   String    @unique
+  tokenPrefix String
+  permissions String[]
+  createdById String
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  createdBy   User      @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, revokedAt])
+  @@index([workspaceId, tokenPrefix])
+  @@index([createdById, createdAt])
+}
+
+model WebhookEndpoint {
+  id              String            @id @default(cuid())
+  workspaceId     String
+  name            String
+  url             String
+  events          String[]
+  secret          String
+  secretPrefix    String
+  active          Boolean           @default(true)
+  createdById     String
+  lastDeliveredAt DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  workspace       Workspace         @relation(fields: [workspaceId], references: [id])
+  createdBy       User              @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  deliveries      WebhookDelivery[]
+
+  @@index([workspaceId, active, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([createdById, createdAt])
+}
+
+model WebhookDelivery {
+  id             String           @id @default(cuid())
+  workspaceId    String
+  webhookId      String
+  event          String
+  status         String
+  attempts       Int              @default(1)
+  requestBody    Json
+  responseStatus Int?
+  responseBody   String?
+  errorMessage   String?
+  createdAt      DateTime         @default(now())
+  deliveredAt    DateTime?
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id])
+  webhook        WebhookEndpoint  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, webhookId, createdAt])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, event, createdAt])
+}
+
+model EmailAccount {
+  id            String         @id @default(cuid())
+  workspaceId   String
+  name          String
+  emailAddress  String
+  provider      String
+  status        String         @default("draft")
+  syncEnabled   Boolean        @default(false)
+  sendEnabled   Boolean        @default(false)
+  createdById   String
+  lastSyncedAt  DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
+  threads       EmailThread[]
+  messages      EmailMessage[]
+
+  @@unique([workspaceId, emailAddress])
+  @@index([workspaceId, status])
+  @@index([workspaceId, provider])
+  @@index([workspaceId, createdById])
+}
+
+model EmailThread {
+  id                String         @id @default(cuid())
+  workspaceId       String
+  accountId         String
+  subject           String
+  participantEmails String[]
+  recordId          String?
+  summary           String?
+  summaryUpdatedAt  DateTime?
+  lastMessageAt     DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  workspace         Workspace      @relation(fields: [workspaceId], references: [id])
+  account           EmailAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  messages          EmailMessage[]
+
+  @@index([workspaceId, accountId, updatedAt])
+  @@index([workspaceId, recordId, updatedAt])
+  @@index([workspaceId, lastMessageAt])
+}
+
+model EmailMessage {
+  id                String       @id @default(cuid())
+  workspaceId       String
+  threadId          String
+  accountId         String
+  direction         String
+  status            String
+  fromAddress       String
+  toAddresses       String[]
+  ccAddresses       String[]
+  bccAddresses      String[]
+  subject           String
+  bodyText          String
+  bodyHtml          String?
+  externalMessageId String?
+  sentAt            DateTime?
+  receivedAt        DateTime?
+  createdById       String?
+  createdAt         DateTime     @default(now())
+  workspace         Workspace    @relation(fields: [workspaceId], references: [id])
+  thread            EmailThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  account           EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, externalMessageId])
+  @@index([workspaceId, threadId, createdAt])
+  @@index([workspaceId, accountId, createdAt])
+  @@index([workspaceId, direction, status, createdAt])
+}
+
+model KnowledgeArticle {
+  id          String    @id @default(cuid())
+  workspaceId String
+  title       String
+  body        String
+  tags        String[]
+  active      Boolean   @default(true)
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, active, updatedAt])
+  @@index([workspaceId, createdById, createdAt])
+}
+
+model EmailAiSettings {
+  workspaceId          String    @id
+  features             Json
+  defaultLocale        String    @default("zh-CN")
+  requireSourceLinks   Boolean   @default(true)
+  maxHistoryMessages   Int       @default(8)
+  maxKnowledgeArticles Int       @default(5)
+  maxContextChars      Int       @default(8000)
+  updatedAt            DateTime  @updatedAt
+  workspace            Workspace @relation(fields: [workspaceId], references: [id])
+}

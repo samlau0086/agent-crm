@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.postgres-data
+.vs
+coverage
+dist
+out
+*.log
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+Thumbs.db

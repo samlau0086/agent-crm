@@ -1,0 +1,47 @@
+{
+  "name": "ai-agent-crm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test:e2e": "playwright test",
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:seed": "node --experimental-strip-types prisma/seed.ts",
+    "db:backup": "node scripts/db-backup.mjs",
+    "db:restore": "node scripts/db-restore.mjs",
+    "config:validate": "node scripts/validate-env.mjs",
+    "deploy:verify": "node scripts/deploy-verify.mjs",
+    "worker": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/job-worker.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "node --experimental-strip-types --import ./tests/register-alias.mjs tests/run-tests.mjs",
+    "verify": "npm run typecheck && npm test && npm run lint && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "clsx": "2.1.1",
+    "lucide-react": "0.468.0",
+    "next": "14.2.23",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@testing-library/react": "16.1.0",
+    "@types/node": "22.10.5",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "eslint": "8.57.1",
+    "eslint-config-next": "14.2.23",
+    "jsdom": "25.0.1",
+    "prisma": "5.22.0",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}

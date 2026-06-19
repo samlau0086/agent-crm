@@ -1,0 +1,92 @@
+services:
+  web:
+    build:
+      context: .
+    environment:
+      DATABASE_URL: postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public
+      APP_BASE_URL: http://127.0.0.1:3000
+      REDIS_URL: redis://redis:6379
+      JOB_EXECUTOR: redis
+      JOB_QUEUE_NAME: crm:jobs
+      JOB_DEAD_LETTER_QUEUE_NAME: crm:jobs:dead
+      JOB_MAX_ATTEMPTS: "3"
+      AI_PROVIDER: openai-compatible
+      AI_BASE_URL: https://api.openai.com/v1
+      AI_API_KEY: ""
+      AI_MODEL: gpt-4.1-mini
+      WAIT_FOR_DATABASE: "true"
+      RUN_MIGRATIONS: "true"
+      SEED_ON_EMPTY: "true"
+      DB_WAIT_TIMEOUT_MS: "90000"
+      BACKUP_DIR: /app/backups
+      DB_MAINTENANCE_MODE: direct
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/healthcheck.mjs"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    entrypoint: ["sh", "-lc"]
+    command: "node scripts/validate-env.mjs && node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/job-worker.ts --loop"
+    environment:
+      DATABASE_URL: postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public
+      APP_BASE_URL: http://127.0.0.1:3000
+      REDIS_URL: redis://redis:6379
+      JOB_EXECUTOR: redis
+      JOB_QUEUE_NAME: crm:jobs
+      JOB_DEAD_LETTER_QUEUE_NAME: crm:jobs:dead
+      JOB_MAX_ATTEMPTS: "3"
+      JOB_WORKER_POLL_MS: "2000"
+      WAIT_FOR_DATABASE: "true"
+      DB_WAIT_TIMEOUT_MS: "90000"
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ai_agent_crm
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: crm
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d ai_agent_crm"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
