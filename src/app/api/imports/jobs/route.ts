@@ -4,6 +4,8 @@ import { csvImportSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 
+
+export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const context = await getRequestContext(request);

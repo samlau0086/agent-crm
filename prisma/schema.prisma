@@ -371,6 +371,8 @@ model EmailAccount {
   status        String         @default("draft")
   syncEnabled   Boolean        @default(false)
   sendEnabled   Boolean        @default(false)
+  encryptedConnectionConfig String?
+  lastConnectionError String?
   createdById   String
   lastSyncedAt  DateTime?
   createdAt     DateTime       @default(now())
@@ -394,6 +396,9 @@ model EmailThread {
   recordId          String?
   summary           String?
   summaryUpdatedAt  DateTime?
+  aiAnalysis        String?
+  aiAnalysisSources Json?
+  aiAnalysisUpdatedAt DateTime?
   lastMessageAt     DateTime?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
@@ -420,7 +425,20 @@ model EmailMessage {
   subject           String
   bodyText          String
   bodyHtml          String?
+  attachments       Json?
+  translatedBodyText String?
+  translatedLocale   String?
+  translatedSources  Json?
+  translatedAt       DateTime?
+  aiAssisted       Boolean      @default(false)
+  aiPurpose        String?
+  aiSourceMessageId String?
+  aiSources        Json?
+  aiGeneratedAt    DateTime?
   externalMessageId String?
+  clientRequestId String?
+  failureReason     String?
+  sendAttemptedAt   DateTime?
   sentAt            DateTime?
   receivedAt        DateTime?
   createdById       String?
@@ -429,9 +447,11 @@ model EmailMessage {
   thread            EmailThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
   account           EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  @@unique([workspaceId, externalMessageId])
+  @@unique([workspaceId, accountId, externalMessageId])
   @@index([workspaceId, threadId, createdAt])
   @@index([workspaceId, accountId, createdAt])
+  @@index([workspaceId, accountId, clientRequestId])
+  @@index([workspaceId, status, sendAttemptedAt])
   @@index([workspaceId, direction, status, createdAt])
 }
 

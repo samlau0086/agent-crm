@@ -3,6 +3,8 @@ import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
 import { emailAssistantContextSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 
+
+export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
   try {
     const context = await getRequestContext(request);

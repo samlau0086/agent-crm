@@ -4,6 +4,8 @@ import { getCrmRepository } from "@/lib/crm/repository";
 import type { WebhookDeliveryStatus } from "@/lib/crm/types";
 import { webhookEvents, type WebhookEvent } from "@/lib/integrations/webhook";
 
+
+export const dynamic = "force-dynamic";
 const deliveryStatuses = new Set<WebhookDeliveryStatus>(["pending", "success", "failed"]);
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {

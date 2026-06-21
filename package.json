@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/build-next.mjs",
+    "build:artifacts": "node scripts/check-build-artifacts.mjs",
     "start": "next start",
     "lint": "next lint",
     "test:e2e": "playwright test",
@@ -15,12 +16,16 @@
     "db:seed": "node --experimental-strip-types prisma/seed.ts",
     "db:backup": "node scripts/db-backup.mjs",
     "db:restore": "node scripts/db-restore.mjs",
+    "config:init": "node scripts/init-env.mjs",
+    "config:secrets": "node scripts/generate-secrets.mjs",
     "config:validate": "node scripts/validate-env.mjs",
     "deploy:verify": "node scripts/deploy-verify.mjs",
     "worker": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/job-worker.ts",
+    "email:sync": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-sync.ts",
+    "email:verify": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-verify.ts",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "node --experimental-strip-types --import ./tests/register-alias.mjs tests/run-tests.mjs",
-    "verify": "npm run typecheck && npm test && npm run lint && npm run build && npm run test:e2e"
+    "verify": "npm run typecheck && npm test && npm run lint && npm run build && npm run build:artifacts && npm run test:e2e"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",

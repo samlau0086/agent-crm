@@ -3,6 +3,8 @@ import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
 import { webhookUpdateSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 
+
+export const dynamic = "force-dynamic";
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);

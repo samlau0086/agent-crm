@@ -10,6 +10,35 @@ type BodyParseOptions = {
 
 export async function parseJsonBody<T>(request: Request, schema?: ZodType<T>, options: BodyParseOptions = {}): Promise<T> {
   const maxBytes = options.maxBytes ?? DEFAULT_JSON_BODY_LIMIT_BYTES;
+  const body = parseJsonText(await readBodyText(request, maxBytes));
+
+  if (!schema) {
+    return body as T;
+  }
+
+  return validateJsonBody(body, schema);
+}
+
+export async function parseOptionalJsonBody<T>(request: Request, schema: ZodType<T>, fallback: T, options: BodyParseOptions = {}): Promise<T> {
+  const maxBytes = options.maxBytes ?? DEFAULT_JSON_BODY_LIMIT_BYTES;
+  const text = await readBodyText(request, maxBytes);
+  if (!text.trim()) {
+    return fallback;
+  }
+
+  return validateJsonBody(parseJsonText(text), schema);
+}
+
+function validateJsonBody<T>(body: unknown, schema: ZodType<T>): T {
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    throw new ApiError(400, "VALIDATION_ERROR", "Request body failed validation", result.error.flatten());
+  }
+
+  return result.data;
+}
+
+async function readBodyText(request: Request, maxBytes: number): Promise<string> {
   assertContentLengthWithinLimit(request, maxBytes);
 
   let text: string;
@@ -23,23 +52,15 @@ export async function parseJsonBody<T>(request: Request, schema?: ZodType<T>, op
     throw new ApiError(413, "PAYLOAD_TOO_LARGE", `Request body must be ${maxBytes} bytes or smaller`);
   }
 
-  let body: unknown;
+  return text;
+}
+
+function parseJsonText(text: string): unknown {
   try {
-    body = JSON.parse(text);
+    return JSON.parse(text);
   } catch {
     throw new ApiError(400, "INVALID_JSON", "Request body must be valid JSON");
   }
-
-  if (!schema) {
-    return body as T;
-  }
-
-  const result = schema.safeParse(body);
-  if (!result.success) {
-    throw new ApiError(400, "VALIDATION_ERROR", "Request body failed validation", result.error.flatten());
-  }
-
-  return result.data;
 }
 
 export async function parseFormBody(request: Request, options: BodyParseOptions = {}): Promise<FormData> {

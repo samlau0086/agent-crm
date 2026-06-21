@@ -16,6 +16,8 @@ export type Permission =
   | "crm.admin"
   | "ai.use";
 
+export type EmailAiGenerationMode = "disabled" | "local" | "provider" | "provider_fallback" | "queued";
+
 export interface Workspace {
   id: string;
   name: string;
@@ -113,8 +115,9 @@ export interface WebhookDelivery {
 export type EmailProviderType = "smtp_imap" | "gmail" | "outlook" | "custom";
 export type EmailAccountStatus = "draft" | "active" | "disabled" | "error";
 export type EmailDirection = "inbound" | "outbound";
-export type EmailMessageStatus = "received" | "draft" | "queued" | "sent" | "failed";
-export type EmailAiFeature = "draft" | "translate" | "context_analysis" | "auto_summarize";
+export type EmailMessageStatus = "received" | "draft" | "queued" | "sending" | "sent" | "failed";
+export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize";
+export type EmailAiFeature = "draft" | "translate" | "auto_translate" | "context_analysis" | "auto_context_analysis" | "auto_summarize";
 
 export interface EmailAccount {
   id: string;
@@ -125,10 +128,31 @@ export interface EmailAccount {
   status: EmailAccountStatus;
   syncEnabled: boolean;
   sendEnabled: boolean;
+  connectionConfigured: boolean;
+  lastConnectionError?: string;
   createdById: string;
   lastSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface EmailConnectionConfig {
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpStartTls?: boolean;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  username?: string;
+  password?: string;
+  mailbox?: string;
+  oauthProvider?: "gmail" | "outlook" | "custom";
+  accessToken?: string;
+  refreshToken?: string;
+  tokenType?: string;
+  expiresAt?: string;
+  scope?: string;
 }
 
 export interface EmailThread {
@@ -140,9 +164,25 @@ export interface EmailThread {
   recordId?: string;
   summary?: string;
   summaryUpdatedAt?: string;
+  aiAnalysis?: string;
+  aiAnalysisSources?: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  aiAnalysisUpdatedAt?: string;
   lastMessageAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface EmailAttachment {
+  id?: string;
+  fileName: string;
+  contentType?: string;
+  size: number;
+  contentBase64?: string;
+  contentId?: string;
+  disposition?: "attachment" | "inline";
+  providerMessageId?: string;
+  providerAttachmentId?: string;
+  externalUrl?: string;
 }
 
 export interface EmailMessage {
@@ -159,7 +199,20 @@ export interface EmailMessage {
   subject: string;
   bodyText: string;
   bodyHtml?: string;
+  attachments?: EmailAttachment[];
+  translatedBodyText?: string;
+  translatedLocale?: string;
+  translatedSources?: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  translatedAt?: string;
+  aiAssisted?: boolean;
+  aiPurpose?: EmailAssistantPurpose;
+  aiSourceMessageId?: string;
+  aiSources?: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  aiGeneratedAt?: string;
   externalMessageId?: string;
+  clientRequestId?: string;
+  failureReason?: string;
+  sendAttemptedAt?: string;
   sentAt?: string;
   receivedAt?: string;
   createdById?: string;
@@ -187,6 +240,30 @@ export interface EmailAiSettings {
   maxKnowledgeArticles: number;
   maxContextChars: number;
   updatedAt: string;
+}
+
+export interface EmailAiGenerationAuditInput {
+  purpose: "draft" | "translate" | "context_analysis" | "summarize";
+  enabled: boolean;
+  recordId?: string;
+  threadId?: string;
+  sourceMessageId?: string;
+  sourceCount: number;
+  sourceLabels?: string[];
+  targetLocale?: string;
+  userPromptLength?: number;
+  sourceTextLength?: number;
+  resultTextLength?: number;
+  contextCharCount?: number;
+  maxContextChars?: number;
+  modelPromptChars?: number;
+  contextTruncated?: boolean;
+  outputTruncated?: boolean;
+  generationMode?: EmailAiGenerationMode;
+  providerError?: string;
+  suggestedSubjectProvided?: boolean;
+  automationFailed?: boolean;
+  errorMessage?: string;
 }
 
 export interface ObjectDefinition {

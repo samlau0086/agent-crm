@@ -1,3 +1,5 @@
+
+export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
 import { teamUpdateSchema } from "@/lib/crm/api-schemas";

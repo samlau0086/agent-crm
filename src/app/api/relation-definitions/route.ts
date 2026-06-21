@@ -1,3 +1,5 @@
+
+export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
 import { relationDefinitionCreateSchema } from "@/lib/crm/api-schemas";

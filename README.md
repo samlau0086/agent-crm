@@ -25,6 +25,16 @@ npm run dev
 docker compose up --build
 ```
 
+首次部署前先从 `.env.example` 初始化 `.env`，脚本会自动生成邮件加密和 OAuth state 密钥，且默认不会覆盖已有 `.env`：
+
+```bash
+npm run config:init
+```
+
+For an existing `.env` or `.env.local`, use `npm run config:init -- --output .env.local --merge-missing` to append only missing keys while preserving current values.
+
+只想生成两条密钥用于已有配置文件时，可运行 `npm run config:secrets`。
+
 Compose 会启动 `web`、`postgres`、`redis`：
 
 - `postgres` 通过 `pg_isready` 做健康检查。
@@ -35,12 +45,14 @@ Compose 会启动 `web`、`postgres`、`redis`：
 关键环境变量：
 
 - `DATABASE_URL`：PostgreSQL 连接串。
-- `APP_BASE_URL`：应用对外访问地址，用于登录跳转和密码设置链接，生产环境应设为真实 HTTPS 域名。
+- `APP_BASE_URL`：应用对外访问地址，用于登录跳转、密码设置链接和邮箱 OAuth callback，生产环境应设为真实 HTTPS 域名。
 - `RUN_MIGRATIONS`：默认 `true`，容器启动时执行迁移。
 - `SEED_ON_EMPTY`：默认建议生产为 `false`；演示环境可设为 `true`。
 - `AI_PROVIDER`：默认 `openai-compatible`；没有 `AI_API_KEY` 时会自动使用本地只读 fallback。
 - `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`：OpenAI-compatible `/chat/completions` provider 配置。
 - `AI_TIMEOUT_MS`：AI provider 请求超时，默认 `10000`，超时或失败时回退到本地只读建议。
+- `EMAIL_CONFIG_SECRET`：邮箱 SMTP/IMAP/OAuth 凭据加密密钥，至少 16 字符；Compose 部署必须在 `.env` 中显式设置，不能使用 `.env.example` 的 placeholder。
+- `EMAIL_OAUTH_STATE_SECRET`：Gmail/Outlook OAuth state 签名密钥，至少 16 字符；建议和 `EMAIL_CONFIG_SECRET` 分开，不能使用 placeholder。
 - `LOGIN_RATE_LIMIT_MAX_ATTEMPTS`：同一邮箱/IP 在窗口期内允许的失败次数，默认 `5`，设为 `0` 可关闭。
 - `LOGIN_RATE_LIMIT_WINDOW_MS`：登录失败计数窗口，默认 `900000`。
 - `LOGIN_RATE_LIMIT_LOCK_MS`：触发限流后的锁定时长，默认 `900000`。
@@ -74,7 +86,7 @@ Docker 私有化部署验收：
 npm run deploy:verify
 ```
 
-该命令会校验 Docker Compose 配置、构建镜像、启动服务、检查 `/api/health`，并在 `web` 容器内验证 PostgreSQL client 与备份 dry-run。没有 Docker 的开发环境可以先运行：
+该命令会校验 Docker Compose 配置、构建镜像、启动服务、检查 `/api/health`，并在 `web` 容器内验证 PostgreSQL client、备份 dry-run 和邮件 diagnostics。需要同时测试真实邮箱连接时追加 `-- --run-email-connections`。没有 Docker 的开发环境可以先运行：
 
 ```bash
 npm run deploy:verify -- --dry-run

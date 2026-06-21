@@ -199,10 +199,12 @@ export const seedData: CrmSnapshot = {
     {
       workspaceId: defaultWorkspaceId,
       features: {
-        draft: true,
-        translate: true,
-        context_analysis: true,
-        auto_summarize: true
+      draft: true,
+      translate: true,
+      auto_translate: false,
+      context_analysis: true,
+      auto_context_analysis: false,
+      auto_summarize: true
       },
       defaultLocale: "zh-CN",
       requireSourceLinks: true,

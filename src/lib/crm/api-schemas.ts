@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { MAX_EMAIL_ATTACHMENT_BASE64_CHARS, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
+import { MAX_OUTBOUND_EMAIL_RECIPIENTS, validateOutboundEmailRecipientPolicy } from "@/lib/email/outbound-policy";
 
 export const MAX_CSV_IMPORT_CHARS = 5_000_000;
 export const MAX_IMPORT_MAPPING_FIELDS = 200;
@@ -246,12 +248,69 @@ export const webhookUpdateSchema = webhookCreateSchema.partial().strict();
 export const emailProviderSchema = z.enum(["smtp_imap", "gmail", "outlook", "custom"]);
 export const emailAccountStatusSchema = z.enum(["draft", "active", "disabled", "error"]);
 export const emailDirectionSchema = z.enum(["inbound", "outbound"]);
-export const emailMessageStatusSchema = z.enum(["received", "draft", "queued", "sent", "failed"]);
+export const emailMessageStatusSchema = z.enum(["received", "draft", "queued", "sending", "sent", "failed"]);
 export const emailAssistantPurposeSchema = z.enum(["draft", "translate", "context_analysis", "summarize"]);
-export const emailAiFeatureSchema = z.enum(["draft", "translate", "context_analysis", "auto_summarize"]);
+export const emailOutboundAiPurposeSchema = z.enum(["draft", "translate"]);
+export const emailAiFeatureSchema = z.enum(["draft", "translate", "auto_translate", "context_analysis", "auto_context_analysis", "auto_summarize"]);
 
 const emailAddressSchema = z.string().trim().email();
 const emailAddressListSchema = z.array(emailAddressSchema).max(100);
+const emailAttachmentSchema = z
+  .object({
+    id: z.string().trim().min(1).max(200).optional(),
+    fileName: z.string().trim().min(1).max(255),
+    contentType: z.string().trim().min(1).max(120).default("application/octet-stream"),
+    size: z.number().int().min(0).max(MAX_EMAIL_ATTACHMENT_BYTES),
+    contentBase64: z.string().trim().max(MAX_EMAIL_ATTACHMENT_BASE64_CHARS).optional(),
+    contentId: z.string().trim().min(1).max(255).optional(),
+    disposition: z.enum(["attachment", "inline"]).optional(),
+    providerMessageId: z.string().trim().min(1).max(500).optional(),
+    providerAttachmentId: z.string().trim().min(1).max(500).optional(),
+    externalUrl: z.string().trim().url().max(2000).optional()
+  })
+  .strict()
+  .refine((value) => !value.contentBase64 || /^[A-Za-z0-9+/=_-]+$/.test(value.contentBase64), {
+    message: "Attachment contentBase64 must be base64 or base64url text"
+  });
+const emailAttachmentsSchema = z.array(emailAttachmentSchema).max(10).optional();
+const emailAiSourceSchema = z
+  .object({
+    label: z.string().trim().min(1).max(300),
+    recordId: z.string().trim().min(1).max(200).optional(),
+    activityId: z.string().trim().min(1).max(200).optional(),
+    messageId: z.string().trim().min(1).max(200).optional(),
+    knowledgeArticleId: z.string().trim().min(1).max(200).optional()
+  })
+  .strict();
+const emailAiSourcesSchema = z.array(emailAiSourceSchema).max(20).optional();
+const outboundEmailAttachmentsSchema = z
+  .array(
+    emailAttachmentSchema.refine((value) => Boolean(value.contentBase64?.trim()), {
+      message: "Outbound attachments require contentBase64"
+    })
+  )
+  .max(10)
+  .optional();
+const emailConnectionConfigSchema = z
+  .object({
+    smtpHost: z.string().trim().min(1).optional(),
+    smtpPort: z.number().int().min(1).max(65535).optional(),
+    smtpSecure: z.boolean().optional(),
+    smtpStartTls: z.boolean().optional(),
+    imapHost: z.string().trim().min(1).optional(),
+    imapPort: z.number().int().min(1).max(65535).optional(),
+    imapSecure: z.boolean().optional(),
+    username: z.string().trim().min(1).optional(),
+    password: z.string().min(1).optional(),
+    mailbox: z.string().trim().min(1).optional(),
+    oauthProvider: z.enum(["gmail", "outlook", "custom"]).optional(),
+    accessToken: z.string().trim().min(1).optional(),
+    refreshToken: z.string().trim().min(1).optional(),
+    tokenType: z.string().trim().min(1).optional(),
+    expiresAt: z.string().datetime().optional(),
+    scope: z.string().trim().min(1).optional()
+  })
+  .strict();
 
 export const emailAccountCreateSchema = z
   .object({
@@ -260,9 +319,26 @@ export const emailAccountCreateSchema = z
     provider: emailProviderSchema,
     status: emailAccountStatusSchema.optional(),
     syncEnabled: z.boolean().optional(),
-    sendEnabled: z.boolean().optional()
+    sendEnabled: z.boolean().optional(),
+    connectionConfig: emailConnectionConfigSchema.optional()
   })
   .strict();
+
+export const emailAccountUpdateSchema = z
+  .object({
+    name: labelSchema.optional(),
+    emailAddress: emailAddressSchema.optional(),
+    provider: emailProviderSchema.optional(),
+    status: emailAccountStatusSchema.optional(),
+    syncEnabled: z.boolean().optional(),
+    sendEnabled: z.boolean().optional(),
+    connectionConfig: emailConnectionConfigSchema.optional(),
+    clearConnectionConfig: z.boolean().optional()
+  })
+  .strict()
+  .refine((value) => !(value.connectionConfig && value.clearConnectionConfig), {
+    message: "connectionConfig and clearConnectionConfig cannot be used together"
+  });
 
 export const emailMessageCreateSchema = z
   .object({
@@ -278,9 +354,115 @@ export const emailMessageCreateSchema = z
     subject: labelSchema,
     bodyText: z.string().trim().min(1),
     bodyHtml: optionalTextSchema,
+    attachments: emailAttachmentsSchema,
     externalMessageId: optionalTextSchema,
     sentAt: z.string().trim().min(1).optional(),
     receivedAt: z.string().trim().min(1).optional()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.direction !== "inbound") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["direction"],
+        message: "Public email message creation only accepts inbound messages; use /api/email/send for outbound delivery"
+      });
+    }
+    if (value.status && value.status !== "received") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["status"],
+        message: "Inbound email message creation only accepts received status"
+      });
+    }
+  });
+
+export const emailSendSchema = z
+  .object({
+    accountId: z.string().trim().min(1),
+    threadId: z.string().trim().min(1).optional(),
+    recordId: z.string().trim().min(1).optional(),
+    to: emailAddressListSchema.min(1),
+    cc: emailAddressListSchema.optional(),
+    bcc: emailAddressListSchema.optional(),
+    subject: labelSchema,
+    bodyText: z.string().trim().min(1),
+    bodyHtml: optionalTextSchema,
+    attachments: outboundEmailAttachmentsSchema,
+    aiAssisted: z.boolean().optional(),
+    aiPurpose: emailOutboundAiPurposeSchema.optional(),
+    aiSourceMessageId: z.string().trim().min(1).optional(),
+    aiSources: emailAiSourcesSchema,
+    aiGeneratedAt: z.string().datetime().optional(),
+    clientRequestId: z.string().trim().min(8).max(120).regex(/^[A-Za-z0-9._:-]+$/).optional()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const policy = validateOutboundEmailRecipientPolicy(value);
+    if (policy.total > MAX_OUTBOUND_EMAIL_RECIPIENTS) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["to"],
+        message: `Outbound email recipients are limited to ${MAX_OUTBOUND_EMAIL_RECIPIENTS} total addresses across to, cc, and bcc`
+      });
+    }
+    if (policy.duplicateRecipients.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["to"],
+        message: `Outbound email recipients must be unique across to, cc, and bcc: ${policy.duplicateRecipients.join(", ")}`
+      });
+    }
+    if (value.aiAssisted && !value.aiPurpose) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["aiPurpose"],
+        message: "aiPurpose is required when aiAssisted is true"
+      });
+    }
+    if (!value.aiAssisted && (value.aiPurpose || value.aiSourceMessageId || value.aiSources?.length || value.aiGeneratedAt)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["aiAssisted"],
+        message: "AI provenance fields require aiAssisted to be true"
+      });
+    }
+  });
+
+export const emailSyncSchema = z
+  .object({
+    accountId: z.string().trim().min(1),
+    limit: z.number().int().min(1).max(100).optional()
+  })
+  .strict();
+
+export const emailSyncAllSchema = z
+  .object({
+    limit: z.number().int().min(1).max(100).optional()
+  })
+  .strict();
+
+export const emailThreadUpdateSchema = z
+  .object({
+    recordId: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional()
+  })
+  .strict();
+
+export const emailMessageTranslateSchema = z
+  .object({
+    targetLocale: z.string().trim().min(2).max(20).optional()
+  })
+  .strict();
+
+export const emailConnectionTestSchema = emailSyncSchema;
+
+export const emailOAuthStartSchema = z
+  .object({
+    provider: z.enum(["gmail", "outlook"]),
+    emailAddress: emailAddressSchema,
+    name: labelSchema.optional(),
+    syncEnabled: z.boolean().optional(),
+    sendEnabled: z.boolean().optional()
   })
   .strict();
 
@@ -300,9 +482,55 @@ export const emailAssistantContextSchema = z
     purpose: emailAssistantPurposeSchema,
     recordId: z.string().trim().min(1).optional(),
     threadId: z.string().trim().min(1).optional(),
+    sourceMessageId: z.string().trim().min(1).optional(),
     targetLocale: z.string().trim().min(2).max(20).optional()
   })
   .strict();
+
+export const emailAiGenerateSchema = emailAssistantContextSchema
+  .extend({
+    userPrompt: z.string().trim().max(2000).optional(),
+    sourceText: z.string().trim().max(12000).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasCrmAnchor = Boolean(value.recordId || value.threadId || value.sourceMessageId);
+    if (!hasCrmAnchor) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["recordId"],
+        message: "Email AI generation requires a CRM record, email thread, or source email message"
+      });
+    }
+    if (value.purpose === "draft" && !value.userPrompt && !hasCrmAnchor) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["userPrompt"],
+        message: "Draft generation requires a record, thread, source message, or user prompt"
+      });
+    }
+    if (value.purpose === "translate" && !value.sourceText) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sourceText"],
+        message: "Translation requires source email text"
+      });
+    }
+    if (value.purpose === "context_analysis" && !hasCrmAnchor) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["threadId"],
+        message: "Context analysis requires a CRM record, email thread, or source email message"
+      });
+    }
+    if (value.purpose === "summarize" && !value.threadId && !value.sourceMessageId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["threadId"],
+        message: "Thread summarization requires an email thread or source email message"
+      });
+    }
+  });
 
 export const knowledgeArticleCreateSchema = z
   .object({
@@ -312,6 +540,8 @@ export const knowledgeArticleCreateSchema = z
     active: z.boolean().optional()
   })
   .strict();
+
+export const knowledgeArticleUpdateSchema = knowledgeArticleCreateSchema.partial().strict();
 
 export const teamCreateSchema = z
   .object({

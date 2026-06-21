@@ -1,3 +1,5 @@
+
+export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { requirePermission } from "@/lib/auth/rbac";
 import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { checkJobHealth, toSafeHealthError } from "@/lib/ops/health";
+import { checkEmailSubsystemDiagnostics } from "@/lib/email/diagnostics";
+import { checkJobHealth, toSafeDatabaseHealthError } from "@/lib/ops/health";
+import { buildServiceHealthPayload } from "@/lib/ops/service-health";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +15,7 @@ export async function GET() {
     await prisma.$queryRaw`SELECT 1`;
   } catch (error) {
     database = "error";
-    errors.push(toSafeHealthError(error, "Database health check failed"));
+    errors.push(toSafeDatabaseHealthError(error));
   }
 
   const jobs = await checkJobHealth();
@@ -21,17 +23,21 @@ export async function GET() {
     errors.push(jobs.error);
   }
 
-  const ok = database === "ok" && jobs.ok;
+  const email = await checkEmailSubsystemDiagnostics();
+  if (!email.ok) {
+    errors.push("Email subsystem diagnostics failed");
+  }
+
+  const payload = buildServiceHealthPayload({
+    checkedAt,
+    database,
+    jobs,
+    email,
+    errors
+  });
 
   return NextResponse.json(
-    {
-      ok,
-      service: "ai-agent-crm",
-      database,
-      jobs,
-      error: errors.length > 0 ? errors.join("; ") : undefined,
-      checkedAt
-    },
-    { status: ok ? 200 : 503 }
+    payload,
+    { status: payload.ok ? 200 : 503 }
   );
 }

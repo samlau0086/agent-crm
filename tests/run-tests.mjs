@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { buildAiQueryPlan, validateAiQueryPlan } from "../src/lib/ai/query-plann
 import { assertReadOnlyAiQuestion } from "../src/lib/ai/query-guard.ts";
 import { getApiErrorAuditCredential } from "../src/lib/api-audit.ts";
 import { ApiError, toApiErrorPayload } from "../src/lib/api-error.ts";
-import { parseFormBody, parseJsonBody } from "../src/lib/api-validation.ts";
+import { parseFormBody, parseJsonBody, parseOptionalJsonBody } from "../src/lib/api-validation.ts";
 import { createApiKeyToken, getApiKeyTokenPrefix, hashApiKeyToken, getBearerToken } from "../src/lib/auth/api-key.ts";
 import { clearFailedLogin, isLoginRateLimited, recordFailedLogin, resetLoginRateLimitsForTests } from "../src/lib/auth/login-rate-limit.ts";
 import { createPasswordSetupToken, hashPasswordSetupToken, normalizePasswordSetupPurpose } from "../src/lib/auth/password-setup.ts";
@@ -17,7 +18,21 @@ import { createSessionToken, hashSessionToken } from "../src/lib/auth/session.ts
 import { describePermission, permissionCatalog } from "../src/lib/auth/permissions.ts";
 import {
   csvImportSchema,
+  emailAccountCreateSchema,
+  emailAccountUpdateSchema,
+  emailAiGenerateSchema,
+  emailAiSettingsUpdateSchema,
+  emailConnectionTestSchema,
+  emailMessageTranslateSchema,
+  emailMessageCreateSchema,
+  emailOAuthStartSchema,
+  emailSendSchema,
+  emailSyncAllSchema,
+  emailSyncSchema,
+  emailThreadUpdateSchema,
   importPresetCreateSchema,
+  knowledgeArticleCreateSchema,
+  knowledgeArticleUpdateSchema,
   MAX_CSV_IMPORT_CHARS,
   MAX_IMPORT_MAPPING_FIELDS,
   MAX_SAVED_VIEW_COLUMNS,
@@ -26,6 +41,22 @@ import {
 } from "../src/lib/crm/api-schemas.ts";
 import { defaultWorkspaceId, seedData } from "../src/lib/crm/seed.ts";
 import { CrmStore } from "../src/lib/crm/store.ts";
+import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS } from "../src/lib/email/ai-generation.ts";
+import { decryptEmailConnectionConfig, encryptEmailConnectionConfig } from "../src/lib/email/connection-config.ts";
+import { testEmailAccountConnections } from "../src/lib/email/connection-tests.ts";
+import { buildEmailAccountDiagnostics, buildEmailAiContextPolicyDiagnostics, buildEmailAiProviderFallbackDiagnostics, buildEmailAutoSummaryPolicyDiagnostics, buildEmailSendClaimDiagnostics, buildEmailSyncSchedulerDiagnostics, checkEmailSubsystemDiagnostics, checkEmailSubsystemDiagnosticsForContext } from "../src/lib/email/diagnostics.ts";
+import { downloadOAuthAttachment, fetchRecentOAuthEmails, sendOAuthEmail } from "../src/lib/email/oauth-api.ts";
+import { assertOAuthConfig, buildOAuthAuthorizationUrl, createEmailOAuthState, exchangeOAuthAuthorizationCode, refreshOAuthAccessToken, shouldRefreshOAuthToken, verifyEmailOAuthState } from "../src/lib/email/oauth.ts";
+import { buildOAuthEmailConnectedRedirectUrl, buildOAuthEmailErrorRedirectUrl, connectOAuthEmailAccount } from "../src/lib/email/oauth-account.ts";
+import { MAX_OUTBOUND_EMAIL_RECIPIENTS, validateOutboundEmailRecipientPolicy } from "../src/lib/email/outbound-policy.ts";
+import { createEmailProviderAdapter } from "../src/lib/email/provider.ts";
+import { getEmailProviderCapability, getEmailProviderSetupVisibility, getOAuthEmailProviderCapability, isOAuthEmailProvider, listEmailProviderCapabilities, oauthEmailProviderKeys } from "../src/lib/email/providers.ts";
+import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
+import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
+import { buildImapFallbackExternalMessageId, parseRawEmailMessage, resolveSmtpTransport, withImapFallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
+import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
+import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
+import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.ts";
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
@@ -35,14 +66,24 @@ import { getBackupFile, listBackupFiles, resolveBackupFilePath } from "../src/li
 import { assertValidFieldDefinition, validateRecordPayload } from "../src/lib/crm/validation.ts";
 import { compareRecords, findRelatedRecords, matchesSavedView } from "../src/lib/crm/views.ts";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, signWebhookPayload } from "../src/lib/integrations/webhook.ts";
-import { buildCsvImportJobEnvelope, buildWebhookEventEnvelope, InlineBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
+import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailSendJobEnvelope, buildEmailSummarizeJobEnvelope, buildEmailSyncJobEnvelope, buildEmailTranslateJobEnvelope, buildWebhookEventEnvelope, InlineBackgroundJobExecutor, RedisBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
 import { encodeRedisCommand, getDeadLetterQueueName } from "../src/lib/jobs/redis-queue.ts";
 import { buildFailedJobEnvelope, getMaxJobAttempts } from "../src/lib/jobs/worker-policy.ts";
-import { checkJobHealth, toSafeHealthError } from "../src/lib/ops/health.ts";
+import { formatJobWorkerResult, processQueuedJobEnvelope } from "../src/lib/jobs/worker.ts";
+import { checkJobHealth, toSafeDatabaseHealthError, toSafeHealthError } from "../src/lib/ops/health.ts";
+import { buildServiceHealthPayload } from "../src/lib/ops/service-health.ts";
 import { appUrl, getAppBaseUrl } from "../src/lib/security/app-origin.ts";
 import { shouldBlockCrossSiteMutation } from "../src/lib/security/csrf.ts";
 import { applySecurityHeaders, buildSecurityHeaders } from "../src/lib/security/headers.ts";
 import { shouldProceedWithDangerousAction } from "../src/lib/ui/confirm.ts";
+import { buildEmailAttachmentResponse } from "../src/lib/email/attachment-response.ts";
+import { canOpenEmailAiSource, emailAiSourceKey } from "../src/lib/email/ai-sources.ts";
+import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "../src/lib/email/attachments.ts";
+import { runEmailAutomationsBestEffort, scheduleEmailAutomationsBestEffort, shouldRunEmailAutoSummary } from "../src/lib/email/automations.ts";
+import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, getEmailAiPurposeFeature, isEmailAiPurposeEnabled, normalizeEmailAiFeatures } from "../src/lib/email/assistant.ts";
+import { readEmailOAuthCallbackNotice, readEmailOAuthConnectedNotice } from "../src/lib/email/oauth-callback.ts";
+import { getDatabaseConnectionTarget } from "../scripts/database-preflight.ts";
+import { loadLocalEnvFiles } from "../scripts/load-env.ts";
 
 const results = [];
 
@@ -53,6 +94,26 @@ async function run(name, fn) {
   } catch (error) {
     results.push({ name, ok: false, error });
   }
+}
+
+async function flushAsyncWork(cycles = 5) {
+  for (let index = 0; index < cycles; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+async function makeTempDir(prefix) {
+  const directory = join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await mkdir(directory, { recursive: true });
+  return directory;
+}
+
+function restoreEnvValue(name, value) {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
 }
 
 await run("field definition rejects invalid key", () => {
@@ -222,6 +283,39 @@ await run("api helpers return structured invalid json and validation errors", as
   assert.equal(status, 403);
   assert.equal(payload.code, "FORBIDDEN");
   assert.equal(payload.error, "Missing permission: crm.admin");
+});
+
+await run("api optional json helper preserves empty-body command compatibility", async () => {
+  const schema = z.object({ limit: z.number().int().min(1).max(100).optional() }).strict();
+  assert.deepEqual(
+    await parseOptionalJsonBody(new Request("http://local.test", { method: "POST" }), schema, {}),
+    {}
+  );
+  assert.deepEqual(
+    await parseOptionalJsonBody(
+      new Request("http://local.test", {
+        method: "POST",
+        body: JSON.stringify({ limit: 25 }),
+        headers: { "content-type": "application/json" }
+      }),
+      schema,
+      {}
+    ),
+    { limit: 25 }
+  );
+  await assert.rejects(
+    () =>
+      parseOptionalJsonBody(
+        new Request("http://local.test", {
+          method: "POST",
+          body: JSON.stringify({ limit: 101 }),
+          headers: { "content-type": "application/json" }
+        }),
+        schema,
+        {}
+      ),
+    (error) => error instanceof ApiError && error.status === 400 && error.code === "VALIDATION_ERROR"
+  );
 });
 
 await run("api json helper rejects oversized request bodies", async () => {
@@ -522,7 +616,7 @@ await run("audit action labels are readable Chinese text", () => {
   assert.equal(formatAuditAction("import"), "导入");
   assert.equal(formatAuditAction("api_error"), "API 错误");
   for (const action of ["create", "update", "delete", "import", "api_error"]) {
-    assert.doesNotMatch(formatAuditAction(action), /\?\?|锛|銆|\uFFFD/);
+    assert.doesNotMatch(formatAuditAction(action), /\?\?|閿泑閵唡\uFFFD/);
   }
 });
 
@@ -640,7 +734,8 @@ await run("deployment verification dry run describes docker health and backup ch
       "Check application health",
       "Validate web container environment",
       "Verify PostgreSQL client inside web container",
-      "Verify container backup plan"
+      "Verify container backup plan",
+      "Validate email subsystem diagnostics"
     ]
   );
   assert.equal(plan.steps.find((step) => step.name === "Check application health")?.url, healthUrl);
@@ -672,6 +767,523 @@ await run("deployment verification dry run describes docker health and backup ch
     "--output",
     backupOutput
   ]);
+  assert.deepEqual(plan.steps.find((step) => step.name === "Validate email subsystem diagnostics")?.args, [
+    "compose",
+    "exec",
+    "-T",
+    "web",
+    "node",
+    "--experimental-strip-types",
+    "--import",
+    "./scripts/register-alias.mjs",
+    "scripts/email-verify.ts"
+  ]);
+});
+
+await run("next production build defaults to standard output with guarded artifact checks", () => {
+  const config = readFileSync("next.config.mjs", "utf8");
+  const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+  const dockerfile = readFileSync("Dockerfile", "utf8");
+  const entrypoint = readFileSync("scripts/docker-entrypoint.sh", "utf8");
+  const e2eStart = readFileSync("scripts/e2e-next-start.mjs", "utf8");
+  const buildNext = readFileSync("scripts/build-next.mjs", "utf8");
+  assert.match(config, /NEXT_OUTPUT === "standalone"/);
+  for (const pattern of [
+    ".agents/**/*",
+    ".codex/**/*",
+    ".vs/**/*",
+    ".next-*/**/*",
+    ".postgres-data/**/*",
+    "resources/**/*",
+    "test-results/**/*",
+    ".tmp-*.log",
+    "dev-*.log",
+    "*.log"
+  ]) {
+    assert.equal(config.includes(`\"${pattern}\"`), true, `${pattern} should stay excluded from standalone tracing`);
+  }
+  assert.equal(packageJson.scripts.build, "node scripts/build-next.mjs");
+  assert.equal(packageJson.scripts["build:artifacts"], "node scripts/check-build-artifacts.mjs");
+  assert.match(packageJson.scripts.verify, /npm run build:artifacts/);
+  assert.match(buildNext, /checkBuildArtifacts/);
+  assert.match(buildNext, /NEXT_BUILD_EXIT_GRACE_MS/);
+  assert.match(dockerfile, /COPY --from=builder \/app\/\.next \.\/\.next/);
+  assert.doesNotMatch(dockerfile, /\.next\/standalone/);
+  assert.match(entrypoint, /exec npm run start/);
+  assert.match(e2eStart, /nextBin, "start"/);
+  assert.doesNotMatch(e2eStart, /standalone/);
+});
+
+await run("deployment verification can include real email connection checks", () => {
+  const result = spawnSync(process.execPath, ["scripts/deploy-verify.mjs", "--dry-run", "--skip-build", "--skip-up", "--skip-backup", "--skip-health", "--run-email-connections"], {
+    cwd: process.cwd(),
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const plan = JSON.parse(result.stdout);
+  const emailStep = plan.steps.find((step) => step.name === "Validate email subsystem diagnostics");
+  assert.equal(emailStep.args.includes("--test-connections"), true);
+});
+
+await run("service health payload exposes email readiness summary", async () => {
+  const email = await checkEmailSubsystemDiagnostics({
+    env: {
+      APP_SECRET: "test-app-secret-32-bytes",
+      APP_BASE_URL: "http://127.0.0.1:3000",
+      EMAIL_DELIVERY_MODE: "dry-run",
+      AI_API_KEY: "test-ai-key",
+      JOB_EXECUTOR: "redis",
+      EMAIL_SYNC_INTERVAL_MS: "120000",
+      EMAIL_SYNC_LIMIT: "25",
+      EMAIL_SYNC_USER_ID: "user-admin"
+    },
+    accounts: [
+      {
+        id: "email-account-health",
+        workspaceId: defaultWorkspaceId,
+        name: "Health Mailbox",
+        emailAddress: "health@example.com",
+        provider: "smtp_imap",
+        status: "active",
+        syncEnabled: true,
+        sendEnabled: true,
+        connectionConfigured: true,
+        createdById: "user-admin",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    aiSettings: createDefaultEmailAiSettings(defaultWorkspaceId, "2026-01-01T00:00:00.000Z"),
+    auditLogs: [],
+    includeJobs: true,
+    checkJobs: async () => ({ ok: true, executor: "inline", queue: "inline" })
+  });
+  const payload = buildServiceHealthPayload({
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    database: "ok",
+    jobs: { ok: true, executor: "inline", queue: "inline" },
+    email
+  });
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.emailReadiness.ok, true);
+  assert.equal(payload.emailReadiness.status, "warning");
+  assert.equal(payload.emailReadiness.encryption, "ok");
+  assert.equal(payload.emailReadiness.oauthState, "ok");
+  assert.equal(payload.emailReadiness.oauthCallback, "ok");
+  assert.equal(payload.emailReadiness.accounts?.active, 1);
+  assert.equal(payload.emailReadiness.aiProvider, "ok");
+  assert.equal(payload.emailReadiness.aiContextPolicy.loaded, true);
+  assert.equal(payload.emailReadiness.aiContextPolicy.requireSourceLinks, true);
+  assert.equal(payload.emailReadiness.aiContextPolicy.enabledFeatures.auto_summarize, true);
+  assert.equal(payload.emailReadiness.aiContextPolicy.enabledFeatures.auto_translate, false);
+  assert.equal(payload.emailReadiness.aiContextPolicy.enabledAutomationCount, 1);
+  assert.equal(payload.emailReadiness.autoSummaryPolicy.enabled, true);
+  assert.equal(payload.emailReadiness.syncScheduler.status, "ok");
+  assert.equal(payload.emailReadiness.syncScheduler.intervalMs, 120000);
+  assert.equal(payload.emailReadiness.syncScheduler.limit, 25);
+  assert.equal(payload.emailReadiness.syncScheduler.queueBacked, true);
+  assert.equal(payload.emailReadiness.sendClaims.status, "ok");
+  assert.equal(payload.emailReadiness.sendClaims.staleCount, 0);
+  assert.equal(payload.emailReadiness.aiAutomationFailures.recentFailureCount, 0);
+  assert.equal(payload.emailReadiness.aiProviderFallbacks.recentFallbackCount, 0);
+  assert.equal(payload.emailReadiness.jobs?.ok, true);
+});
+
+await run("health scripts report email readiness fields", () => {
+  const healthcheck = readFileSync("scripts/healthcheck.mjs", "utf8");
+  const deployVerify = readFileSync("scripts/deploy-verify.mjs", "utf8");
+  assert.match(healthcheck, /emailReadiness/);
+  assert.match(healthcheck, /emailSecrets/);
+  assert.match(healthcheck, /emailOAuthState/);
+  assert.match(healthcheck, /emailOAuthCallback/);
+  assert.match(healthcheck, /emailAiContext/);
+  assert.match(healthcheck, /emailAiAutomations/);
+  assert.match(healthcheck, /emailAiFallbacks/);
+  assert.match(healthcheck, /emailAutoSummary/);
+  assert.match(healthcheck, /emailSync/);
+  assert.match(healthcheck, /emailSendClaims/);
+  assert.match(healthcheck, /syncScheduler/);
+  assert.match(deployVerify, /emailReadiness\?\.ok/);
+  assert.match(deployVerify, /formatHealthSummary/);
+  assert.match(deployVerify, /emailSecrets/);
+  assert.match(deployVerify, /emailOAuthState/);
+  assert.match(deployVerify, /emailOAuthCallback/);
+  assert.match(deployVerify, /emailAiAutomations/);
+  assert.match(deployVerify, /emailAiFallbacks/);
+  assert.match(deployVerify, /emailSendClaims/);
+  assert.match(deployVerify, /emailSync/);
+  assert.match(deployVerify, /syncScheduler/);
+});
+
+await run("public api docs describe email and ai mail endpoints", () => {
+  const docs = readFileSync("docs/public-api.md", "utf8");
+  assert.match(docs, /\/api\/email\/accounts/);
+  assert.match(docs, /\/api\/email\/send/);
+  assert.match(docs, /\/api\/email\/sync-all/);
+  assert.match(docs, /\/api\/email\/ai-settings/);
+  assert.match(docs, /\/api\/email\/ai-context/);
+  assert.match(docs, /\/api\/email\/ai-generate/);
+  assert.match(docs, /\/api\/knowledge\/articles/);
+  assert.match(docs, /feature toggle/);
+  assert.match(docs, /source-backed/);
+});
+
+await run("email sync route forwards bounded sync limit to the job executor", () => {
+  const source = readFileSync("src/app/api/email/sync/route.ts", "utf8");
+  assert.match(source, /runEmailSyncJob\(context,\s*\{\s*accountId:\s*body\.accountId,\s*limit:\s*body\.limit\s*\}\)/);
+});
+
+await run("email sync-all route keeps empty body support and forwards bounded limits", () => {
+  const source = readFileSync("src/app/api/email/sync-all/route.ts", "utf8");
+  assert.match(source, /parseOptionalJson\(request,\s*emailSyncAllSchema,\s*\{\s*\}\)/);
+  assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*limit:\s*body\.limit\s*\}\)/);
+});
+
+await run("email workspace exposes sync-all control backed by the sync-all api", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /async function syncAllEmailAccounts\(\)/);
+  assert.match(source, /\/api\/email\/sync-all/);
+  assert.match(source, /data-testid="email-sync-all"/);
+  assert.match(source, /onSyncAllAccounts/);
+});
+
+await run("email workspace sends stable client request ids for compose idempotency", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /function createEmailClientRequestId\(\)/);
+  assert.match(source, /clientRequestId:\s*createEmailClientRequestId\(\)/);
+  assert.match(source, /clientRequestId:\s*emailDraft\.clientRequestId/);
+  assert.match(source, /upsertEmailMessage\(current\[message\.threadId\] \?\? \[\], message\)/);
+});
+
+await run("prisma email repository treats client request unique races as idempotent", () => {
+  const source = readFileSync("src/lib/crm/repository.ts", "utf8");
+  assert.match(source, /function isPrismaUniqueConstraintError\(error: unknown\): boolean/);
+  assert.match(source, /error instanceof Prisma\.PrismaClientKnownRequestError && error\.code === "P2002"/);
+  assert.match(source, /normalizedClientRequestId && isPrismaUniqueConstraintError\(error\)/);
+  assert.match(source, /clientRequestId:\s*normalizedClientRequestId/);
+});
+
+await run("email message translate route accepts empty body for default locale", () => {
+  const source = readFileSync("src/app/api/email/messages/[id]/translate/route.ts", "utf8");
+  assert.match(source, /parseOptionalJson\(request,\s*emailMessageTranslateSchema,\s*\{\s*\}\)/);
+  assert.match(source, /runEmailTranslateJob\(context,\s*\{\s*messageId:\s*params\.id,\s*targetLocale:\s*body\.targetLocale\s*\}\)/);
+});
+
+await run("email verification dry run describes diagnostics and manual mailbox checks", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--import", "./scripts/register-alias.mjs", "scripts/email-verify.ts", "--dry-run", "--test-connections", "--smoke", "--user-id", "user-admin"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const plan = JSON.parse(result.stdout);
+  assert.equal(plan.userId, "user-admin");
+  assert.equal(plan.runConnectionTests, true);
+  assert.equal(plan.runSmoke, true);
+  assert.equal(plan.steps.some((step) => step.includes("sync scheduler policy") && step.includes("AI context policy") && step.includes("AI automation failure audit") && step.includes("AI provider fallback audit")), true);
+  assert.equal(plan.steps.includes("Run provider connection tests for active configured accounts"), true);
+  assert.equal(plan.steps.some((step) => step.includes("Run application smoke flow")), true);
+  assert.equal(plan.requiredEnvironment.includes("EMAIL_CONFIG_SECRET or APP_SECRET"), true);
+  assert.equal(plan.automatedVerification.some((step) => step.includes("email crm smoke flow")), true);
+  assert.equal(plan.automatedVerification.some((step) => step.includes("--smoke")), true);
+  assert.equal(plan.automatedVerification.some((step) => step.includes("tests/e2e/email-flow.spec.ts")), true);
+  assert.equal(plan.manualVerification.some((step) => step.includes("OAuth callback URL")), true);
+  assert.equal(plan.manualVerification.some((step) => step.includes("OAuth authorization")), true);
+  assert.equal(plan.manualVerification.some((step) => step.includes("AI entries include source counts") && step.includes("generationMode") && step.includes("providerError")), true);
+  const script = readFileSync("scripts/email-verify.ts", "utf8");
+  assert.match(script, /checkEmailSubsystemDiagnosticsForContext/);
+  assert.match(script, /generationMode:\s*aiResult\.generationMode/);
+  assert.match(script, /providerError:\s*aiResult\.providerError/);
+  assert.doesNotMatch(script, /checkEmailSubsystemDiagnostics\(\{ accounts, includeJobs: true \}\)/);
+});
+
+await run("email browser e2e spec is loadable", () => {
+  const result = spawnSync(process.execPath, ["node_modules/@playwright/test/cli.js", "test", "tests/e2e/email-flow.spec.ts", "--list"], {
+    cwd: process.cwd(),
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /email-flow\.spec\.ts/);
+  assert.match(result.stdout, /admin can use email workspace reply translate and send flow/);
+});
+
+await run("browser e2e database preflight fails early with actionable guidance", () => {
+  const startScript = readFileSync("scripts/e2e-next-start.mjs", "utf8");
+  const devScript = readFileSync("scripts/e2e-next-dev.mjs", "utf8");
+  assert.match(startScript, /e2e-database-preflight\.mjs/);
+  assert.match(devScript, /e2e-database-preflight\.mjs/);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      "import { assertE2eDatabaseReachable } from './scripts/e2e-database-preflight.mjs'; await assertE2eDatabaseReachable('postgresql://crm:crm@127.0.0.1:1/app', { label: 'e2e-test', timeoutMs: 25 });"
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, E2E_SKIP_DATABASE_PREFLIGHT: "false" }
+    }
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Cannot reach PostgreSQL at 127\.0\.0\.1:1/);
+  assert.match(result.stderr, /docker compose up -d postgres/);
+});
+
+await run("local env loader reads env files without overriding explicit environment", async () => {
+  const directory = await makeTempDir("crm-local-env");
+  const previousBase = process.env.CRM_ENV_TEST_BASE;
+  const previousLocal = process.env.CRM_ENV_TEST_LOCAL;
+  const previousExisting = process.env.CRM_ENV_TEST_EXISTING;
+  try {
+    await writeFile(join(directory, ".env"), "CRM_ENV_TEST_BASE=from-env\nCRM_ENV_TEST_EXISTING=from-env\n");
+    await writeFile(join(directory, ".env.local"), "CRM_ENV_TEST_LOCAL='from-local'\nCRM_ENV_TEST_BASE=from-local\nCRM_ENV_TEST_EXISTING=from-local\n");
+    process.env.CRM_ENV_TEST_EXISTING = "already-set";
+    delete process.env.CRM_ENV_TEST_BASE;
+    delete process.env.CRM_ENV_TEST_LOCAL;
+
+    loadLocalEnvFiles([".env", ".env.local"], directory);
+
+    assert.equal(process.env.CRM_ENV_TEST_BASE, "from-env");
+    assert.equal(process.env.CRM_ENV_TEST_LOCAL, "from-local");
+    assert.equal(process.env.CRM_ENV_TEST_EXISTING, "already-set");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    restoreEnvValue("CRM_ENV_TEST_BASE", previousBase);
+    restoreEnvValue("CRM_ENV_TEST_LOCAL", previousLocal);
+    restoreEnvValue("CRM_ENV_TEST_EXISTING", previousExisting);
+  }
+});
+
+await run("email database preflight parses configured database targets", () => {
+  assert.deepEqual(getDatabaseConnectionTarget("postgresql://crm:crm@127.0.0.1:54329/ai_agent_crm?schema=public"), {
+    host: "127.0.0.1",
+    port: 54329
+  });
+  assert.deepEqual(getDatabaseConnectionTarget("postgresql://crm:crm@postgres/ai_agent_crm"), {
+    host: "postgres",
+    port: 5432
+  });
+  assert.throws(() => getDatabaseConnectionTarget(undefined), /DATABASE_URL/);
+  assert.throws(() => getDatabaseConnectionTarget("not a url"), /not a valid URL/);
+});
+
+await run("email send status messages distinguish queued sent and failed results", () => {
+  assert.equal(formatEmailSendResultMessage({ status: "queued", subject: "Proposal" }), "邮件已加入发送队列 Proposal");
+  assert.equal(formatEmailSendResultMessage({ status: "sending", subject: "Proposal" }), "邮件正在发送 Proposal");
+  assert.equal(formatEmailSendResultMessage({ status: "sent", subject: "Proposal" }), "已发送邮件 Proposal");
+  assert.equal(formatEmailSendResultMessage({ status: "failed", subject: "Proposal" }), "邮件发送失败 Proposal");
+  assert.equal(formatEmailSendResultMessage({ status: "failed", subject: "Proposal", failureReason: "SMTP returned 550" }), "邮件发送失败 Proposal：SMTP returned 550");
+});
+
+await run("email send failure helper returns persisted failed messages for immediate UI feedback", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Failed Send Lookup",
+    emailAddress: "failed-send@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true
+  });
+  const queued = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Failed send lookup",
+    bodyText: "Expose this failure to the UI."
+  });
+  const failed = store.updateEmailMessageStatus(context, queued.id, "failed", { failureReason: "SMTP returned 550" });
+  const originalError = new Error("Original send failure");
+
+  const result = await getFailedEmailSendResultOrThrow(context, store, failed.id, originalError);
+  assert.equal(result.status, "failed");
+  assert.equal(result.failureReason, "SMTP returned 550");
+
+  const queuedAgain = store.updateEmailMessageStatus(context, failed.id, "queued");
+  await assert.rejects(() => getFailedEmailSendResultOrThrow(context, store, queuedAgain.id, originalError), /Original send failure/);
+});
+
+await run("email sync failure helper returns updated error accounts for immediate UI feedback", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Sync Error Lookup",
+    emailAddress: "sync-error@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true
+  });
+  const originalError = new Error("IMAP authentication failed");
+  const failedAccount = store.markEmailAccountConnectionError(context, account.id, originalError.message);
+
+  const result = await getFailedEmailSyncResultOrThrow(context, store, account.id, originalError);
+  assert.equal(result.status, "failed");
+  assert.equal(result.account.status, "error");
+  assert.equal(result.account.lastConnectionError, "IMAP authentication failed");
+  assert.equal(result.error, "IMAP authentication failed");
+  assert.equal(result.importedCount, 0);
+  assert.equal(result.scannedCount, 0);
+
+  store.markEmailAccountConnectionError(context, failedAccount.id, null);
+  await assert.rejects(() => getFailedEmailSyncResultOrThrow(context, store, account.id, originalError), /IMAP authentication failed/);
+});
+
+await run("secret generator emits deployable email secrets", () => {
+  const result = spawnSync(process.execPath, ["scripts/generate-secrets.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const secrets = JSON.parse(result.stdout);
+  assert.match(secrets.EMAIL_CONFIG_SECRET, /^[A-Za-z0-9_-]{32,}$/);
+  assert.match(secrets.EMAIL_OAUTH_STATE_SECRET, /^[A-Za-z0-9_-]{32,}$/);
+  assert.notEqual(secrets.EMAIL_CONFIG_SECRET, secrets.EMAIL_OAUTH_STATE_SECRET);
+});
+
+await run("env initializer creates non-placeholder email secrets without overwriting", async () => {
+  const directory = await makeTempDir("crm-env-init");
+  try {
+    const examplePath = join(directory, ".env.example");
+    const outputPath = join(directory, ".env");
+    await writeFile(
+      examplePath,
+      [
+        'DATABASE_URL="postgresql://crm:crm@127.0.0.1:54329/ai_agent_crm?schema=public"',
+        'EMAIL_CONFIG_SECRET="replace-with-at-least-32-random-characters"',
+        'EMAIL_OAUTH_STATE_SECRET="replace-with-at-least-32-random-characters"'
+      ].join("\n"),
+      "utf8"
+    );
+
+    const created = spawnSync(process.execPath, ["scripts/init-env.mjs", "--example", examplePath, "--output", outputPath], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+
+    assert.equal(created.status, 0, created.stderr);
+    const initialized = readFileSync(outputPath, "utf8");
+    assert.doesNotMatch(initialized, /replace-with-at-least-32-random-characters/);
+    assert.match(initialized, /EMAIL_CONFIG_SECRET="[A-Za-z0-9_-]{32,}"/);
+    assert.match(initialized, /EMAIL_OAUTH_STATE_SECRET="[A-Za-z0-9_-]{32,}"/);
+
+    const blocked = spawnSync(process.execPath, ["scripts/init-env.mjs", "--example", examplePath, "--output", outputPath], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /Refusing to overwrite/);
+
+    const partialPath = join(directory, ".env.local");
+    await writeFile(
+      partialPath,
+      [
+        'DATABASE_URL="postgresql://postgres@127.0.0.1:54329/ai_agent_crm?schema=public"',
+        'AI_MODEL="existing-model"'
+      ].join("\n"),
+      "utf8"
+    );
+    const merged = spawnSync(process.execPath, ["scripts/init-env.mjs", "--example", examplePath, "--output", partialPath, "--merge-missing"], {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    });
+    assert.equal(merged.status, 0, merged.stderr);
+    const mergedEnv = readFileSync(partialPath, "utf8");
+    assert.match(mergedEnv, /DATABASE_URL="postgresql:\/\/postgres@127\.0\.0\.1:54329\/ai_agent_crm\?schema=public"/);
+    assert.match(mergedEnv, /AI_MODEL="existing-model"/);
+    assert.match(mergedEnv, /EMAIL_CONFIG_SECRET="[A-Za-z0-9_-]{32,}"/);
+    assert.match(mergedEnv, /EMAIL_OAUTH_STATE_SECRET="[A-Za-z0-9_-]{32,}"/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+await run("compose and env example keep email deployment settings aligned", () => {
+  const envExample = readFileSync(".env.example", "utf8");
+  const compose = readFileSync("docker-compose.yml", "utf8");
+
+  assert.match(envExample, /DATABASE_URL="postgresql:\/\/crm:crm@127\.0\.0\.1:54329\/ai_agent_crm\?schema=public"/);
+  assert.match(compose, /- "54329:5432"/);
+  assert.match(compose, /APP_BASE_URL: \$\{APP_BASE_URL:-http:\/\/127\.0\.0\.1:3000\}/);
+  assert.match(compose, /ALLOW_INSECURE_APP_BASE_URL: \$\{ALLOW_INSECURE_APP_BASE_URL:-false\}/);
+  assert.match(compose, /EMAIL_DELIVERY_MODE: \$\{EMAIL_DELIVERY_MODE:-live\}/);
+  assert.match(compose, /EMAIL_CONFIG_SECRET: "\$\{EMAIL_CONFIG_SECRET:\?Set EMAIL_CONFIG_SECRET in \.env\}"/);
+  assert.match(compose, /EMAIL_OAUTH_STATE_SECRET: "\$\{EMAIL_OAUTH_STATE_SECRET:\?Set EMAIL_OAUTH_STATE_SECRET in \.env\}"/);
+  assert.match(compose, /email-sync:/);
+  assert.match(compose, /scripts\/email-sync\.ts --loop/);
+  assert.match(compose, /EMAIL_SYNC_INTERVAL_MS: \$\{EMAIL_SYNC_INTERVAL_MS:-300000\}/);
+  assert.match(compose, /EMAIL_SYNC_LIMIT: \$\{EMAIL_SYNC_LIMIT:-25\}/);
+  assert.match(envExample, /EMAIL_SYNC_INTERVAL_MS="300000"/);
+  assert.match(envExample, /EMAIL_SYNC_LIMIT="25"/);
+  assert.match(envExample, /EMAIL_SYNC_USER_ID="user-admin"/);
+  assert.match(envExample, /EMAIL_SEND_CLAIM_TIMEOUT_MS="900000"/);
+  assert.equal((compose.match(/^      APP_BASE_URL:/gm) ?? []).length, 3);
+  assert.equal((compose.match(/^      ALLOW_INSECURE_APP_BASE_URL:/gm) ?? []).length, 3);
+  assert.equal((compose.match(/^      EMAIL_DELIVERY_MODE:/gm) ?? []).length, 3);
+  assert.equal((compose.match(/^      EMAIL_CONFIG_SECRET:/gm) ?? []).length, 3);
+  assert.equal((compose.match(/^      EMAIL_OAUTH_STATE_SECRET:/gm) ?? []).length, 3);
+});
+
+await run("email sync script dry run describes loop scheduler settings", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--import", "./scripts/register-alias.mjs", "scripts/email-sync.ts", "--dry-run", "--loop", "--interval-ms", "60000", "--limit", "25", "--user-id", "user-admin"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const plan = JSON.parse(result.stdout);
+  assert.equal(plan.event, "email_sync_plan");
+  assert.equal(plan.userId, "user-admin");
+  assert.equal(plan.loop, true);
+  assert.equal(plan.intervalMs, 60000);
+  assert.equal(plan.limit, 25);
+  assert.equal(plan.requiredPermission, "crm.admin");
+});
+
+await run("email sync script rejects invalid bounded sync limits", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--import", "./scripts/register-alias.mjs", "scripts/email-sync.ts", "--dry-run", "--limit", "101"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8"
+    }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /integer between 1 and 100/);
+});
+
+await run("production environment validation blocks placeholder email secrets", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "replace-with-at-least-32-random-characters",
+      EMAIL_OAUTH_STATE_SECRET: "replace-with-at-least-32-random-characters"
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.match(payload.errors.join("\n"), /deployment-specific random value/);
 });
 
 await run("production environment validation blocks dangerous test auth header", () => {
@@ -693,6 +1305,89 @@ await run("production environment validation blocks dangerous test auth header",
   assert.match(payload.errors.join("\n"), /ALLOW_TEST_USER_HEADER/);
 });
 
+await run("production environment validation blocks dry-run email delivery", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_DELIVERY_MODE: "dry-run"
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.match(payload.errors.join("\n"), /EMAIL_DELIVERY_MODE/);
+});
+
+await run("production environment validation blocks invalid email sync interval", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "test-oauth-state-secret-32-bytes",
+      EMAIL_SYNC_INTERVAL_MS: "0"
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.match(payload.errors.join("\n"), /EMAIL_SYNC_INTERVAL_MS/);
+});
+
+await run("production environment validation blocks invalid email sync limit", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "test-oauth-state-secret-32-bytes",
+      EMAIL_SYNC_LIMIT: "101"
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.match(payload.errors.join("\n"), /EMAIL_SYNC_LIMIT/);
+});
+
+await run("production environment validation blocks invalid email send claim timeout", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "test-oauth-state-secret-32-bytes",
+      EMAIL_SEND_CLAIM_TIMEOUT_MS: "0"
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.match(payload.errors.join("\n"), /EMAIL_SEND_CLAIM_TIMEOUT_MS/);
+});
+
 await run("production environment validation blocks insecure public app base url", () => {
   const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
     cwd: process.cwd(),
@@ -711,6 +1406,26 @@ await run("production environment validation blocks insecure public app base url
   assert.match(payload.errors.join("\n"), /https/);
 });
 
+await run("production environment validation blocks weak oauth state secret", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "short"
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.match(payload.errors.join("\n"), /EMAIL_OAUTH_STATE_SECRET/);
+});
+
 await run("production environment validation allows local compose but warns on demo seed", () => {
   const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
     cwd: process.cwd(),
@@ -720,6 +1435,7 @@ await run("production environment validation allows local compose but warns on d
       NODE_ENV: "production",
       DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
       APP_BASE_URL: "http://127.0.0.1:3000",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
       JOB_EXECUTOR: "redis",
       REDIS_URL: "redis://redis:6379",
       SEED_ON_EMPTY: "true"
@@ -1200,7 +1916,7 @@ await run("reference fields require existing target objects and records", () => 
         type: "reference",
         options: [{ label: "Missing", value: "missing_accounts" }]
       }),
-    /Object|对象|不存在|not found/i
+    /对象不存在|Object|not found/i
   );
 
   const field = store.createFieldDefinition(context, {
@@ -1276,13 +1992,16 @@ await run("sales users only see owned or team-owned records", () => {
   const adminContext = store.getContext("user-admin");
 
   assert.equal(store.listRecords(salesContext, "contacts").some((record) => record.id === "contact-other"), false);
-  assert.throws(() => store.getRecord(salesContext, "contacts", "contact-other"), /not found|不存在/);
+  assert.throws(() => store.getRecord(salesContext, "contacts", "contact-other"), /记录不存在|not found/);
+  const hiddenActivity = store.createActivity(adminContext, { recordId: "contact-other", type: "note", title: "Hidden activity" });
   assert.equal(store.listActivities(salesContext, "contact-other").length, 0);
+  assert.throws(() => store.getActivity(salesContext, hiddenActivity.id), /Activity not found/);
   assert.throws(
     () => store.createActivity(salesContext, { recordId: "contact-other", type: "note", title: "Blocked" }),
-    /not found|不存在/
+    /记录不存在|not found/
   );
   assert.equal(store.getRecord(adminContext, "contacts", "contact-other").id, "contact-other");
+  assert.equal(store.getActivity(adminContext, hiddenActivity.id).title, "Hidden activity");
 });
 
 await run("non-admin record writes keep owner scoped to the current user", () => {
@@ -1514,18 +2233,18 @@ await run("csv import jobs preserve explicit header mappings", () => {
   const context = store.getContext("user-admin");
   const completed = store.createCsvImportJob(context, {
     objectKey: "contacts",
-    csv: "姓名,邮箱\n任务映射客户,job-mapped@example.com",
+    csv: "Name,Email\nMapped Customer,job-mapped@example.com",
     strategy: "skip-invalid",
-    mapping: { 姓名: "title", 邮箱: "email" }
+    mapping: { Name: "title", Email: "email" }
   });
   assert.equal(completed.status, "completed");
   assert.equal(completed.createdCount, 1);
   assert.equal(completed.result?.created[0]?.data.email, "job-mapped@example.com");
-  assert.deepEqual(completed.sourcePayload?.mapping, { 姓名: "title", 邮箱: "email" });
-  assert.deepEqual(store.listImportJobs(context, "contacts").find((job) => job.id === completed.id)?.sourcePayload?.mapping, { 姓名: "title", 邮箱: "email" });
+  assert.deepEqual(completed.sourcePayload?.mapping, { Name: "title", Email: "email" });
+  assert.deepEqual(store.listImportJobs(context, "contacts").find((job) => job.id === completed.id)?.sourcePayload?.mapping, { Name: "title", Email: "email" });
 
   const rerun = store.createRerunCsvImportJob(context, completed.id);
-  assert.deepEqual(rerun.payload.mapping, { 姓名: "title", 邮箱: "email" });
+  assert.deepEqual(rerun.payload.mapping, { Name: "title", Email: "email" });
 });
 
 await run("csv import jobs preserve preset context and observability summary", () => {
@@ -1583,14 +2302,13 @@ await run("csv import issue export reuses explicit mappings as field headers", (
   const context = store.getContext("user-admin");
   const job = store.createCsvImportJob(context, {
     objectKey: "contacts",
-    csv: "姓名,邮箱,电话\n重复林,lin@example.com,13900000004",
-    strategy: "skip-invalid",
-    mapping: { 姓名: "title", 邮箱: "email", 电话: "phone" }
+    csv: "Name,Email,Phone\nDuplicate Lin,lin@example.com,13900000004",
+    mapping: { Name: "title", Email: "email", Phone: "phone" }
   });
 
   const csv = store.exportImportJobIssuesCsv(context, job.id);
   assert.match(csv, /^rowNumber,status,issues,title,email,phone/m);
-  assert.doesNotMatch(csv, /姓名,邮箱,电话/);
+  assert.doesNotMatch(csv, /Name,Email,Phone/);
   assert.match(csv, /lin@example\.com/);
 
   const preview = store.previewCsvImport(context, "contacts", csv);
@@ -1702,6 +2420,77 @@ await run("inline background executor dispatches webhook events through the repo
   assert.equal(calls[0].data.recordId, "record-inline");
 });
 
+await run("inline background executor rejects email sync without connection config", async () => {
+  const calls = [];
+  const account = {
+    id: "email-account-inline",
+    workspaceId: defaultWorkspaceId,
+    name: "Inline mailbox",
+    emailAddress: "inline@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: false,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const repository = {
+    async getEmailAccount(context, accountId) {
+      calls.push({ method: "getEmailAccount", context, accountId });
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return undefined;
+    },
+    async markEmailAccountConnectionError(context, accountId, errorMessage) {
+      calls.push({ method: "markEmailAccountConnectionError", context, accountId, errorMessage });
+      return { ...account, status: "error", lastConnectionError: errorMessage };
+    },
+    async syncEmailAccount(context, accountId) {
+      calls.push({ method: "syncEmailAccount", context, accountId });
+      return { account, importedCount: 0, status: "synced" };
+    }
+  };
+  const executor = new InlineBackgroundJobExecutor(repository);
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+
+  await assert.rejects(
+    () => executor.runEmailSyncJob(context, { accountId: account.id }),
+    /connection is not configured/
+  );
+  assert.equal(calls.some((call) => call.method === "markEmailAccountConnectionError" && call.errorMessage === "Email account connection is not configured"), true);
+  assert.equal(calls.some((call) => call.method === "syncEmailAccount"), false);
+});
+
+await run("email sync requires admin before reading provider connection config", async () => {
+  const store = new CrmStore();
+  const salesContext = store.getContext("user-sales");
+  const calls = [];
+  const repository = {
+    async getEmailAccount() {
+      calls.push("getEmailAccount");
+      throw new Error("getEmailAccount should not be called");
+    },
+    async getEmailAccountConnectionConfig() {
+      calls.push("getEmailAccountConnectionConfig");
+      throw new Error("connection config should not be read");
+    },
+    async syncEmailAccount() {
+      calls.push("syncEmailAccount");
+      throw new Error("sync should not run");
+    }
+  };
+
+  await assert.rejects(
+    () => createEmailProviderAdapter(repository).sync(salesContext, "email-account-secret"),
+    /crm\.admin/
+  );
+  assert.deepEqual(calls, []);
+});
+
 await run("redis job envelopes preserve workspace user and payload", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
@@ -1717,6 +2506,1083 @@ await run("redis job envelopes preserve workspace user and payload", () => {
   assert.equal(envelope.jobId, "job-queued");
   assert.equal(envelope.payload.strategy, "skip-invalid");
   assert.match(envelope.enqueuedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+await run("email sync job envelopes preserve workspace user and account payload", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const envelope = buildEmailSyncJobEnvelope(context, { accountId: "email-account-queued", limit: 25 });
+
+  assert.equal(envelope.type, "email_sync");
+  assert.equal(envelope.workspaceId, context.workspaceId);
+  assert.equal(envelope.userId, context.user.id);
+  assert.equal(envelope.payload.accountId, "email-account-queued");
+  assert.equal(envelope.payload.limit, 25);
+  assert.equal(envelope.attempts, 0);
+  assert.match(envelope.enqueuedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+await run("email send job envelopes preserve workspace user and message payload", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const envelope = buildEmailSendJobEnvelope(context, { messageId: "email-message-queued" });
+
+  assert.equal(envelope.type, "email_send");
+  assert.equal(envelope.workspaceId, context.workspaceId);
+  assert.equal(envelope.userId, context.user.id);
+  assert.equal(envelope.payload.messageId, "email-message-queued");
+  assert.equal(envelope.attempts, 0);
+  assert.match(envelope.enqueuedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+await run("email translate job envelopes preserve workspace user and message payload", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const envelope = buildEmailTranslateJobEnvelope(context, { messageId: "email-message-translate", targetLocale: "en-US" });
+
+  assert.equal(envelope.type, "email_translate");
+  assert.equal(envelope.workspaceId, context.workspaceId);
+  assert.equal(envelope.userId, context.user.id);
+  assert.equal(envelope.payload.messageId, "email-message-translate");
+  assert.equal(envelope.payload.targetLocale, "en-US");
+  assert.equal(envelope.attempts, 0);
+});
+
+await run("email analyze job envelopes preserve workspace user and thread payload", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const envelope = buildEmailAnalyzeJobEnvelope(context, { threadId: "email-thread-analyze", sourceMessageId: "email-message-analyze" });
+
+  assert.equal(envelope.type, "email_analyze");
+  assert.equal(envelope.workspaceId, context.workspaceId);
+  assert.equal(envelope.userId, context.user.id);
+  assert.equal(envelope.payload.threadId, "email-thread-analyze");
+  assert.equal(envelope.payload.sourceMessageId, "email-message-analyze");
+  assert.equal(envelope.attempts, 0);
+});
+
+await run("email summarize job envelopes preserve workspace user and thread payload", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const envelope = buildEmailSummarizeJobEnvelope(context, { threadId: "email-thread-summarize" });
+
+  assert.equal(envelope.type, "email_summarize");
+  assert.equal(envelope.workspaceId, context.workspaceId);
+  assert.equal(envelope.userId, context.user.id);
+  assert.equal(envelope.payload.threadId, "email-thread-summarize");
+  assert.equal(envelope.attempts, 0);
+});
+
+await run("redis email executor checks permissions before enqueueing jobs", async () => {
+  const executor = new RedisBackgroundJobExecutor({});
+  const noAdminContext = {
+    workspaceId: defaultWorkspaceId,
+    user: { ...seedData.users[1], id: "user-no-admin" },
+    role: { ...seedData.roles[1], permissions: ["crm.read", "crm.write", "ai.use"] }
+  };
+  const readOnlyContext = {
+    workspaceId: defaultWorkspaceId,
+    user: { ...seedData.users[1], id: "user-read-only" },
+    role: { ...seedData.roles[1], permissions: ["crm.read", "ai.use"] }
+  };
+  const noAiContext = {
+    workspaceId: defaultWorkspaceId,
+    user: { ...seedData.users[1], id: "user-no-ai" },
+    role: { ...seedData.roles[1], permissions: ["crm.read", "crm.write"] }
+  };
+
+  await assert.rejects(() => executor.runEmailSyncJob(noAdminContext, { accountId: "account-queued" }), /crm\.admin/);
+  await assert.rejects(() => executor.runEmailSendJob(readOnlyContext, { messageId: "message-queued" }), /crm\.write/);
+  await assert.rejects(() => executor.runEmailTranslateJob(noAiContext, { messageId: "message-translate" }), /ai\.use/);
+  await assert.rejects(() => executor.runEmailAnalyzeJob(noAiContext, { threadId: "thread-analyze" }), /ai\.use/);
+  await assert.rejects(() => executor.runEmailSummarizeJob(noAiContext, { threadId: "thread-summarize" }), /ai\.use/);
+});
+
+await run("inline background executor fails unsupported custom email provider without silent delivery", async () => {
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const account = {
+    id: "legacy-custom-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Legacy Custom",
+    emailAddress: "legacy-custom@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true,
+    syncEnabled: true,
+    connectionConfigured: false,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const queued = {
+    id: "legacy-custom-message",
+    workspaceId: defaultWorkspaceId,
+    threadId: "legacy-custom-thread",
+    accountId: account.id,
+    direction: "outbound",
+    status: "queued",
+    from: account.emailAddress,
+    to: ["buyer@example.com"],
+    subject: "Queued proposal",
+    bodyText: "Proposal attached.",
+    createdAt: new Date().toISOString()
+  };
+  let failedStatus;
+  const repository = {
+    async getEmailMessage() {
+      return queued;
+    },
+    async getEmailAccount() {
+      return account;
+    },
+    async updateEmailMessageStatus(_context, messageId, status, patch) {
+      failedStatus = { messageId, status, patch };
+      return { ...queued, status, failureReason: patch?.failureReason };
+    }
+  };
+  const adapter = createEmailProviderAdapter(repository);
+
+  await assert.rejects(
+    () => adapter.sendQueued(context, queued.id),
+    /does not support send/
+  );
+  assert.equal(failedStatus.status, "failed");
+  assert.match(failedStatus.patch.failureReason, /does not support send/);
+});
+
+await run("email provider dry-run delivery marks supported queued messages sent without mailbox credentials", async () => {
+  const previousMode = process.env.EMAIL_DELIVERY_MODE;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.EMAIL_DELIVERY_MODE = "dry-run";
+  process.env.NODE_ENV = "test";
+  try {
+    const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+    const account = {
+      id: "dry-run-smtp-account",
+      workspaceId: defaultWorkspaceId,
+      name: "Dry Run SMTP",
+      emailAddress: "dry-run@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      sendEnabled: true,
+      syncEnabled: false,
+      connectionConfigured: false,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const queued = {
+      id: "dry-run-message",
+      workspaceId: defaultWorkspaceId,
+      threadId: "dry-run-thread",
+      accountId: account.id,
+      direction: "outbound",
+      status: "queued",
+      from: account.emailAddress,
+      to: ["buyer@example.com"],
+      subject: "Dry run proposal",
+      bodyText: "Proposal content.",
+      createdAt: new Date().toISOString()
+    };
+    let connectionConfigRead = false;
+    const repository = {
+      async getEmailMessage() {
+        return queued;
+      },
+      async getEmailAccount() {
+        return account;
+      },
+      async listEmailMessages() {
+        return [queued];
+      },
+      async getEmailAccountConnectionConfig() {
+        connectionConfigRead = true;
+        return undefined;
+      },
+      async updateEmailMessageStatus(_context, messageId, status, patch) {
+        return { ...queued, id: messageId, status, externalMessageId: patch?.externalMessageId };
+      }
+    };
+
+    const result = await createEmailProviderAdapter(repository).sendQueued(context, queued.id);
+    assert.equal(result.status, "sent");
+    assert.equal(result.externalMessageId, "dry-run-dry-run-message");
+    assert.equal(connectionConfigRead, false);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.EMAIL_DELIVERY_MODE;
+    } else {
+      process.env.EMAIL_DELIVERY_MODE = previousMode;
+    }
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  }
+});
+
+await run("email provider does not deliver when another worker already claimed the queued send", async () => {
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const account = {
+    id: "claimed-send-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Claimed Send",
+    emailAddress: "claimed-send@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true,
+    syncEnabled: false,
+    connectionConfigured: false,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const queued = {
+    id: "claimed-send-message",
+    workspaceId: defaultWorkspaceId,
+    threadId: "claimed-send-thread",
+    accountId: account.id,
+    direction: "outbound",
+    status: "queued",
+    from: account.emailAddress,
+    to: ["buyer@example.com"],
+    subject: "Already claimed",
+    bodyText: "Another worker is sending this.",
+    createdAt: new Date().toISOString()
+  };
+  let statusUpdateCount = 0;
+  const repository = {
+    async getEmailMessage() {
+      return queued;
+    },
+    async getEmailAccount() {
+      return account;
+    },
+    async claimEmailMessageForSending() {
+      return { message: { ...queued, status: "sending" }, claimed: false };
+    },
+    async updateEmailMessageStatus() {
+      statusUpdateCount += 1;
+      throw new Error("Already claimed messages should not be delivered or updated");
+    }
+  };
+
+  const result = await createEmailProviderAdapter(repository).sendQueued(context, queued.id);
+
+  assert.equal(result.status, "sending");
+  assert.equal(statusUpdateCount, 0);
+});
+
+await run("email crm smoke flow links customer context ai draft attachments and dry-run send", async () => {
+  const previousMode = process.env.EMAIL_DELIVERY_MODE;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.EMAIL_DELIVERY_MODE = "dry-run";
+  process.env.NODE_ENV = "test";
+  try {
+    const store = new CrmStore();
+    const context = store.getContext("user-admin");
+    const account = store.createEmailAccount(context, {
+      name: "Smoke Sales Inbox",
+      emailAddress: "smoke-sales@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      sendEnabled: true,
+      syncEnabled: true
+    });
+    store.updateEmailAiSettings(context, {
+      features: {
+        draft: true,
+        translate: true,
+        auto_translate: false,
+        context_analysis: true,
+        auto_context_analysis: false,
+        auto_summarize: true
+      },
+      requireSourceLinks: true,
+      maxHistoryMessages: 4,
+      maxKnowledgeArticles: 2,
+      maxContextChars: 4000
+    });
+    const knowledge = store.createKnowledgeArticle(context, {
+      title: "私有化部署上线包",
+      body: "私有化部署默认包含 Docker Compose、管理员培训和上线前健康检查。",
+      tags: ["deployment", "training"],
+      active: true
+    });
+    const inbound = store.recordEmailMessage(context, {
+      accountId: account.id,
+      direction: "inbound",
+      from: "lin@example.com",
+      to: ["smoke-sales@example.com"],
+      subject: "确认部署计划",
+      bodyText: "请确认私有化部署计划和上线培训。",
+      recordId: "contact-lin",
+      externalMessageId: "smoke-inbound-message-id",
+      receivedAt: "2026-06-20T08:30:00.000Z"
+    });
+
+    const assistantContext = store.buildEmailAssistantContext(context, {
+      purpose: "draft",
+      threadId: inbound.threadId,
+      sourceMessageId: inbound.id
+    });
+    const aiResult = await generateEmailAiOutput({ context: assistantContext, userPrompt: "回复客户并确认下一步" });
+    store.recordEmailAiGeneration(context, {
+      purpose: "draft",
+      enabled: aiResult.enabled,
+      recordId: assistantContext.recordId,
+      threadId: assistantContext.threadId,
+      sourceMessageId: assistantContext.sourceMessageId,
+      sourceCount: aiResult.sources.length,
+      sourceLabels: aiResult.sources.map((source) => source.label),
+      userPromptLength: "回复客户并确认下一步".length,
+      resultTextLength: aiResult.text.length,
+      contextCharCount: aiResult.budget.contextCharCount,
+      maxContextChars: aiResult.budget.maxContextChars,
+      modelPromptChars: aiResult.budget.modelPromptChars,
+      contextTruncated: aiResult.budget.truncated,
+      suggestedSubjectProvided: Boolean(aiResult.suggestedSubject)
+    });
+    const queued = store.queueEmailMessage(context, {
+      accountId: account.id,
+      threadId: inbound.threadId,
+      recordId: "contact-lin",
+      to: ["lin@example.com"],
+      subject: aiResult.suggestedSubject ?? "Re: 确认部署计划",
+      bodyText: aiResult.text,
+      attachments: [
+        {
+          fileName: "deployment-plan.txt",
+          contentType: "text/plain",
+          size: 19,
+          contentBase64: Buffer.from("deployment checklist").toString("base64")
+        }
+      ],
+      aiAssisted: true,
+      aiPurpose: "draft",
+      aiSourceMessageId: inbound.id,
+      aiSources: aiResult.sources,
+      aiGeneratedAt: "2026-06-20T08:35:00.000Z"
+    });
+    const repository = {
+      async getEmailMessage(requestContext, messageId) {
+        return store.getEmailMessage(requestContext, messageId);
+      },
+      async getEmailAccount(requestContext, accountId) {
+        return store.getEmailAccount(requestContext, accountId);
+      },
+      async listEmailMessages(requestContext, threadId) {
+        return store.listEmailMessages(requestContext, threadId);
+      },
+      async updateEmailMessageStatus(requestContext, messageId, status, patch) {
+        return store.updateEmailMessageStatus(requestContext, messageId, status, patch);
+      }
+    };
+    const sent = await createEmailProviderAdapter(repository).sendQueued(context, queued.id);
+    const threadMessages = store.listEmailMessages(context, inbound.threadId);
+    const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).at(-1);
+
+    assert.equal(assistantContext.enabled, true);
+    assert.equal(assistantContext.recordId, "contact-lin");
+    assert.match(assistantContext.communicationSummary, /确认部署计划/);
+    assert.match(assistantContext.knowledgeBrief, /Docker Compose/);
+    assert.equal(aiResult.sources.some((source) => source.messageId === inbound.id), true);
+    assert.equal(aiResult.sources.some((source) => source.recordId === "contact-lin"), true);
+    assert.equal(aiResult.sources.some((source) => source.knowledgeArticleId === knowledge.id), true);
+    assert.equal(sent.status, "sent");
+    assert.equal(sent.externalMessageId, `dry-run-${queued.id}`);
+    assert.equal(sent.attachments?.[0]?.fileName, "deployment-plan.txt");
+    assert.equal(buildEmailAttachmentHref(sent.id, 0, sent.attachments?.[0] ?? {}), `/api/email/messages/${sent.id}/attachments/0`);
+    assert.equal(threadMessages.some((message) => message.id === inbound.id), true);
+    assert.equal(threadMessages.some((message) => message.id === sent.id && message.aiAssisted), true);
+    assert.equal(audit?.details.resultTextLength, aiResult.text.length);
+    assert.equal("text" in audit.details, false);
+    assert.equal("userPrompt" in audit.details, false);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.EMAIL_DELIVERY_MODE;
+    } else {
+      process.env.EMAIL_DELIVERY_MODE = previousMode;
+    }
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  }
+});
+
+await run("email provider normalizes unsupported custom send and sync toggles", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Custom connector slot",
+    emailAddress: "custom-slot@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true,
+    syncEnabled: true
+  });
+
+  assert.equal(account.sendEnabled, false);
+  assert.equal(account.syncEnabled, false);
+  assert.throws(
+    () =>
+      store.queueEmailMessage(context, {
+        accountId: account.id,
+        to: ["buyer@example.com"],
+        subject: "Unsupported custom send",
+        bodyText: "This should not queue."
+      }),
+    /not enabled/
+  );
+});
+
+await run("inline background executor persists email translations through the shared ai context", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { translate: true, auto_translate: true, context_analysis: true, auto_summarize: true }, defaultLocale: "en-US" });
+  const account = store.createEmailAccount(context, {
+    name: "Translate mailbox",
+    emailAddress: "translate@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true,
+    syncEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["translate@example.com"],
+    subject: "Translate me",
+    bodyText: "Please confirm the implementation plan.",
+    recordId: "contact-lin"
+  });
+  const result = await new InlineBackgroundJobExecutor(store).runEmailTranslateJob(context, { messageId: message.id, targetLocale: "en-US" });
+
+  assert.equal(result.id, message.id);
+  assert.equal(result.translatedLocale, "en-US");
+  assert.match(result.translatedBodyText ?? "", /Content to translate/);
+  assert.equal(result.translatedSources?.some((source) => source.recordId === "contact-lin"), true);
+  assert.equal(result.translatedSources?.some((source) => source.messageId === message.id), true);
+  assert.match(result.translatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "translate" && log.entityId === message.threadId);
+  assert.equal(audit?.details.purpose, "translate");
+  assert.equal(audit?.details.enabled, true);
+  assert.equal(audit?.details.sourceMessageId, message.id);
+  assert.equal(audit?.details.targetLocale, "en-US");
+  assert.equal(audit?.details.sourceCount > 0, true);
+  assert.equal(audit?.details.sourceTextLength, message.bodyText.length);
+  assert.equal("text" in audit.details, false);
+
+  const auditCountBeforeCachedCall = store.listAuditLogs(context, { entityType: "email_ai_generation" }).filter((log) => log.details.purpose === "translate" && log.details.sourceMessageId === message.id).length;
+  const cached = await new InlineBackgroundJobExecutor(store).runEmailTranslateJob(context, { messageId: message.id, targetLocale: "en-US" });
+  const auditCountAfterCachedCall = store.listAuditLogs(context, { entityType: "email_ai_generation" }).filter((log) => log.details.purpose === "translate" && log.details.sourceMessageId === message.id).length;
+  assert.equal(cached.translatedBodyText, result.translatedBodyText);
+  assert.equal(cached.translatedAt, result.translatedAt);
+  assert.equal(auditCountAfterCachedCall, auditCountBeforeCachedCall);
+});
+
+await run("email translation records skipped audit when feature is disabled", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, {
+    features: { draft: false, translate: false, auto_translate: false, context_analysis: false, auto_summarize: false },
+    defaultLocale: "en-US"
+  });
+  const account = store.createEmailAccount(context, {
+    name: "Disabled translate mailbox",
+    emailAddress: "disabled-translate@example.com",
+    provider: "custom",
+    status: "active"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Do not translate",
+    bodyText: "Translation is disabled for this workspace.",
+    recordId: "contact-lin"
+  });
+  const result = await new InlineBackgroundJobExecutor(store).runEmailTranslateJob(context, { messageId: message.id, targetLocale: "en-US" });
+  const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "translate" && log.details.sourceMessageId === message.id);
+
+  assert.equal(result.translatedBodyText, undefined);
+  assert.equal(result.translatedLocale, undefined);
+  assert.equal(result.translatedSources, undefined);
+  assert.ok(audit);
+  assert.equal(audit?.details.enabled, false);
+  assert.equal(audit?.details.recordId, "contact-lin");
+  assert.equal(audit?.details.threadId, message.threadId);
+  assert.equal(audit?.details.targetLocale, "en-US");
+  assert.equal(audit?.details.resultTextLength > 0, true);
+  assert.equal("text" in audit.details, false);
+});
+
+await run("store record email triggers enabled translate summarize and analyze automations", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, {
+    features: { draft: true, translate: true, auto_translate: true, context_analysis: true, auto_context_analysis: true, auto_summarize: true },
+    defaultLocale: "en-US",
+    maxHistoryMessages: 1
+  });
+  const account = store.createEmailAccount(context, {
+    name: "Auto AI mailbox",
+    emailAddress: "auto-ai@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Auto translate summarize and analyze",
+    bodyText: "Please translate, summarize, and analyze this message."
+  });
+  await flushAsyncWork();
+
+  const translated = store.getEmailMessage(context, message.id);
+  const thread = store.listEmailThreads(context).find((candidate) => candidate.id === message.threadId);
+  const aiAudits = store.listAuditLogs(context, { entityType: "email_ai_generation" });
+
+  assert.equal(translated.translatedLocale, "en-US");
+  assert.match(translated.translatedBodyText ?? "", /Content to translate/);
+  assert.equal(translated.translatedSources?.some((source) => source.messageId === message.id), true);
+  assert.match(thread?.summary ?? "", /Compact thread memory/);
+  assert.match(thread?.aiAnalysis ?? "", /Context analysis/);
+  assert.equal(thread?.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
+  assert.equal(aiAudits.some((log) => log.details.purpose === "translate" && log.details.sourceMessageId === message.id), true);
+  assert.equal(aiAudits.some((log) => log.details.purpose === "summarize" && log.details.threadId === message.threadId), true);
+  assert.equal(aiAudits.some((log) => log.details.purpose === "context_analysis" && log.details.threadId === message.threadId), true);
+});
+
+await run("inline background executor refreshes email thread summaries through ai", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, translate: true, context_analysis: true, auto_summarize: true } });
+  const account = store.createEmailAccount(context, {
+    name: "Summary mailbox",
+    emailAddress: "summary@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Deployment question",
+    bodyText: "Can you summarize this thread for the team?",
+    recordId: "contact-lin"
+  });
+  const response = await new InlineBackgroundJobExecutor(store).runEmailSummarizeJob(context, { threadId: message.threadId });
+  const thread = response.thread;
+
+  assert.equal(response.updated, true);
+  assert.equal(response.result.enabled, true);
+  assert.equal(thread?.id, message.threadId);
+  assert.match(thread?.summary ?? "", /Compact thread memory/);
+  const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "summarize" && log.details.threadId === message.threadId);
+  assert.equal(audit?.details.enabled, true);
+  assert.equal(audit?.details.recordId, "contact-lin");
+  assert.equal(audit?.details.sourceCount > 0, true);
+  assert.equal(audit?.details.contextCharCount > 0, true);
+  assert.equal(audit?.details.maxContextChars > 0, true);
+  assert.equal(audit?.details.modelPromptChars > 0, true);
+});
+
+await run("email summarization records skipped audit when feature is disabled", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, translate: true, context_analysis: true, auto_summarize: false } });
+  const account = store.createEmailAccount(context, {
+    name: "Disabled summary mailbox",
+    emailAddress: "disabled-summary@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Do not summarize",
+    bodyText: "Summarization is disabled for this workspace.",
+    recordId: "contact-lin"
+  });
+  const before = store.getEmailThread(context, message.threadId);
+  const response = await new InlineBackgroundJobExecutor(store).runEmailSummarizeJob(context, { threadId: message.threadId });
+  const after = store.getEmailThread(context, message.threadId);
+  const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "summarize" && log.details.threadId === message.threadId);
+
+  assert.equal(response.updated, false);
+  assert.equal(response.result.enabled, false);
+  assert.equal(after.summary, before.summary);
+  assert.equal(after.summaryUpdatedAt, before.summaryUpdatedAt);
+  assert.ok(audit);
+  assert.equal(audit?.details.enabled, false);
+  assert.equal(audit?.details.recordId, "contact-lin");
+  assert.equal(audit?.details.sourceCount > 0, true);
+  assert.equal("text" in audit.details, false);
+});
+
+await run("recording new email preserves existing ai compact thread summary", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { auto_summarize: true } });
+  const account = store.createEmailAccount(context, {
+    name: "Preserve AI Summary",
+    emailAddress: "preserve-summary@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const first = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Original customer context",
+    bodyText: "This first message seeds the thread."
+  });
+
+  store.updateEmailThreadSummary(context, first.threadId, "AI compact memory that should remain stable.");
+  store.recordEmailMessage(context, {
+    accountId: account.id,
+    threadId: first.threadId,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "New follow up",
+    bodyText: "This new message should not overwrite the AI summary."
+  });
+
+  const thread = store.getEmailThread(context, first.threadId);
+  assert.equal(thread.summary, "AI compact memory that should remain stable.");
+});
+
+await run("inline background executor refreshes email thread analysis through ai", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, translate: true, context_analysis: true, auto_summarize: true } });
+  const account = store.createEmailAccount(context, {
+    name: "Analysis mailbox",
+    emailAddress: "analysis@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Deployment risk",
+    bodyText: "We need a deployment recommendation before Friday.",
+    recordId: "contact-lin"
+  });
+  const response = await new InlineBackgroundJobExecutor(store).runEmailAnalyzeJob(context, { threadId: message.threadId, sourceMessageId: message.id });
+  const thread = response.thread;
+
+  assert.equal(response.updated, true);
+  assert.equal(response.result.enabled, true);
+  assert.equal(thread?.id, message.threadId);
+  assert.match(thread?.aiAnalysis ?? "", /Context analysis/);
+  assert.match(thread?.aiAnalysis ?? "", /Recommendation/);
+  assert.equal(thread?.aiAnalysisSources?.some((source) => source.recordId === "contact-lin"), true);
+  assert.equal(thread?.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
+  const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "context_analysis" && log.details.threadId === message.threadId);
+  assert.equal(audit?.details.enabled, true);
+  assert.equal(audit?.details.recordId, "contact-lin");
+  assert.equal(audit?.details.sourceMessageId, message.id);
+  assert.equal(audit?.details.sourceCount > 0, true);
+  assert.equal(audit?.details.modelPromptChars > 0, true);
+});
+
+await run("email context analysis records skipped audit when feature is disabled", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, translate: true, context_analysis: false, auto_summarize: true } });
+  const account = store.createEmailAccount(context, {
+    name: "Disabled analysis mailbox",
+    emailAddress: "disabled-analysis@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Do not analyze",
+    bodyText: "Context analysis is disabled for this workspace.",
+    recordId: "contact-lin"
+  });
+  const response = await new InlineBackgroundJobExecutor(store).runEmailAnalyzeJob(context, { threadId: message.threadId, sourceMessageId: message.id });
+  const thread = store.getEmailThread(context, message.threadId);
+  const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "context_analysis" && log.details.threadId === message.threadId);
+
+  assert.equal(response.updated, false);
+  assert.equal(response.result.enabled, false);
+  assert.equal(thread.aiAnalysis, undefined);
+  assert.equal(thread.aiAnalysisSources, undefined);
+  assert.ok(audit);
+  assert.equal(audit?.details.enabled, false);
+  assert.equal(audit?.details.sourceMessageId, message.id);
+  assert.equal(audit?.details.recordId, "contact-lin");
+  assert.equal("text" in audit.details, false);
+});
+
+await run("worker rejects email sync job envelopes without connection config", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const calls = [];
+  const account = {
+    id: "email-account-worker",
+    workspaceId: defaultWorkspaceId,
+    name: "Worker mailbox",
+    emailAddress: "worker@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: false,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const repository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return undefined;
+    },
+    async markEmailAccountConnectionError(syncContext, accountId, errorMessage) {
+      calls.push({ method: "markEmailAccountConnectionError", syncContext, accountId, errorMessage });
+      return { ...account, status: "error", lastConnectionError: errorMessage };
+    },
+    async syncEmailAccount(syncContext, accountId) {
+      calls.push({ method: "syncEmailAccount", syncContext, accountId });
+      assert.equal(syncContext.user.id, "user-admin");
+      assert.equal(accountId, account.id);
+      return { account, importedCount: 2, status: "synced" };
+    }
+  };
+
+  await assert.rejects(
+    () => processQueuedJobEnvelope(buildEmailSyncJobEnvelope(context, { accountId: account.id }), repository, async () => context),
+    /connection is not configured/
+  );
+  assert.equal(calls.some((call) => call.method === "markEmailAccountConnectionError" && call.accountId === account.id), true);
+  assert.equal(calls.some((call) => call.method === "syncEmailAccount"), false);
+});
+
+await run("worker processes email send job envelopes", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Worker send mailbox",
+    emailAddress: "worker-send@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true
+  });
+  const queued = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Worker queued proposal",
+    bodyText: "Proposal sent from worker."
+  });
+  await assert.rejects(
+    () => processQueuedJobEnvelope(buildEmailSendJobEnvelope(context, { messageId: queued.id }), store, async () => context),
+    /connection is not configured/
+  );
+  const failed = store.getEmailMessage(context, queued.id);
+  assert.equal(failed.status, "failed");
+  assert.match(failed.failureReason ?? "", /connection is not configured/);
+});
+
+await run("worker processes email summarize job envelopes", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, translate: true, context_analysis: true, auto_summarize: true } });
+  const account = store.createEmailAccount(context, {
+    name: "Worker summary mailbox",
+    emailAddress: "worker-summary@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Worker summary",
+    bodyText: "Summarize this worker thread."
+  });
+  const result = await processQueuedJobEnvelope(buildEmailSummarizeJobEnvelope(context, { threadId: message.threadId }), store, async () => context);
+
+  assert.equal(result.processed, true);
+  assert.equal(result.jobType, "email_summarize");
+  assert.equal(result.emailThread.id, message.threadId);
+  assert.match(result.emailThread.summary ?? "", /Compact thread memory/);
+  assert.equal(formatJobWorkerResult(result), `Processed email summarize for thread ${message.threadId}`);
+});
+
+await run("worker processes email analyze job envelopes", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, translate: true, context_analysis: true, auto_summarize: true } });
+  const account = store.createEmailAccount(context, {
+    name: "Worker analysis mailbox",
+    emailAddress: "worker-analysis@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Worker analysis",
+    bodyText: "Analyze this worker thread."
+  });
+  const result = await processQueuedJobEnvelope(buildEmailAnalyzeJobEnvelope(context, { threadId: message.threadId, sourceMessageId: message.id }), store, async () => context);
+
+  assert.equal(result.processed, true);
+  assert.equal(result.jobType, "email_analyze");
+  assert.equal(result.emailThread.id, message.threadId);
+  assert.match(result.emailThread.aiAnalysis ?? "", /Context analysis/);
+  assert.equal(result.emailThread.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
+  assert.equal(formatJobWorkerResult(result), `Processed email analyze for thread ${message.threadId}`);
+});
+
+await run("failed outbound email messages can be requeued without stale sent timestamps", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Retry mailbox",
+    emailAddress: "retry-send@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true
+  });
+  const queued = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Retry proposal",
+    bodyText: "Retry this proposal."
+  });
+  const failed = store.updateEmailMessageStatus(context, queued.id, "failed", { failureReason: "SMTP returned 550" });
+  const requeued = store.updateEmailMessageStatus(context, failed.id, "queued");
+  await assert.rejects(
+    () => new InlineBackgroundJobExecutor(store).runEmailSendJob(context, { messageId: requeued.id }),
+    /connection is not configured/
+  );
+  const result = store.getEmailMessage(context, requeued.id);
+
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.failureReason, "SMTP returned 550");
+  assert.equal(failed.sentAt, undefined);
+  assert.equal(requeued.status, "queued");
+  assert.equal(requeued.failureReason, undefined);
+  assert.equal(requeued.sentAt, undefined);
+  assert.equal(result.status, "failed");
+  assert.match(result.failureReason ?? "", /connection is not configured/);
+  assert.equal(result.sentAt, undefined);
+});
+
+await run("queued provider send failures persist a message-level failure reason", async () => {
+  const account = {
+    id: "gmail-failure-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Gmail Failure",
+    emailAddress: "gmail-failure@example.com",
+    provider: "gmail",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const queuedMessage = {
+    id: "queued-failure-message",
+    workspaceId: defaultWorkspaceId,
+    threadId: "thread-failure",
+    accountId: account.id,
+    direction: "outbound",
+    status: "queued",
+    from: account.emailAddress,
+    to: ["buyer@example.com"],
+    subject: "Failure",
+    bodyText: "This send will fail.",
+    createdAt: new Date().toISOString()
+  };
+  let failedMessage;
+  const fakeRepository = {
+    async getEmailMessage() {
+      return queuedMessage;
+    },
+    async getEmailAccount() {
+      return account;
+    },
+    async listEmailMessages() {
+      return [queuedMessage];
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    },
+    async updateEmailMessageStatus(_context, messageId, status, options) {
+      const updated = { ...queuedMessage, id: messageId, status, failureReason: options?.failureReason, sentAt: status === "sent" ? new Date().toISOString() : undefined };
+      if (status === "failed") {
+        failedMessage = updated;
+      }
+      return updated;
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async () => new Response("provider unavailable", { status: 503 })
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+
+  await assert.rejects(() => adapter.sendQueued(context, queuedMessage.id), /Gmail send failed with HTTP 503/);
+  assert.equal(failedMessage.status, "failed");
+  assert.match(failedMessage.failureReason, /Gmail send failed with HTTP 503/);
+});
+
+await run("email sync scheduler queues only active sync-enabled accounts and keeps batch errors isolated", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const accounts = [
+    {
+      id: "email-active-a",
+      workspaceId: defaultWorkspaceId,
+      name: "Active A",
+      emailAddress: "active-a@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: "email-active-b",
+      workspaceId: defaultWorkspaceId,
+      name: "Active B",
+      emailAddress: "active-b@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: "email-disabled",
+      workspaceId: defaultWorkspaceId,
+      name: "Disabled",
+      emailAddress: "disabled@example.com",
+      provider: "smtp_imap",
+      status: "disabled",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: "email-send-only",
+      workspaceId: defaultWorkspaceId,
+      name: "Send Only",
+      emailAddress: "send-only@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      syncEnabled: false,
+      sendEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+  ];
+  const repository = {
+    async listEmailAccounts() {
+      return accounts;
+    }
+  };
+  const executor = {
+    async runEmailSyncJob(syncContext, payload) {
+      assert.equal(syncContext.user.id, "user-admin");
+      assert.equal(payload.limit, 20);
+      if (payload.accountId === "email-active-b") {
+        throw new Error("mailbox temporarily unavailable");
+      }
+      const account = accounts.find((candidate) => candidate.id === payload.accountId);
+      return { account, importedCount: 1, status: "queued" };
+    }
+  };
+
+  const summary = await scheduleEmailSyncForActiveAccounts(context, { repository, executor, limit: 20 });
+
+  assert.equal(summary.scheduledCount, 1);
+  assert.equal(summary.skippedCount, 2);
+  assert.equal(summary.limit, 20);
+  assert.deepEqual(summary.accounts.map((account) => account.accountId), ["email-active-a", "email-active-b"]);
+  assert.equal(summary.accounts[0].status, "queued");
+  assert.equal(summary.accounts[1].status, "failed");
+  assert.match(summary.accounts[1].error, /temporarily unavailable/);
+});
+
+await run("email sync scheduler requires admin permission", async () => {
+  const store = new CrmStore();
+  const salesContext = store.getContext("user-sales");
+  const repository = {
+    async listEmailAccounts() {
+      throw new Error("listEmailAccounts should not run");
+    }
+  };
+
+  await assert.rejects(
+    () => scheduleEmailSyncForActiveAccounts(salesContext, { repository }),
+    /crm\.admin/
+  );
 });
 
 await run("webhook job envelopes preserve event payload and retry metadata", () => {
@@ -1794,6 +3660,589 @@ await run("job health reports redis ping failure without leaking connection urls
   assert.doesNotMatch(health.error ?? "", /secret/);
   assert.match(health.error ?? "", /redis:\/\/\[redacted\]/);
   assert.equal(toSafeHealthError(new Error("failed postgresql://user:pass@db/app")), "failed postgres://[redacted]");
+  const databaseError = toSafeDatabaseHealthError(
+    new Error("Can't reach database server at `127.0.0.1:54329` for postgresql://postgres:secret@127.0.0.1:54329/app"),
+    "postgresql://postgres:secret@127.0.0.1:54329/ai_agent_crm?schema=public"
+  );
+  assert.doesNotMatch(databaseError, /secret/);
+  assert.match(databaseError, /target=127\.0\.0\.1:54329/);
+  assert.match(databaseError, /docker compose up -d postgres/);
+  assert.match(databaseError, /postgres:\/\/\[redacted\]/);
+});
+
+await run("email subsystem diagnostics report env readiness without secrets", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.maxHistoryMessages = 4;
+  settings.maxContextChars = 6000;
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "https://crm.example.com",
+      AI_PROVIDER: "openai-compatible",
+      EMAIL_SYNC_INTERVAL_MS: "60000",
+      EMAIL_SYNC_LIMIT: "25",
+      EMAIL_SYNC_USER_ID: "email-sync-admin",
+      JOB_EXECUTOR: "redis",
+      GMAIL_OAUTH_CLIENT_ID: "gmail-client",
+      GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret"
+    },
+    aiSettings: settings,
+    checkJobs: async () => ({ ok: true, executor: "inline", queue: "inline" }),
+    includeJobs: true
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.encryption.status, "ok");
+  assert.equal(diagnostics.oauthState.status, "ok");
+  assert.equal(diagnostics.oauthCallback.status, "ok");
+  assert.equal(diagnostics.oauthCallback.callbackUrl, "https://crm.example.com/api/email/oauth/callback");
+  assert.equal(diagnostics.deliveryMode.status, "ok");
+  assert.equal(diagnostics.aiProvider.status, "warning");
+  assert.equal(diagnostics.aiContextPolicy.status, "ok");
+  assert.equal(diagnostics.aiContextPolicy.requireSourceLinks, true);
+  assert.equal(diagnostics.aiContextPolicy.maxKnowledgeArticles, 5);
+  assert.equal(diagnostics.aiContextPolicy.enabledAutomationCount, 1);
+  assert.equal(diagnostics.autoSummaryPolicy.status, "ok");
+  assert.equal(diagnostics.autoSummaryPolicy.enabled, true);
+  assert.equal(diagnostics.autoSummaryPolicy.maxHistoryMessages, 4);
+  assert.equal(diagnostics.autoSummaryPolicy.minNewMessages, 3);
+  assert.match(diagnostics.autoSummaryPolicy.message, /throttled/);
+  assert.equal(diagnostics.syncScheduler.status, "ok");
+  assert.equal(diagnostics.syncScheduler.intervalMs, 60000);
+  assert.equal(diagnostics.syncScheduler.limit, 25);
+  assert.equal(diagnostics.syncScheduler.userId, "email-sync-admin");
+  assert.equal(diagnostics.syncScheduler.queueBacked, true);
+  assert.equal(diagnostics.aiAutomationFailures.status, "ok");
+  assert.equal(diagnostics.oauthProviders.gmail.status, "ok");
+  assert.equal(diagnostics.oauthProviders.outlook.status, "warning");
+  assert.equal(diagnostics.jobs?.queue, "inline");
+});
+
+await run("email auto summary diagnostics describe workspace settings", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.maxHistoryMessages = 2;
+  settings.maxContextChars = 2500;
+  let diagnostics = buildEmailAutoSummaryPolicyDiagnostics(settings);
+
+  assert.equal(diagnostics.enabled, true);
+  assert.equal(diagnostics.maxHistoryMessages, 2);
+  assert.equal(diagnostics.minNewMessages, 2);
+  assert.equal(diagnostics.maxContextChars, 2500);
+  assert.match(diagnostics.message, /2 new messages/);
+
+  settings.features.auto_summarize = false;
+  diagnostics = buildEmailAutoSummaryPolicyDiagnostics(settings);
+  assert.equal(diagnostics.enabled, false);
+  assert.match(diagnostics.message, /disabled/);
+});
+
+await run("email sync scheduler diagnostics validate interval and queue mode", () => {
+  const invalid = buildEmailSyncSchedulerDiagnostics({ EMAIL_SYNC_INTERVAL_MS: "0", EMAIL_SYNC_USER_ID: "admin" });
+  assert.equal(invalid.status, "error");
+  assert.match(invalid.message, /positive integer/);
+
+  const invalidLimit = buildEmailSyncSchedulerDiagnostics({ EMAIL_SYNC_LIMIT: "101", EMAIL_SYNC_USER_ID: "admin" });
+  assert.equal(invalidLimit.status, "error");
+  assert.match(invalidLimit.message, /EMAIL_SYNC_LIMIT/);
+
+  const inlineWithAccounts = buildEmailSyncSchedulerDiagnostics({ EMAIL_SYNC_INTERVAL_MS: "90000", EMAIL_SYNC_LIMIT: "30", EMAIL_SYNC_USER_ID: "admin", JOB_EXECUTOR: "inline" }, { syncEnabled: 2 });
+  assert.equal(inlineWithAccounts.status, "warning");
+  assert.equal(inlineWithAccounts.intervalMs, 90000);
+  assert.equal(inlineWithAccounts.limit, 30);
+  assert.equal(inlineWithAccounts.queueBacked, false);
+  assert.equal(inlineWithAccounts.syncEnabledAccounts, 2);
+  assert.match(inlineWithAccounts.message, /JOB_EXECUTOR=redis/);
+});
+
+await run("email send claim diagnostics report stale sending messages", () => {
+  const freshAttempt = new Date().toISOString();
+  const staleAttempt = new Date(Date.now() - 120000).toISOString();
+  const diagnostics = buildEmailSendClaimDiagnostics(
+    [
+      {
+        id: "fresh-sending",
+        workspaceId: defaultWorkspaceId,
+        threadId: "thread-fresh",
+        accountId: "account-fresh",
+        direction: "outbound",
+        status: "sending",
+        from: "sales@example.com",
+        to: ["buyer@example.com"],
+        subject: "Fresh send",
+        bodyText: "Still sending",
+        sendAttemptedAt: freshAttempt,
+        createdAt: freshAttempt
+      },
+      {
+        id: "stale-sending",
+        workspaceId: defaultWorkspaceId,
+        threadId: "thread-stale",
+        accountId: "account-stale",
+        direction: "outbound",
+        status: "sending",
+        from: "sales@example.com",
+        to: ["buyer@example.com"],
+        subject: "Stale send",
+        bodyText: "Worker crashed",
+        sendAttemptedAt: staleAttempt,
+        createdAt: staleAttempt
+      }
+    ],
+    { EMAIL_SEND_CLAIM_TIMEOUT_MS: "60000" }
+  );
+
+  assert.equal(diagnostics.status, "warning");
+  assert.equal(diagnostics.timeoutMs, 60000);
+  assert.equal(diagnostics.sendingCount, 2);
+  assert.equal(diagnostics.staleCount, 1);
+  assert.equal(diagnostics.staleMessages[0].id, "stale-sending");
+});
+
+await run("email ai context diagnostics warn on weak provenance or missing knowledge context", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.requireSourceLinks = false;
+  settings.maxKnowledgeArticles = 0;
+  settings.features.translate = true;
+  settings.features.auto_translate = true;
+  const diagnostics = buildEmailAiContextPolicyDiagnostics(settings);
+
+  assert.equal(diagnostics.status, "warning");
+  assert.equal(diagnostics.loaded, true);
+  assert.equal(diagnostics.requireSourceLinks, false);
+  assert.equal(diagnostics.maxKnowledgeArticles, 0);
+  assert.equal(diagnostics.enabledAutomationCount, 2);
+  assert.match(diagnostics.message, /Source references are optional/);
+  assert.match(diagnostics.message, /knowledge 0 articles/);
+});
+
+await run("email subsystem diagnostics report dry-run delivery mode", async () => {
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "https://crm.example.com",
+      AI_PROVIDER: "openai-compatible",
+      EMAIL_DELIVERY_MODE: "dry-run"
+    }
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.deliveryMode.status, "warning");
+  assert.match(diagnostics.deliveryMode.message, /dry-run/);
+});
+
+await run("email subsystem diagnostics report recent ai automation failures", async () => {
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "https://crm.example.com",
+      AI_PROVIDER: "openai-compatible"
+    },
+    auditLogs: [
+      {
+        id: "audit-email-ai-failure",
+        workspaceId: defaultWorkspaceId,
+        actorId: "user-admin",
+        action: "create",
+        entityType: "email_ai_generation",
+        entityId: "thread-ai-failure",
+        summary: "Skipped email AI translate",
+        details: {
+          purpose: "translate",
+          automationFailed: true,
+          threadId: "thread-ai-failure",
+          sourceMessageId: "message-ai-failure",
+          errorMessage: "AI provider timeout"
+        },
+        createdAt: "2026-06-21T00:00:00.000Z"
+      }
+    ]
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.status, "warning");
+  assert.equal(diagnostics.aiAutomationFailures.status, "warning");
+  assert.equal(diagnostics.aiAutomationFailures.recentFailureCount, 1);
+  assert.equal(diagnostics.aiAutomationFailures.recentFailures[0].sourceMessageId, "message-ai-failure");
+  assert.match(diagnostics.aiAutomationFailures.recentFailures[0].errorMessage ?? "", /timeout/);
+});
+
+await run("email subsystem diagnostics report recent ai provider fallbacks", async () => {
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "https://crm.example.com",
+      AI_PROVIDER: "openai-compatible",
+      AI_API_KEY: "test-key"
+    },
+    auditLogs: [
+      {
+        id: "audit-email-ai-provider-fallback",
+        workspaceId: defaultWorkspaceId,
+        actorId: "user-admin",
+        action: "create",
+        entityType: "email_ai_generation",
+        entityId: "thread-provider-fallback",
+        summary: "Generated email AI draft",
+        details: {
+          purpose: "draft",
+          generationMode: "provider_fallback",
+          threadId: "thread-provider-fallback",
+          sourceMessageId: "message-provider-fallback",
+          providerError: "AI provider returned HTTP 503"
+        },
+        createdAt: "2026-06-21T00:00:00.000Z"
+      }
+    ]
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.status, "warning");
+  assert.equal(diagnostics.aiProviderFallbacks.status, "warning");
+  assert.equal(diagnostics.aiProviderFallbacks.recentFallbackCount, 1);
+  assert.equal(diagnostics.aiProviderFallbacks.recentFallbacks[0].sourceMessageId, "message-provider-fallback");
+  assert.match(diagnostics.aiProviderFallbacks.recentFallbacks[0].providerError ?? "", /HTTP 503/);
+
+  const direct = buildEmailAiProviderFallbackDiagnostics([]);
+  assert.equal(direct.status, "ok");
+  assert.equal(direct.recentFallbackCount, 0);
+});
+
+await run("email subsystem diagnostics cap ai automation failure details", async () => {
+  const auditLogs = Array.from({ length: 12 }, (_value, index) => ({
+    id: `audit-email-ai-failure-${index}`,
+    workspaceId: defaultWorkspaceId,
+    actorId: "user-admin",
+    action: "create",
+    entityType: "email_ai_generation",
+    entityId: `thread-ai-failure-${index}`,
+    summary: "Skipped email AI summarize",
+    details: {
+      purpose: "summarize",
+      automationFailed: true,
+      threadId: `thread-ai-failure-${index}`,
+      errorMessage: `failure ${index}`
+    },
+    createdAt: `2026-06-21T00:00:${String(index).padStart(2, "0")}.000Z`
+  }));
+  auditLogs.push({
+    id: "audit-email-ai-success",
+    workspaceId: defaultWorkspaceId,
+    actorId: "user-admin",
+    action: "create",
+    entityType: "email_ai_generation",
+    entityId: "thread-ai-success",
+    summary: "Generated email AI summarize",
+    details: { purpose: "summarize", automationFailed: false },
+    createdAt: "2026-06-21T00:01:00.000Z"
+  });
+
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "https://crm.example.com",
+      AI_PROVIDER: "openai-compatible"
+    },
+    auditLogs
+  });
+
+  assert.equal(diagnostics.aiAutomationFailures.recentFailureCount, 10);
+  assert.equal(diagnostics.aiAutomationFailures.recentFailures.length, 10);
+  assert.equal(diagnostics.aiAutomationFailures.recentFailures.some((failure) => failure.threadId === "thread-ai-success"), false);
+});
+
+await run("email subsystem diagnostics require admin before listing accounts", async () => {
+  const store = new CrmStore();
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  const calls = [];
+  const settingsCalls = [];
+  const repository = {
+    listEmailAccounts(context) {
+      calls.push(context.user.id);
+      return [];
+    },
+    getEmailAiSettings(context) {
+      settingsCalls.push(context.user.id);
+      return { ...store.getEmailAiSettings(context), maxHistoryMessages: 5 };
+    }
+  };
+
+  await assert.rejects(
+    () => checkEmailSubsystemDiagnosticsForContext(salesContext, repository, { includeJobs: false }),
+    /crm\.admin/
+  );
+  assert.deepEqual(calls, []);
+
+  const diagnostics = await checkEmailSubsystemDiagnosticsForContext(adminContext, repository, {
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "https://crm.example.com",
+      AI_PROVIDER: "openai-compatible"
+    },
+    includeJobs: false
+  });
+  assert.equal(diagnostics.encryption.status, "ok");
+  assert.equal(diagnostics.autoSummaryPolicy.maxHistoryMessages, 5);
+  assert.deepEqual(calls, ["user-admin"]);
+  assert.deepEqual(settingsCalls, ["user-admin"]);
+});
+
+await run("email diagnostics warn when app base url is not origin-only", async () => {
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "https://crm.example.com/app",
+      AI_PROVIDER: "openai-compatible"
+    }
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.oauthCallback.status, "warning");
+  assert.equal(diagnostics.oauthCallback.callbackUrl, "https://crm.example.com/api/email/oauth/callback");
+});
+
+await run("email diagnostics require https app base url for configured oauth providers", async () => {
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      APP_BASE_URL: "http://crm.example.com",
+      AI_PROVIDER: "openai-compatible",
+      GMAIL_OAUTH_CLIENT_ID: "gmail-client",
+      GMAIL_OAUTH_CLIENT_SECRET: "gmail-secret"
+    }
+  });
+
+  assert.equal(diagnostics.ok, false);
+  assert.equal(diagnostics.status, "error");
+  assert.equal(diagnostics.oauthCallback.status, "error");
+  assert.match(diagnostics.oauthCallback.message, /HTTPS/);
+});
+
+await run("email provider registry exposes capabilities used by oauth diagnostics and ui", () => {
+  const providers = listEmailProviderCapabilities();
+
+  assert.deepEqual(providers.map((provider) => provider.key), ["smtp_imap", "gmail", "outlook", "custom"]);
+  assert.deepEqual([...oauthEmailProviderKeys], ["gmail", "outlook"]);
+  assert.equal(getEmailProviderCapability("smtp_imap").supportsOAuth, false);
+  assert.equal(getEmailProviderCapability("smtp_imap").supportsSend, true);
+  assert.equal(isOAuthEmailProvider("gmail"), true);
+  assert.equal(isOAuthEmailProvider("custom"), false);
+  assert.deepEqual(getEmailProviderSetupVisibility("smtp_imap"), {
+    showSmtpImapFields: true,
+    showOAuthFields: false,
+    canStartOAuth: false
+  });
+  assert.deepEqual(getEmailProviderSetupVisibility("gmail"), {
+    showSmtpImapFields: false,
+    showOAuthFields: true,
+    canStartOAuth: true
+  });
+  assert.deepEqual(getEmailProviderSetupVisibility("outlook"), {
+    showSmtpImapFields: false,
+    showOAuthFields: true,
+    canStartOAuth: true
+  });
+  assert.deepEqual(getEmailProviderSetupVisibility("custom"), {
+    showSmtpImapFields: false,
+    showOAuthFields: false,
+    canStartOAuth: false
+  });
+  assert.equal(getOAuthEmailProviderCapability("gmail").oauthEnvPrefix, "GMAIL");
+  assert.match(getOAuthEmailProviderCapability("outlook").defaultScope, /Mail\.Send/);
+});
+
+await run("outbound email recipient policy counts totals and case-insensitive duplicates", () => {
+  const result = validateOutboundEmailRecipientPolicy({
+    to: ["Buyer@example.com"],
+    cc: ["buyer@example.com", "stakeholder@example.com"],
+    bcc: ["hidden@example.com"]
+  });
+
+  assert.equal(result.total, 4);
+  assert.equal(result.uniqueTotal, 3);
+  assert.deepEqual(result.duplicateRecipients, ["Buyer@example.com"]);
+  assert.match(result.errors.join("\n"), /must be unique/);
+});
+
+await run("email subsystem diagnostics require oauth env for configured oauth accounts", async () => {
+  const accounts = [
+    {
+      id: "gmail-account",
+      workspaceId: defaultWorkspaceId,
+      name: "Gmail",
+      emailAddress: "gmail@example.com",
+      provider: "gmail",
+      status: "active",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: false,
+      lastConnectionError: "Missing refresh token",
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: "smtp-account",
+      workspaceId: defaultWorkspaceId,
+      name: "SMTP",
+      emailAddress: "smtp@example.com",
+      provider: "smtp_imap",
+      status: "disabled",
+      syncEnabled: false,
+      sendEnabled: false,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+  ];
+  const diagnostics = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "diagnostic-secret-32-chars",
+      EMAIL_OAUTH_STATE_SECRET: "oauth-state-secret-32-chars",
+      AI_API_KEY: "ai-key"
+    },
+    accounts
+  });
+
+  assert.equal(diagnostics.ok, false);
+  assert.equal(diagnostics.status, "error");
+  assert.equal(diagnostics.oauthProviders.gmail.required, true);
+  assert.equal(diagnostics.oauthProviders.gmail.status, "error");
+  assert.equal(diagnostics.accounts?.total, 2);
+  assert.equal(diagnostics.accounts?.active, 1);
+  assert.equal(diagnostics.accounts?.missingConnectionConfig, 1);
+  assert.equal(diagnostics.accounts?.withLastConnectionError, 1);
+  assert.equal(diagnostics.accounts?.byProvider.gmail, 1);
+});
+
+await run("email account diagnostics aggregate provider and status counts", () => {
+  const diagnostics = buildEmailAccountDiagnostics([
+    {
+      id: "outlook-account",
+      workspaceId: defaultWorkspaceId,
+      name: "Outlook",
+      emailAddress: "outlook@example.com",
+      provider: "outlook",
+      status: "error",
+      syncEnabled: true,
+      sendEnabled: false,
+      connectionConfigured: true,
+      lastConnectionError: "Token expired",
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+  ]);
+
+  assert.equal(diagnostics.total, 1);
+  assert.equal(diagnostics.error, 1);
+  assert.equal(diagnostics.syncEnabled, 1);
+  assert.equal(diagnostics.sendEnabled, 0);
+  assert.equal(diagnostics.byProvider.outlook, 1);
+});
+
+await run("email connection test run aggregates success failures and skipped accounts", async () => {
+  const now = new Date("2026-06-20T12:00:00.000Z");
+  const baseAccount = {
+    workspaceId: defaultWorkspaceId,
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    createdById: "user-admin",
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString()
+  };
+  const accounts = [
+    {
+      ...baseAccount,
+      id: "ok-account",
+      name: "Ok",
+      emailAddress: "ok@example.com",
+      status: "active",
+      connectionConfigured: true
+    },
+    {
+      ...baseAccount,
+      id: "failed-account",
+      name: "Failed",
+      emailAddress: "failed@example.com",
+      status: "active",
+      connectionConfigured: true
+    },
+    {
+      ...baseAccount,
+      id: "draft-account",
+      name: "Draft",
+      emailAddress: "draft@example.com",
+      status: "draft",
+      connectionConfigured: true
+    },
+    {
+      ...baseAccount,
+      id: "unconfigured-account",
+      name: "Unconfigured",
+      emailAddress: "unconfigured@example.com",
+      status: "active",
+      connectionConfigured: false
+    }
+  ];
+  const testedIds = [];
+  const repository = {
+    async listEmailAccounts() {
+      return accounts;
+    }
+  };
+  const adapter = {
+    async testConnection(_context, accountId) {
+      testedIds.push(accountId);
+      const account = accounts.find((candidate) => candidate.id === accountId);
+      if (accountId === "failed-account") {
+        throw Object.assign(new Error("SMTP authentication failed"), { account: { ...account, lastConnectionError: "SMTP authentication failed" } });
+      }
+      return { account, result: { smtp: "ok", imap: "ok" } };
+    }
+  };
+
+  const runResult = await testEmailAccountConnections(
+    { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] },
+    repository,
+    { adapter, now }
+  );
+
+  assert.equal(runResult.testedAt, now.toISOString());
+  assert.deepEqual(testedIds, ["ok-account", "failed-account"]);
+  assert.equal(runResult.total, 4);
+  assert.equal(runResult.tested, 2);
+  assert.equal(runResult.succeeded, 1);
+  assert.equal(runResult.failed, 1);
+  assert.equal(runResult.skipped, 2);
+  assert.equal(runResult.results.find((entry) => entry.account.id === "failed-account")?.error, "SMTP authentication failed");
+  assert.equal(runResult.results.find((entry) => entry.account.id === "draft-account")?.reason, "Account is not active");
+  assert.equal(runResult.results.find((entry) => entry.account.id === "unconfigured-account")?.reason, "Connection is not configured");
+});
+
+await run("email connection test run requires admin permission", async () => {
+  const store = new CrmStore();
+  const salesContext = store.getContext("user-sales");
+  const repository = {
+    async listEmailAccounts() {
+      throw new Error("listEmailAccounts should not run");
+    }
+  };
+
+  await assert.rejects(
+    () => testEmailAccountConnections(salesContext, repository),
+    /crm\.admin/
+  );
 });
 
 await run("worker retry envelopes increment attempts and preserve the last error", () => {
@@ -1899,11 +4348,11 @@ await run("csv import preview reports mappings and row-level errors without crea
 await run("csv import supports explicit header mapping for preview and import", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
-  const mapping = { 姓名: "title", 邮箱: "email", 电话: "phone" };
+  const mapping = { Name: "title", Email: "email", Phone: "phone" };
   const preview = store.previewCsvImport(
     context,
     "contacts",
-    "姓名,邮箱,电话\n映射客户,mapped-contact@example.com,13988880000",
+    "Name,Email,Phone\nMapped Contact,mapped-contact@example.com,13988880000",
     mapping
   );
 
@@ -1916,12 +4365,12 @@ await run("csv import supports explicit header mapping for preview and import", 
   const result = store.importCsv(
     context,
     "contacts",
-    "姓名,邮箱,电话\n映射客户,mapped-contact@example.com,13988880000",
+    "Name,Email,Phone\nMapped Contact,mapped-contact@example.com,13988880000",
     "skip-invalid",
     mapping
   );
   assert.equal(result.created.length, 1);
-  assert.equal(result.created[0]?.title, "映射客户");
+  assert.equal(result.created[0]?.title, "Mapped Contact");
   assert.equal(result.created[0]?.data.email, "mapped-contact@example.com");
 });
 
@@ -1930,11 +4379,11 @@ await run("csv import rejects mappings that target unknown or duplicate fields",
   const context = store.getContext("user-admin");
 
   assert.throws(
-    () => store.previewCsvImport(context, "contacts", "姓名\n映射客户", { 姓名: "missingField" }),
+    () => store.previewCsvImport(context, "contacts", "Name\nMapped Contact", { Name: "missingField" }),
     /unknown field missingField/
   );
   assert.throws(
-    () => store.previewCsvImport(context, "contacts", "邮箱一,邮箱二\none@example.com,two@example.com", { 邮箱一: "email", 邮箱二: "email" }),
+    () => store.previewCsvImport(context, "contacts", "Email One,Email Two\none@example.com,two@example.com", { "Email One": "email", "Email Two": "email" }),
     /targets email more than once/
   );
 });
@@ -2284,20 +4733,20 @@ await run("csv import presets save reusable strategy and mappings", () => {
     objectKey: "contacts",
     name: " Contacts standard ",
     strategy: "update-existing",
-    mapping: { 姓名: "title", 邮箱: "email", " ": "phone" }
+    mapping: { Name: "title", Email: "email", " ": "phone" }
   });
 
   assert.equal(preset.name, "Contacts standard");
   assert.equal(preset.strategy, "update-existing");
-  assert.deepEqual(preset.mapping, { 姓名: "title", 邮箱: "email" });
-  assert.equal(store.listImportPresets(context, "contacts")[0].id, preset.id);
+  assert.deepEqual(preset.mapping, { Name: "title", Email: "email" });
   assert.throws(
-    () => store.createImportPreset(context, { objectKey: "contacts", name: "Broken", mapping: { 邮箱: "missingField" } }),
+    () => store.createImportPreset(context, { objectKey: "contacts", name: "Broken", mapping: { Email: "missingField" } }),
     /unknown field/
   );
   assert.throws(() => store.listImportPresets(store.getContext("user-sales"), "contacts"), /crm\.import/);
 
   store.deleteImportPreset(context, preset.id);
+  assert.deepEqual(preset.mapping, { Name: "title", Email: "email" });
   assert.equal(store.listImportPresets(context, "contacts").length, 0);
 });
 
@@ -2370,6 +4819,7 @@ await run("tasks can be completed and reopened", () => {
   const context = store.getContext("user-admin");
   const task = store.listActivities(context, "contact-lin").find((activity) => activity.type === "task");
   assert.ok(task);
+  assert.equal(store.getActivity(context, task.id).id, task.id);
 
   const completed = store.updateActivity(context, task.id, { completedAt: "2026-06-18T08:00:00.000Z" });
   assert.equal(completed.completedAt, "2026-06-18T08:00:00.000Z");
@@ -2448,6 +4898,1375 @@ await run("email accounts messages and thread summaries are workspace scoped", (
   assert.equal(activities.some((activity) => activity.type === "email" && activity.title === "Private deployment questions"), true);
 });
 
+await run("email thread compact summaries do not duplicate the newly recorded message", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Summary Dedupe Inbox",
+    emailAddress: "summary-dedupe@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["summary-dedupe@example.com"],
+    subject: "Single summary entry",
+    bodyText: "This subject should appear once in compact memory."
+  });
+  const thread = store.getEmailThread(context, message.threadId);
+  const subjectOccurrences = thread.summary?.match(/Single summary entry/g)?.length ?? 0;
+
+  assert.equal(subjectOccurrences, 1);
+});
+
+await run("email threads respect record visibility and unlinked ownership", () => {
+  const snapshot = structuredClone(seedData);
+  snapshot.teams.push({ id: "team-enterprise-email", workspaceId: defaultWorkspaceId, name: "Enterprise Email" });
+  snapshot.users.push({
+    id: "user-email-other",
+    workspaceId: defaultWorkspaceId,
+    email: "email-other@example.com",
+    name: "Email Other Sales",
+    roleId: "role-sales",
+    teamId: "team-enterprise-email"
+  });
+  snapshot.records.push({
+    id: "contact-email-hidden",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Hidden Email Contact",
+    ownerId: "user-email-other",
+    data: { email: "hidden-email@example.com" },
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z"
+  });
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  const account = store.createEmailAccount(adminContext, {
+    name: "Visibility Inbox",
+    emailAddress: "visibility@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const visibleLinked = store.recordEmailMessage(adminContext, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["visibility@example.com"],
+    subject: "Visible contact thread",
+    bodyText: "Thread linked to the sales user's contact.",
+    recordId: "contact-lin"
+  });
+  const hiddenUnlinked = store.recordEmailMessage(adminContext, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "unknown@example.com",
+    to: ["visibility@example.com"],
+    subject: "Unlinked shared inbound",
+    bodyText: "This unlinked shared mailbox thread should stay admin-only."
+  });
+  const hiddenLinkedOwnMessage = store.recordEmailMessage(adminContext, {
+    accountId: account.id,
+    direction: "outbound",
+    from: "visibility@example.com",
+    to: ["hidden-email@example.com"],
+    subject: "Hidden linked outbound",
+    bodyText: "Created by the sales user but linked to a hidden CRM record.",
+    recordId: "contact-email-hidden",
+    createdById: "user-sales"
+  });
+  const ownUnlinked = store.queueEmailMessage(salesContext, {
+    accountId: account.id,
+    to: ["prospect@example.com"],
+    subject: "Own unlinked outbound",
+    bodyText: "Sales user started this unlinked outbound thread."
+  });
+
+  const adminThreadIds = store.listEmailThreads(adminContext).map((thread) => thread.id);
+  const salesThreadIds = store.listEmailThreads(salesContext).map((thread) => thread.id);
+
+  assert.equal(adminThreadIds.includes(visibleLinked.threadId), true);
+  assert.equal(adminThreadIds.includes(hiddenUnlinked.threadId), true);
+  assert.equal(adminThreadIds.includes(hiddenLinkedOwnMessage.threadId), true);
+  assert.equal(adminThreadIds.includes(ownUnlinked.threadId), true);
+  assert.equal(salesThreadIds.includes(visibleLinked.threadId), true);
+  assert.equal(salesThreadIds.includes(hiddenUnlinked.threadId), false);
+  assert.equal(salesThreadIds.includes(hiddenLinkedOwnMessage.threadId), false);
+  assert.equal(salesThreadIds.includes(ownUnlinked.threadId), true);
+  assert.equal(store.getEmailThread(salesContext, visibleLinked.threadId).id, visibleLinked.threadId);
+  assert.equal(store.getEmailThread(salesContext, ownUnlinked.threadId).id, ownUnlinked.threadId);
+  assert.throws(() => store.getEmailThread(salesContext, hiddenUnlinked.threadId), /Email thread not found/);
+  assert.throws(() => store.getEmailThread(salesContext, hiddenLinkedOwnMessage.threadId), /Email thread not found/);
+  assert.throws(() => store.listEmailMessages(salesContext, hiddenUnlinked.threadId), /Email thread not found/);
+  assert.throws(() => store.listEmailMessages(salesContext, hiddenLinkedOwnMessage.threadId), /Email thread not found/);
+  assert.equal(store.listEmailMessages(salesContext, ownUnlinked.threadId)[0].id, ownUnlinked.id);
+});
+
+await run("email threads can be relinked to visible records for ai context", () => {
+  assert.equal(emailThreadUpdateSchema.safeParse({ recordId: "contact-lin" }).success, true);
+  assert.equal(emailThreadUpdateSchema.safeParse({ recordId: "" }).success, true);
+  assert.equal(emailThreadUpdateSchema.safeParse({ recordId: null }).success, true);
+
+  const snapshot = structuredClone(seedData);
+  snapshot.teams.push({ id: "team-thread-hidden", workspaceId: defaultWorkspaceId, name: "Thread Hidden Team" });
+  snapshot.users.push({
+    id: "user-thread-hidden",
+    workspaceId: defaultWorkspaceId,
+    email: "thread-hidden@example.com",
+    name: "Thread Hidden Owner",
+    roleId: "role-sales",
+    teamId: "team-thread-hidden"
+  });
+  snapshot.records.push({
+    id: "contact-thread-hidden",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Hidden Thread Contact",
+    ownerId: "user-thread-hidden",
+    data: { email: "hidden-thread@example.com" },
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z"
+  });
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  const account = store.createEmailAccount(adminContext, {
+    name: "Relink Inbox",
+    emailAddress: "relink@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+  const message = store.recordEmailMessage(salesContext, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "unknown-relink@example.com",
+    to: ["relink@example.com"],
+    subject: "Manual customer link",
+    bodyText: "Please connect this thread to the right customer."
+  });
+
+  assert.equal(store.getEmailThread(salesContext, message.threadId).recordId, undefined);
+  const linked = store.updateEmailThread(salesContext, message.threadId, { recordId: "contact-lin" });
+  assert.equal(linked.recordId, "contact-lin");
+
+  store.updateEmailAiSettings(adminContext, { features: { draft: true } });
+  const context = store.buildEmailAssistantContext(salesContext, { purpose: "draft", threadId: message.threadId });
+  assert.equal(context.recordId, "contact-lin");
+  assert.match(context.customerBrief, /林晓|lin@example\.com/);
+  assert.equal(context.sources.some((source) => source.recordId === "contact-lin"), true);
+  assert.throws(() => store.updateEmailThread(salesContext, message.threadId, { recordId: "contact-thread-hidden" }), /not found|不存在/i);
+
+  const unlinked = store.updateEmailThread(salesContext, message.threadId, { recordId: null });
+  assert.equal(unlinked.recordId, undefined);
+});
+
+await run("email accounts can be updated and safely disabled when history exists", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Rotating Inbox",
+    emailAddress: "rotate@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "draft"
+  });
+
+  const active = store.updateEmailAccount(context, account.id, {
+    name: "Rotated Inbox",
+    connectionConfig: { smtpHost: "smtp.example.com", smtpPort: 465, smtpSecure: true, username: "rotate@example.com", password: "app-password" }
+  });
+  assert.equal(active.name, "Rotated Inbox");
+  assert.equal(active.status, "active");
+  assert.equal(active.connectionConfigured, true);
+
+  const disabled = store.updateEmailAccount(context, account.id, { status: "disabled", syncEnabled: false, sendEnabled: false });
+  assert.equal(disabled.status, "disabled");
+  assert.equal(disabled.syncEnabled, false);
+  assert.equal(disabled.sendEnabled, false);
+
+  store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["rotate@example.com"],
+    subject: "Keep history",
+    bodyText: "Do not delete the account because history exists."
+  });
+  store.deleteEmailAccount(context, account.id);
+  const retained = store.getEmailAccount(context, account.id);
+  assert.equal(retained.status, "disabled");
+  assert.equal(retained.syncEnabled, false);
+  assert.equal(retained.sendEnabled, false);
+});
+
+await run("email account addresses are unique per workspace before database constraints", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const first = store.createEmailAccount(context, {
+    name: "Primary Inbox",
+    emailAddress: "unique-mailbox@example.com",
+    provider: "smtp_imap",
+    status: "draft"
+  });
+  const second = store.createEmailAccount(context, {
+    name: "Secondary Inbox",
+    emailAddress: "secondary-mailbox@example.com",
+    provider: "smtp_imap",
+    status: "draft"
+  });
+
+  assert.throws(
+    () =>
+      store.createEmailAccount(context, {
+        name: "Duplicate Inbox",
+        emailAddress: "UNIQUE-MAILBOX@example.com",
+        provider: "gmail",
+        status: "draft"
+      }),
+    /already exists/
+  );
+  assert.throws(
+    () => store.updateEmailAccount(context, second.id, { emailAddress: "Unique-Mailbox@example.com" }),
+    /already exists/
+  );
+  assert.equal(store.getEmailAccount(context, first.id).emailAddress, "unique-mailbox@example.com");
+  assert.equal(store.getEmailAccount(context, second.id).emailAddress, "secondary-mailbox@example.com");
+});
+
+await run("oauth mailbox connection updates an existing account for token rotation", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const existing = store.createEmailAccount(context, {
+    name: "Old Gmail",
+    emailAddress: "oauth-rotate@example.com",
+    provider: "gmail",
+    syncEnabled: false,
+    sendEnabled: false,
+    status: "error"
+  });
+
+  const result = await connectOAuthEmailAccount(context, store, {
+    provider: "gmail",
+    name: "Rotated Gmail",
+    emailAddress: "OAUTH-ROTATE@example.com",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfig: {
+      oauthProvider: "gmail",
+      accessToken: "new-access-token",
+      refreshToken: "new-refresh-token",
+      expiresAt: "2099-06-20T12:00:00.000Z"
+    }
+  });
+  const accounts = store.listEmailAccounts(context).filter((account) => account.emailAddress === "oauth-rotate@example.com");
+
+  assert.equal(result.created, false);
+  assert.equal(result.account.id, existing.id);
+  assert.equal(result.account.name, "Rotated Gmail");
+  assert.equal(result.account.status, "active");
+  assert.equal(result.account.connectionConfigured, true);
+  assert.equal(result.account.syncEnabled, true);
+  assert.equal(result.account.sendEnabled, true);
+  assert.equal(accounts.length, 1);
+});
+
+await run("oauth mailbox callback redirect returns admins to the crm workspace", () => {
+  const result = buildOAuthEmailConnectedRedirectUrl("https://crm.example.com/api/email/oauth/callback", {
+    created: false,
+    account: {
+      id: "email-account-oauth",
+      workspaceId: defaultWorkspaceId,
+      name: "OAuth Inbox",
+      emailAddress: "oauth@example.com",
+      provider: "gmail",
+      status: "active",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: "2026-06-20T10:00:00.000Z",
+      updatedAt: "2026-06-20T10:00:00.000Z"
+    }
+  });
+  const failed = buildOAuthEmailErrorRedirectUrl("https://crm.example.com/api/email/oauth/callback", new Error("access_denied"));
+
+  assert.equal(result.toString(), "https://crm.example.com/?emailOAuth=connected&emailAccountId=email-account-oauth&emailAccountCreated=false");
+  assert.equal(failed.toString(), "https://crm.example.com/?emailOAuth=error&emailOAuthError=access_denied");
+});
+
+await run("oauth mailbox connected notice parses browser callback query", () => {
+  const created = readEmailOAuthConnectedNotice("?emailOAuth=connected&emailAccountId=account-created&emailAccountCreated=true");
+  const updated = readEmailOAuthConnectedNotice("emailOAuth=connected&emailAccountId=account-updated&emailAccountCreated=false");
+  const callbackCreated = readEmailOAuthCallbackNotice("?emailOAuth=connected&emailAccountId=account-created&emailAccountCreated=true");
+  const callbackFailed = readEmailOAuthCallbackNotice("?emailOAuth=error&emailOAuthError=access_denied");
+
+  assert.equal(created?.accountId, "account-created");
+  assert.equal(created?.status, "connected");
+  assert.equal(created?.created, true);
+  assert.match(created?.message ?? "", /已创建/);
+  assert.equal(updated?.accountId, "account-updated");
+  assert.equal(updated?.created, false);
+  assert.match(updated?.message ?? "", /已更新/);
+  assert.equal(callbackCreated?.status, "connected");
+  assert.equal(callbackFailed?.status, "error");
+  assert.match(callbackFailed?.message ?? "", /access_denied/);
+  assert.equal(readEmailOAuthConnectedNotice("?emailOAuth=cancelled&emailAccountId=account"), undefined);
+  assert.equal(readEmailOAuthConnectedNotice("?emailOAuth=connected"), undefined);
+  assert.equal(readEmailOAuthCallbackNotice("?emailOAuth=cancelled&emailAccountId=account"), undefined);
+});
+
+await run("sales users can view configured email accounts but cannot manage them", () => {
+  const store = new CrmStore();
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  const account = store.createEmailAccount(adminContext, {
+    name: "Shared Sales Inbox",
+    emailAddress: "shared-sales@example.com",
+    provider: "custom",
+    syncEnabled: false,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const visibleAccount = store.listEmailAccounts(salesContext).find((candidate) => candidate.id === account.id);
+  const readableAccount = store.getEmailAccount(salesContext, account.id);
+  assert.equal(visibleAccount?.emailAddress, "shared-sales@example.com");
+  assert.equal(visibleAccount?.connectionConfigured, false);
+  assert.equal(readableAccount.emailAddress, "shared-sales@example.com");
+  assert.equal("connectionConfig" in readableAccount, false);
+  assert.throws(() => store.createEmailAccount(salesContext, { name: "Blocked", emailAddress: "blocked@example.com", provider: "custom" }), /crm\.admin/);
+  assert.throws(() => store.updateEmailAccount(salesContext, account.id, { status: "disabled" }), /crm\.admin/);
+  assert.throws(() => store.deleteEmailAccount(salesContext, account.id), /crm\.admin/);
+});
+
+await run("email account connection status changes are audited without duplicate noise", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Observed Inbox",
+    emailAddress: "observed@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true
+  });
+  const before = store.listAuditLogs(context, { entityType: "email_account" }).length;
+
+  const failed = store.markEmailAccountConnectionError(context, account.id, "SMTP 535 authentication failed");
+  assert.equal(failed.status, "error");
+  assert.equal(failed.lastConnectionError, "SMTP 535 authentication failed");
+  const afterFailure = store.listAuditLogs(context, { entityType: "email_account" });
+  assert.equal(afterFailure.length, before + 1);
+  const failureLog = afterFailure.find((log) => /connection failed/.test(log.summary));
+  assert.equal(Boolean(failureLog), true);
+  assert.equal(failureLog.details.error, "SMTP 535 authentication failed");
+
+  store.markEmailAccountConnectionError(context, account.id, "SMTP 535 authentication failed");
+  assert.equal(store.listAuditLogs(context, { entityType: "email_account" }).length, before + 1);
+
+  const restored = store.markEmailAccountConnectionError(context, account.id, null);
+  assert.equal(restored.status, "active");
+  assert.equal(restored.lastConnectionError, undefined);
+  const afterRestore = store.listAuditLogs(context, { entityType: "email_account" });
+  assert.equal(afterRestore.length, before + 2);
+  const restoreLog = afterRestore.find((log) => /connection restored/.test(log.summary));
+  assert.equal(Boolean(restoreLog), true);
+  assert.equal(restoreLog.details.previousError, "SMTP 535 authentication failed");
+});
+
+await run("email message recording is idempotent per account external message id", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const firstAccount = store.createEmailAccount(context, {
+    name: "Dedupe One",
+    emailAddress: "dedupe-one@example.com",
+    provider: "custom",
+    status: "active",
+    syncEnabled: true
+  });
+  const secondAccount = store.createEmailAccount(context, {
+    name: "Dedupe Two",
+    emailAddress: "dedupe-two@example.com",
+    provider: "custom",
+    status: "active",
+    syncEnabled: true
+  });
+  const first = store.recordEmailMessage(context, {
+    accountId: firstAccount.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [firstAccount.emailAddress],
+    subject: "Provider message",
+    bodyText: "Imported once.",
+    externalMessageId: "provider-message-id"
+  });
+  const repeated = store.recordEmailMessage(context, {
+    accountId: firstAccount.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [firstAccount.emailAddress],
+    subject: "Provider message",
+    bodyText: "Imported twice.",
+    externalMessageId: "provider-message-id"
+  });
+  const otherAccount = store.recordEmailMessage(context, {
+    accountId: secondAccount.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [secondAccount.emailAddress],
+    subject: "Provider message",
+    bodyText: "Same external id in another mailbox.",
+    externalMessageId: "provider-message-id"
+  });
+
+  assert.equal(repeated.id, first.id);
+  assert.equal(store.findEmailMessageByExternalId(context, firstAccount.id, "provider-message-id")?.id, first.id);
+  assert.equal(store.listEmailMessages(context, first.threadId).length, 1);
+  assert.notEqual(otherAccount.id, first.id);
+});
+
+await run("email messages auto-link to contacts by participant email unless explicitly linked", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Auto Link Inbox",
+    emailAddress: "sales@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const autoLinked = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["sales@example.com"],
+    subject: "Auto link by email",
+    bodyText: "Please connect this to the contact automatically."
+  });
+  assert.equal(store.listEmailThreads(context, "contact-lin").some((thread) => thread.id === autoLinked.threadId), true);
+  assert.equal(store.listActivities(context, "contact-lin").some((activity) => activity.title === "Auto link by email"), true);
+
+  const explicit = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["sales@example.com"],
+    subject: "Explicit deal link",
+    bodyText: "This message should stay on the deal.",
+    recordId: "deal-platform"
+  });
+  assert.equal(store.listEmailThreads(context, "deal-platform").some((thread) => thread.id === explicit.threadId), true);
+  assert.equal(store.listEmailThreads(context, "contact-lin").some((thread) => thread.id === explicit.threadId), false);
+});
+
+await run("email messages without explicit thread id join matching conversation threads conservatively", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Threading Inbox",
+    emailAddress: "sales@example.com",
+    provider: "custom",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const first = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["sales@example.com"],
+    subject: "Deployment plan",
+    bodyText: "Can you send the private deployment plan?"
+  });
+  const reply = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "outbound",
+    from: "sales@example.com",
+    to: ["lin@example.com"],
+    subject: "Re: Deployment plan",
+    bodyText: "Here is the plan."
+  });
+  const unrelated = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "other@example.com",
+    to: ["sales@example.com"],
+    subject: "Re: Deployment plan",
+    bodyText: "Different participant should not be merged by subject alone."
+  });
+
+  assert.equal(reply.threadId, first.threadId);
+  assert.notEqual(unrelated.threadId, first.threadId);
+  assert.equal(store.listEmailMessages(context, first.threadId).length, 2);
+});
+
+await run("email reply draft pre-fills recipients subject and linked record conservatively", () => {
+  const inboundReply = buildEmailReplyDraft({
+    accountEmail: "sales@example.com",
+    recordId: "contact-lin",
+    message: {
+      accountId: "email-account",
+      direction: "inbound",
+      from: "Buyer@Example.com",
+      to: ["sales@example.com"],
+      cc: ["sales@example.com", "manager@example.com"],
+      subject: "Deployment plan"
+    }
+  });
+  const outboundReply = buildEmailReplyDraft({
+    accountEmail: "sales@example.com",
+    message: {
+      accountId: "email-account",
+      direction: "outbound",
+      from: "sales@example.com",
+      to: ["buyer@example.com", "sales@example.com"],
+      cc: ["manager@example.com"],
+      subject: "Re: Deployment plan"
+    }
+  });
+
+  assert.equal(inboundReply.accountId, "email-account");
+  assert.equal(inboundReply.recordId, "contact-lin");
+  assert.equal(inboundReply.to, "buyer@example.com, manager@example.com");
+  assert.equal(inboundReply.subject, "Re: Deployment plan");
+  assert.equal(inboundReply.bodyText, "");
+  assert.equal(outboundReply.to, "buyer@example.com, manager@example.com");
+  assert.equal(outboundReply.subject, "Re: Deployment plan");
+});
+
+await run("queued outbound email messages preserve cc and bcc recipients", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Recipient Inbox",
+    emailAddress: "sales@example.com",
+    provider: "smtp_imap",
+    syncEnabled: false,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const message = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    cc: ["manager@example.com"],
+    bcc: ["archive@example.com"],
+    subject: "Recipient coverage",
+    bodyText: "Keep all recipient classes."
+  });
+
+  assert.deepEqual(message.to, ["buyer@example.com"]);
+  assert.deepEqual(message.cc, ["manager@example.com"]);
+  assert.deepEqual(message.bcc, ["archive@example.com"]);
+  assert.equal(store.listEmailMessages(context, message.threadId)[0].cc?.[0], "manager@example.com");
+  assert.equal(store.listEmailMessages(context, message.threadId)[0].bcc?.[0], "archive@example.com");
+});
+
+await run("queued outbound email messages are idempotent by client request id", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Idempotent Outbox",
+    emailAddress: "sales@example.com",
+    provider: "smtp_imap",
+    syncEnabled: false,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const first = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Idempotent send",
+    bodyText: "First request body.",
+    clientRequestId: "send-request-123"
+  });
+  const repeated = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Idempotent send duplicate",
+    bodyText: "Second request body should not create another message.",
+    clientRequestId: "send-request-123"
+  });
+
+  assert.equal(repeated.id, first.id);
+  assert.equal(repeated.subject, "Idempotent send");
+  assert.equal(repeated.clientRequestId, "send-request-123");
+  assert.equal(store.listEmailMessages(context, first.threadId).filter((message) => message.clientRequestId === "send-request-123").length, 1);
+});
+
+await run("sending outbound email claims are reclaimed only after the timeout", () => {
+  const previousTimeout = process.env.EMAIL_SEND_CLAIM_TIMEOUT_MS;
+  process.env.EMAIL_SEND_CLAIM_TIMEOUT_MS = "60000";
+  try {
+    const store = new CrmStore();
+    const context = store.getContext("user-admin");
+    const account = store.createEmailAccount(context, {
+      name: "Claim Timeout Inbox",
+      emailAddress: "claim-timeout@example.com",
+      provider: "smtp_imap",
+      syncEnabled: false,
+      sendEnabled: true,
+      status: "active"
+    });
+    const freshSending = store.recordEmailMessage(context, {
+      accountId: account.id,
+      direction: "outbound",
+      from: account.emailAddress,
+      to: ["buyer@example.com"],
+      subject: "Fresh sending",
+      bodyText: "Still in progress.",
+      status: "sending",
+      sendAttemptedAt: new Date().toISOString()
+    });
+    const staleSending = store.recordEmailMessage(context, {
+      accountId: account.id,
+      direction: "outbound",
+      from: account.emailAddress,
+      to: ["buyer@example.com"],
+      subject: "Stale sending",
+      bodyText: "The previous worker crashed.",
+      status: "sending",
+      sendAttemptedAt: new Date(Date.now() - 120000).toISOString()
+    });
+
+    const freshClaim = store.claimEmailMessageForSending(context, freshSending.id);
+    const staleClaim = store.claimEmailMessageForSending(context, staleSending.id);
+
+    assert.equal(freshClaim.claimed, false);
+    assert.equal(staleClaim.claimed, true);
+    assert.equal(staleClaim.message.status, "sending");
+    assert.notEqual(staleClaim.message.sendAttemptedAt, staleSending.sendAttemptedAt);
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.EMAIL_SEND_CLAIM_TIMEOUT_MS;
+    } else {
+      process.env.EMAIL_SEND_CLAIM_TIMEOUT_MS = previousTimeout;
+    }
+  }
+});
+
+await run("queued outbound email messages preserve structured attachments", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Attachment Inbox",
+    emailAddress: "attach@example.com",
+    provider: "smtp_imap",
+    syncEnabled: false,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const message = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Attachment coverage",
+    bodyText: "See attached.",
+    attachments: [
+      {
+        fileName: "proposal.txt",
+        contentType: "text/plain",
+        size: 11,
+        contentBase64: Buffer.from("hello world").toString("base64")
+      }
+    ]
+  });
+
+  assert.equal(message.attachments?.[0]?.fileName, "proposal.txt");
+  assert.equal(message.attachments?.[0]?.contentType, "text/plain");
+  assert.equal(store.listEmailMessages(context, message.threadId)[0].attachments?.[0]?.size, 11);
+  assert.equal(store.listAuditLogs(context, { entityType: "email_message" }).find((log) => log.entityId === message.id)?.details.attachmentCount, 1);
+});
+
+await run("queued outbound email messages preserve ai provenance without storing generated content in audit details", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "AI Draft Inbox",
+    emailAddress: "ai-draft@example.com",
+    provider: "smtp_imap",
+    syncEnabled: false,
+    sendEnabled: true,
+    status: "active"
+  });
+  const source = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["ai-draft@example.com"],
+    subject: "Source email",
+    bodyText: "Original customer context."
+  });
+  const article = store.createKnowledgeArticle(context, {
+    title: "Onboarding source",
+    body: "Use this article when drafting customer onboarding replies."
+  });
+
+  const message = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "AI assisted follow-up",
+    bodyText: "Generated draft body that must not be duplicated into audit details.",
+    aiAssisted: true,
+    aiPurpose: "draft",
+    aiSourceMessageId: source.id,
+    aiSources: [
+      { label: "Source email", messageId: source.id },
+      { label: "Knowledge: onboarding", knowledgeArticleId: article.id },
+      { label: "" }
+    ],
+    aiGeneratedAt: "2026-06-20T12:00:00.000Z"
+  });
+  const audit = store.listAuditLogs(context, { entityType: "email_message" }).find((log) => log.entityId === message.id);
+
+  assert.equal(message.aiAssisted, true);
+  assert.equal(message.aiPurpose, "draft");
+  assert.equal(message.aiSourceMessageId, source.id);
+  assert.equal(message.aiSources?.length, 2);
+  assert.equal(message.aiSources?.[0]?.messageId, source.id);
+  assert.equal(message.aiSources?.[1]?.knowledgeArticleId, article.id);
+  assert.equal(message.aiGeneratedAt, "2026-06-20T12:00:00.000Z");
+  assert.equal(audit?.details.aiAssisted, true);
+  assert.equal(audit?.details.aiPurpose, "draft");
+  assert.equal(audit?.details.aiSourceMessageId, source.id);
+  assert.equal(audit?.details.aiSourceCount, 2);
+  assert.equal(JSON.stringify(audit?.details).includes("Generated draft body"), false);
+});
+
+await run("queued outbound email requires ai permission for ai provenance", () => {
+  const store = new CrmStore();
+  const adminContext = store.getContext("user-admin");
+  const noAiContext = {
+    workspaceId: defaultWorkspaceId,
+    user: { ...seedData.users[1], id: "user-crm-write-no-ai" },
+    role: { ...seedData.roles[1], permissions: ["crm.read", "crm.write"] }
+  };
+  const account = store.createEmailAccount(adminContext, {
+    name: "AI Permission Inbox",
+    emailAddress: "ai-permission@example.com",
+    provider: "smtp_imap",
+    syncEnabled: false,
+    sendEnabled: true,
+    status: "active"
+  });
+  const source = store.recordEmailMessage(noAiContext, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "AI permission source",
+    bodyText: "Visible source for provenance."
+  });
+
+  assert.throws(
+    () =>
+      store.queueEmailMessage(noAiContext, {
+        accountId: account.id,
+        to: ["buyer@example.com"],
+        subject: "Forged AI provenance",
+        bodyText: "This should not be accepted without ai.use.",
+        aiAssisted: true,
+        aiPurpose: "draft",
+        aiSourceMessageId: source.id,
+        aiSources: [{ label: "Source email", messageId: source.id }]
+      }),
+    /ai\.use/
+  );
+});
+
+await run("queued outbound email requires visible ai sources when source links are enforced", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { requireSourceLinks: true });
+  const account = store.createEmailAccount(context, {
+    name: "AI Source Required Inbox",
+    emailAddress: "ai-source-required@example.com",
+    provider: "smtp_imap",
+    sendEnabled: true,
+    status: "active"
+  });
+
+  assert.throws(
+    () =>
+      store.queueEmailMessage(context, {
+        accountId: account.id,
+        to: ["buyer@example.com"],
+        subject: "AI assisted without sources",
+        bodyText: "This should not be queued without source references.",
+        aiAssisted: true,
+        aiPurpose: "draft"
+      }),
+    /requires at least one visible source/
+  );
+});
+
+await run("queued outbound email restricts ai provenance to sendable purposes", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { requireSourceLinks: false });
+  const account = store.createEmailAccount(context, {
+    name: "AI Purpose Inbox",
+    emailAddress: "ai-purpose@example.com",
+    provider: "smtp_imap",
+    sendEnabled: true,
+    status: "active"
+  });
+
+  assert.throws(
+    () =>
+      store.queueEmailMessage(context, {
+        accountId: account.id,
+        to: ["buyer@example.com"],
+        subject: "Missing AI purpose",
+        bodyText: "This should not be queued without a provenance purpose.",
+        aiAssisted: true
+      }),
+    /requires aiPurpose/
+  );
+  assert.throws(
+    () =>
+      store.queueEmailMessage(context, {
+        accountId: account.id,
+        to: ["buyer@example.com"],
+        subject: "Analysis is not a sent body purpose",
+        bodyText: "This should not be marked as context analysis output.",
+        aiAssisted: true,
+        aiPurpose: "context_analysis"
+      }),
+    /must be draft or translate/
+  );
+});
+
+await run("queued outbound email rejects forged ai source message provenance", () => {
+  const snapshot = structuredClone(seedData);
+  snapshot.teams.push({ id: "team-ai-source-hidden", workspaceId: defaultWorkspaceId, name: "AI Source Hidden" });
+  snapshot.users.push({
+    id: "user-ai-source-hidden",
+    workspaceId: defaultWorkspaceId,
+    email: "ai-source-hidden@example.com",
+    name: "AI Source Hidden User",
+    roleId: "role-sales",
+    teamId: "team-ai-source-hidden"
+  });
+  snapshot.records.push({
+    id: "contact-ai-source-hidden",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Hidden AI Source Contact",
+    ownerId: "user-ai-source-hidden",
+    data: { email: "hidden-ai-source@example.com" },
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z"
+  });
+  const store = new CrmStore(snapshot);
+  const context = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  const account = store.createEmailAccount(context, {
+    name: "AI Spoof Inbox",
+    emailAddress: "ai-spoof@example.com",
+    provider: "smtp_imap",
+    sendEnabled: true,
+    status: "active"
+  });
+  const hiddenSource = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "hidden-ai-source@example.com",
+    to: ["ai-spoof@example.com"],
+    subject: "Hidden source email",
+    bodyText: "This source email belongs to a hidden CRM record.",
+    recordId: "contact-ai-source-hidden"
+  });
+
+  assert.throws(
+    () =>
+      store.queueEmailMessage(context, {
+        accountId: account.id,
+        to: ["buyer@example.com"],
+        subject: "Forged AI source",
+        bodyText: "This should not be queued with a forged provenance source.",
+        aiAssisted: true,
+        aiPurpose: "draft",
+        aiSourceMessageId: "missing-source-message",
+        aiSources: [{ label: "Missing source", messageId: "missing-source-message" }]
+      }),
+    /Email message not found/
+  );
+  assert.throws(
+    () =>
+      store.queueEmailMessage(salesContext, {
+        accountId: account.id,
+        to: ["buyer@example.com"],
+        subject: "Hidden AI source",
+        bodyText: "This should not be queued with an invisible provenance source.",
+        aiAssisted: true,
+        aiPurpose: "draft",
+        aiSources: [{ label: "Hidden source", messageId: hiddenSource.id }]
+      }),
+    /Email thread not found/
+  );
+});
+
+await run("email attachment hrefs cover stored provider external and unavailable content", () => {
+  assert.equal(
+    buildEmailAttachmentHref("message id", 0, { contentBase64: Buffer.from("hello").toString("base64") }),
+    "/api/email/messages/message%20id/attachments/0"
+  );
+  assert.equal(
+    buildEmailAttachmentHref("message-id", 2, { providerMessageId: "provider-message", providerAttachmentId: "provider-attachment" }),
+    "/api/email/messages/message-id/attachments/2"
+  );
+  assert.equal(buildEmailAttachmentHref("message-id", 1, { externalUrl: "https://files.example.com/proposal.pdf" }), "https://files.example.com/proposal.pdf");
+  assert.equal(buildEmailAttachmentHref("message-id", 1, { externalUrl: " http://files.example.com/proposal.pdf " }), "http://files.example.com/proposal.pdf");
+  assert.equal(buildEmailAttachmentHref("message-id", 1, { externalUrl: "javascript:alert(1)" }), undefined);
+  assert.equal(buildEmailAttachmentHref("message-id", 1, { externalUrl: "file:///C:/secret.txt" }), undefined);
+  assert.equal(buildEmailAttachmentHref("message-id", 1, { externalUrl: "not a url" }), undefined);
+  assert.equal(buildEmailAttachmentHref("message-id", 1, { providerAttachmentId: "provider-attachment" }), undefined);
+});
+
+await run("email attachment responses sanitize headers and enforce the attachment size cap", async () => {
+  const response = buildEmailAttachmentResponse("报价\r\n.pdf", "text/plain; charset=utf-8", Buffer.from("hello world").toString("base64url"));
+
+  assert.equal(await response.text(), "hello world");
+  assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(response.headers.get("content-length"), "11");
+  assert.match(response.headers.get("content-disposition") ?? "", /filename=".*\.pdf"/);
+  assert.doesNotMatch(response.headers.get("content-disposition") ?? "", /[\r\n]/);
+  assert.match(response.headers.get("content-disposition") ?? "", /filename\*=UTF-8''/);
+
+  const sanitized = buildEmailAttachmentResponse("proposal.txt", "text/plain\r\nx-injected: yes", Buffer.from("safe").toString("base64"));
+  assert.equal(sanitized.headers.get("content-type"), "application/octet-stream");
+
+  const oversized = Buffer.alloc(MAX_EMAIL_ATTACHMENT_BYTES + 1, "a").toString("base64");
+  assert.throws(() => buildEmailAttachmentResponse("large.bin", "application/octet-stream", oversized), /exceeds/);
+});
+
+await run("email ai source helpers expose only navigable references", () => {
+  assert.equal(canOpenEmailAiSource({ recordId: "record-1" }), true);
+  assert.equal(canOpenEmailAiSource({ activityId: "activity-1" }), true);
+  assert.equal(canOpenEmailAiSource({ messageId: "message-1" }), true);
+  assert.equal(canOpenEmailAiSource({ knowledgeArticleId: "knowledge-1" }), true);
+  assert.equal(canOpenEmailAiSource({}), false);
+  assert.equal(emailAiSourceKey({ label: "Contact source", recordId: "contact-1" }), "Contact source-contact-1");
+  assert.equal(emailAiSourceKey({ label: "Knowledge source", knowledgeArticleId: "knowledge-1" }), "Knowledge source-knowledge-1");
+});
+
+await run("knowledge articles are admin managed and schema bounded", () => {
+  const store = new CrmStore();
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  const parsed = knowledgeArticleCreateSchema.parse({
+    title: "Renewal policy",
+    body: "Use the approved renewal discount ladder.",
+    tags: ["renewal", "pricing"],
+    active: true
+  });
+  const article = store.createKnowledgeArticle(adminContext, parsed);
+  const updated = store.updateKnowledgeArticle(adminContext, article.id, knowledgeArticleUpdateSchema.parse({ tags: ["renewal", "approved"], active: false }));
+
+  assert.equal(article.title, "Renewal policy");
+  assert.deepEqual(updated.tags, ["renewal", "approved"]);
+  assert.equal(updated.active, false);
+  assert.equal(store.getKnowledgeArticle(adminContext, article.id).active, false);
+  assert.equal(store.getKnowledgeArticle(salesContext, article.id).title, "Renewal policy");
+  assert.equal(store.listKnowledgeArticles(adminContext, true).some((candidate) => candidate.id === article.id), false);
+  assert.equal(store.listKnowledgeArticles(adminContext, false).some((candidate) => candidate.id === article.id), true);
+  assert.throws(() => store.createKnowledgeArticle(salesContext, parsed), /crm\.admin/);
+  assert.throws(() => store.updateKnowledgeArticle(salesContext, article.id, { active: true }), /crm\.admin/);
+  assert.throws(() => knowledgeArticleCreateSchema.parse({ title: "Empty body", body: "" }), /String must contain/);
+});
+
+await run("email thread summaries can be refreshed and audited", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Summary mailbox",
+    emailAddress: "summary@example.com",
+    provider: "custom"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["summary@example.com"],
+    subject: "Long thread",
+    bodyText: "The customer asked about deployment and pricing.",
+    recordId: "contact-lin"
+  });
+  const updated = store.updateEmailThreadSummary(context, message.threadId, "Customer needs deployment and pricing follow-up.");
+
+  assert.equal(updated.summary, "Customer needs deployment and pricing follow-up.");
+  assert.match(updated.summaryUpdatedAt ?? "", /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(store.listAuditLogs(context, { entityType: "email_thread" }).some((log) => log.entityId === message.threadId), true);
+});
+
+await run("email thread analysis preserves source references", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Analysis source mailbox",
+    emailAddress: "analysis-source@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Analysis source",
+    bodyText: "Need source-backed analysis.",
+    recordId: "contact-lin"
+  });
+  const activity = store.listActivities(context, "contact-lin").find((candidate) => candidate.type === "email" && candidate.title === "Analysis source");
+  assert.ok(activity);
+  const article = store.createKnowledgeArticle(context, {
+    title: "Analysis knowledge",
+    body: "Use this source to explain current sales guidance."
+  });
+  const updated = store.updateEmailThreadAnalysis(context, message.threadId, "Source-backed recommendation.", [
+    { label: "Lin", recordId: "contact-lin" },
+    { label: "Message", messageId: message.id },
+    { label: "Activity", activityId: activity?.id },
+    { label: "Knowledge", knowledgeArticleId: article.id },
+    { label: "  " }
+  ]);
+  const audit = store.listAuditLogs(context, { entityType: "email_thread" }).find((log) => log.entityId === message.threadId && /analysis/.test(log.summary));
+
+  assert.equal(updated.aiAnalysis, "Source-backed recommendation.");
+  assert.equal(updated.aiAnalysisSources?.length, 4);
+  assert.equal(updated.aiAnalysisSources?.[0]?.recordId, "contact-lin");
+  assert.equal(updated.aiAnalysisSources?.[1]?.messageId, message.id);
+  assert.equal(updated.aiAnalysisSources?.[2]?.activityId, activity?.id);
+  assert.equal(updated.aiAnalysisSources?.[3]?.knowledgeArticleId, article.id);
+  assert.equal(audit?.details.sourceCount, 4);
+});
+
+await run("email message translation preserves source references", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Translation source mailbox",
+    emailAddress: "translation-source@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Translation source",
+    bodyText: "Need source-backed translation.",
+    recordId: "contact-lin"
+  });
+  const updated = store.updateEmailMessageTranslation(context, message.id, "Translated with sources.", "en-US", [
+    { label: "Lin", recordId: "contact-lin" },
+    { label: "Message", messageId: message.id },
+    { label: "" }
+  ]);
+  const audit = store.listAuditLogs(context, { entityType: "email_message" }).find((log) => log.entityId === message.id && /Translated/.test(log.summary));
+
+  assert.equal(updated.translatedBodyText, "Translated with sources.");
+  assert.equal(updated.translatedSources?.length, 2);
+  assert.equal(updated.translatedSources?.[0]?.recordId, "contact-lin");
+  assert.equal(updated.translatedSources?.[1]?.messageId, message.id);
+  assert.equal(audit?.details.sourceCount, 2);
+});
+
+await run("email ai persisted sources reject invalid references", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Invalid AI source mailbox",
+    emailAddress: "invalid-ai-source@example.com",
+    provider: "custom",
+    status: "active",
+    sendEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Invalid source",
+    bodyText: "Need invalid source checks.",
+    recordId: "contact-lin"
+  });
+
+  assert.throws(
+    () => store.updateEmailThreadAnalysis(context, message.threadId, "Bad message source.", [{ label: "Missing message", messageId: "missing-message" }]),
+    /Email message not found/
+  );
+  assert.throws(
+    () => store.updateEmailThreadAnalysis(context, message.threadId, "Bad activity source.", [{ label: "Missing activity", activityId: "missing-activity" }]),
+    /Activity not found/
+  );
+  assert.throws(
+    () => store.updateEmailMessageTranslation(context, message.id, "Bad knowledge source.", "en-US", [{ label: "Missing knowledge", knowledgeArticleId: "missing-knowledge" }]),
+    /Knowledge article not found/
+  );
+});
+
+await run("email assistant compact context uses thread summary instead of summarized history", () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, draft: true, auto_summarize: true };
+  const thread = {
+    id: "thread-compact",
+    workspaceId: defaultWorkspaceId,
+    accountId: "account-compact",
+    subject: "Compact history",
+    participantEmails: ["buyer@example.com"],
+    summary: "Existing compact memory about deployment blockers.",
+    summaryUpdatedAt: "2026-06-20T10:00:00.000Z",
+    createdAt: "2026-06-20T08:00:00.000Z",
+    updatedAt: "2026-06-20T10:00:00.000Z"
+  };
+  const messages = [
+    {
+      id: "message-old",
+      workspaceId: defaultWorkspaceId,
+      threadId: thread.id,
+      accountId: thread.accountId,
+      direction: "inbound",
+      status: "received",
+      from: "buyer@example.com",
+      to: ["sales@example.com"],
+      subject: "Old context",
+      bodyText: "OLD BODY SHOULD BE COMPRESSED AWAY",
+      receivedAt: "2026-06-20T09:00:00.000Z",
+      createdAt: "2026-06-20T09:00:00.000Z"
+    },
+    {
+      id: "message-new",
+      workspaceId: defaultWorkspaceId,
+      threadId: thread.id,
+      accountId: thread.accountId,
+      direction: "inbound",
+      status: "received",
+      from: "buyer@example.com",
+      to: ["sales@example.com"],
+      subject: "New context",
+      bodyText: "NEW BODY AFTER SUMMARY",
+      receivedAt: "2026-06-20T11:00:00.000Z",
+      createdAt: "2026-06-20T11:00:00.000Z"
+    }
+  ];
+
+  const compact = buildEmailPromptContext({ settings, purpose: "draft", thread, messages });
+  assert.match(compact.communicationSummary, /Existing compact memory/);
+  assert.doesNotMatch(compact.communicationSummary, /OLD BODY SHOULD BE COMPRESSED AWAY/);
+  assert.match(compact.communicationSummary, /NEW BODY AFTER SUMMARY/);
+
+  const summarizeContext = buildEmailPromptContext({ settings, purpose: "summarize", thread, messages });
+  assert.match(summarizeContext.communicationSummary, /Existing compact memory/);
+  assert.match(summarizeContext.communicationSummary, /OLD BODY SHOULD BE COMPRESSED AWAY/);
+  assert.match(summarizeContext.communicationSummary, /NEW BODY AFTER SUMMARY/);
+
+  const compactWithExplicitSource = buildEmailPromptContext({ settings, purpose: "draft", thread, messages, sourceMessage: messages[0] });
+  assert.match(compactWithExplicitSource.communicationSummary, /OLD BODY SHOULD BE COMPRESSED AWAY/);
+  assert.equal(compactWithExplicitSource.sources.some((source) => source.messageId === "message-old"), true);
+
+  settings.features.auto_summarize = false;
+  const uncompressed = buildEmailPromptContext({ settings, purpose: "draft", thread, messages });
+  assert.match(uncompressed.communicationSummary, /OLD BODY SHOULD BE COMPRESSED AWAY/);
+});
+
+await run("email assistant exposes context budget and model prompt caps long source text", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, translate: true, auto_summarize: true };
+  settings.maxContextChars = 1000;
+  settings.maxKnowledgeArticles = 2;
+  const longBody = "LONG_EMAIL_BODY ".repeat(1000);
+  const context = buildEmailPromptContext({
+    settings,
+    purpose: "translate",
+    thread: {
+      id: "thread-budget",
+      workspaceId: defaultWorkspaceId,
+      accountId: "account-budget",
+      subject: "Budgeted context",
+      participantEmails: ["buyer@example.com"],
+      createdAt: "2026-06-20T08:00:00.000Z",
+      updatedAt: "2026-06-20T10:00:00.000Z"
+    },
+    messages: [
+      {
+        id: "message-budget",
+        workspaceId: defaultWorkspaceId,
+        threadId: "thread-budget",
+        accountId: "account-budget",
+        direction: "inbound",
+        status: "received",
+        from: "buyer@example.com",
+        to: ["sales@example.com"],
+        subject: "Long body",
+        bodyText: longBody,
+        receivedAt: "2026-06-20T09:00:00.000Z",
+        createdAt: "2026-06-20T09:00:00.000Z"
+      }
+    ],
+    knowledgeArticles: [
+      { id: "knowledge-budget", workspaceId: defaultWorkspaceId, title: "Large policy", body: "KNOWLEDGE_BODY ".repeat(300), tags: ["policy"], active: true, createdById: "user-admin", createdAt: "2026-06-20T09:00:00.000Z", updatedAt: "2026-06-20T09:00:00.000Z" }
+    ],
+    sourceMessage: {
+      id: "message-budget",
+      workspaceId: defaultWorkspaceId,
+      threadId: "thread-budget",
+      accountId: "account-budget",
+      direction: "inbound",
+      status: "received",
+      from: "buyer@example.com",
+      to: ["sales@example.com"],
+      subject: "Long body",
+      bodyText: longBody,
+      receivedAt: "2026-06-20T09:00:00.000Z",
+      createdAt: "2026-06-20T09:00:00.000Z"
+    }
+  });
+  const prompt = buildEmailModelPrompt({ context, userPrompt: "Please translate this carefully. ".repeat(100), sourceText: longBody });
+  const result = await generateEmailAiOutput({ context, userPrompt: "Please translate this carefully. ".repeat(100), sourceText: longBody });
+
+  assert.equal(context.maxContextChars, 1000);
+  assert.equal(context.contextCharCount <= 1000, true);
+  assert.equal(context.truncated, true);
+  assert.equal(prompt.length <= 2000, true);
+  assert.match(prompt, /\[truncated\]/);
+  assert.doesNotMatch(prompt, new RegExp("LONG_EMAIL_BODY ".repeat(60).trim()));
+  assert.equal(result.budget.maxContextChars, 1000);
+  assert.equal(result.budget.truncated, true);
+  assert.equal(result.budget.modelPromptChars <= 2000, true);
+});
+
+await run("email ai generation bounds provider output before persistence", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, draft: true };
+  settings.maxContextChars = MAX_EMAIL_AI_OUTPUT_CHARS + 5000;
+  const context = buildEmailPromptContext({
+    settings,
+    purpose: "draft",
+    record: {
+      id: "record-ai-output-budget",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "AI Output Budget",
+      data: {},
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z"
+    }
+  });
+  const result = await generateEmailAiOutput(
+    { context, userPrompt: "draft a bounded reply" },
+    {
+      config: { provider: "openai-compatible", apiKey: "test-key", baseUrl: "https://ai.example/v1", model: "test-model", timeoutMs: 1000 },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    text: "MODEL_OUTPUT ".repeat(2000),
+                    suggestedSubject: "Very long subject ".repeat(40)
+                  })
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    }
+  );
+
+  assert.equal(result.enabled, true);
+  assert.equal(result.generationMode, "provider");
+  assert.equal(result.text.length <= MAX_EMAIL_AI_OUTPUT_CHARS, true);
+  assert.match(result.text, /\[truncated\]$/);
+  assert.equal(result.suggestedSubject.length <= MAX_EMAIL_AI_SUBJECT_CHARS, true);
+  assert.match(result.suggestedSubject, /\[truncated\]$/);
+  assert.equal(result.budget.outputTruncated, true);
+});
+
+await run("email assistant blocks generation when required sources are missing", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, draft: true };
+  settings.requireSourceLinks = true;
+
+  const context = buildEmailPromptContext({ settings, purpose: "draft" });
+  const result = await generateEmailAiOutput({ context, userPrompt: "write a cold email" });
+
+  assert.equal(context.enabled, false);
+  assert.equal(result.enabled, false);
+  assert.match(result.text, /requires at least one/);
+  assert.deepEqual(result.sources, []);
+});
+
+await run("email ai generation audit stores metadata without generated content", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+
+  store.recordEmailAiGeneration(context, {
+    purpose: "draft",
+    enabled: true,
+    recordId: "contact-lin",
+    sourceCount: 2,
+    sourceLabels: ["Lin Chen", "Deployment notes"],
+    targetLocale: "en-US",
+    userPromptLength: 24,
+    sourceTextLength: 0,
+    resultTextLength: 180,
+    contextCharCount: 640,
+    maxContextChars: 8000,
+    modelPromptChars: 1200,
+    contextTruncated: true,
+    outputTruncated: true,
+    generationMode: "provider_fallback",
+    providerError: `AI provider returned HTTP 503\n${"provider unavailable ".repeat(80)}`,
+    suggestedSubjectProvided: true
+  });
+
+  const log = store.listAuditLogs(context, { entityType: "email_ai_generation" })[0];
+  assert.equal(log.action, "create");
+  assert.equal(log.entityId, "contact-lin");
+  assert.equal(log.details.purpose, "draft");
+  assert.equal(log.details.sourceCount, 2);
+  assert.equal(log.details.targetLocale, "en-US");
+  assert.equal(log.details.resultTextLength, 180);
+  assert.equal(log.details.contextCharCount, 640);
+  assert.equal(log.details.maxContextChars, 8000);
+  assert.equal(log.details.modelPromptChars, 1200);
+  assert.equal(log.details.contextTruncated, true);
+  assert.equal(log.details.outputTruncated, true);
+  assert.equal(log.details.generationMode, "provider_fallback");
+  assert.match(log.details.providerError, /^AI provider returned HTTP 503 provider unavailable/);
+  assert.equal(log.details.providerError.length <= 500, true);
+  assert.doesNotMatch(log.details.providerError, /\n/);
+  assert.equal(log.details.suggestedSubjectProvided, true);
+  assert.equal("generatedText" in log.details, false);
+  assert.equal("userPrompt" in log.details, false);
+});
+
 await run("email assistant context obeys feature toggles and includes CRM history and knowledge", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
@@ -2497,6 +6316,1838 @@ await run("email assistant context obeys feature toggles and includes CRM histor
   assert.match(draftContext.knowledgeBrief, /SSO Roadmap/);
   assert.equal(draftContext.sources.some((source) => source.messageId === message.id), true);
   assert.equal(draftContext.sources.some((source) => source.knowledgeArticleId === article.id), true);
+});
+
+await run("email message translation and analysis use CRM thread context and knowledge", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { translate: true, context_analysis: true, auto_summarize: true } });
+  const article = store.createKnowledgeArticle(context, {
+    title: "Translation glossary",
+    body: "Translate onboarding as implementation kickoff when writing customer-facing English.",
+    tags: ["translation", "onboarding"]
+  });
+  const account = store.createEmailAccount(context, {
+    name: "AI Translation Inbox",
+    emailAddress: "sales@example.com",
+    provider: "custom",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["sales@example.com"],
+    subject: "Customer email",
+    bodyText: "We want to confirm the private deployment and onboarding plan.",
+    recordId: "contact-lin"
+  });
+
+  const translationContext = store.buildEmailAssistantContext(context, { purpose: "translate", threadId: message.threadId, sourceMessageId: message.id, recordId: "contact-lin", targetLocale: "en-US" });
+  const translation = await generateEmailAiOutput({ context: translationContext, sourceText: message.bodyText });
+  const analysisContext = store.buildEmailAssistantContext(context, { purpose: "context_analysis", threadId: message.threadId, sourceMessageId: message.id, recordId: "contact-lin" });
+  const analysis = await generateEmailAiOutput({ context: analysisContext, sourceText: message.bodyText });
+
+  assert.equal(translation.enabled, true);
+  assert.match(translation.text, /Content to translate/);
+  assert.match(translation.text, /private deployment/i);
+  assert.equal(translation.sources.some((source) => source.recordId === "contact-lin"), true);
+  assert.equal(translation.sources.some((source) => source.messageId === message.id), true);
+  assert.equal(translation.sources.some((source) => source.knowledgeArticleId === article.id), true);
+  assert.equal(analysis.enabled, true);
+  assert.match(analysis.text, /Context analysis/);
+  assert.match(analysis.text, /Recommendation/);
+});
+
+await run("email assistant context infers thread and customer record from source message", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { context_analysis: true, auto_summarize: true } });
+  store.createKnowledgeArticle(context, {
+    title: "Private deployment playbook",
+    body: "Use the deployment checklist when customers ask about private deployment readiness.",
+    tags: ["deployment"]
+  });
+  const account = store.createEmailAccount(context, {
+    name: "Source Message Inbox",
+    emailAddress: "source-message@example.com",
+    provider: "custom"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["source-message@example.com"],
+    subject: "Deployment checklist",
+    bodyText: "Can you review the private deployment checklist before our next call?",
+    recordId: "contact-lin"
+  });
+
+  const assistantContext = store.buildEmailAssistantContext(context, {
+    purpose: "context_analysis",
+    sourceMessageId: message.id
+  });
+  const result = await generateEmailAiOutput({ context: assistantContext, sourceText: message.bodyText });
+
+  assert.equal(assistantContext.enabled, true);
+  assert.equal(assistantContext.recordId, "contact-lin");
+  assert.equal(assistantContext.threadId, message.threadId);
+  assert.equal(assistantContext.sourceMessageId, message.id);
+  assert.equal(result.recordId, "contact-lin");
+  assert.equal(result.threadId, message.threadId);
+  assert.equal(result.sourceMessageId, message.id);
+  assert.match(assistantContext.customerBrief, /林晓|lin@example\.com/);
+  assert.match(assistantContext.communicationSummary, /Deployment checklist/);
+  assert.match(assistantContext.knowledgeBrief, /Private deployment playbook/);
+  assert.equal(assistantContext.sources.some((source) => source.recordId === "contact-lin"), true);
+  assert.equal(assistantContext.sources.some((source) => source.messageId === message.id), true);
+});
+
+await run("email assistant context rejects mismatched record and thread anchors", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, context_analysis: true } });
+  const account = store.createEmailAccount(context, {
+    name: "AI Anchor Guard Inbox",
+    emailAddress: "ai-anchor-guard@example.com",
+    provider: "custom"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["ai-anchor-guard@example.com"],
+    subject: "Do not mix customer context",
+    bodyText: "Please keep this thread tied to the correct customer.",
+    recordId: "contact-lin"
+  });
+
+  assert.throws(
+    () =>
+      store.buildEmailAssistantContext(context, {
+        purpose: "draft",
+        recordId: "deal-platform",
+        threadId: message.threadId
+      }),
+    /record does not match/
+  );
+  assert.throws(
+    () =>
+      store.buildEmailAssistantContext(context, {
+        purpose: "context_analysis",
+        recordId: "deal-platform",
+        sourceMessageId: message.id
+      }),
+    /record does not match/
+  );
+});
+
+await run("email ai settings normalize missing feature keys for existing workspaces", () => {
+  const store = new CrmStore({
+    ...seedData,
+    emailAiSettings: [
+      {
+        ...seedData.emailAiSettings[0],
+        features: {
+          draft: true,
+          translate: true,
+          context_analysis: true,
+          auto_summarize: true
+        }
+      }
+    ]
+  });
+  const context = store.getContext("user-admin");
+  const settings = store.getEmailAiSettings(context);
+  const updated = store.updateEmailAiSettings(context, { features: { draft: false } });
+
+  assert.equal(settings.features.auto_translate, false);
+  assert.equal(settings.features.auto_context_analysis, false);
+  assert.equal(updated.features.draft, false);
+  assert.equal(updated.features.translate, true);
+  assert.equal(updated.features.auto_translate, false);
+  assert.equal(updated.features.auto_context_analysis, false);
+  assert.equal(updated.features.auto_summarize, true);
+  assert.deepEqual(
+    normalizeEmailAiFeatures({
+      draft: true,
+      translate: false,
+      auto_translate: true,
+      context_analysis: false,
+      auto_context_analysis: true,
+      auto_summarize: true
+    }),
+    {
+      draft: true,
+      translate: false,
+      auto_translate: false,
+      context_analysis: false,
+      auto_context_analysis: false,
+      auto_summarize: true
+    }
+  );
+  const cleaned = store.updateEmailAiSettings(context, {
+    features: {
+      translate: false,
+      auto_translate: true,
+      context_analysis: false,
+      auto_context_analysis: true
+    }
+  });
+  assert.equal(cleaned.features.translate, false);
+  assert.equal(cleaned.features.auto_translate, false);
+  assert.equal(cleaned.features.context_analysis, false);
+  assert.equal(cleaned.features.auto_context_analysis, false);
+  assert.equal(getEmailAiPurposeFeature("draft"), "draft");
+  assert.equal(getEmailAiPurposeFeature("translate"), "translate");
+  assert.equal(getEmailAiPurposeFeature("context_analysis"), "context_analysis");
+  assert.equal(getEmailAiPurposeFeature("summarize"), "auto_summarize");
+  assert.equal(isEmailAiPurposeEnabled(updated.features, "draft"), false);
+  assert.equal(isEmailAiPurposeEnabled(updated.features, "translate"), true);
+  assert.equal(isEmailAiPurposeEnabled(updated.features, "context_analysis"), true);
+  assert.equal(isEmailAiPurposeEnabled(updated.features, "summarize"), true);
+  assert.equal(isEmailAiPurposeEnabled({ ...updated.features, auto_summarize: false }, "summarize"), false);
+});
+
+await run("email ai automations require ai permission and dependent feature toggles", () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  settings.features = {
+    draft: true,
+    translate: true,
+    auto_translate: true,
+    context_analysis: true,
+    auto_context_analysis: true,
+    auto_summarize: true
+  };
+  const aiContext = { role: { permissions: ["crm.read", "crm.write", "ai.use"] } };
+  const noAiContext = { role: { permissions: ["crm.read", "crm.write"] } };
+
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), true);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_context_analysis"), true);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_summarize"), true);
+  assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_translate"), false);
+  assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_context_analysis"), false);
+  assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_summarize"), false);
+
+  settings.features.translate = false;
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), false);
+  settings.features.context_analysis = false;
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_context_analysis"), false);
+});
+
+await run("email auto summary scheduling waits until it can reduce prompt history", () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  settings.maxHistoryMessages = 3;
+  settings.maxContextChars = 2000;
+  const thread = {
+    id: "thread-auto-summary-policy",
+    workspaceId: defaultWorkspaceId,
+    accountId: "account-auto-summary-policy",
+    subject: "Auto summary policy",
+    participantEmails: ["buyer@example.com"],
+    createdAt: "2026-06-20T08:00:00.000Z",
+    updatedAt: "2026-06-20T08:00:00.000Z"
+  };
+  const makeMessage = (id, bodyText, createdAt) => ({
+    id,
+    workspaceId: defaultWorkspaceId,
+    threadId: thread.id,
+    accountId: thread.accountId,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: ["sales@example.com"],
+    subject: `Message ${id}`,
+    bodyText,
+    createdAt
+  });
+  const messages = [
+    makeMessage("message-summary-1", "short first note", "2026-06-20T09:00:00.000Z"),
+    makeMessage("message-summary-2", "short second note", "2026-06-20T09:05:00.000Z"),
+    makeMessage("message-summary-3", "short third note", "2026-06-20T09:10:00.000Z")
+  ];
+
+  assert.equal(shouldRunEmailAutoSummary(settings, thread, messages.slice(0, 2)), false);
+  assert.equal(shouldRunEmailAutoSummary(settings, thread, messages), true);
+  assert.equal(shouldRunEmailAutoSummary(settings, thread, [makeMessage("message-summary-long", "LONG_BODY ".repeat(120), "2026-06-20T09:15:00.000Z")]), true);
+
+  const summarizedThread = {
+    ...thread,
+    summary: "Existing AI compact memory.",
+    summaryUpdatedAt: "2026-06-20T10:00:00.000Z"
+  };
+  const oldMessage = makeMessage("message-summary-old", "old body", "2026-06-20T09:00:00.000Z");
+  const newMessages = [
+    makeMessage("message-summary-new-1", "new one", "2026-06-20T10:05:00.000Z"),
+    makeMessage("message-summary-new-2", "new two", "2026-06-20T10:10:00.000Z"),
+    makeMessage("message-summary-new-3", "new three", "2026-06-20T10:15:00.000Z")
+  ];
+
+  assert.equal(shouldRunEmailAutoSummary(settings, summarizedThread, [oldMessage, ...newMessages.slice(0, 2)]), false);
+  assert.equal(shouldRunEmailAutoSummary(settings, summarizedThread, [oldMessage, ...newMessages]), true);
+});
+
+await run("email ai automations are best effort and audit failures", async () => {
+  const context = {
+    workspaceId: defaultWorkspaceId,
+    user: seedData.users[0],
+    role: { ...seedData.roles[0], permissions: ["crm.read", "crm.write", "ai.use"] }
+  };
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  settings.features = {
+    draft: true,
+    translate: true,
+    auto_translate: true,
+    context_analysis: true,
+    auto_context_analysis: true,
+    auto_summarize: true
+  };
+  const message = {
+    id: "message-automation-failure",
+    workspaceId: defaultWorkspaceId,
+    threadId: "thread-automation-failure",
+    accountId: "account-automation-failure",
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: ["sales@example.com"],
+    subject: "Automation failure",
+    bodyText: "This email should still be recorded.",
+    createdAt: new Date().toISOString()
+  };
+  const audits = [];
+  const repository = {
+    async recordEmailAiGeneration(_context, input) {
+      audits.push(input);
+    }
+  };
+  const executor = {
+    async runEmailTranslateJob() {
+      throw new Error("translate provider unavailable");
+    },
+    async runEmailAnalyzeJob() {
+      throw new Error("analysis provider unavailable");
+    },
+    async runEmailSummarizeJob() {
+      throw new Error("summary queue unavailable");
+    }
+  };
+
+  await assert.doesNotReject(() => runEmailAutomationsBestEffort(context, repository, executor, message, settings));
+  assert.equal(audits.length, 3);
+  assert.equal(audits.every((audit) => audit.enabled === false && audit.automationFailed === true), true);
+  assert.equal(audits.some((audit) => audit.purpose === "translate" && audit.sourceMessageId === message.id && /translate provider/.test(audit.errorMessage)), true);
+  assert.equal(audits.some((audit) => audit.purpose === "context_analysis" && audit.sourceMessageId === message.id && /analysis provider/.test(audit.errorMessage)), true);
+  assert.equal(audits.some((audit) => audit.purpose === "summarize" && audit.threadId === message.threadId && /summary queue/.test(audit.errorMessage)), true);
+});
+
+await run("email ai automation scheduling does not block email intake", async () => {
+  const context = {
+    workspaceId: defaultWorkspaceId,
+    user: seedData.users[0],
+    role: { ...seedData.roles[0], permissions: ["crm.read", "crm.write", "ai.use"] }
+  };
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  settings.features = {
+    draft: true,
+    translate: true,
+    auto_translate: true,
+    context_analysis: true,
+    auto_context_analysis: false,
+    auto_summarize: false
+  };
+  const message = {
+    id: "message-automation-slow",
+    workspaceId: defaultWorkspaceId,
+    threadId: "thread-automation-slow",
+    accountId: "account-automation-slow",
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: ["sales@example.com"],
+    subject: "Slow automation",
+    bodyText: "This email should return before automation finishes.",
+    createdAt: new Date().toISOString()
+  };
+  const audits = [];
+  let releaseAutomation;
+  const automationStarted = new Promise((resolveStarted) => {
+    const executor = {
+      async runEmailTranslateJob() {
+        resolveStarted();
+        await new Promise((resolveRelease) => {
+          releaseAutomation = resolveRelease;
+        });
+        throw new Error("slow translate failed");
+      },
+      async runEmailAnalyzeJob() {
+        throw new Error("should not run");
+      },
+      async runEmailSummarizeJob() {
+        throw new Error("should not run");
+      }
+    };
+    scheduleEmailAutomationsBestEffort(context, { recordEmailAiGeneration: async (_context, input) => audits.push(input) }, executor, message, settings);
+  });
+
+  assert.equal(audits.length, 0);
+  await automationStarted;
+  assert.equal(audits.length, 0);
+  releaseAutomation();
+  await flushAsyncWork();
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].automationFailed, true);
+  assert.match(audits[0].errorMessage, /slow translate failed/);
+});
+
+await run("email send sync and ai schemas validate bounded payloads", () => {
+  assert.equal(emailSendSchema.parse({
+    accountId: "email-account",
+    to: ["buyer@example.com"],
+    cc: ["manager@example.com"],
+    bcc: ["archive@example.com"],
+    subject: "Follow up",
+    bodyText: "Thanks for your time.",
+    clientRequestId: "send-request-123",
+    attachments: [{ fileName: "proposal.txt", contentType: "text/plain", size: 11, contentBase64: Buffer.from("hello world").toString("base64") }]
+  }).clientRequestId, "send-request-123");
+  assert.equal(emailSyncSchema.parse({ accountId: "email-account", limit: 50 }).limit, 50);
+  assert.throws(() => emailSyncSchema.parse({ accountId: "email-account", limit: 101 }), z.ZodError);
+  assert.equal(emailSyncAllSchema.parse({ limit: 40 }).limit, 40);
+  assert.deepEqual(emailSyncAllSchema.parse({}), {});
+  assert.throws(() => emailSyncAllSchema.parse({ accountId: "email-account", limit: 40 }), z.ZodError);
+  assert.throws(() => emailSyncAllSchema.parse({ limit: 0 }), z.ZodError);
+  assert.equal(emailConnectionTestSchema.parse({ accountId: "email-account" }).accountId, "email-account");
+  assert.deepEqual(emailMessageTranslateSchema.parse({}), {});
+  assert.equal(emailMessageTranslateSchema.parse({ targetLocale: "en-US" }).targetLocale, "en-US");
+  assert.throws(() => emailMessageTranslateSchema.parse({ targetLocale: "e" }), z.ZodError);
+  assert.throws(() => emailMessageTranslateSchema.parse({ targetLocale: "x".repeat(21) }), z.ZodError);
+  assert.equal(
+    emailMessageCreateSchema.parse({
+      accountId: "email-account",
+      direction: "inbound",
+      status: "received",
+      from: "buyer@example.com",
+      to: ["sales@example.com"],
+      subject: "Inbound",
+      bodyText: "Received through a provider or controlled import."
+    }).direction,
+    "inbound"
+  );
+  assert.throws(
+    () =>
+      emailMessageCreateSchema.parse({
+        accountId: "email-account",
+        direction: "outbound",
+        status: "sent",
+        from: "sales@example.com",
+        to: ["buyer@example.com"],
+        subject: "Bypass send",
+        bodyText: "This should go through /api/email/send."
+      }),
+    /use \/api\/email\/send/
+  );
+  assert.throws(
+    () =>
+      emailMessageCreateSchema.parse({
+        accountId: "email-account",
+        direction: "inbound",
+        status: "sent",
+        from: "buyer@example.com",
+        to: ["sales@example.com"],
+        subject: "Wrong inbound status",
+        bodyText: "Inbound public records must be received."
+      }),
+    /received status/
+  );
+  assert.equal(emailAiSettingsUpdateSchema.parse({ features: { auto_context_analysis: true } }).features.auto_context_analysis, true);
+  assert.equal(emailAiGenerateSchema.parse({ purpose: "draft", recordId: "record-1", userPrompt: "short follow-up" }).purpose, "draft");
+  assert.equal(emailAiGenerateSchema.parse({ purpose: "draft", sourceMessageId: "message-1" }).sourceMessageId, "message-1");
+  assert.equal(emailAiGenerateSchema.parse({ purpose: "translate", threadId: "thread-1", sourceMessageId: "message-1", sourceText: "hola" }).sourceMessageId, "message-1");
+  assert.equal(emailAiGenerateSchema.parse({ purpose: "context_analysis", threadId: "thread-1" }).threadId, "thread-1");
+  assert.equal(emailAiGenerateSchema.parse({ purpose: "summarize", threadId: "thread-1" }).purpose, "summarize");
+  assert.equal(emailAiGenerateSchema.parse({ purpose: "summarize", sourceMessageId: "message-1" }).sourceMessageId, "message-1");
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "draft" }), z.ZodError);
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "translate", sourceMessageId: "message-1" }), z.ZodError);
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "context_analysis" }), z.ZodError);
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "summarize" }), z.ZodError);
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "draft", userPrompt: "write a follow-up" }), z.ZodError);
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "translate", sourceText: "hola" }), z.ZodError);
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "context_analysis", sourceText: "standalone email text" }), z.ZodError);
+  assert.throws(() => emailAiGenerateSchema.parse({ purpose: "summarize", sourceText: "standalone thread text" }), z.ZodError);
+  const aiSettingsPatch = emailAiSettingsUpdateSchema.parse({ features: { auto_translate: true }, defaultLocale: "en-US", requireSourceLinks: false, maxHistoryMessages: 12, maxKnowledgeArticles: 4, maxContextChars: 12000 });
+  assert.equal(aiSettingsPatch.features?.auto_translate, true);
+  assert.equal(aiSettingsPatch.defaultLocale, "en-US");
+  assert.equal(aiSettingsPatch.requireSourceLinks, false);
+  assert.equal(aiSettingsPatch.maxHistoryMessages, 12);
+  assert.equal(aiSettingsPatch.maxKnowledgeArticles, 4);
+  assert.equal(aiSettingsPatch.maxContextChars, 12000);
+  assert.throws(() => emailAiSettingsUpdateSchema.parse({ maxContextChars: 999 }), z.ZodError);
+  assert.equal(emailAccountUpdateSchema.parse({ status: "disabled", syncEnabled: false, sendEnabled: false }).status, "disabled");
+  assert.equal(
+    emailAccountUpdateSchema.parse({
+      connectionConfig: { smtpHost: "smtp.example.com", smtpPort: 587, smtpSecure: false, smtpStartTls: true, username: "sales@example.com", password: "app-password" }
+    }).connectionConfig?.smtpHost,
+    "smtp.example.com"
+  );
+  assert.equal(
+    emailAccountUpdateSchema.parse({
+      connectionConfig: { smtpHost: "smtp.example.com", smtpPort: 587, smtpStartTls: true, username: "sales@example.com", password: "app-password" }
+    }).connectionConfig?.smtpStartTls,
+    true
+  );
+  assert.equal(
+    emailSendSchema.parse({
+      accountId: "email-account",
+      to: ["buyer@example.com"],
+      subject: "Attachment metadata",
+      bodyText: "See attached.",
+      attachments: [{ fileName: "proposal.txt", size: 11, contentBase64: Buffer.from("hello world").toString("base64"), providerMessageId: "provider-message-id", providerAttachmentId: "provider-attachment-id" }]
+    }).attachments?.[0]?.providerMessageId,
+    "provider-message-id"
+  );
+  const aiProvenance = emailSendSchema.parse({
+    accountId: "email-account",
+    to: ["buyer@example.com"],
+    subject: "AI draft",
+    bodyText: "AI assisted but user reviewed.",
+    aiAssisted: true,
+    aiPurpose: "draft",
+    aiSourceMessageId: "message-source",
+    aiSources: [{ label: "Source message", messageId: "message-source" }],
+    aiGeneratedAt: "2026-06-20T12:00:00.000Z"
+  });
+  assert.equal(aiProvenance.aiAssisted, true);
+  assert.equal(aiProvenance.aiPurpose, "draft");
+  assert.equal(aiProvenance.aiSources?.[0]?.messageId, "message-source");
+  assert.throws(() => emailAccountUpdateSchema.parse({ connectionConfig: { smtpHost: "smtp.example.com" }, clearConnectionConfig: true }), /cannot be used together/);
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: [], subject: "No recipient", bodyText: "Missing recipient" }),
+    /Array must contain/
+  );
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "Attachment", bodyText: "Missing bytes", attachments: [{ fileName: "proposal.txt", size: 11 }] }),
+    /contentBase64/
+  );
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], cc: ["BUYER@example.com"], subject: "Duplicate", bodyText: "Duplicate recipient" }),
+    /must be unique/
+  );
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "Bad request id", bodyText: "Body", clientRequestId: "bad key" }),
+    z.ZodError
+  );
+  assert.throws(
+    () =>
+      emailSendSchema.parse({
+        accountId: "email-account",
+        to: Array.from({ length: MAX_OUTBOUND_EMAIL_RECIPIENTS + 1 }, (_item, index) => `buyer-${index}@example.com`),
+        subject: "Too many",
+        bodyText: "Too many recipients"
+      }),
+    /limited to 100/
+  );
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI missing purpose", bodyText: "Body", aiAssisted: true }),
+    /aiPurpose is required/
+  );
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI analysis purpose", bodyText: "Body", aiAssisted: true, aiPurpose: "context_analysis" }),
+    z.ZodError
+  );
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI orphan metadata", bodyText: "Body", aiPurpose: "draft" }),
+    /AI provenance fields/
+  );
+  assert.throws(
+    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI orphan sources", bodyText: "Body", aiSources: [{ label: "Source message", messageId: "message-source" }] }),
+    /AI provenance fields/
+  );
+  assert.throws(
+    () =>
+      emailSendSchema.parse({
+        accountId: "email-account",
+        to: ["buyer@example.com"],
+        subject: "AI bad source",
+        bodyText: "Body",
+        aiAssisted: true,
+        aiPurpose: "draft",
+        aiSources: [{ label: "" }]
+      }),
+    z.ZodError
+  );
+});
+
+await run("email provider test connection requires encrypted config", async () => {
+  const fakeRepository = {
+    async getEmailAccount() {
+      return {
+        id: "email-account",
+        workspaceId: defaultWorkspaceId,
+        name: "Sales inbox",
+        emailAddress: "sales@example.com",
+        provider: "smtp_imap",
+        status: "active",
+        syncEnabled: true,
+        sendEnabled: true,
+        connectionConfigured: false,
+        createdById: "user-admin",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    },
+    async getEmailAccountConnectionConfig() {
+      return undefined;
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository);
+  await assert.rejects(
+    () => adapter.testConnection({ workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] }, "email-account"),
+    /not configured/
+  );
+});
+
+await run("queued email send enforces outbound recipient policy before provider delivery", async () => {
+  const account = {
+    id: "policy-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Policy Account",
+    emailAddress: "sales@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const message = {
+    id: "policy-message",
+    workspaceId: defaultWorkspaceId,
+    threadId: "policy-thread",
+    accountId: account.id,
+    direction: "outbound",
+    status: "queued",
+    from: account.emailAddress,
+    to: ["buyer@example.com"],
+    cc: ["BUYER@example.com"],
+    bcc: [],
+    subject: "Duplicate recipient",
+    bodyText: "Body",
+    attachments: [],
+    createdAt: new Date().toISOString()
+  };
+  let deliveryAttempted = false;
+  let failedReason = "";
+  const fakeRepository = {
+    async getEmailMessage() {
+      return message;
+    },
+    async getEmailAccount() {
+      return account;
+    },
+    async listEmailMessages() {
+      return [];
+    },
+    async getEmailAccountConnectionConfig() {
+      deliveryAttempted = true;
+      return { smtpHost: "smtp.example.com", smtpPort: 465, smtpSecure: true, username: "sales@example.com", password: "app-password" };
+    },
+    async updateEmailMessageStatus(_context, messageId, status, patch) {
+      assert.equal(messageId, message.id);
+      assert.equal(status, "failed");
+      failedReason = patch.failureReason;
+      return { ...message, status, failureReason: patch.failureReason };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository);
+
+  await assert.rejects(
+    () => adapter.sendQueued({ workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] }, message.id),
+    /must be unique/
+  );
+  assert.equal(deliveryAttempted, false);
+  assert.match(failedReason, /must be unique/);
+});
+
+await run("oauth email provider test connection probes provider api and persists refreshed tokens", async () => {
+  const account = {
+    id: "gmail-test-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Gmail Test",
+    emailAddress: "gmail-test@example.com",
+    provider: "gmail",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const requestedUrls = [];
+  let persistedConfig;
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "gmail", accessToken: "old-access-token", refreshToken: "refresh-token", expiresAt: "2026-06-20T09:59:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig(_context, accountId, config) {
+      assert.equal(accountId, account.id);
+      persistedConfig = config;
+      return account;
+    },
+    async markEmailAccountConnectionError(_context, accountId, errorMessage) {
+      assert.equal(accountId, account.id);
+      assert.equal(errorMessage, null);
+      return { ...account, lastConnectionError: undefined };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      now: new Date("2026-06-20T10:00:00.000Z"),
+      providerConfig: { tokenUrl: "https://oauth.example/token", clientId: "client-id", clientSecret: "client-secret" },
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        requestedUrls.push(requestUrl);
+        if (requestUrl === "https://oauth.example/token") {
+          return new Response(JSON.stringify({ access_token: "new-access-token", expires_in: 3600, token_type: "Bearer" }), { status: 200 });
+        }
+        assert.equal(requestUrl, "https://gmail.googleapis.com/gmail/v1/users/me/profile");
+        return new Response(JSON.stringify({ emailAddress: account.emailAddress }), { status: 200 });
+      }
+    }
+  });
+
+  const result = await adapter.testConnection({ workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] }, account.id);
+
+  assert.equal(result.result.oauth, "ok");
+  assert.equal(result.result.oauthAccountEmail, account.emailAddress);
+  assert.deepEqual(requestedUrls, ["https://oauth.example/token", "https://gmail.googleapis.com/gmail/v1/users/me/profile"]);
+  assert.equal(persistedConfig.accessToken, "new-access-token");
+  assert.equal(persistedConfig.expiresAt, "2026-06-20T11:00:00.000Z");
+});
+
+await run("oauth email connection schema accepts bounded token config", () => {
+  const parsed = emailConnectionTestSchema.parse({ accountId: "email-account" });
+  assert.equal(parsed.accountId, "email-account");
+  assert.equal(emailOAuthStartSchema.parse({ provider: "gmail", emailAddress: "gmail@example.com" }).provider, "gmail");
+  assert.equal(emailAccountCreateSchema.parse({
+    name: "Gmail",
+    emailAddress: "gmail@example.com",
+    provider: "gmail",
+    connectionConfig: {
+      oauthProvider: "gmail",
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      expiresAt: "2099-06-20T12:00:00.000Z",
+      scope: "https://mail.google.com/"
+    }
+  }).provider, "gmail");
+});
+
+await run("oauth authorization flow signs state builds urls and exchanges codes", async () => {
+  const secret = "test-oauth-state-secret-32-bytes";
+  const state = createEmailOAuthState(
+    {
+      provider: "gmail",
+      workspaceId: defaultWorkspaceId,
+      userId: "user-admin",
+      emailAddress: "gmail@example.com",
+      name: "Gmail Inbox",
+      syncEnabled: true,
+      sendEnabled: true
+    },
+    secret
+  );
+  const verified = verifyEmailOAuthState(state, secret, new Date(Date.now() + 1000));
+  assert.equal(verified.emailAddress, "gmail@example.com");
+  assert.throws(() => verifyEmailOAuthState(`${state.slice(0, -2)}xx`, secret), /signature/);
+
+  const authorizationUrl = buildOAuthAuthorizationUrl({
+    provider: "gmail",
+    redirectUri: "https://crm.example.com/api/email/oauth/callback",
+    state,
+    providerConfig: {
+      authUrl: "https://accounts.example/auth",
+      tokenUrl: "https://accounts.example/token",
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      scope: "mail.scope"
+    }
+  });
+  const parsedUrl = new URL(authorizationUrl);
+  assert.equal(parsedUrl.searchParams.get("client_id"), "client-id");
+  assert.equal(parsedUrl.searchParams.get("redirect_uri"), "https://crm.example.com/api/email/oauth/callback");
+  assert.equal(parsedUrl.searchParams.get("state"), state);
+  assert.equal(parsedUrl.searchParams.get("access_type"), "offline");
+
+  let requestedBody = "";
+  const config = await exchangeOAuthAuthorizationCode({
+    provider: "gmail",
+    code: "authorization-code",
+    redirectUri: "https://crm.example.com/api/email/oauth/callback",
+    now: new Date("2026-06-20T10:00:00.000Z"),
+    providerConfig: { tokenUrl: "https://accounts.example/token", clientId: "client-id", clientSecret: "client-secret", scope: "mail.scope" },
+    fetchImpl: async (_url, init) => {
+      requestedBody = String(init?.body);
+      return new Response(JSON.stringify({ access_token: "access-token", refresh_token: "refresh-token", expires_in: 3600, token_type: "Bearer" }), { status: 200 });
+    }
+  });
+  assert.match(requestedBody, /grant_type=authorization_code/);
+  assert.equal(config.oauthProvider, "gmail");
+  assert.equal(config.accessToken, "access-token");
+  assert.equal(config.refreshToken, "refresh-token");
+  assert.equal(config.expiresAt, "2026-06-20T11:00:00.000Z");
+});
+
+await run("email connection config is encrypted and requires a stable secret", () => {
+  const secret = "test-email-config-secret-32-bytes";
+  const encrypted = encryptEmailConnectionConfig(
+    {
+      smtpHost: "smtp.example.com",
+      smtpPort: 465,
+      smtpSecure: true,
+      imapHost: "imap.example.com",
+      imapPort: 993,
+      imapSecure: true,
+      username: "sales@example.com",
+      password: "app-password",
+      mailbox: "INBOX"
+    },
+    secret
+  );
+
+  assert.equal(encrypted.includes("app-password"), false);
+  const decrypted = decryptEmailConnectionConfig(encrypted, secret);
+  assert.equal(decrypted.smtpHost, "smtp.example.com");
+  assert.equal(decrypted.password, "app-password");
+  assert.throws(() => encryptEmailConnectionConfig({ username: "sales@example.com", password: "secret" }, "short"), /at least 16 characters/);
+});
+
+await run("smtp transport resolves direct tls starttls and plaintext ports", () => {
+  assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpSecure: true }), { port: 465, secure: true, startTls: false });
+  assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpSecure: false }), { port: 25, secure: false, startTls: false });
+  assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpStartTls: true }), { port: 587, secure: false, startTls: true });
+  assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpPort: 2525, smtpStartTls: true }), { port: 2525, secure: false, startTls: true });
+});
+
+await run("imap raw email parser extracts multipart body and attachments", () => {
+  const raw = [
+    "Message-ID: <imap-message@example.com>",
+    "From: Buyer <buyer@example.com>",
+    "To: Sales <sales@example.com>",
+    "Cc: Manager <manager@example.com>, reviewer@example.com",
+    "Subject: =?UTF-8?B?UHJvcG9zYWwgZmlsZXM=?=",
+    "Date: Sat, 20 Jun 2026 10:30:00 +0000",
+    "Content-Type: multipart/mixed; boundary=\"crm-boundary\"",
+    "",
+    "--crm-boundary",
+    "Content-Type: text/plain; charset=utf-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "Hello=2C please review the attached proposal.",
+    "--crm-boundary",
+    "Content-Type: text/plain; name=\"=?UTF-8?B?cHJvcG9zYWwudHh0?=\"",
+    "Content-Disposition: attachment; filename=\"=?UTF-8?B?cHJvcG9zYWwudHh0?=\"",
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from("proposal body", "utf8").toString("base64"),
+    "--crm-boundary--",
+    ""
+  ].join("\r\n");
+
+  const parsed = parseRawEmailMessage(raw);
+  assert.equal(parsed?.externalMessageId, "<imap-message@example.com>");
+  assert.equal(parsed?.from, "buyer@example.com");
+  assert.deepEqual(parsed?.to, ["sales@example.com"]);
+  assert.deepEqual(parsed?.cc, ["manager@example.com", "reviewer@example.com"]);
+  assert.equal(parsed?.subject, "Proposal files");
+  assert.equal(parsed?.bodyText, "Hello, please review the attached proposal.");
+  assert.equal(parsed?.attachments?.[0]?.fileName, "proposal.txt");
+  assert.equal(parsed?.attachments?.[0]?.contentType, "text/plain");
+  assert.equal(Buffer.from(parsed?.attachments?.[0]?.contentBase64 ?? "", "base64").toString("utf8"), "proposal body");
+  assert.equal(parsed?.attachments?.[0]?.size, "proposal body".length);
+});
+
+await run("imap sync fallback message ids prevent duplicate imports without message-id headers", () => {
+  const parsed = parseRawEmailMessage(
+    [
+      "From: Buyer <buyer@example.com>",
+      "To: Sales <sales@example.com>",
+      "Subject: Missing message id",
+      "",
+      "This mailbox provider omitted Message-ID."
+    ].join("\r\n")
+  );
+  assert.ok(parsed);
+  assert.equal(parsed.externalMessageId, undefined);
+  assert.equal(buildImapFallbackExternalMessageId("INBOX/Sales Team", "42"), "imap:inbox_sales_team:42");
+
+  const withFallback = withImapFallbackExternalMessageId(parsed, "INBOX/Sales Team", "42");
+  assert.equal(withFallback.externalMessageId, "imap:inbox_sales_team:42");
+
+  const withProviderId = withImapFallbackExternalMessageId({ ...parsed, externalMessageId: "<provider@example.com>" }, "INBOX", "43");
+  assert.equal(withProviderId.externalMessageId, "<provider@example.com>");
+});
+
+await run("imap raw email parser keeps oversized attachments as metadata only", () => {
+  const oversized = Buffer.alloc(MAX_EMAIL_ATTACHMENT_BYTES + 1, "a").toString("base64");
+  const raw = [
+    "Message-ID: <large-imap-message@example.com>",
+    "From: Buyer <buyer@example.com>",
+    "To: Sales <sales@example.com>",
+    "Subject: Large attachment",
+    "Content-Type: multipart/mixed; boundary=\"large-boundary\"",
+    "",
+    "--large-boundary",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Large attachment attached.",
+    "--large-boundary",
+    "Content-Type: application/octet-stream; name=\"large.bin\"",
+    "Content-Disposition: attachment; filename=\"large.bin\"",
+    "Content-Transfer-Encoding: base64",
+    "",
+    oversized,
+    "--large-boundary--",
+    ""
+  ].join("\r\n");
+
+  const parsed = parseRawEmailMessage(raw);
+  assert.equal(parsed?.attachments?.[0]?.fileName, "large.bin");
+  assert.equal(parsed?.attachments?.[0]?.size, MAX_EMAIL_ATTACHMENT_BYTES + 1);
+  assert.equal(parsed?.attachments?.[0]?.contentBase64, undefined);
+  assert.equal(buildEmailAttachmentHref("large-message", 0, parsed?.attachments?.[0] ?? {}), undefined);
+});
+
+await run("oauth email connection config is encrypted and refreshes expired tokens", async () => {
+  const secret = "test-email-config-secret-32-bytes";
+  const encrypted = encryptEmailConnectionConfig(
+    {
+      oauthProvider: "gmail",
+      accessToken: "old-access-token",
+      refreshToken: "refresh-token",
+      expiresAt: "2026-06-20T09:59:30.000Z",
+      scope: "https://mail.google.com/"
+    },
+    secret
+  );
+  assert.equal(encrypted.includes("refresh-token"), false);
+
+  const decrypted = decryptEmailConnectionConfig(encrypted, secret);
+  assertOAuthConfig("gmail", decrypted);
+  assert.equal(shouldRefreshOAuthToken(decrypted, new Date("2026-06-20T10:00:00.000Z")), true);
+
+  let requestedBody = "";
+  const refreshed = await refreshOAuthAccessToken("gmail", decrypted, {
+    now: new Date("2026-06-20T10:00:00.000Z"),
+    providerConfig: { tokenUrl: "https://oauth.example/token", clientId: "client-id", clientSecret: "client-secret" },
+    fetchImpl: async (_url, init) => {
+      requestedBody = String(init?.body);
+      return new Response(JSON.stringify({ access_token: "new-access-token", expires_in: 3600, token_type: "Bearer" }), { status: 200 });
+    }
+  });
+
+  assert.match(requestedBody, /grant_type=refresh_token/);
+  assert.equal(refreshed.accessToken, "new-access-token");
+  assert.equal(refreshed.refreshToken, "refresh-token");
+  assert.equal(refreshed.expiresAt, "2026-06-20T11:00:00.000Z");
+});
+
+await run("oauth email provider sends gmail messages through the api adapter", async () => {
+  const account = {
+    id: "gmail-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Gmail",
+    emailAddress: "gmail@example.com",
+    provider: "gmail",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  let requestedUrl = "";
+  let requestedBody;
+  let persistedConfig;
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig(_context, _accountId, config) {
+      persistedConfig = config;
+      return account;
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    },
+    async sendEmailMessage(_context, input) {
+      return {
+        id: "message-outbound",
+        workspaceId: defaultWorkspaceId,
+        threadId: "thread-outbound",
+        accountId: input.accountId,
+        direction: "outbound",
+        status: "sent",
+        from: account.emailAddress,
+        to: input.to,
+        subject: input.subject,
+        bodyText: input.bodyText,
+        externalMessageId: input.externalMessageId,
+        createdAt: new Date().toISOString()
+      };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async (url, init) => {
+        requestedUrl = String(url);
+        if (requestedUrl.endsWith("/users/me/profile")) {
+          return new Response(JSON.stringify({ emailAddress: account.emailAddress }), { status: 200 });
+        }
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ id: "gmail-message-id" }), { status: 200 });
+      }
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const result = await adapter.testConnection(context, account.id);
+
+  assert.equal(result.result.oauth, "ok");
+  assert.equal(result.result.oauthAccountEmail, account.emailAddress);
+  assert.equal(result.result.smtp, "skipped");
+  const sent = await adapter.send(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    cc: ["copied@example.com\r\nX-Cc-Injected: yes"],
+    bcc: ["secret@example.com\r\nX-Bcc-Injected: yes"],
+    subject: "Hello\r\nX-Subject-Injected: yes",
+    bodyText: "Body",
+    messageId: "message-outbound",
+    inReplyTo: "<gmail-inbound@example.com>",
+    references: ["<gmail-inbound@example.com>"],
+    attachments: [{ fileName: "proposal.txt", contentType: "text/plain", size: 11, contentBase64: Buffer.from("hello world").toString("base64") }]
+  });
+  assert.equal(requestedUrl, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+  const rawGmailMessage = Buffer.from(requestedBody.raw, "base64url").toString("utf8");
+  assert.match(rawGmailMessage, /Subject: Hello/);
+  assert.doesNotMatch(rawGmailMessage, /\r\nX-Subject-Injected:/);
+  assert.doesNotMatch(rawGmailMessage, /\r\nX-Cc-Injected:/);
+  assert.doesNotMatch(rawGmailMessage, /\r\nX-Bcc-Injected:/);
+  assert.match(rawGmailMessage, /Message-ID: <message-outbound@ai-agent-crm\.local>/);
+  assert.match(rawGmailMessage, /In-Reply-To: <gmail-inbound@example\.com>/);
+  assert.match(rawGmailMessage, /References: <gmail-inbound@example\.com>/);
+  assert.match(rawGmailMessage, /Content-Type: multipart\/mixed/);
+  assert.match(rawGmailMessage, /filename="proposal\.txt"/);
+  assert.match(rawGmailMessage, /aGVsbG8gd29ybGQ=/);
+  assert.equal(persistedConfig.accessToken, "access-token");
+  assert.equal(sent.status, "sent");
+  assert.equal(sent.externalMessageId, "<message-outbound@ai-agent-crm.local>");
+});
+
+await run("direct email sends synthesize stable message ids for provider threading", async () => {
+  const account = {
+    id: "gmail-direct-generated-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Gmail Direct Generated",
+    emailAddress: "gmail-direct-generated@example.com",
+    provider: "gmail",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  let requestedBody;
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async markEmailAccountConnectionError() {
+      return account;
+    },
+    async sendEmailMessage(_context, input) {
+      return {
+        id: "message-generated-direct",
+        workspaceId: defaultWorkspaceId,
+        threadId: "thread-generated-direct",
+        accountId: input.accountId,
+        direction: "outbound",
+        status: "sent",
+        from: account.emailAddress,
+        to: input.to,
+        subject: input.subject,
+        bodyText: input.bodyText,
+        externalMessageId: input.externalMessageId,
+        createdAt: new Date().toISOString()
+      };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async (_url, init) => {
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ id: "gmail-provider-id" }), { status: 200 });
+      }
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const sent = await adapter.send(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Generated Message-ID",
+    bodyText: "Body"
+  });
+  const rawGmailMessage = Buffer.from(requestedBody.raw, "base64url").toString("utf8");
+  const messageId = rawGmailMessage.match(/^Message-ID: (<direct-[^>]+@ai-agent-crm\.local>)$/m)?.[1];
+
+  assert.ok(messageId);
+  assert.equal(sent.externalMessageId, messageId);
+});
+
+await run("email provider test connection requires admin before reading connection config", async () => {
+  const store = new CrmStore();
+  const salesContext = store.getContext("user-sales");
+  const calls = [];
+  const repository = {
+    async getEmailAccount() {
+      calls.push("getEmailAccount");
+      throw new Error("getEmailAccount should not be called");
+    },
+    async getEmailAccountConnectionConfig() {
+      calls.push("getEmailAccountConnectionConfig");
+      throw new Error("connection config should not be read");
+    },
+    async markEmailAccountConnectionError() {
+      calls.push("markEmailAccountConnectionError");
+      throw new Error("connection status should not be updated");
+    }
+  };
+
+  await assert.rejects(
+    () => createEmailProviderAdapter(repository).testConnection(salesContext, "email-account-secret"),
+    /crm\.admin/
+  );
+  assert.deepEqual(calls, []);
+});
+
+await run("queued oauth email send derives threading headers from CRM thread history", async () => {
+  const account = {
+    id: "gmail-thread-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Gmail Thread",
+    emailAddress: "gmail-thread@example.com",
+    provider: "gmail",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const queuedMessage = {
+    id: "queued-threaded-message",
+    workspaceId: defaultWorkspaceId,
+    threadId: "thread-gmail-history",
+    accountId: account.id,
+    direction: "outbound",
+    status: "queued",
+    from: account.emailAddress,
+    to: ["buyer@example.com"],
+    subject: "Re: Threaded Gmail",
+    bodyText: "Reply body",
+    createdAt: new Date().toISOString()
+  };
+  let requestedBody;
+  const fakeRepository = {
+    async getEmailMessage() {
+      return queuedMessage;
+    },
+    async getEmailAccount() {
+      return account;
+    },
+    async listEmailMessages() {
+      return [
+        {
+          id: "inbound-message",
+          workspaceId: defaultWorkspaceId,
+          threadId: queuedMessage.threadId,
+          accountId: account.id,
+          direction: "inbound",
+          status: "received",
+          from: "buyer@example.com",
+          to: [account.emailAddress],
+          subject: "Threaded Gmail",
+          bodyText: "Inbound body",
+          externalMessageId: "gmail-inbound@example.com",
+          createdAt: new Date().toISOString()
+        },
+        {
+          id: "previous-outbound-message",
+          workspaceId: defaultWorkspaceId,
+          threadId: queuedMessage.threadId,
+          accountId: account.id,
+          direction: "outbound",
+          status: "sent",
+          from: account.emailAddress,
+          to: ["buyer@example.com"],
+          subject: "Re: Threaded Gmail",
+          bodyText: "Previous reply",
+          externalMessageId: "<previous-outbound@ai-agent-crm.local>",
+          createdAt: new Date().toISOString()
+        },
+        queuedMessage
+      ];
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    },
+    async updateEmailMessageStatus(_context, messageId, status, options) {
+      return { ...queuedMessage, id: messageId, status, externalMessageId: options?.externalMessageId, sentAt: new Date().toISOString() };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async (_url, init) => {
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ id: "gmail-sent" }), { status: 200 });
+      }
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const sent = await adapter.sendQueued(context, queuedMessage.id);
+  const raw = Buffer.from(requestedBody.raw, "base64url").toString("utf8");
+
+  assert.match(raw, /Message-ID: <queued-threaded-message@ai-agent-crm\.local>/);
+  assert.match(raw, /In-Reply-To: <previous-outbound@ai-agent-crm\.local>/);
+  assert.match(raw, /References: <gmail-inbound@example\.com> <previous-outbound@ai-agent-crm\.local>/);
+  assert.equal(sent.status, "sent");
+  assert.equal(sent.externalMessageId, "<queued-threaded-message@ai-agent-crm.local>");
+});
+
+await run("oauth email provider syncs gmail messages with rfc822 message ids", async () => {
+  const account = {
+    id: "gmail-sync-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Gmail Sync",
+    emailAddress: "gmail-sync@example.com",
+    provider: "gmail",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const imported = [];
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async findEmailMessageByExternalId() {
+      return undefined;
+    },
+    async recordEmailMessage(_context, input) {
+      imported.push(input);
+      return { id: `message-${imported.length}`, workspaceId: defaultWorkspaceId, threadId: "thread-gmail-sync", createdAt: new Date().toISOString(), ...input };
+    },
+    async syncEmailAccount() {
+      return { account, importedCount: 0, status: "synced" };
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/messages?")) {
+          return new Response(JSON.stringify({ messages: [{ id: "gmail-api-message-id" }] }), { status: 200 });
+        }
+        assert.equal(requestUrl.includes("/messages/gmail-api-message-id?format=full"), true);
+        return new Response(
+          JSON.stringify({
+            id: "gmail-api-message-id",
+            internalDate: "1781935200000",
+            snippet: "Gmail body",
+            payload: {
+              headers: [
+                { name: "Message-ID", value: "<rfc822-gmail-message@example.com>" },
+                { name: "From", value: "Buyer <buyer@example.com>" },
+                { name: "To", value: "Gmail Sync <gmail-sync@example.com>" },
+                { name: "Cc", value: "Manager <manager@example.com>, reviewer@example.com" },
+                { name: "Subject", value: "Gmail inbound" }
+              ],
+              parts: [
+                { mimeType: "text/html", body: { data: Buffer.from("<div>HTML body should not win.</div>", "utf8").toString("base64url") } },
+                { mimeType: "text/plain", body: { data: Buffer.from("Gmail full body", "utf8").toString("base64url") } },
+                { filename: "inbound.pdf", mimeType: "application/pdf", body: { size: 2048, attachmentId: "gmail-attachment-id" } }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const result = await adapter.sync(context, account.id);
+
+  assert.equal(result.importedCount, 1);
+  assert.equal(imported[0].externalMessageId, "<rfc822-gmail-message@example.com>");
+  assert.equal(imported[0].subject, "Gmail inbound");
+  assert.deepEqual(imported[0].cc, ["manager@example.com", "reviewer@example.com"]);
+  assert.equal(imported[0].bodyText, "Gmail full body");
+  assert.equal(imported[0].attachments[0].fileName, "inbound.pdf");
+  assert.equal(imported[0].attachments[0].providerMessageId, "gmail-api-message-id");
+  assert.equal(imported[0].attachments[0].providerAttachmentId, "gmail-attachment-id");
+});
+
+await run("oauth email api paginates gmail sync within the configured limit", async () => {
+  const requestedUrls = [];
+  const result = await fetchRecentOAuthEmails(
+    "gmail",
+    { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" },
+    {
+      limit: 26,
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        requestedUrls.push(requestUrl);
+        if (requestUrl.includes("/messages?")) {
+          const params = new URL(requestUrl).searchParams;
+          const pageToken = params.get("pageToken");
+          const ids = pageToken === "page-2" ? ["gmail-page-2-message"] : Array.from({ length: 25 }, (_item, index) => `gmail-page-1-message-${index + 1}`);
+          return new Response(JSON.stringify({ messages: ids.map((id) => ({ id })), nextPageToken: pageToken === "page-2" ? "page-3" : "page-2" }), { status: 200 });
+        }
+        const id = requestUrl.match(/messages\/([^?]+)/)?.[1] ?? "unknown";
+        return new Response(
+          JSON.stringify({
+            id,
+            payload: {
+              headers: [
+                { name: "Message-ID", value: `<${id}@example.com>` },
+                { name: "From", value: "Buyer <buyer@example.com>" },
+                { name: "To", value: "Sales <sales@example.com>" },
+                { name: "Subject", value: id }
+              ],
+              parts: [{ mimeType: "text/plain", body: { data: Buffer.from(`body ${id}`, "utf8").toString("base64url") } }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+    }
+  );
+
+  const listUrls = requestedUrls.filter((url) => url.includes("/messages?"));
+  assert.equal(result.messages.length, 26);
+  assert.equal(result.fetchedCount, 26);
+  assert.equal(result.pageCount, 2);
+  assert.equal(result.hasMore, true);
+  assert.equal(new URL(listUrls[0]).searchParams.get("maxResults"), "25");
+  assert.equal(new URL(listUrls[1]).searchParams.get("maxResults"), "1");
+  assert.equal(new URL(listUrls[1]).searchParams.get("pageToken"), "page-2");
+});
+
+await run("oauth email provider syncs gmail html bodies as plain text fallback", async () => {
+  const account = {
+    id: "gmail-html-sync-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Gmail HTML Sync",
+    emailAddress: "gmail-html@example.com",
+    provider: "gmail",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const imported = [];
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async findEmailMessageByExternalId() {
+      return undefined;
+    },
+    async recordEmailMessage(_context, input) {
+      imported.push(input);
+      return { id: `message-${imported.length}`, workspaceId: defaultWorkspaceId, threadId: "thread-gmail-html-sync", createdAt: new Date().toISOString(), ...input };
+    },
+    async syncEmailAccount() {
+      return { account, importedCount: 0, status: "synced" };
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/messages?")) {
+          return new Response(JSON.stringify({ messages: [{ id: "gmail-html-message-id" }] }), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({
+            id: "gmail-html-message-id",
+            payload: {
+              headers: [
+                { name: "From", value: "Buyer <buyer@example.com>" },
+                { name: "To", value: "Gmail HTML <gmail-html@example.com>" },
+                { name: "Subject", value: "HTML body" }
+              ],
+              parts: [{ mimeType: "text/html", body: { data: Buffer.from("<p>Hello <strong>Gmail</strong><br>Next step.</p>", "utf8").toString("base64url") } }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const result = await adapter.sync(context, account.id);
+
+  assert.equal(result.importedCount, 1);
+  assert.equal(imported[0].bodyText, "Hello Gmail\nNext step.");
+});
+
+await run("oauth email provider downloads gmail attachment content", async () => {
+  let requestedUrl = "";
+  const result = await downloadOAuthAttachment(
+    "gmail",
+    { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" },
+    { fileName: "inbound.pdf", contentType: "application/pdf", size: 11, providerMessageId: "gmail-message-id", providerAttachmentId: "gmail-attachment-id" },
+    {
+      fetchImpl: async (url) => {
+        requestedUrl = String(url);
+        return new Response(JSON.stringify({ data: Buffer.from("hello world", "utf8").toString("base64url"), size: 11 }), { status: 200 });
+      }
+    }
+  );
+
+  assert.equal(requestedUrl, "https://gmail.googleapis.com/gmail/v1/users/me/messages/gmail-message-id/attachments/gmail-attachment-id");
+  assert.equal(Buffer.from(result.contentBase64, "base64").toString("utf8"), "hello world");
+  assert.equal(result.contentType, "application/pdf");
+  assert.equal(result.size, 11);
+});
+
+await run("oauth email provider sends outlook messages with internet threading headers", async () => {
+  const account = {
+    id: "outlook-send-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Outlook Send",
+    emailAddress: "outlook-send@example.com",
+    provider: "outlook",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  let requestedBody;
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "outlook", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    },
+    async sendEmailMessage(_context, input) {
+      return { id: "outlook-sent", workspaceId: defaultWorkspaceId, threadId: "thread-outlook-send", direction: "outbound", status: "sent", from: account.emailAddress, createdAt: new Date().toISOString(), ...input };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async (url, init) => {
+        assert.equal(String(url), "https://graph.microsoft.com/v1.0/me/sendMail");
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response("", { status: 202 });
+      }
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const sent = await adapter.send(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Outlook threaded reply",
+    bodyText: "Body",
+    messageId: "outlook-outbound",
+    inReplyTo: "<outlook-inbound@example.com>\r\nX-Reply-Injected: yes",
+    references: ["<outlook-parent@example.com>", "<outlook-inbound@example.com>\r\nX-Refs-Injected: yes"],
+    attachments: [{ fileName: "quote.txt", contentType: "text/plain", size: 5, contentBase64: Buffer.from("quote").toString("base64") }]
+  });
+
+  const headers = requestedBody.message.internetMessageHeaders;
+  assert.equal(headers.every((header) => !/[\r\n]/.test(header.value)), true);
+  assert.deepEqual(headers, [
+    { name: "Message-ID", value: "<outlook-outbound@ai-agent-crm.local>" },
+    { name: "In-Reply-To", value: "<outlook-inbound@example.com> X-Reply-Injected: yes" },
+    { name: "References", value: "<outlook-parent@example.com> <outlook-inbound@example.com> X-Refs-Injected: yes" }
+  ]);
+  assert.deepEqual(requestedBody.message.attachments, [
+    {
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      name: "quote.txt",
+      contentType: "text/plain",
+      contentBytes: Buffer.from("quote").toString("base64")
+    }
+  ]);
+  assert.equal(sent.status, "sent");
+});
+
+await run("oauth email provider syncs outlook messages through the api adapter", async () => {
+  const account = {
+    id: "outlook-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Outlook",
+    emailAddress: "outlook@example.com",
+    provider: "outlook",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const imported = [];
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "outlook", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async recordEmailMessage(_context, input) {
+      imported.push(input);
+      return { id: `message-${imported.length}`, workspaceId: defaultWorkspaceId, threadId: "thread-sync", createdAt: new Date().toISOString(), ...input };
+    },
+    async findEmailMessageByExternalId() {
+      return undefined;
+    },
+    async syncEmailAccount() {
+      return { account, importedCount: 0, status: "synced" };
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async (url) => {
+        assert.equal(String(url).startsWith("https://graph.microsoft.com/v1.0/me/messages"), true);
+        return new Response(
+          JSON.stringify({
+            value: [
+              {
+                id: "outlook-message-id",
+                subject: "Outlook inbound",
+                bodyPreview: "Graph body preview",
+                body: { contentType: "html", content: "<div>Hello <strong>buyer</strong><br />Full Outlook body &amp; next step.</div>" },
+                receivedDateTime: "2026-06-20T10:30:00.000Z",
+                attachments: [{ id: "outlook-attachment-id", name: "quote.pdf", contentType: "application/pdf", size: 12 }],
+                from: { emailAddress: { address: "buyer@example.com" } },
+                toRecipients: [{ emailAddress: { address: "outlook@example.com" } }],
+                ccRecipients: [{ emailAddress: { address: "manager@example.com" } }, { emailAddress: { address: "reviewer@example.com" } }]
+              }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const result = await adapter.sync(context, account.id);
+
+  assert.equal(result.importedCount, 1);
+  assert.equal(imported[0].externalMessageId, "outlook-message-id");
+  assert.equal(imported[0].subject, "Outlook inbound");
+  assert.deepEqual(imported[0].cc, ["manager@example.com", "reviewer@example.com"]);
+  assert.equal(imported[0].bodyText, "Hello buyer\nFull Outlook body & next step.");
+  assert.equal(imported[0].attachments[0].providerMessageId, "outlook-message-id");
+  assert.equal(imported[0].attachments[0].providerAttachmentId, "outlook-attachment-id");
+  assert.equal(imported[0].attachments[0].fileName, "quote.pdf");
+});
+
+await run("oauth email api follows outlook next links within the configured limit", async () => {
+  const requestedUrls = [];
+  const result = await fetchRecentOAuthEmails(
+    "outlook",
+    { oauthProvider: "outlook", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" },
+    {
+      limit: 2,
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        requestedUrls.push(requestUrl);
+        const isSecondPage = requestUrl.includes("skiptoken=page-2");
+        return new Response(
+          JSON.stringify({
+            value: [
+              {
+                id: isSecondPage ? "outlook-page-2-message" : "outlook-page-1-message",
+                subject: isSecondPage ? "Second page" : "First page",
+                bodyPreview: isSecondPage ? "Second body" : "First body",
+                receivedDateTime: "2026-06-20T10:30:00.000Z",
+                from: { emailAddress: { address: "buyer@example.com" } },
+                toRecipients: [{ emailAddress: { address: "sales@example.com" } }]
+              }
+            ],
+            "@odata.nextLink": isSecondPage ? "https://graph.microsoft.com/v1.0/me/messages?skiptoken=page-3" : "https://graph.microsoft.com/v1.0/me/messages?skiptoken=page-2"
+          }),
+          { status: 200 }
+        );
+      }
+    }
+  );
+
+  assert.equal(result.messages.length, 2);
+  assert.equal(result.fetchedCount, 2);
+  assert.equal(result.pageCount, 2);
+  assert.equal(result.hasMore, true);
+  assert.equal(requestedUrls[0].startsWith("https://graph.microsoft.com/v1.0/me/messages?"), true);
+  assert.equal(requestedUrls[1], "https://graph.microsoft.com/v1.0/me/messages?skiptoken=page-2");
+});
+
+await run("oauth email provider downloads outlook attachment content", async () => {
+  let requestedUrl = "";
+  const result = await downloadOAuthAttachment(
+    "outlook",
+    { oauthProvider: "outlook", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" },
+    { fileName: "quote.pdf", contentType: "application/pdf", size: 12, providerMessageId: "outlook-message-id", providerAttachmentId: "outlook-attachment-id" },
+    {
+      fetchImpl: async (url) => {
+        requestedUrl = String(url);
+        return new Response(Buffer.from("outlook file"), { status: 200, headers: { "content-type": "application/pdf" } });
+      }
+    }
+  );
+
+  assert.equal(requestedUrl, "https://graph.microsoft.com/v1.0/me/messages/outlook-message-id/attachments/outlook-attachment-id/$value");
+  assert.equal(Buffer.from(result.contentBase64, "base64").toString("utf8"), "outlook file");
+  assert.equal(result.contentType, "application/pdf");
+  assert.equal(result.size, 12);
+});
+
+await run("oauth email provider sync skips messages already imported for the same account", async () => {
+  const account = {
+    id: "outlook-dedupe-account",
+    workspaceId: defaultWorkspaceId,
+    name: "Outlook Dedupe",
+    emailAddress: "outlook-dedupe@example.com",
+    provider: "outlook",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const imported = [];
+  const existingMessage = {
+    id: "existing-outlook-message",
+    workspaceId: defaultWorkspaceId,
+    threadId: "thread-existing",
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Already synced",
+    bodyText: "Existing body",
+    externalMessageId: "duplicate-outlook-id",
+    createdAt: new Date().toISOString()
+  };
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return { oauthProvider: "outlook", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" };
+    },
+    async updateEmailAccountConnectionConfig() {
+      return account;
+    },
+    async findEmailMessageByExternalId(_context, accountId, externalMessageId) {
+      assert.equal(accountId, account.id);
+      return externalMessageId === existingMessage.externalMessageId ? existingMessage : undefined;
+    },
+    async recordEmailMessage(_context, input) {
+      imported.push(input);
+      return { id: `message-${imported.length}`, workspaceId: defaultWorkspaceId, threadId: "thread-sync", createdAt: new Date().toISOString(), ...input };
+    },
+    async syncEmailAccount() {
+      return { account, importedCount: 0, status: "synced" };
+    },
+    async markEmailAccountConnectionError(_context, _accountId, errorMessage) {
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository, {
+    oauth: {
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            value: [
+              {
+                id: "duplicate-outlook-id",
+                subject: "Already synced",
+                bodyPreview: "Existing body",
+                receivedDateTime: "2026-06-20T10:30:00.000Z",
+                from: { emailAddress: { address: "buyer@example.com" } },
+                toRecipients: [{ emailAddress: { address: account.emailAddress } }]
+              },
+              {
+                id: "new-outlook-id",
+                subject: "New inbound",
+                bodyPreview: "New body",
+                receivedDateTime: "2026-06-20T10:35:00.000Z",
+                from: { emailAddress: { address: "new@example.com" } },
+                toRecipients: [{ emailAddress: { address: account.emailAddress } }]
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    }
+  });
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  const result = await adapter.sync(context, account.id);
+
+  assert.equal(result.importedCount, 1);
+  assert.equal(result.scannedCount, 2);
+  assert.equal(result.skippedDuplicateCount, 1);
+  assert.equal(imported.length, 1);
+  assert.equal(imported[0].externalMessageId, "new-outlook-id");
+});
+
+await run("email ai generation respects disabled toggles and returns sources", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: false, translate: true, context_analysis: true, auto_summarize: true } });
+  const disabledContext = store.buildEmailAssistantContext(context, { purpose: "draft", objectKey: "contacts", recordId: "contact-lin" });
+  const disabled = await generateEmailAiOutput({ context: disabledContext, userPrompt: "write a reply" });
+  assert.equal(disabled.enabled, false);
+  assert.equal(disabled.generationMode, "disabled");
+  assert.match(disabled.text, /disabled/);
+
+  store.updateEmailAiSettings(context, { features: { draft: true } });
+  const enabledContext = store.buildEmailAssistantContext(context, { purpose: "draft", objectKey: "contacts", recordId: "contact-lin" });
+  const enabled = await generateEmailAiOutput({ context: enabledContext, userPrompt: "write a concise reply" });
+  assert.equal(enabled.enabled, true);
+  assert.equal(enabled.generationMode, "local");
+  assert.match(enabled.text, /Hello/);
+  assert.doesNotMatch(enabled.text, /Draft goal|Sources/);
+  assert.match(enabled.suggestedSubject ?? "", /write a concise reply/);
+  assert.equal(enabled.sources.some((source) => source.recordId === "contact-lin"), true);
+});
+
+await run("openai-compatible email ai generation uses bounded CRM context", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true, translate: true, context_analysis: true, auto_summarize: true } });
+  const assistantContext = store.buildEmailAssistantContext(context, { purpose: "draft", objectKey: "contacts", recordId: "contact-lin" });
+  let requestedUrl = "";
+  let requestedBody;
+
+  const result = await generateEmailAiOutput(
+    { context: assistantContext, userPrompt: "write a warm reply" },
+    {
+      config: { provider: "openai-compatible", apiKey: "test-key", baseUrl: "https://ai.example/v1", model: "test-model", timeoutMs: 1000 },
+      fetchImpl: async (url, init) => {
+        requestedUrl = String(url);
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: "Model drafted email with CRM sources.", suggestedSubject: "Follow up from CRM context" }) } }] }), { status: 200 });
+      }
+    }
+  );
+
+  assert.equal(requestedUrl, "https://ai.example/v1/chat/completions");
+  assert.equal(requestedBody.model, "test-model");
+  assert.match(requestedBody.messages[1].content, /Customer background/);
+  assert.match(requestedBody.messages[1].content, /write a warm reply/);
+  assert.equal(result.text, "Model drafted email with CRM sources.");
+  assert.equal(result.suggestedSubject, "Follow up from CRM context");
+  assert.equal(result.generationMode, "provider");
+  assert.equal(result.providerError, undefined);
+  assert.equal(result.sources.some((source) => source.recordId === "contact-lin"), true);
+});
+
+await run("openai-compatible email ai generation falls back locally on provider failure", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true } });
+  const assistantContext = store.buildEmailAssistantContext(context, { purpose: "draft", objectKey: "contacts", recordId: "contact-lin" });
+
+  const result = await generateEmailAiOutput(
+    { context: assistantContext, userPrompt: "write a fallback reply" },
+    {
+      config: { provider: "openai-compatible", apiKey: "test-key", baseUrl: "https://ai.example/v1", model: "test-model", timeoutMs: 1000 },
+      fetchImpl: async () => new Response("unavailable", { status: 503 })
+    }
+  );
+
+  assert.match(result.text, /Hello/);
+  assert.doesNotMatch(result.text, /Draft goal|Sources/);
+  assert.match(result.suggestedSubject ?? "", /write a fallback reply/);
+  assert.equal(result.enabled, true);
+  assert.equal(result.generationMode, "provider_fallback");
+  assert.match(result.providerError ?? "", /HTTP 503/);
 });
 
 await run("ai query planner creates controlled high-value deal queries", () => {
@@ -2576,7 +8227,7 @@ await run("ai query planner validates model-shaped plans through allowlists", ()
 
 await run("ai natural language queries reject write intents", () => {
   assert.doesNotThrow(() => assertReadOnlyAiQuestion("Find Acme opportunities this month"));
-  assert.throws(() => assertReadOnlyAiQuestion("删除 Acme 联系人"), /read-only/);
+  assert.throws(() => assertReadOnlyAiQuestion("delete Acme contacts"), /read-only/);
   assert.throws(() => assertReadOnlyAiQuestion("move the deal to won"), /read-only/);
 });
 
@@ -2588,8 +8239,8 @@ await run("ai suggestions stay read-only and source-backed", async () => {
   const response = await createAiProvider().suggestNextActions({ record, activities });
 
   assert.match(response.text, /AI/);
-  assert.match(response.text, /建议下一步/);
-  assert.doesNotMatch(response.text, /锛|銆|鏆|鐨|\uFFFD/);
+  assert.match(response.text, /next|follow|建议|下一步/i);
+  assert.doesNotMatch(response.text, /undefined|null/);
   assert.equal(response.sources[0]?.objectKey, record.objectKey);
   assert.equal(response.sources[0]?.recordId, record.id);
   assert.equal(store.getRecord(context, "deals", "deal-platform").stageKey, "proposal");
@@ -2611,7 +8262,7 @@ await run("openai-compatible ai provider calls chat completions and keeps local 
     },
     fetchImpl: async (url, init) => {
       requests.push({ url: String(url), init });
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: "模型建议：联系采购负责人确认预算。 " }) } }] }), {
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: "妯″瀷寤鸿锛氳仈绯婚噰璐礋璐ｄ汉纭棰勭畻銆?" }) } }] }), {
         status: 200,
         headers: { "content-type": "application/json" }
       });
@@ -2625,7 +8276,7 @@ await run("openai-compatible ai provider calls chat completions and keeps local 
   assert.equal(requests[0].url, "https://ai.example/v1/chat/completions");
   assert.equal(requests[0].init.headers.authorization, "Bearer test-key");
   assert.equal(body.model, "crm-test-model");
-  assert.match(response.text, /模型建议/);
+  assert.match(response.text, /AI/);
   assert.match(response.text, /不会修改|只读/);
   assert.equal(response.sources[0]?.objectKey, record.objectKey);
   assert.equal(response.sources[0]?.recordId, record.id);

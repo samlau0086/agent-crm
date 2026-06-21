@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 
+
+export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest, { params }: { params: { id: string; deliveryId: string } }) {
   try {
     const context = await getRequestContext(request);

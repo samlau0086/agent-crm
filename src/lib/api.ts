@@ -8,7 +8,7 @@ import { getBearerToken } from "@/lib/auth/api-key";
 import { getSessionUserId, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { getCrmRepository, getRequestContextByApiKeyToken, getRequestContextByUserId } from "@/lib/crm/repository";
 import type { RequestContext } from "@/lib/crm/types";
-import { parseJsonBody } from "@/lib/api-validation";
+import { parseJsonBody, parseOptionalJsonBody } from "@/lib/api-validation";
 
 export { ApiError } from "@/lib/api-error";
 
@@ -56,6 +56,10 @@ export async function requireAppContext(): Promise<RequestContext> {
 
 export async function parseJson<T>(request: Request, schema?: ZodType<T>): Promise<T> {
   return parseJsonBody(request, schema);
+}
+
+export async function parseOptionalJson<T>(request: Request, schema: ZodType<T>, fallback: T): Promise<T> {
+  return parseOptionalJsonBody(request, schema, fallback);
 }
 
 export function ok<T>(data: T, init?: ResponseInit): NextResponse<T> {

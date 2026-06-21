@@ -4,10 +4,13 @@
 
 - `web`: Next.js 应用和 API。
 - `worker`: Redis 队列后台任务处理。
+- `email-sync`: 周期性调度启用同步的邮箱账号，把收信任务放入 Redis 队列。
 - `postgres`: CRM 主数据库。
 - `redis`: 导入、Webhook 等后台任务队列基础设施。
 
 ## 启动
+
+首次部署前用 `npm run config:init` 从 `.env.example` 初始化 `.env`；脚本会自动生成 `EMAIL_CONFIG_SECRET` 和 `EMAIL_OAUTH_STATE_SECRET`，且默认不会覆盖已有 `.env`。只想为已有配置文件生成两条密钥时，可运行 `npm run config:secrets`。已有 `.env` 或 `.env.local` 只想补缺失项时，可运行 `npm run config:init -- --output .env.local --merge-missing`，已有值会被保留。不要把 `.env.example` 中的 `replace-with-...` placeholder 用于生产；启动校验会拒绝这些示例值。
 
 ```bash
 docker compose up --build -d
@@ -35,8 +38,10 @@ npm run deploy:verify
 - `docker compose build`
 - `docker compose up -d`
 - 轮询 `http://127.0.0.1:3000/api/health`
+- 在 `web` 容器内执行 `node scripts/validate-env.mjs`
 - 在 `web` 容器内检查 `pg_dump --version`
 - 在 `web` 容器内执行一次备份 dry-run
+- 在 `web` 容器内执行邮件 diagnostics；追加 `-- --run-email-connections` 会测试真实 SMTP/IMAP/Gmail/Outlook 账号连接
 
 只查看将要执行的步骤，不启动容器：
 
@@ -58,10 +63,13 @@ npm run deploy:verify -- --health-url http://127.0.0.1:8080/api/health
 
 生产环境建议显式设置：
 
-- `APP_BASE_URL=https://crm.example.com`: 应用对外访问地址，用于登录跳转和密码设置链接；不要依赖请求 `Origin` 头。
+- `APP_BASE_URL=https://crm.example.com`: 应用对外访问地址，用于登录跳转、密码设置链接和邮箱 OAuth callback；不要依赖请求 `Origin` 头。
 - `SEED_ON_EMPTY=false`: 避免空库自动灌入演示数据。
 - `RUN_MIGRATIONS=true`: 容器启动时执行 Prisma 迁移。
 - `AI_API_KEY`: 不配置时 AI 会使用本地只读 fallback。
+- `EMAIL_DELIVERY_MODE`: 默认为 `live`；`dry-run` 只用于本地或 E2E，生产校验会拒绝。
+- `EMAIL_CONFIG_SECRET`: 邮箱凭据加密密钥，至少 16 字符；建议由 `npm run config:secrets` 生成，更换密钥前需要先规划已有邮箱配置的重新加密。
+- `EMAIL_OAUTH_STATE_SECRET`: OAuth state 签名密钥，至少 16 字符；建议由 `npm run config:secrets` 生成，Gmail/Outlook 授权回调会用到。
 - `BACKUP_DIR=/app/backups`: Web 管理台列出和下载备份文件的目录。
 - `DB_MAINTENANCE_MODE=direct`: 容器内使用 PostgreSQL client 直连 `DATABASE_URL` 做备份。
 - `HEALTHCHECK_TIMEOUT_MS=5000`: 按部署环境网络情况调整。

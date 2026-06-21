@@ -7,7 +7,12 @@ import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { adminUserId, defaultWorkspaceId, seedData } from "@/lib/crm/seed";
-import { buildEmailAssistantContext, createDefaultEmailAiSettings } from "@/lib/email/assistant";
+import { buildEmailAssistantContext, createDefaultEmailAiSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
+import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
+import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
+import { getEmailProviderCapability } from "@/lib/email/providers";
+import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
+import { translateEmailMessage } from "@/lib/email/translation";
 import type {
   Activity,
   ApiKey,
@@ -27,7 +32,10 @@ import type {
   CrmSnapshot,
   DashboardSummary,
   EmailAccount,
+  EmailAttachment,
+  EmailAiGenerationAuditInput,
   EmailAiSettings,
+  EmailConnectionConfig,
   EmailMessage,
   EmailThread,
   FieldDefinition,
@@ -430,7 +438,7 @@ export class CrmStore {
   }
 
   listEmailAccounts(context: RequestContext): EmailAccount[] {
-    requirePermission(context, "crm.admin");
+    requirePermission(context, "crm.read");
     return clone(
       (this.data.emailAccounts ?? [])
         .filter((account) => account.workspaceId === context.workspaceId)
@@ -438,21 +446,34 @@ export class CrmStore {
     );
   }
 
+  getEmailAccount(context: RequestContext, accountId: string): EmailAccount {
+    requirePermission(context, "crm.read");
+    return clone(this.assertEmailAccount(context, accountId));
+  }
+
   createEmailAccount(
     context: RequestContext,
-    input: Pick<EmailAccount, "name" | "emailAddress" | "provider"> & Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">>
+    input: Pick<EmailAccount, "name" | "emailAddress" | "provider"> &
+      Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">> & { connectionConfig?: EmailConnectionConfig }
   ): EmailAccount {
     requirePermission(context, "crm.admin");
     const now = stamp();
+    const toggles = normalizeEmailAccountToggles(input.provider, {
+      syncEnabled: input.syncEnabled ?? false,
+      sendEnabled: input.sendEnabled ?? false
+    });
+    const emailAddress = normalizeEmailAddress(input.emailAddress);
+    this.assertEmailAccountEmailAvailable(context, emailAddress);
     const account: EmailAccount = {
       id: createId("email_account"),
       workspaceId: context.workspaceId,
       name: normalizeRequiredText(input.name, "Email account name"),
-      emailAddress: normalizeEmailAddress(input.emailAddress),
+      emailAddress,
       provider: input.provider,
       status: input.status ?? "draft",
-      syncEnabled: input.syncEnabled ?? false,
-      sendEnabled: input.sendEnabled ?? false,
+      syncEnabled: toggles.syncEnabled,
+      sendEnabled: toggles.sendEnabled,
+      connectionConfigured: Boolean(input.connectionConfig),
       createdById: context.user.id,
       createdAt: now,
       updatedAt: now
@@ -465,13 +486,158 @@ export class CrmStore {
     return clone(account);
   }
 
+  updateEmailAccount(
+    context: RequestContext,
+    accountId: string,
+    input: Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "syncEnabled" | "sendEnabled" | "status">> & {
+      connectionConfig?: EmailConnectionConfig;
+      clearConnectionConfig?: boolean;
+    }
+  ): EmailAccount {
+    requirePermission(context, "crm.admin");
+    const account = this.assertEmailAccount(context, accountId);
+    const nextProvider = input.provider ?? account.provider;
+    const toggles = normalizeEmailAccountToggles(nextProvider, {
+      syncEnabled: input.syncEnabled ?? account.syncEnabled,
+      sendEnabled: input.sendEnabled ?? account.sendEnabled
+    });
+    const emailAddress = input.emailAddress !== undefined ? normalizeEmailAddress(input.emailAddress) : account.emailAddress;
+    this.assertEmailAccountEmailAvailable(context, emailAddress, account.id);
+    if (input.name !== undefined) account.name = normalizeRequiredText(input.name, "Email account name");
+    account.emailAddress = emailAddress;
+    if (input.provider !== undefined) account.provider = input.provider;
+    if (input.status !== undefined) account.status = input.status;
+    account.syncEnabled = toggles.syncEnabled;
+    account.sendEnabled = toggles.sendEnabled;
+    if (input.connectionConfig) {
+      account.connectionConfigured = true;
+      delete account.lastConnectionError;
+      if (input.status === undefined && account.status === "draft") {
+        account.status = "active";
+      }
+    }
+    if (input.clearConnectionConfig) {
+      account.connectionConfigured = false;
+      delete account.lastConnectionError;
+      if (input.status === undefined) {
+        account.status = "draft";
+      }
+    }
+    account.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_account", account.id, {
+      summary: `Updated email account ${account.emailAddress}`,
+      details: {
+        provider: account.provider,
+        status: account.status,
+        syncEnabled: account.syncEnabled,
+        sendEnabled: account.sendEnabled,
+        connectionConfigured: account.connectionConfigured
+      }
+    });
+    return clone(account);
+  }
+
+  getEmailAccountConnectionConfig(context: RequestContext, accountId: string): EmailConnectionConfig | undefined {
+    requirePermission(context, "crm.write");
+    this.assertEmailAccount(context, accountId);
+    return undefined;
+  }
+
+  updateEmailAccountConnectionConfig(context: RequestContext, accountId: string, _config: EmailConnectionConfig): EmailAccount {
+    requirePermission(context, "crm.write");
+    const account = this.assertEmailAccount(context, accountId);
+    account.connectionConfigured = true;
+    delete account.lastConnectionError;
+    account.status = "active";
+    account.updatedAt = stamp();
+    return clone(account);
+  }
+
+  deleteEmailAccount(context: RequestContext, accountId: string): void {
+    requirePermission(context, "crm.admin");
+    const account = this.assertEmailAccount(context, accountId);
+    const messageCount = (this.data.emailMessages ?? []).filter((message) => message.workspaceId === context.workspaceId && message.accountId === account.id).length;
+    if (messageCount > 0) {
+      account.status = "disabled";
+      account.syncEnabled = false;
+      account.sendEnabled = false;
+      account.updatedAt = stamp();
+      this.writeAuditLog(context, "update", "email_account", account.id, {
+        summary: `Disabled email account ${account.emailAddress}`,
+        details: { reason: "account has email history", messageCount }
+      });
+      return;
+    }
+    this.data.emailAccounts = (this.data.emailAccounts ?? []).filter((candidate) => candidate.id !== account.id);
+    this.writeAuditLog(context, "delete", "email_account", account.id, {
+      summary: `Deleted email account ${account.emailAddress}`,
+      details: { provider: account.provider }
+    });
+  }
+
+  markEmailAccountConnectionError(context: RequestContext, accountId: string, errorMessage: string | null): EmailAccount {
+    requirePermission(context, "crm.write");
+    const account = this.assertEmailAccount(context, accountId);
+    const previousStatus = account.status;
+    const previousError = account.lastConnectionError ?? null;
+    const normalizedError = errorMessage?.trim() || null;
+    const nextStatus: EmailAccount["status"] = normalizedError ? "error" : "active";
+
+    account.status = nextStatus;
+    if (normalizedError) {
+      account.lastConnectionError = normalizedError;
+    } else {
+      delete account.lastConnectionError;
+    }
+    account.updatedAt = stamp();
+
+    if (previousStatus !== nextStatus || previousError !== normalizedError) {
+      this.writeAuditLog(context, "update", "email_account", account.id, {
+        summary: normalizedError
+          ? `Email account connection failed ${account.emailAddress}`
+          : `Email account connection restored ${account.emailAddress}`,
+        details: {
+          previousStatus,
+          status: nextStatus,
+          previousError,
+          error: normalizedError,
+          provider: account.provider
+        }
+      });
+    }
+    return clone(account);
+  }
+
   listEmailThreads(context: RequestContext, recordId?: string): EmailThread[] {
     requirePermission(context, "crm.read");
+    if (recordId) {
+      this.assertVisibleRecordById(context, recordId);
+    }
     return clone(
       (this.data.emailThreads ?? [])
-        .filter((thread) => thread.workspaceId === context.workspaceId && (!recordId || thread.recordId === recordId))
+        .filter((thread) => thread.workspaceId === context.workspaceId && (!recordId || thread.recordId === recordId) && this.canAccessEmailThread(context, thread))
         .sort((left, right) => (right.lastMessageAt ?? right.updatedAt).localeCompare(left.lastMessageAt ?? left.updatedAt))
     );
+  }
+
+  getEmailThread(context: RequestContext, threadId: string): EmailThread {
+    requirePermission(context, "crm.read");
+    return clone(this.assertEmailThread(context, threadId));
+  }
+
+  updateEmailThread(context: RequestContext, threadId: string, input: { recordId?: string | null }): EmailThread {
+    requirePermission(context, "crm.write");
+    const thread = this.assertEmailThread(context, threadId);
+    const previousRecordId = thread.recordId;
+    if (Object.prototype.hasOwnProperty.call(input, "recordId")) {
+      thread.recordId = input.recordId ? this.assertVisibleRecordById(context, input.recordId).id : undefined;
+    }
+    thread.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_thread", thread.id, {
+      summary: `Updated email thread link ${thread.subject}`,
+      details: { threadId: thread.id, previousRecordId, recordId: thread.recordId }
+    });
+    return clone(thread);
   }
 
   listEmailMessages(context: RequestContext, threadId: string): EmailMessage[] {
@@ -484,17 +650,198 @@ export class CrmStore {
     );
   }
 
+  getEmailMessage(context: RequestContext, messageId: string): EmailMessage {
+    requirePermission(context, "crm.read");
+    const message = (this.data.emailMessages ?? []).find((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
+    if (!message) {
+      throw new Error("Email message not found");
+    }
+    this.assertEmailThread(context, message.threadId);
+    return clone(message);
+  }
+
+  findEmailMessageByExternalId(context: RequestContext, accountId: string, externalMessageId: string): EmailMessage | undefined {
+    requirePermission(context, "crm.read");
+    this.assertEmailAccount(context, accountId);
+    const normalizedExternalMessageId = externalMessageId.trim();
+    if (!normalizedExternalMessageId) {
+      return undefined;
+    }
+    const message = (this.data.emailMessages ?? []).find(
+      (candidate) =>
+        candidate.workspaceId === context.workspaceId &&
+        candidate.accountId === accountId &&
+        candidate.externalMessageId === normalizedExternalMessageId
+    );
+    return message ? clone(message) : undefined;
+  }
+
+  updateEmailThreadSummary(context: RequestContext, threadId: string, summary: string): EmailThread {
+    requirePermission(context, "crm.write");
+    const thread = this.assertEmailThread(context, threadId);
+    thread.summary = normalizeRequiredText(summary, "Email thread summary");
+    thread.summaryUpdatedAt = stamp();
+    thread.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_thread", thread.id, {
+      summary: `Updated email thread summary ${thread.subject}`,
+      details: { threadId: thread.id, summaryLength: thread.summary.length }
+    });
+    return clone(thread);
+  }
+
+  updateEmailThreadAnalysis(context: RequestContext, threadId: string, analysis: string, sources: EmailThread["aiAnalysisSources"] = []): EmailThread {
+    requirePermission(context, "crm.write");
+    const thread = this.assertEmailThread(context, threadId);
+    const aiAnalysisSources = this.assertVisibleEmailAiSources(context, sources);
+    thread.aiAnalysis = normalizeRequiredText(analysis, "Email thread analysis");
+    thread.aiAnalysisSources = aiAnalysisSources;
+    thread.aiAnalysisUpdatedAt = stamp();
+    thread.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_thread", thread.id, {
+      summary: `Updated email thread analysis ${thread.subject}`,
+      details: { threadId: thread.id, analysisLength: thread.aiAnalysis.length, sourceCount: aiAnalysisSources.length }
+    });
+    return clone(thread);
+  }
+
+  updateEmailMessageStatus(
+    context: RequestContext,
+    messageId: string,
+    status: EmailMessage["status"],
+    options: { externalMessageId?: string; failureReason?: string | null } = {}
+  ): EmailMessage {
+    requirePermission(context, "crm.write");
+    const message = (this.data.emailMessages ?? []).find((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
+    if (!message) {
+      throw new Error("Email message not found");
+    }
+    this.assertEmailThread(context, message.threadId);
+    const previousStatus = message.status;
+    message.status = status;
+    if (options.externalMessageId?.trim()) {
+      message.externalMessageId = options.externalMessageId.trim();
+    }
+    if (status === "failed") {
+      message.failureReason = options.failureReason?.trim() || "Delivery failed";
+    } else if (status === "queued" || status === "sending" || status === "sent") {
+      delete message.failureReason;
+    }
+    if (status === "sent") {
+      message.sentAt = stamp();
+    } else {
+      delete message.sentAt;
+    }
+    if (status === "sending") {
+      message.sendAttemptedAt = stamp();
+    } else if (status === "queued") {
+      delete message.sendAttemptedAt;
+    }
+    this.writeAuditLog(context, "update", "email_message", message.id, {
+      summary: `Updated email status ${message.subject}`,
+      details: { status, previousStatus, threadId: message.threadId }
+    });
+    return clone(message);
+  }
+
+  claimEmailMessageForSending(context: RequestContext, messageId: string): { message: EmailMessage; claimed: boolean } {
+    requirePermission(context, "crm.write");
+    const message = (this.data.emailMessages ?? []).find((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
+    if (!message) {
+      throw new Error("Email message not found");
+    }
+    this.assertEmailThread(context, message.threadId);
+    const staleBefore = emailSendClaimStaleBefore();
+    const isClaimableSending = message.status === "sending" && isEmailSendClaimStale(message.sendAttemptedAt, staleBefore);
+    if (message.direction !== "outbound" || (message.status !== "queued" && message.status !== "failed" && !isClaimableSending)) {
+      return { message: clone(message), claimed: false };
+    }
+    const previousStatus = message.status;
+    message.status = "sending";
+    message.sendAttemptedAt = stamp();
+    delete message.failureReason;
+    delete message.sentAt;
+    this.writeAuditLog(context, "update", "email_message", message.id, {
+      summary: `Claimed email send ${message.subject}`,
+      details: { status: message.status, previousStatus, threadId: message.threadId }
+    });
+    return { message: clone(message), claimed: true };
+  }
+
+  updateEmailMessageTranslation(context: RequestContext, messageId: string, text: string, locale: string, sources: EmailMessage["translatedSources"] = []): EmailMessage {
+    requirePermission(context, "crm.write");
+    const message = (this.data.emailMessages ?? []).find((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
+    if (!message) {
+      throw new Error("Email message not found");
+    }
+    this.assertEmailThread(context, message.threadId);
+    const translatedSources = this.assertVisibleEmailAiSources(context, sources);
+    message.translatedBodyText = normalizeRequiredText(text, "Email translation");
+    message.translatedLocale = normalizeRequiredText(locale, "Translation locale");
+    message.translatedSources = translatedSources;
+    message.translatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_message", message.id, {
+      summary: `Translated email ${message.subject}`,
+      details: { threadId: message.threadId, locale: message.translatedLocale, sourceCount: translatedSources.length }
+    });
+    return clone(message);
+  }
+
   recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "externalMessageId" | "status" | "sentAt" | "receivedAt" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "sentAt" | "receivedAt" | "createdById">> & {
         recordId?: string;
       }
   ): EmailMessage {
     requirePermission(context, "crm.write");
     const account = this.assertEmailAccount(context, input.accountId);
+    const normalizedExternalMessageId = input.externalMessageId?.trim() || undefined;
+    const normalizedClientRequestId = input.clientRequestId?.trim() || undefined;
+    const createdById = input.createdById ?? context.user.id;
+    if (normalizedExternalMessageId) {
+      const existing = (this.data.emailMessages ?? []).find(
+        (candidate) =>
+          candidate.workspaceId === context.workspaceId &&
+          candidate.accountId === account.id &&
+          candidate.externalMessageId === normalizedExternalMessageId
+      );
+      if (existing) {
+        return clone(existing);
+      }
+    }
+    if (normalizedClientRequestId) {
+      const existing = (this.data.emailMessages ?? []).find(
+        (candidate) =>
+          candidate.workspaceId === context.workspaceId &&
+          candidate.accountId === account.id &&
+          candidate.direction === input.direction &&
+          candidate.createdById === createdById &&
+          candidate.clientRequestId === normalizedClientRequestId
+      );
+      if (existing) {
+        return clone(existing);
+      }
+    }
     const now = stamp();
-    const thread = input.threadId ? this.assertEmailThread(context, input.threadId) : this.createEmailThreadForMessage(context, account.id, input, now);
+    const requestedRecordId = input.recordId ? this.assertVisibleRecordById(context, input.recordId).id : undefined;
+    const autoRecordId = requestedRecordId ?? this.findRecordIdByEmailParticipants(context, account.emailAddress, [input.from, ...input.to, ...(input.cc ?? [])]);
+    const thread = input.threadId
+      ? this.assertEmailThread(context, input.threadId)
+      : this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], autoRecordId) ??
+        this.createEmailThreadForMessage(context, account.id, { ...input, recordId: autoRecordId }, now);
+    const aiSourceMessageId = input.aiSourceMessageId?.trim() || undefined;
+    if (aiSourceMessageId) {
+      this.getEmailMessage(context, aiSourceMessageId);
+    }
+    assertEmailOutboundAiPurpose(input.direction, input.aiAssisted, input.aiPurpose);
+    if (input.aiAssisted) {
+      requirePermission(context, "ai.use");
+    }
+    const aiSources = input.aiAssisted ? this.assertVisibleEmailAiSources(context, input.aiSources) : [];
+    const settings = this.ensureEmailAiSettings(context.workspaceId);
+    if (input.aiAssisted && settings.requireSourceLinks && aiSources.length === 0) {
+      throw new Error("AI assisted email requires at least one visible source");
+    }
     const message: EmailMessage = {
       id: createId("email_message"),
       workspaceId: context.workspaceId,
@@ -509,14 +856,23 @@ export class CrmStore {
       subject: normalizeRequiredText(input.subject, "Email subject"),
       bodyText: normalizeRequiredText(input.bodyText, "Email body"),
       bodyHtml: input.bodyHtml,
-      externalMessageId: input.externalMessageId,
+      attachments: normalizeEmailAttachments(input.attachments),
+      aiAssisted: input.aiAssisted || undefined,
+      aiPurpose: input.aiPurpose,
+      aiSourceMessageId,
+      aiSources: aiSources.length ? aiSources : undefined,
+      aiGeneratedAt: input.aiGeneratedAt,
+      externalMessageId: normalizedExternalMessageId,
+      clientRequestId: normalizedClientRequestId,
+      failureReason: input.status === "failed" ? "Delivery failed" : undefined,
+      sendAttemptedAt: input.sendAttemptedAt ?? (input.status === "sending" ? now : undefined),
       sentAt: input.sentAt,
       receivedAt: input.receivedAt,
-      createdById: input.createdById ?? context.user.id,
+      createdById,
       createdAt: now
     };
     (this.data.emailMessages ??= []).push(message);
-    this.updateEmailThreadFromMessage(thread, message, input.recordId);
+    this.updateEmailThreadFromMessage(thread, message, autoRecordId);
     if (thread.recordId) {
       this.createActivity(context, {
         recordId: thread.recordId,
@@ -527,9 +883,37 @@ export class CrmStore {
     }
     this.writeAuditLog(context, "create", "email_message", message.id, {
       summary: `Recorded ${message.direction} email ${message.subject}`,
-      details: { accountId: account.id, threadId: thread.id, status: message.status }
+      details: {
+        accountId: account.id,
+        threadId: thread.id,
+        status: message.status,
+        attachmentCount: message.attachments?.length ?? 0,
+        aiAssisted: message.aiAssisted ?? false,
+        aiPurpose: message.aiPurpose,
+        aiSourceMessageId: message.aiSourceMessageId,
+        aiSourceCount: message.aiSources?.length ?? 0
+      }
     });
+    this.triggerEmailAutomations(context, message);
     return clone(message);
+  }
+
+  queueEmailMessage(
+    context: RequestContext,
+    input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId">> & { recordId?: string }
+  ): EmailMessage {
+    requirePermission(context, "crm.write");
+    const account = this.assertEmailAccount(context, input.accountId);
+    if (!account.sendEnabled || account.status !== "active") {
+      throw new Error("Email account is not enabled for sending");
+    }
+    return this.recordEmailMessage(context, {
+      ...input,
+      direction: "outbound",
+      from: account.emailAddress,
+      status: "queued"
+    });
   }
 
   listKnowledgeArticles(context: RequestContext, activeOnly = true): KnowledgeArticle[] {
@@ -539,6 +923,15 @@ export class CrmStore {
         .filter((article) => article.workspaceId === context.workspaceId && (!activeOnly || article.active))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     );
+  }
+
+  getKnowledgeArticle(context: RequestContext, articleId: string): KnowledgeArticle {
+    requirePermission(context, "crm.read");
+    const article = (this.data.knowledgeArticles ?? []).find((candidate) => candidate.id === articleId && candidate.workspaceId === context.workspaceId);
+    if (!article) {
+      throw new Error("Knowledge article not found");
+    }
+    return clone(article);
   }
 
   createKnowledgeArticle(context: RequestContext, input: Pick<KnowledgeArticle, "title" | "body"> & Partial<Pick<KnowledgeArticle, "tags" | "active">>): KnowledgeArticle {
@@ -563,6 +956,29 @@ export class CrmStore {
     return clone(article);
   }
 
+  updateKnowledgeArticle(context: RequestContext, articleId: string, input: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>): KnowledgeArticle {
+    requirePermission(context, "crm.admin");
+    const article = (this.data.knowledgeArticles ?? []).find((candidate) => candidate.id === articleId && candidate.workspaceId === context.workspaceId);
+    if (!article) {
+      throw new Error("Knowledge article not found");
+    }
+    if (input.title !== undefined) article.title = normalizeRequiredText(input.title, "Knowledge title");
+    if (input.body !== undefined) article.body = normalizeRequiredText(input.body, "Knowledge body");
+    if (input.tags !== undefined) article.tags = input.tags.map((tag) => tag.trim()).filter(Boolean);
+    if (input.active !== undefined) article.active = input.active;
+    article.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "knowledge_article", article.id, {
+      summary: `Updated knowledge article ${article.title}`,
+      details: { tags: article.tags, active: article.active }
+    });
+    return clone(article);
+  }
+
+  deleteKnowledgeArticle(context: RequestContext, articleId: string): void {
+    requirePermission(context, "crm.admin");
+    this.updateKnowledgeArticle(context, articleId, { active: false });
+  }
+
   getEmailAiSettings(context: RequestContext): EmailAiSettings {
     requirePermission(context, "crm.read");
     return clone(this.ensureEmailAiSettings(context.workspaceId));
@@ -572,7 +988,7 @@ export class CrmStore {
     requirePermission(context, "crm.admin");
     const settings = this.ensureEmailAiSettings(context.workspaceId);
     if (patch.features) {
-      settings.features = { ...settings.features, ...patch.features };
+      settings.features = normalizeEmailAiFeatures({ ...settings.features, ...patch.features });
     }
     if (patch.defaultLocale !== undefined) settings.defaultLocale = normalizeRequiredText(patch.defaultLocale, "Default locale");
     if (patch.requireSourceLinks !== undefined) settings.requireSourceLinks = patch.requireSourceLinks;
@@ -589,12 +1005,25 @@ export class CrmStore {
 
   buildEmailAssistantContext(
     context: RequestContext,
-    input: Pick<EmailAssistantInput, "purpose" | "targetLocale"> & { recordId?: string; objectKey?: string; threadId?: string }
+    input: Pick<EmailAssistantInput, "purpose" | "targetLocale"> & { recordId?: string; objectKey?: string; threadId?: string; sourceMessageId?: string }
   ) {
     requirePermission(context, "ai.use");
-    const thread = input.threadId ? this.assertEmailThread(context, input.threadId) : undefined;
+    const sourceMessage = input.sourceMessageId ? this.getEmailMessage(context, input.sourceMessageId) : undefined;
+    const thread = input.threadId
+      ? this.assertEmailThread(context, input.threadId)
+      : sourceMessage
+        ? this.assertEmailThread(context, sourceMessage.threadId)
+        : undefined;
+    if (sourceMessage && thread && sourceMessage.threadId !== thread.id) {
+      throw new Error("Source email message does not belong to this thread");
+    }
+    assertEmailAiRecordThreadAlignment(input.recordId, thread);
     const recordId = input.recordId ?? thread?.recordId;
-    const record = recordId && input.objectKey ? this.getRecord(context, input.objectKey, recordId) : undefined;
+    const record = recordId
+      ? input.objectKey
+        ? this.getRecord(context, input.objectKey, recordId)
+        : this.data.records.find((candidate) => candidate.id === recordId && candidate.workspaceId === context.workspaceId && this.canAccessRecord(context, candidate))
+      : undefined;
     const fields = record ? this.listFieldDefinitions(context, record.objectKey) : [];
     const activities = record ? this.listActivities(context, record.id) : [];
     const messages = thread ? this.listEmailMessages(context, thread.id) : [];
@@ -606,8 +1035,39 @@ export class CrmStore {
       activities,
       thread,
       messages,
+      sourceMessage,
       knowledgeArticles: this.listKnowledgeArticles(context),
       targetLocale: input.targetLocale
+    });
+  }
+
+  recordEmailAiGeneration(context: RequestContext, input: EmailAiGenerationAuditInput): void {
+    requirePermission(context, "ai.use");
+    this.writeAuditLog(context, "create", "email_ai_generation", input.threadId ?? input.sourceMessageId ?? input.recordId, {
+      summary: `${input.enabled ? "Generated" : "Skipped"} email AI ${input.purpose}`,
+      details: {
+        purpose: input.purpose,
+        enabled: input.enabled,
+        recordId: input.recordId,
+        threadId: input.threadId,
+        sourceMessageId: input.sourceMessageId,
+        sourceCount: input.sourceCount,
+        sourceLabels: input.sourceLabels?.slice(0, 10),
+        targetLocale: input.targetLocale,
+        userPromptLength: input.userPromptLength ?? 0,
+        sourceTextLength: input.sourceTextLength ?? 0,
+        resultTextLength: input.resultTextLength ?? 0,
+        contextCharCount: input.contextCharCount ?? 0,
+        maxContextChars: input.maxContextChars ?? 0,
+        modelPromptChars: input.modelPromptChars ?? 0,
+        contextTruncated: input.contextTruncated ?? false,
+        outputTruncated: input.outputTruncated ?? false,
+        generationMode: input.generationMode,
+        providerError: normalizeEmailAiProviderError(input.providerError),
+        suggestedSubjectProvided: input.suggestedSubjectProvided ?? false,
+        automationFailed: input.automationFailed ?? false,
+        errorMessage: input.errorMessage
+      }
     });
   }
 
@@ -1310,6 +1770,15 @@ export class CrmStore {
         })
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     );
+  }
+
+  getActivity(context: RequestContext, activityId: string): Activity {
+    requirePermission(context, "crm.read");
+    const activity = this.listActivities(context).find((candidate) => candidate.id === activityId);
+    if (!activity) {
+      throw new Error("Activity not found");
+    }
+    return clone(activity);
   }
 
   createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId">): Activity {
@@ -2267,6 +2736,7 @@ export class CrmStore {
   private ensureEmailAiSettings(workspaceId: string): EmailAiSettings {
     const settings = (this.data.emailAiSettings ??= []).find((candidate) => candidate.workspaceId === workspaceId);
     if (settings) {
+      settings.features = normalizeEmailAiFeatures(settings.features);
       return settings;
     }
     const created = createDefaultEmailAiSettings(workspaceId, stamp());
@@ -2282,12 +2752,99 @@ export class CrmStore {
     return account;
   }
 
+  private assertEmailAccountEmailAvailable(context: RequestContext, emailAddress: string, exceptAccountId?: string): void {
+    const existing = (this.data.emailAccounts ?? []).find(
+      (account) =>
+        account.workspaceId === context.workspaceId &&
+        account.id !== exceptAccountId &&
+        account.emailAddress.toLowerCase() === emailAddress.toLowerCase()
+    );
+    if (existing) {
+      throw new Error("Email account address already exists");
+    }
+  }
+
   private assertEmailThread(context: RequestContext, threadId: string): EmailThread {
     const thread = (this.data.emailThreads ?? []).find((candidate) => candidate.id === threadId && candidate.workspaceId === context.workspaceId);
-    if (!thread) {
+    if (!thread || !this.canAccessEmailThread(context, thread)) {
       throw new Error("Email thread not found");
     }
     return thread;
+  }
+
+  private canAccessEmailThread(context: RequestContext, thread: EmailThread): boolean {
+    if (canManageAllRecords(context)) {
+      return true;
+    }
+    if (thread.recordId) {
+      const record = this.data.records.find((candidate) => candidate.id === thread.recordId && candidate.workspaceId === context.workspaceId);
+      return Boolean(record && this.canAccessRecord(context, record));
+    }
+    return (this.data.emailMessages ?? []).some(
+      (message) => message.workspaceId === context.workspaceId && message.threadId === thread.id && message.createdById === context.user.id
+    );
+  }
+
+  private assertVisibleRecordById(context: RequestContext, recordId: string): CrmRecord {
+    const record = this.data.records.find((candidate) => candidate.id === recordId && candidate.workspaceId === context.workspaceId);
+    if (!record || !this.canAccessRecord(context, record)) {
+      throw new Error("记录不存在");
+    }
+    return record;
+  }
+
+  private assertVisibleEmailAiSources(context: RequestContext, sources: unknown): NonNullable<EmailThread["aiAnalysisSources"]> {
+    const normalizedSources = normalizeEmailAiSources(sources);
+    for (const source of normalizedSources) {
+      if (source.recordId) {
+        this.assertVisibleRecordById(context, source.recordId);
+      }
+      if (source.messageId) {
+        this.getEmailMessage(context, source.messageId);
+      }
+      if (source.activityId && !this.listActivities(context).some((activity) => activity.id === source.activityId)) {
+        throw new Error("Activity not found");
+      }
+      if (
+        source.knowledgeArticleId &&
+        !(this.data.knowledgeArticles ?? []).some((article) => article.id === source.knowledgeArticleId && article.workspaceId === context.workspaceId)
+      ) {
+        throw new Error("Knowledge article not found");
+      }
+    }
+    return normalizedSources;
+  }
+
+  private findMatchingEmailThread(context: RequestContext, accountId: string, accountEmail: string, subject: string, participants: string[], recordId?: string): EmailThread | undefined {
+    const normalizedSubject = normalizeEmailSubject(subject);
+    if (!normalizedSubject) {
+      return undefined;
+    }
+    const accountAddress = normalizeEmailAddress(accountEmail);
+    const participantSet = new Set(participants.map(normalizeEmailAddress).filter((email) => email !== accountAddress));
+    return (this.data.emailThreads ?? [])
+      .filter((thread) => thread.workspaceId === context.workspaceId && thread.accountId === accountId && (!recordId || !thread.recordId || thread.recordId === recordId))
+      .sort((left, right) => (emailThreadTime(right).localeCompare(emailThreadTime(left))))
+      .find((thread) => {
+        if (normalizeEmailSubject(thread.subject) !== normalizedSubject) {
+          return false;
+        }
+        if (recordId && thread.recordId === recordId) {
+          return true;
+        }
+        return thread.participantEmails.some((email) => {
+          const normalized = normalizeEmailAddress(email);
+          return normalized !== accountAddress && participantSet.has(normalized);
+        });
+      });
+  }
+
+  private findRecordIdByEmailParticipants(context: RequestContext, accountEmail: string, participants: string[]): string | undefined {
+    const accountAddress = normalizeEmailAddress(accountEmail);
+    const emails = Array.from(new Set(participants.map((participant) => normalizeEmailAddress(participant)).filter((email) => email !== accountAddress)));
+    return this.data.records
+      .filter((record) => record.workspaceId === context.workspaceId && record.objectKey === "contacts" && this.canAccessRecord(context, record))
+      .find((record) => emails.includes(String(record.data.email ?? "").trim().toLowerCase()))?.id;
   }
 
   private createEmailThreadForMessage(
@@ -2311,15 +2868,33 @@ export class CrmStore {
   }
 
   private updateEmailThreadFromMessage(thread: EmailThread, message: EmailMessage, recordId?: string): void {
+    const settings = this.ensureEmailAiSettings(thread.workspaceId);
     thread.subject = thread.subject || message.subject;
     thread.participantEmails = Array.from(new Set([...thread.participantEmails, message.from, ...message.to, ...(message.cc ?? [])].map(normalizeEmailAddress)));
     thread.recordId = recordId ?? thread.recordId;
     thread.lastMessageAt = emailMessageTime(message);
     thread.updatedAt = stamp();
-    if (!thread.summary || this.ensureEmailAiSettings(thread.workspaceId).features.auto_summarize) {
-      thread.summary = summarizeEmailThread((this.data.emailMessages ?? []).filter((candidate) => candidate.threadId === thread.id).concat(message));
+    if (!settings.features.auto_summarize) {
+      thread.summary = summarizeEmailThread((this.data.emailMessages ?? []).filter((candidate) => candidate.threadId === thread.id));
       thread.summaryUpdatedAt = stamp();
+    } else if (!thread.summaryUpdatedAt) {
+      thread.summary = summarizeEmailThread((this.data.emailMessages ?? []).filter((candidate) => candidate.threadId === thread.id));
     }
+  }
+
+  private triggerEmailAutomations(context: RequestContext, message: EmailMessage): void {
+    const settings = this.ensureEmailAiSettings(context.workspaceId);
+    scheduleEmailAutomationsBestEffort(
+      context,
+      this,
+      {
+        runEmailTranslateJob: (automationContext, payload) => translateEmailMessage(automationContext, this, payload),
+        runEmailAnalyzeJob: (automationContext, payload) => analyzeEmailThreadWithAi(automationContext, this, payload),
+        runEmailSummarizeJob: (automationContext, payload) => summarizeEmailThreadWithAi(automationContext, this, payload)
+      },
+      message,
+      settings
+    );
   }
 
   private writeAuditLog(
@@ -2402,6 +2977,14 @@ function normalizeEmailAddress(value: string): string {
   return email;
 }
 
+function normalizeEmailSubject(value: string): string {
+  return value
+    .trim()
+    .replace(/^(\s*(re|fw|fwd)\s*:\s*)+/i, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 function normalizeIntegerLimit(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
     return min;
@@ -2410,13 +2993,118 @@ function normalizeIntegerLimit(value: number, min: number, max: number): number 
 }
 
 function emailMessageTime(message: EmailMessage): string {
-  return message.sentAt ?? message.receivedAt ?? message.createdAt;
+  return message.receivedAt ?? message.sentAt ?? message.createdAt;
+}
+
+function emailThreadTime(thread: EmailThread): string {
+  return thread.lastMessageAt ?? thread.updatedAt;
+}
+
+const DEFAULT_EMAIL_SEND_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
+const MIN_EMAIL_SEND_CLAIM_TIMEOUT_MS = 60 * 1000;
+
+function emailSendClaimStaleBefore(now = new Date()): Date {
+  return new Date(now.getTime() - emailSendClaimTimeoutMs());
+}
+
+function emailSendClaimTimeoutMs(): number {
+  const configured = Number(process.env.EMAIL_SEND_CLAIM_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_EMAIL_SEND_CLAIM_TIMEOUT_MS;
+  }
+  return Math.max(MIN_EMAIL_SEND_CLAIM_TIMEOUT_MS, Math.floor(configured));
+}
+
+function isEmailSendClaimStale(sendAttemptedAt: string | undefined, staleBefore: Date): boolean {
+  if (!sendAttemptedAt) {
+    return true;
+  }
+  const attemptedAt = new Date(sendAttemptedAt);
+  return Number.isNaN(attemptedAt.getTime()) || attemptedAt < staleBefore;
 }
 
 function summarizeEmailThread(messages: EmailMessage[]): string {
   const ordered = [...messages].sort((left, right) => emailMessageTime(left).localeCompare(emailMessageTime(right)));
   const latest = ordered.slice(-5).map((message) => `${message.direction}: ${message.subject} (${message.status})`).join("; ");
   return latest || "No email messages yet.";
+}
+
+function normalizeEmailAttachments(value: unknown): EmailAttachment[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const attachments = value
+    .map((item): EmailAttachment | undefined => {
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+      const attachment = item as Partial<EmailAttachment>;
+      const fileName = typeof attachment.fileName === "string" ? attachment.fileName.trim() : "";
+      if (!fileName) {
+        return undefined;
+      }
+      return {
+        ...(typeof attachment.id === "string" && attachment.id.trim() ? { id: attachment.id.trim() } : {}),
+        fileName,
+        contentType: typeof attachment.contentType === "string" && attachment.contentType.trim() ? attachment.contentType.trim() : "application/octet-stream",
+        size: Number.isFinite(Number(attachment.size)) ? Math.max(0, Math.floor(Number(attachment.size))) : 0,
+        ...(typeof attachment.contentBase64 === "string" && attachment.contentBase64.trim() ? { contentBase64: attachment.contentBase64.trim() } : {}),
+        ...(typeof attachment.contentId === "string" && attachment.contentId.trim() ? { contentId: attachment.contentId.trim() } : {}),
+        ...(attachment.disposition === "inline" ? { disposition: "inline" as const } : attachment.disposition === "attachment" ? { disposition: "attachment" as const } : {}),
+        ...(typeof attachment.providerMessageId === "string" && attachment.providerMessageId.trim() ? { providerMessageId: attachment.providerMessageId.trim() } : {}),
+        ...(typeof attachment.providerAttachmentId === "string" && attachment.providerAttachmentId.trim() ? { providerAttachmentId: attachment.providerAttachmentId.trim() } : {}),
+        ...(typeof attachment.externalUrl === "string" && attachment.externalUrl.trim() ? { externalUrl: attachment.externalUrl.trim() } : {})
+      };
+    })
+    .filter((attachment): attachment is EmailAttachment => Boolean(attachment));
+  return attachments.length ? attachments : undefined;
+}
+
+function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAnalysisSources"]> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((source) => {
+      if (!source || typeof source !== "object") {
+        return undefined;
+      }
+      const item = source as Record<string, unknown>;
+      const label = typeof item.label === "string" ? item.label.trim() : "";
+      if (!label) {
+        return undefined;
+      }
+      return {
+        label,
+        ...(typeof item.recordId === "string" && item.recordId.trim() ? { recordId: item.recordId.trim() } : {}),
+        ...(typeof item.activityId === "string" && item.activityId.trim() ? { activityId: item.activityId.trim() } : {}),
+        ...(typeof item.messageId === "string" && item.messageId.trim() ? { messageId: item.messageId.trim() } : {}),
+        ...(typeof item.knowledgeArticleId === "string" && item.knowledgeArticleId.trim() ? { knowledgeArticleId: item.knowledgeArticleId.trim() } : {})
+      };
+    })
+    .filter((source): source is NonNullable<EmailThread["aiAnalysisSources"]>[number] => Boolean(source))
+    .slice(0, 20);
+}
+
+function assertEmailOutboundAiPurpose(direction: EmailMessage["direction"], aiAssisted: boolean | undefined, aiPurpose: EmailMessage["aiPurpose"]): void {
+  if (direction !== "outbound" || !aiAssisted) {
+    return;
+  }
+  if (!aiPurpose) {
+    throw new Error("AI assisted outbound email requires aiPurpose");
+  }
+  if (aiPurpose !== "draft" && aiPurpose !== "translate") {
+    throw new Error("AI assisted outbound email purpose must be draft or translate");
+  }
+}
+
+function assertEmailAiRecordThreadAlignment(recordId: string | undefined, thread: EmailThread | undefined): void {
+  if (!recordId || !thread?.recordId) {
+    return;
+  }
+  if (recordId !== thread.recordId) {
+    throw new Error("Email AI context record does not match the selected thread");
+  }
 }
 
 function coerceRow(row: Record<string, string>, fields: FieldDefinition[]): Record<string, unknown> {
@@ -2665,4 +3353,17 @@ function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize
     filters: query.filters?.filter((filter) => filter.field && filter.value.trim()),
     sort: query.sort?.field ? query.sort : undefined
   };
+}
+
+function normalizeEmailAccountToggles(provider: EmailAccount["provider"], toggles: Pick<EmailAccount, "syncEnabled" | "sendEnabled">): Pick<EmailAccount, "syncEnabled" | "sendEnabled"> {
+  const capability = getEmailProviderCapability(provider);
+  return {
+    syncEnabled: capability.supportsSync ? toggles.syncEnabled : false,
+    sendEnabled: capability.supportsSend ? toggles.sendEnabled : false
+  };
+}
+
+function normalizeEmailAiProviderError(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, 500) : undefined;
 }

@@ -1,29 +1,32 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { runQueuedJobOnce } from "@/lib/jobs/worker";
+import { formatJobWorkerResult, runQueuedJobOnce } from "@/lib/jobs/worker";
+import { assertDatabaseReachable } from "./database-preflight.ts";
+import { loadLocalEnvFiles } from "./load-env.ts";
+
+loadLocalEnvFiles();
 
 const loop = process.argv.includes("--loop");
 const pollMs = Number(process.env.JOB_WORKER_POLL_MS || 2000);
 
 async function tick() {
   const result = await runQueuedJobOnce();
-  if (result.processed) {
-    if (result.requeued) {
-      console.log(`Requeued job after worker error: ${result.error ?? "unknown error"}`);
-      return;
-    }
-    if (result.deadLettered) {
-      console.log(`Moved job to dead letter queue: ${result.error ?? "unknown error"}`);
-      return;
-    }
-    console.log(`Processed job ${result.job?.id ?? "unknown"} with status ${result.job?.status ?? "unknown"}`);
+  const message = formatJobWorkerResult(result);
+  if (message) {
+    console.log(message);
   }
 }
 
-if (loop) {
-  while (true) {
+try {
+  await assertDatabaseReachable({ label: "job-worker" });
+  if (loop) {
+    while (true) {
+      await tick();
+      await sleep(pollMs);
+    }
+  } else {
     await tick();
-    await sleep(pollMs);
   }
-} else {
-  await tick();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Job worker failed.");
+  process.exit(1);
 }

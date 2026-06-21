@@ -1,3 +1,5 @@
+
+export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";

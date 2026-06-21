@@ -73,3 +73,30 @@ export function toSafeHealthError(error: unknown, fallback = "Health check faile
     .replace(/postgres(?:ql)?:\/\/\S+/gi, "postgres://[redacted]")
     .replace(/redis:\/\/\S+/gi, "redis://[redacted]");
 }
+
+export function toSafeDatabaseHealthError(error: unknown, databaseUrl = process.env.DATABASE_URL): string {
+  const safeMessage = toSafeHealthError(error, "Database health check failed");
+  const target = getDatabaseTarget(databaseUrl);
+  const guidance = [
+    "Database health check failed",
+    target ? `target=${target.host}:${target.port}` : undefined,
+    "start PostgreSQL before running CRM email verification or browser E2E",
+    target?.host === "127.0.0.1" && target.port === "54329" ? "with Docker Compose: docker compose up -d postgres" : undefined
+  ].filter(Boolean);
+  return `${guidance.join("; ")}. ${safeMessage}`;
+}
+
+function getDatabaseTarget(databaseUrl: string | undefined): { host: string; port: string } | undefined {
+  if (!databaseUrl?.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(databaseUrl);
+    return {
+      host: parsed.hostname,
+      port: parsed.port || "5432"
+    };
+  } catch {
+    return undefined;
+  }
+}

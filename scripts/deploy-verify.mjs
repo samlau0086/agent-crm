@@ -58,6 +58,23 @@ function buildSteps(parsed, options) {
     );
   }
 
+  if (!parsed["skip-email"]) {
+    steps.push(
+      commandStep("Validate email subsystem diagnostics", "docker", [
+        "compose",
+        "exec",
+        "-T",
+        "web",
+        "node",
+        "--experimental-strip-types",
+        "--import",
+        "./scripts/register-alias.mjs",
+        "scripts/email-verify.ts",
+        ...(parsed["run-email-connections"] ? ["--test-connections"] : [])
+      ])
+    );
+  }
+
   if (parsed["run-backup"]) {
     steps.push(
       commandStep("Create verification backup", "docker", [
@@ -115,11 +132,11 @@ async function waitForHealth(url, timeout) {
     try {
       const response = await fetch(url, { signal: controller.signal });
       const payload = await response.json().catch(() => ({}));
-      if (response.ok && payload.ok === true && payload.database === "ok") {
-        console.error(`Health check passed: ${url}`);
+      if (response.ok && payload.ok === true && payload.database === "ok" && payload.emailReadiness?.ok !== false) {
+        console.error(`Health check passed: ${url} ${formatHealthSummary(payload)}`);
         return;
       }
-      lastError = `HTTP ${response.status} ${JSON.stringify(payload)}`;
+      lastError = `HTTP ${response.status} ${formatHealthSummary(payload)} ${JSON.stringify(payload)}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : "Health check failed.";
     } finally {
@@ -163,4 +180,23 @@ function formatSpawnError(command, error) {
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function formatHealthSummary(payload) {
+  return [
+    `database=${payload?.database ?? "unknown"}`,
+    `jobs=${payload?.jobs?.ok === true ? "ok" : payload?.jobs?.queue ?? "unknown"}`,
+    `email=${payload?.emailReadiness?.status ?? payload?.email?.status ?? "unknown"}`,
+    `emailSecrets=${payload?.emailReadiness?.encryption ?? payload?.email?.encryption?.status ?? "unknown"}`,
+    `emailOAuthState=${payload?.emailReadiness?.oauthState ?? payload?.email?.oauthState?.status ?? "unknown"}`,
+    `emailOAuthCallback=${payload?.emailReadiness?.oauthCallback ?? payload?.email?.oauthCallback?.status ?? "unknown"}`,
+    `emailDelivery=${payload?.emailReadiness?.deliveryMode ?? payload?.email?.deliveryMode?.status ?? "unknown"}`,
+    `emailAi=${payload?.emailReadiness?.aiProvider ?? payload?.email?.aiProvider?.status ?? "unknown"}`,
+    `emailAiContext=${payload?.emailReadiness?.aiContextPolicy?.status ?? payload?.email?.aiContextPolicy?.status ?? "unknown"}`,
+    `emailAiAutomations=${payload?.emailReadiness?.aiContextPolicy?.enabledAutomationCount ?? payload?.email?.aiContextPolicy?.enabledAutomationCount ?? "unknown"}`,
+    `emailAiFallbacks=${payload?.emailReadiness?.aiProviderFallbacks?.recentFallbackCount ?? payload?.email?.aiProviderFallbacks?.recentFallbackCount ?? "unknown"}`,
+    `emailAutoSummary=${payload?.emailReadiness?.autoSummaryPolicy?.status ?? payload?.email?.autoSummaryPolicy?.status ?? "unknown"}`,
+    `emailSync=${payload?.emailReadiness?.syncScheduler?.status ?? payload?.email?.syncScheduler?.status ?? "unknown"}`,
+    `emailSendClaims=${payload?.emailReadiness?.sendClaims?.staleCount ?? payload?.email?.sendClaims?.staleCount ?? "unknown"}`
+  ].join(" ");
 }

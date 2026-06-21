@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 
+
+export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const context = await getRequestContext(request);

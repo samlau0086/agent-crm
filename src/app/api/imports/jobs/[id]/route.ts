@@ -4,6 +4,8 @@ import { importJobActionSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 
+
+export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);

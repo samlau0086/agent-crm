@@ -4,12 +4,18 @@ type GlobalWithPrisma = typeof globalThis & {
   __prisma?: PrismaClient;
 };
 
-export const prisma =
-  (globalThis as GlobalWithPrisma).__prisma ??
-  new PrismaClient({
+function getPrismaClient(): PrismaClient {
+  const globalWithPrisma = globalThis as GlobalWithPrisma;
+  globalWithPrisma.__prisma ??= new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"]
   });
-
-if (process.env.NODE_ENV !== "production") {
-  (globalThis as GlobalWithPrisma).__prisma = prisma;
+  return globalWithPrisma.__prisma;
 }
+
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_target, property, receiver) {
+    const client = getPrismaClient();
+    const value = Reflect.get(client, property, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  }
+});

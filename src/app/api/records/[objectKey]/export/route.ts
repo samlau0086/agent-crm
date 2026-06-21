@@ -3,6 +3,8 @@ import { getRequestContext, handleApiError } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { parseRecordListQuery } from "@/lib/crm/record-query";
 
+
+export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest, { params }: { params: { objectKey: string } }) {
   try {
     const context = await getRequestContext(request);

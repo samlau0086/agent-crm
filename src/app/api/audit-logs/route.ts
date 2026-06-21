@@ -3,6 +3,8 @@ import { getRequestContext, handleApiError, ok } from "@/lib/api";
 import { parseAuditLogQuery } from "@/lib/crm/audit-query";
 import { getCrmRepository } from "@/lib/crm/repository";
 
+
+export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const context = await getRequestContext(request);

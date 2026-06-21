@@ -8,6 +8,8 @@ import { parseFormBody, parseJsonBody } from "@/lib/api-validation";
 import { prisma } from "@/lib/db";
 import { appUrl, getAppBaseUrl } from "@/lib/security/app-origin";
 
+
+export const dynamic = "force-dynamic";
 const setPasswordJsonSchema = z
   .object({
     token: z.string().min(1),

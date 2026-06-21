@@ -17,4 +17,4 @@ if [ "${SEED_ON_EMPTY:-false}" = "true" ]; then
   node scripts/seed-if-empty.mjs
 fi
 
-exec node server.js
+exec npm run start

@@ -13,9 +13,11 @@ import {
   Filter,
   LayoutDashboard,
   LayoutList,
+  Mail,
   RefreshCw,
   RotateCcw,
   Save,
+  Send,
   Settings,
   Trash2,
   Trophy,
@@ -38,9 +40,16 @@ import type {
   CsvImportJob,
   CsvImportStrategy,
   DashboardSummary,
+  EmailAccount,
+  EmailAttachment,
+  EmailAiSettings,
+  EmailConnectionConfig,
+  EmailMessage,
+  EmailThread,
   FieldDefinition,
   ImportJobQueueSummary,
   ImportPreset,
+  KnowledgeArticle,
   ObjectDefinition,
   Pipeline,
   RecordListResult,
@@ -52,6 +61,14 @@ import type {
   WebhookEndpoint
 } from "@/lib/crm/types";
 import { findRelatedRecords } from "@/lib/crm/views";
+import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
+import { canOpenEmailAiSource, emailAiSourceKey, type EmailAiSourceRef } from "@/lib/email/ai-sources";
+import { isEmailAiPurposeEnabled } from "@/lib/email/assistant";
+import { readEmailOAuthCallbackNotice } from "@/lib/email/oauth-callback";
+import { getEmailProviderCapability, getEmailProviderSetupVisibility, isOAuthEmailProvider, listEmailProviderCapabilities } from "@/lib/email/providers";
+import { buildEmailReplyDraft, type EmailComposeReplyDraft } from "@/lib/email/reply-draft";
+import { formatEmailSendResultMessage } from "@/lib/email/status-messages";
+import type { EmailDiagnosticStatus, EmailSubsystemDiagnostics } from "@/lib/email/diagnostics";
 import { formatCurrency, formatDate, labelForOption } from "@/lib/utils/format";
 import { shouldProceedWithDangerousAction } from "@/lib/ui/confirm";
 import type { BackupFile } from "@/lib/ops/backups";
@@ -74,6 +91,10 @@ interface CrmWorkspaceProps {
   roles: Role[];
   apiKeys: ApiKey[];
   webhooks: WebhookEndpoint[];
+  emailAccounts: EmailAccount[];
+  emailThreads: EmailThread[];
+  emailAiSettings: EmailAiSettings;
+  knowledgeArticles: KnowledgeArticle[];
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
   importJobs: CsvImportJob[];
@@ -81,9 +102,86 @@ interface CrmWorkspaceProps {
   importJobQueueSummary?: ImportJobQueueSummary;
 }
 
-type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "objects" | "records" | "tasks" | "activities" | "settings";
+type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
 type AiSource = { label: string; objectKey?: string; recordId?: string; activityId?: string };
 type AiResponse = { text: string; sources: AiSource[] };
+type EmailAiSource = EmailAiSourceRef;
+type EmailAiGenerateResult = {
+  enabled: boolean;
+  purpose: "draft" | "translate" | "context_analysis" | "summarize";
+  recordId?: string;
+  threadId?: string;
+  sourceMessageId?: string;
+  generationMode?: "disabled" | "local" | "provider" | "provider_fallback" | "queued";
+  providerError?: string;
+  text: string;
+  suggestedSubject?: string;
+  sources: EmailAiSource[];
+  budget?: { maxContextChars: number; contextCharCount: number; modelPromptChars: number; truncated: boolean; outputTruncated?: boolean };
+};
+type EmailConnectionTestRun = {
+  testedAt: string;
+  total: number;
+  tested: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  results: Array<{
+    account: EmailAccount;
+    ok: boolean;
+    skipped: boolean;
+    result?: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string };
+    reason?: string;
+    error?: string;
+  }>;
+};
+type EmailSyncAllRun = {
+  scheduledCount: number;
+  skippedCount: number;
+  limit?: number;
+  accounts: Array<{
+    accountId: string;
+    emailAddress: string;
+    status: string;
+    importedCount: number;
+    error?: string;
+  }>;
+};
+type EmailAccountDraft = {
+  editingAccountId?: string;
+  name: string;
+  emailAddress: string;
+  provider: EmailAccount["provider"];
+  syncEnabled: boolean;
+  sendEnabled: boolean;
+  smtpHost: string;
+  smtpPort: string;
+  smtpSecure: boolean;
+  smtpStartTls: boolean;
+  imapHost: string;
+  imapPort: string;
+  imapSecure: boolean;
+  username: string;
+  password: string;
+  mailbox: string;
+  oauthAccessToken: string;
+  oauthRefreshToken: string;
+  oauthExpiresAt: string;
+  oauthScope: string;
+};
+type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "status" | "syncEnabled" | "sendEnabled">> & {
+  connectionConfig?: EmailConnectionConfig;
+  clearConnectionConfig?: boolean;
+};
+type EmailComposeDraft = EmailComposeReplyDraft & {
+  clientRequestId: string;
+};
+type KnowledgeArticleDraft = {
+  title: string;
+  body: string;
+  tags: string;
+  active: boolean;
+};
 type ViewDraft = {
   name: string;
   columns: string[];
@@ -110,6 +208,78 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
 ];
 
 const coreObjects = new Set(["contacts", "companies", "deals"]);
+const emailAiFeatureMeta: Record<keyof EmailAiSettings["features"], { label: string; description: string; dependsOn?: keyof EmailAiSettings["features"] }> = {
+  draft: { label: "AI 写邮件", description: "基于客户背景、沟通历史和知识库生成邮件草稿" },
+  translate: { label: "AI 翻译", description: "手动翻译邮件内容" },
+  auto_translate: { label: "自动翻译", description: "新入站邮件自动生成翻译", dependsOn: "translate" },
+  context_analysis: { label: "上下文分析", description: "分析邮件线程并给出下一步建议" },
+  auto_context_analysis: { label: "自动上下文分析", description: "新邮件自动刷新线程分析", dependsOn: "context_analysis" },
+  auto_summarize: { label: "自动总结", description: "把长线程压缩成 compact memory 以减少后续 token 消耗" }
+};
+
+function isEmailAiFeatureBlockedByDependency(feature: keyof EmailAiSettings["features"], features: EmailAiSettings["features"]): boolean {
+  const dependency = emailAiFeatureMeta[feature].dependsOn;
+  return Boolean(dependency && !features[dependency]);
+}
+
+function emailAiFeatureDependencyMessage(feature: keyof EmailAiSettings["features"]): string | undefined {
+  const dependency = emailAiFeatureMeta[feature].dependsOn;
+  return dependency ? `需要先开启 ${emailAiFeatureMeta[dependency].label}` : undefined;
+}
+function createEmailClientRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `email-send:${crypto.randomUUID()}`;
+  }
+  return `email-send:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function upsertEmailMessage(messages: EmailMessage[], message: EmailMessage): EmailMessage[] {
+  const index = messages.findIndex((candidate) => candidate.id === message.id);
+  if (index === -1) {
+    return [...messages, message];
+  }
+  return messages.map((candidate) => (candidate.id === message.id ? message : candidate));
+}
+
+const navigationItems: typeof navItems = navItems.some((item) => item.key === "email")
+  ? navItems
+  : [...navItems.slice(0, -1), { key: "email", label: "邮件", icon: Mail }, navItems[navItems.length - 1]];
+
+function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}): EmailAccountDraft {
+  return {
+    name: "",
+    emailAddress: "",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    smtpHost: "",
+    smtpPort: "465",
+    smtpSecure: true,
+    smtpStartTls: false,
+    imapHost: "",
+    imapPort: "993",
+    imapSecure: true,
+    username: "",
+    password: "",
+    mailbox: "INBOX",
+    oauthAccessToken: "",
+    oauthRefreshToken: "",
+    oauthExpiresAt: "",
+    oauthScope: "",
+    ...overrides
+  };
+}
+
+function createEmailAccountEditDraft(account: EmailAccount): EmailAccountDraft {
+  return createEmptyEmailAccountDraft({
+    editingAccountId: account.id,
+    name: account.name,
+    emailAddress: account.emailAddress,
+    provider: account.provider,
+    syncEnabled: account.syncEnabled,
+    sendEnabled: account.sendEnabled
+  });
+}
 
 const emptyViewDraft: ViewDraft = {
   name: "新视图",
@@ -178,6 +348,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [selectedImportPresetId, setSelectedImportPresetId] = useState("");
   const [importPresetName, setImportPresetName] = useState("");
   const [aiQuestion, setAiQuestion] = useState("本周有哪些高价值交易需要继续推进？");
+  const [emailAccounts, setEmailAccounts] = useState<EmailAccount[]>(props.emailAccounts);
+  const [emailThreads, setEmailThreads] = useState<EmailThread[]>(props.emailThreads);
+  const [emailMessagesByThread, setEmailMessagesByThread] = useState<Record<string, EmailMessage[]>>({});
+  const [selectedEmailThreadId, setSelectedEmailThreadId] = useState(props.emailThreads[0]?.id ?? "");
+  const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
+  const [emailAccountDraft, setEmailAccountDraft] = useState<EmailAccountDraft>(() => createEmptyEmailAccountDraft());
+  const [emailDraft, setEmailDraft] = useState<EmailComposeDraft>({
+    clientRequestId: createEmailClientRequestId(),
+    accountId: props.emailAccounts[0]?.id ?? "",
+    recordId: "",
+    to: "",
+    cc: "",
+    bcc: "",
+    subject: "",
+    bodyText: "",
+    attachments: [],
+    aiAssisted: false
+  });
+  const [emailAiPurpose, setEmailAiPurpose] = useState<"draft" | "translate" | "context_analysis" | "summarize">("draft");
+  const [emailAiPrompt, setEmailAiPrompt] = useState("");
+  const [emailAiResult, setEmailAiResult] = useState<EmailAiGenerateResult | null>(null);
+  const [emailDiagnostics, setEmailDiagnostics] = useState<EmailSubsystemDiagnostics | null>(null);
+  const [emailConnectionTestRun, setEmailConnectionTestRun] = useState<EmailConnectionTestRun | null>(null);
+  const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>(props.knowledgeArticles);
+  const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeArticleDraft>({ title: "", body: "", tags: "", active: true });
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -320,6 +515,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   );
   const canImport = props.role.permissions.includes("crm.import");
   const canManageViews = props.role.permissions.includes("crm.admin");
+  const canManageEmailSettings = props.role.permissions.includes("crm.admin");
   const activeImportJobs = useMemo(
     () => importJobs.filter((job) => job.objectKey === activeObject?.key),
     [activeObject?.key, importJobs]
@@ -355,6 +551,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   useEffect(() => {
     setIsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    const notice = readEmailOAuthCallbackNotice(window.location.search);
+    if (!notice) {
+      return;
+    }
+    setActiveNav("email");
+    if (notice.status === "error") {
+      setError(notice.message);
+    } else {
+      setMessage(notice.message);
+    }
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete("emailOAuth");
+    nextUrl.searchParams.delete("emailAccountId");
+    nextUrl.searchParams.delete("emailAccountCreated");
+    nextUrl.searchParams.delete("emailOAuthError");
+    window.history.replaceState(window.history.state, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
   }, []);
 
   useEffect(() => {
@@ -399,6 +614,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setImportPresets(props.importPresets);
   }, [props.importPresets]);
+
+  useEffect(() => {
+    setEmailAccounts(props.emailAccounts);
+    setEmailThreads(props.emailThreads);
+    setEmailAiSettings(props.emailAiSettings);
+    setKnowledgeArticles(props.knowledgeArticles);
+    setEmailDraft((current) => ({ ...current, accountId: current.accountId || props.emailAccounts[0]?.id || "" }));
+    setSelectedEmailThreadId((current) => (props.emailThreads.some((thread) => thread.id === current) ? current : props.emailThreads[0]?.id ?? ""));
+  }, [props.emailAccounts, props.emailAiSettings, props.emailThreads, props.knowledgeArticles]);
 
   useEffect(() => {
     setSelectedImportPresetId((current) => (activeImportPresets.some((preset) => preset.id === current) ? current : ""));
@@ -883,6 +1107,375 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  async function createEmailAccount() {
+    const account = await fetchJson<EmailAccount>("/api/email/accounts", {
+      method: "POST",
+      body: {
+        name: emailAccountDraft.name,
+        emailAddress: emailAccountDraft.emailAddress,
+        provider: emailAccountDraft.provider,
+        syncEnabled: emailAccountDraft.syncEnabled,
+        sendEnabled: emailAccountDraft.sendEnabled,
+        status: "active"
+        ,
+        connectionConfig: buildEmailConnectionConfig(emailAccountDraft)
+      }
+    });
+    setEmailAccounts((current) => [account, ...current.filter((candidate) => candidate.id !== account.id)]);
+    setEmailDraft((current) => ({ ...current, accountId: account.id }));
+    setEmailAccountDraft(createEmptyEmailAccountDraft());
+    setMessage(`已创建邮箱账户：${account.emailAddress}`);
+  }
+
+  async function syncEmailAccount(accountId: string) {
+    const result = await fetchJson<{ account: EmailAccount; importedCount: number; scannedCount?: number; skippedDuplicateCount?: number; hasMore?: boolean; status: string; error?: string }>("/api/email/sync", {
+      method: "POST",
+      body: { accountId }
+    });
+    setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
+    if (result.status === "failed") {
+      setError(result.error ?? result.account.lastConnectionError ?? "邮箱同步失败");
+      setMessage(`邮箱同步失败：${result.account.emailAddress}`);
+      return;
+    }
+    setMessage(`邮箱同步完成：扫描 ${result.scannedCount ?? result.importedCount} 封，新增 ${result.importedCount} 封，跳过重复 ${result.skippedDuplicateCount ?? 0} 封${result.hasMore ? "，仍有更多历史邮件" : ""}`);
+    router.refresh();
+  }
+
+  async function syncAllEmailAccounts() {
+    const result = await fetchJson<EmailSyncAllRun>("/api/email/sync-all", { method: "POST" });
+    const failed = result.accounts.filter((account) => account.status === "failed");
+    if (failed.length) {
+      setError(`邮箱批量同步完成，但 ${failed.length} 个账号失败：${failed.map((account) => account.emailAddress).join(", ")}`);
+    }
+    setMessage(`邮箱批量同步完成：已调度 ${result.scheduledCount} 个，跳过 ${result.skippedCount} 个，失败 ${failed.length} 个`);
+    router.refresh();
+  }
+
+  async function testEmailConnection(accountId: string) {
+    const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
+      method: "POST",
+      body: { accountId }
+    });
+    setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
+    setMessage(`邮箱连接测试完成：SMTP ${result.result.smtp ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
+  }
+
+  async function testAllEmailConnections() {
+    const result = await fetchJson<EmailConnectionTestRun>("/api/email/test-connections", { method: "POST" });
+    setEmailConnectionTestRun(result);
+    setEmailAccounts((current) => mergeEmailAccounts(current, result.results.map((entry) => entry.account)));
+    setMessage(`邮箱连接批量测试完成：成功 ${result.succeeded}，失败 ${result.failed}，跳过 ${result.skipped}`);
+  }
+
+  async function updateEmailAccount(accountId: string, patch: EmailAccountUpdatePatch) {
+    const account = await fetchJson<EmailAccount>(`/api/email/accounts/${accountId}`, {
+      method: "PATCH",
+      body: patch
+    });
+    setEmailAccounts((current) => [account, ...current.filter((candidate) => candidate.id !== account.id)]);
+    setMessage(`邮箱账户已更新：${account.emailAddress}`);
+    router.refresh();
+  }
+
+  async function updateEmailAccountFromDraft() {
+    if (!emailAccountDraft.editingAccountId) {
+      return;
+    }
+    const connectionConfig = buildEmailConnectionConfig(emailAccountDraft);
+    await updateEmailAccount(emailAccountDraft.editingAccountId, {
+      name: emailAccountDraft.name,
+      emailAddress: emailAccountDraft.emailAddress,
+      provider: emailAccountDraft.provider,
+      syncEnabled: emailAccountDraft.syncEnabled,
+      sendEnabled: emailAccountDraft.sendEnabled,
+      ...(connectionConfig ? { connectionConfig } : {})
+    });
+    setEmailAccountDraft(createEmptyEmailAccountDraft());
+  }
+
+  async function startEmailOAuth() {
+    const result = await fetchJson<{ authorizationUrl: string }>("/api/email/oauth/start", {
+      method: "POST",
+      body: {
+        provider: emailAccountDraft.provider,
+        emailAddress: emailAccountDraft.emailAddress,
+        name: emailAccountDraft.name || `${emailAccountDraft.provider} mailbox`,
+        syncEnabled: emailAccountDraft.syncEnabled,
+        sendEnabled: emailAccountDraft.sendEnabled
+      }
+    });
+    window.location.assign(result.authorizationUrl);
+  }
+
+  async function loadEmailMessages(threadId: string) {
+    const messages = await fetchJson<EmailMessage[]>(`/api/email/threads/${threadId}/messages`, { method: "GET" });
+    setEmailMessagesByThread((current) => ({ ...current, [threadId]: messages }));
+  }
+
+  async function updateEmailThread(threadId: string, recordId: string) {
+    const thread = await fetchJson<EmailThread>(`/api/email/threads/${threadId}`, {
+      method: "PATCH",
+      body: { recordId: recordId || null }
+    });
+    setEmailThreads((current) => [thread, ...current.filter((candidate) => candidate.id !== thread.id)]);
+    setEmailDraft((current) => (current.recordId || selectedEmailThreadId !== thread.id ? current : { ...current, recordId: thread.recordId || "" }));
+    setMessage(thread.recordId ? "邮件线程已关联到客户记录" : "邮件线程已取消关联记录");
+  }
+
+  async function sendEmail() {
+    const message = await fetchJson<EmailMessage>("/api/email/send", {
+      method: "POST",
+      body: {
+        accountId: emailDraft.accountId,
+        threadId: selectedEmailThreadId || undefined,
+        recordId: emailDraft.recordId || selectedRecord?.id,
+        to: splitEmailList(emailDraft.to),
+        cc: splitEmailList(emailDraft.cc),
+        bcc: splitEmailList(emailDraft.bcc),
+        subject: emailDraft.subject,
+        bodyText: emailDraft.bodyText,
+        clientRequestId: emailDraft.clientRequestId,
+        attachments: emailDraft.attachments?.length ? emailDraft.attachments : undefined,
+        aiAssisted: emailDraft.aiAssisted || undefined,
+        aiPurpose: emailDraft.aiAssisted ? emailDraft.aiPurpose : undefined,
+        aiSourceMessageId: emailDraft.aiAssisted ? emailDraft.aiSourceMessageId : undefined,
+        aiSources: emailDraft.aiAssisted ? emailDraft.aiSources : undefined,
+        aiGeneratedAt: emailDraft.aiAssisted ? emailDraft.aiGeneratedAt : undefined
+      }
+    });
+    setEmailMessagesByThread((current) => ({ ...current, [message.threadId]: upsertEmailMessage(current[message.threadId] ?? [], message) }));
+    setSelectedEmailThreadId(message.threadId);
+    setEmailDraft((current) => ({ ...current, clientRequestId: createEmailClientRequestId(), to: "", cc: "", bcc: "", subject: "", bodyText: "", attachments: [], aiAssisted: false, aiPurpose: undefined, aiSourceMessageId: undefined, aiSources: undefined, aiGeneratedAt: undefined }));
+    setMessage(formatEmailSendResultMessage(message));
+    router.refresh();
+  }
+
+  async function retryEmailMessage(messageId: string) {
+    const message = await fetchJson<EmailMessage>(`/api/email/messages/${messageId}/retry`, {
+      method: "POST"
+    });
+    setEmailMessagesByThread((current) => ({
+      ...current,
+      [message.threadId]: (current[message.threadId] ?? []).map((candidate) => (candidate.id === message.id ? message : candidate))
+    }));
+    setMessage(`已重试邮件：${message.subject}`);
+    router.refresh();
+  }
+
+  function replyToEmailMessage(message: EmailMessage) {
+    const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
+    const account = emailAccounts.find((candidate) => candidate.id === message.accountId);
+    setSelectedEmailThreadId(message.threadId);
+    setEmailDraft((current) => ({
+      ...current,
+      ...buildEmailReplyDraft({
+        message,
+        accountEmail: account?.emailAddress,
+        recordId: thread?.recordId || current.recordId || selectedRecord?.id || ""
+      }),
+      aiAssisted: false,
+      aiPurpose: undefined,
+      aiSourceMessageId: undefined,
+      aiSources: undefined,
+      aiGeneratedAt: undefined
+    }));
+  }
+
+  async function generateEmailAi() {
+    const selectedSourceMessageId = selectedEmailThreadId
+      ? emailMessagesByThread[selectedEmailThreadId]?.at(-1)?.id
+      : undefined;
+    const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
+      method: "POST",
+      body: {
+        purpose: emailAiPurpose,
+        threadId: selectedEmailThreadId || undefined,
+        recordId: emailDraft.recordId || selectedRecord?.id,
+        sourceMessageId: selectedSourceMessageId,
+        userPrompt: emailAiPrompt || undefined,
+        sourceText: emailDraft.bodyText || undefined
+      }
+    });
+    setEmailAiResult(result);
+    if (result.enabled && (emailAiPurpose === "draft" || emailAiPurpose === "translate")) {
+      setEmailDraft((current) => ({
+        ...current,
+        subject: emailAiPurpose === "draft" && !current.subject.trim() ? result.suggestedSubject ?? current.subject : current.subject,
+        bodyText: result.text,
+        aiAssisted: true,
+        aiPurpose: emailAiPurpose,
+        aiSourceMessageId: result.sourceMessageId,
+        aiSources: result.sources,
+        aiGeneratedAt: new Date().toISOString()
+      }));
+    }
+  }
+
+  async function generateEmailAiForMessage(message: EmailMessage, purpose: "translate" | "context_analysis") {
+    if (purpose === "translate") {
+      const translated = await fetchJson<EmailMessage>(`/api/email/messages/${message.id}/translate`, {
+        method: "POST"
+      });
+      setEmailMessagesByThread((current) => ({
+        ...current,
+        [translated.threadId]: (current[translated.threadId] ?? []).map((candidate) => (candidate.id === translated.id ? translated : candidate))
+      }));
+      setEmailAiPurpose("translate");
+      setEmailAiResult({
+        enabled: Boolean(translated.translatedBodyText),
+        purpose: "translate",
+        text: translated.translatedBodyText ?? "",
+        sources: translated.translatedSources?.length ? translated.translatedSources : [{ label: translated.subject, messageId: translated.id }]
+      });
+      return;
+    }
+    const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
+    const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
+      method: "POST",
+      body: {
+        purpose,
+        threadId: message.threadId,
+        sourceMessageId: message.id,
+        recordId: thread?.recordId || selectedRecord?.id || emailDraft.recordId || undefined,
+        userPrompt: purpose === "context_analysis" ? "Analyze this email and suggest the next sales action." : undefined,
+        sourceText: message.bodyText
+      }
+    });
+    setEmailAiPurpose(purpose);
+    setEmailAiResult(result);
+  }
+
+  async function summarizeEmailThread() {
+    if (!selectedEmailThreadId) {
+      return;
+    }
+    const response = await fetchJson<{ updated: boolean; queued?: boolean; thread?: EmailThread; result: EmailAiGenerateResult }>(`/api/email/threads/${selectedEmailThreadId}/summarize`, {
+      method: "POST"
+    });
+    setEmailAiResult(response.result);
+    if (response.thread) {
+      setEmailThreads((current) => [response.thread as EmailThread, ...current.filter((thread) => thread.id !== response.thread?.id)]);
+    }
+    setMessage(response.queued ? "邮件线程总结已加入后台队列" : response.updated ? "邮件线程摘要已刷新" : "邮件自动总结功能已关闭");
+  }
+
+  async function analyzeEmailThread() {
+    if (!selectedEmailThreadId) {
+      return;
+    }
+    const response = await fetchJson<{ updated: boolean; queued?: boolean; thread?: EmailThread; result: EmailAiGenerateResult }>(`/api/email/threads/${selectedEmailThreadId}/analyze`, {
+      method: "POST"
+    });
+    setEmailAiResult(response.result);
+    if (response.thread) {
+      setEmailThreads((current) => [response.thread as EmailThread, ...current.filter((thread) => thread.id !== response.thread?.id)]);
+    }
+    setMessage(response.queued ? "邮件线程分析已加入队列。" : response.updated ? "邮件线程分析已刷新。" : "邮件上下文分析已关闭。");
+  }
+
+  async function updateEmailAiFeature(feature: keyof EmailAiSettings["features"], enabled: boolean) {
+    return updateEmailAiSettingsPatch({ features: { [feature]: enabled } });
+  }
+
+  async function updateEmailAiSettingsPatch(patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars">> & { features?: Partial<EmailAiSettings["features"]> }) {
+    const settings = await fetchJson<EmailAiSettings>("/api/email/ai-settings", {
+      method: "PATCH",
+      body: patch
+    });
+    setEmailAiSettings(settings);
+    setMessage("邮件 AI 设置已更新");
+  }
+
+  async function refreshEmailDiagnostics() {
+    const diagnostics = await fetchJson<EmailSubsystemDiagnostics>("/api/email/diagnostics", { method: "GET" });
+    setEmailDiagnostics(diagnostics);
+    setMessage(`邮件诊断完成：${formatEmailDiagnosticStatus(diagnostics.status)}`);
+  }
+
+  async function openEmailAiSource(source: EmailAiSource) {
+    if (source.recordId) {
+      const record = records.find((candidate) => candidate.id === source.recordId);
+      if (record) {
+        openRecord(record);
+        return;
+      }
+    }
+
+    if (source.messageId) {
+      const threadEntry = Object.entries(emailMessagesByThread).find(([, messages]) => messages.some((message) => message.id === source.messageId));
+      if (threadEntry) {
+        setSelectedEmailThreadId(threadEntry[0]);
+        setActiveNav("email");
+        return;
+      }
+      const message = await fetchJson<EmailMessage>(`/api/email/messages/${source.messageId}`, { method: "GET" });
+      await loadEmailMessages(message.threadId);
+      setSelectedEmailThreadId(message.threadId);
+      setActiveNav("email");
+      return;
+    }
+
+    if (source.activityId) {
+      let activity = activities.find((candidate) => candidate.id === source.activityId);
+      if (!activity) {
+        const fetchedActivity = await fetchJson<Activity>(`/api/activities/${source.activityId}`, { method: "GET" });
+        activity = fetchedActivity;
+        setActivities((current) => mergeActivities(current, [fetchedActivity]));
+      }
+      if (activity?.recordId) {
+        const record = records.find((candidate) => candidate.id === activity.recordId);
+        if (record) {
+          openRecord(record);
+          return;
+        }
+      }
+      setActiveNav("activities");
+      setMessage(`已定位活动来源：${source.label}`);
+      return;
+    }
+
+    if (source.knowledgeArticleId) {
+      let article = knowledgeArticles.find((candidate) => candidate.id === source.knowledgeArticleId);
+      if (!article) {
+        const fetchedArticle = await fetchJson<KnowledgeArticle>(`/api/knowledge/articles/${source.knowledgeArticleId}`, { method: "GET" });
+        article = fetchedArticle;
+        setKnowledgeArticles((current) => [fetchedArticle, ...current.filter((candidate) => candidate.id !== fetchedArticle.id)]);
+      }
+      setActiveNav("email");
+      setMessage(article ? `知识库来源：${article.title}` : `知识库来源：${source.label}`);
+      return;
+    }
+
+    setMessage("该 AI 来源暂时无法直接打开");
+  }
+
+  async function createKnowledgeArticle() {
+    const article = await fetchJson<KnowledgeArticle>("/api/knowledge/articles", {
+      method: "POST",
+      body: {
+        title: knowledgeDraft.title,
+        body: knowledgeDraft.body,
+        tags: splitEmailList(knowledgeDraft.tags),
+        active: knowledgeDraft.active
+      }
+    });
+    setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)]);
+    setKnowledgeDraft({ title: "", body: "", tags: "", active: true });
+    setMessage(`知识库文章已创建：${article.title}`);
+    router.refresh();
+  }
+
+  async function updateKnowledgeArticle(articleId: string, patch: Partial<Pick<KnowledgeArticle, "active">>) {
+    const article = await fetchJson<KnowledgeArticle>(`/api/knowledge/articles/${articleId}`, {
+      method: "PATCH",
+      body: patch
+    });
+    setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)]);
+    setMessage(`知识库文章已更新：${article.title}`);
+    router.refresh();
+  }
+
   function runAction(action: () => Promise<void>) {
     setMessage(null);
     setError(null);
@@ -915,7 +1508,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         </div>
 
         <nav className="nav-list" aria-label="主导航">
-          {navItems.map((item) => {
+          {navigationItems.map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -1516,6 +2109,63 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           </div>
         )}
 
+        {activeNav === "email" && (
+          <EmailWorkspace
+            accounts={emailAccounts}
+            threads={emailThreads}
+            messagesByThread={emailMessagesByThread}
+            selectedThreadId={selectedEmailThreadId}
+            selectedRecord={selectedRecord}
+            records={records}
+            aiSettings={emailAiSettings}
+            accountDraft={emailAccountDraft}
+            emailDraft={emailDraft}
+            aiPurpose={emailAiPurpose}
+            aiPrompt={emailAiPrompt}
+            aiResult={emailAiResult}
+            diagnostics={emailDiagnostics}
+            connectionTestRun={emailConnectionTestRun}
+            knowledgeArticles={knowledgeArticles}
+            knowledgeDraft={knowledgeDraft}
+            disabled={isPending}
+            canManageEmailSettings={canManageEmailSettings}
+            onAccountDraftChange={setEmailAccountDraft}
+            onEmailDraftChange={setEmailDraft}
+            onKnowledgeDraftChange={setKnowledgeDraft}
+            onAiPurposeChange={setEmailAiPurpose}
+            onAiPromptChange={setEmailAiPrompt}
+            onSelectThread={(threadId) => {
+              setSelectedEmailThreadId(threadId);
+              if (!emailMessagesByThread[threadId]) {
+                runAction(() => loadEmailMessages(threadId));
+              }
+            }}
+            onUpdateThread={(threadId, recordId) => runAction(() => updateEmailThread(threadId, recordId))}
+            onCreateAccount={() => runAction(createEmailAccount)}
+            onStartOAuth={() => runAction(startEmailOAuth)}
+            onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
+            onSyncAllAccounts={() => runAction(syncAllEmailAccounts)}
+            onTestConnection={(accountId) => runAction(() => testEmailConnection(accountId))}
+            onEditAccount={(account) => setEmailAccountDraft(createEmailAccountEditDraft(account))}
+            onUpdateAccount={(accountId, patch) => runAction(() => updateEmailAccount(accountId, patch))}
+            onUpdateAccountFromDraft={() => runAction(updateEmailAccountFromDraft)}
+            onResetAccountDraft={() => setEmailAccountDraft(createEmptyEmailAccountDraft())}
+            onSend={() => runAction(sendEmail)}
+            onReplyToMessage={replyToEmailMessage}
+            onRetryMessage={(messageId) => runAction(() => retryEmailMessage(messageId))}
+            onGenerateAiForMessage={(message, purpose) => runAction(() => generateEmailAiForMessage(message, purpose))}
+            onGenerateAi={() => runAction(generateEmailAi)}
+            onOpenAiSource={(source) => runAction(() => openEmailAiSource(source))}
+            onSummarizeThread={() => runAction(summarizeEmailThread)}
+            onAnalyzeThread={() => runAction(analyzeEmailThread)}
+            onRefreshDiagnostics={() => runAction(refreshEmailDiagnostics)}
+            onTestAllConnections={() => runAction(testAllEmailConnections)}
+            onCreateKnowledgeArticle={() => runAction(createKnowledgeArticle)}
+            onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
+            onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
+            onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
+          />
+        )}
         {activeNav === "tasks" && <TaskView activities={openTasks} users={props.users} onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))} />}
         {activeNav === "activities" && <ActivityTimeline activities={activities} records={records} />}
         {activeNav === "settings" && (
@@ -1617,6 +2267,755 @@ function Dashboard({
         <ObjectDirectory objects={objects} recordCounts={recordCounts} onOpenObject={onOpenObject} />
       </div>
     </>
+  );
+}
+
+function EmailWorkspace({
+  accounts,
+  threads,
+  messagesByThread,
+  selectedThreadId,
+  selectedRecord,
+  records,
+  aiSettings,
+  accountDraft,
+  emailDraft,
+  aiPurpose,
+  aiPrompt,
+  aiResult,
+  diagnostics,
+  connectionTestRun,
+  knowledgeArticles,
+  knowledgeDraft,
+  disabled,
+  canManageEmailSettings,
+  onAccountDraftChange,
+  onEmailDraftChange,
+  onKnowledgeDraftChange,
+  onAiPurposeChange,
+  onAiPromptChange,
+  onSelectThread,
+  onUpdateThread,
+  onCreateAccount,
+  onStartOAuth,
+  onSyncAccount,
+  onSyncAllAccounts,
+  onTestConnection,
+  onEditAccount,
+  onUpdateAccount,
+  onUpdateAccountFromDraft,
+  onResetAccountDraft,
+  onSend,
+  onReplyToMessage,
+  onRetryMessage,
+  onGenerateAiForMessage,
+  onGenerateAi,
+  onOpenAiSource,
+  onSummarizeThread,
+  onAnalyzeThread,
+  onRefreshDiagnostics,
+  onTestAllConnections,
+  onCreateKnowledgeArticle,
+  onUpdateKnowledgeArticle,
+  onToggleAiFeature,
+  onUpdateAiSettings
+}: {
+  accounts: EmailAccount[];
+  threads: EmailThread[];
+  messagesByThread: Record<string, EmailMessage[]>;
+  selectedThreadId: string;
+  selectedRecord?: CrmRecord;
+  records: CrmRecord[];
+  aiSettings: EmailAiSettings;
+  accountDraft: EmailAccountDraft;
+  emailDraft: EmailComposeDraft;
+  aiPurpose: EmailAiGenerateResult["purpose"];
+  aiPrompt: string;
+  aiResult: EmailAiGenerateResult | null;
+  diagnostics: EmailSubsystemDiagnostics | null;
+  connectionTestRun: EmailConnectionTestRun | null;
+  knowledgeArticles: KnowledgeArticle[];
+  knowledgeDraft: KnowledgeArticleDraft;
+  disabled: boolean;
+  canManageEmailSettings: boolean;
+  onAccountDraftChange: (draft: EmailAccountDraft) => void;
+  onEmailDraftChange: (draft: EmailComposeDraft) => void;
+  onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
+  onAiPurposeChange: (purpose: EmailAiGenerateResult["purpose"]) => void;
+  onAiPromptChange: (prompt: string) => void;
+  onSelectThread: (threadId: string) => void;
+  onUpdateThread: (threadId: string, recordId: string) => void;
+  onCreateAccount: () => void;
+  onStartOAuth: () => void;
+  onSyncAccount: (accountId: string) => void;
+  onSyncAllAccounts: () => void;
+  onTestConnection: (accountId: string) => void;
+  onEditAccount: (account: EmailAccount) => void;
+  onUpdateAccount: (accountId: string, patch: EmailAccountUpdatePatch) => void;
+  onUpdateAccountFromDraft: () => void;
+  onResetAccountDraft: () => void;
+  onSend: () => void;
+  onReplyToMessage: (message: EmailMessage) => void;
+  onRetryMessage: (messageId: string) => void;
+  onGenerateAiForMessage: (message: EmailMessage, purpose: "translate" | "context_analysis") => void;
+  onGenerateAi: () => void;
+  onOpenAiSource: (source: EmailAiSource) => void;
+  onSummarizeThread: () => void;
+  onAnalyzeThread: () => void;
+  onRefreshDiagnostics: () => void;
+  onTestAllConnections: () => void;
+  onCreateKnowledgeArticle: () => void;
+  onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "active">>) => void;
+  onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
+  onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars">>) => void;
+}) {
+  const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
+  const selectedMessages = selectedThread ? messagesByThread[selectedThread.id] ?? [] : [];
+  const activeAccounts = accounts.filter((account) => account.status === "active" && account.sendEnabled && getEmailProviderCapability(account.provider).supportsSend);
+  const linkedRecordId = emailDraft.recordId || selectedRecord?.id || selectedThread?.recordId || "";
+  const selectedThreadRecordId = selectedThread?.recordId || "";
+  const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
+  const selectedProviderSetupVisibility = getEmailProviderSetupVisibility(accountDraft.provider);
+  const selectedEmailAiPurposeEnabled = isEmailAiPurposeEnabled(aiSettings.features, aiPurpose);
+
+  function updateEmailAccountProvider(provider: EmailAccount["provider"]) {
+    const capability = getEmailProviderCapability(provider);
+    onAccountDraftChange({
+      ...accountDraft,
+      provider,
+      sendEnabled: accountDraft.sendEnabled && capability.supportsSend,
+      syncEnabled: accountDraft.syncEnabled && capability.supportsSync,
+      ...(capability.connectionKind === "smtp_imap"
+        ? {}
+        : {
+            smtpHost: "",
+            smtpPort: "465",
+            smtpSecure: true,
+            smtpStartTls: false,
+            imapHost: "",
+            imapPort: "993",
+            imapSecure: true,
+            username: "",
+            password: "",
+            mailbox: "INBOX"
+          }),
+      ...(capability.supportsOAuth
+        ? {}
+        : {
+            oauthAccessToken: "",
+            oauthRefreshToken: "",
+            oauthExpiresAt: "",
+            oauthScope: ""
+          })
+    });
+  }
+
+  async function addEmailAttachmentFiles(files: FileList | null) {
+    const selectedFiles = Array.from(files ?? []);
+    if (!selectedFiles.length) {
+      return;
+    }
+    const existing = emailDraft.attachments ?? [];
+    if (existing.length + selectedFiles.length > 10) {
+      window.alert("邮件附件最多 10 个文件。");
+      return;
+    }
+    try {
+      const attachments = await Promise.all(selectedFiles.map(readEmailAttachmentFile));
+      onEmailDraftChange({ ...emailDraft, attachments: [...existing, ...attachments] });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "无法读取邮件附件。");
+    }
+  }
+
+  function removeEmailAttachment(index: number) {
+    onEmailDraftChange({
+      ...emailDraft,
+      attachments: (emailDraft.attachments ?? []).filter((_, candidateIndex) => candidateIndex !== index)
+    });
+  }
+
+  function renderEmailAiSources(sources?: EmailAiSource[]) {
+    if (!sources?.length) {
+      return null;
+    }
+    return (
+      <div className="toolbar" style={{ marginTop: 8 }}>
+        {sources.map((source) =>
+          canOpenEmailAiSource(source) ? (
+            <button className="secondary-button" data-testid={emailAiSourceTestId(source)} key={emailAiSourceKey(source)} type="button" onClick={() => onOpenAiSource(source)}>
+              {source.label}
+            </button>
+          ) : (
+            <span className="badge" key={emailAiSourceKey(source)}>{source.label}</span>
+          )
+        )}
+      </div>
+    );
+  }
+
+  function emailAiSourceTestId(source: EmailAiSource): string {
+    if (source.recordId) {
+      return `email-ai-source-record-${source.recordId}`;
+    }
+    if (source.messageId) {
+      return `email-ai-source-message-${source.messageId}`;
+    }
+    if (source.activityId) {
+      return `email-ai-source-activity-${source.activityId}`;
+    }
+    if (source.knowledgeArticleId) {
+      return `email-ai-source-knowledge-${source.knowledgeArticleId}`;
+    }
+    return "email-ai-source";
+  }
+
+  return (
+    <div className="email-grid">
+      <section className="section">
+        <div className="settings-panel-header">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>邮箱账户</h2>
+            <div className="subtle">Provider 通过 adapter 扩展，当前 UI 走统一发送/同步 API。</div>
+          </div>
+        </div>
+        {canManageEmailSettings ? (
+          <>
+        <div className="form-grid">
+          <label>
+            <span className="subtle">名称</span>
+            <input className="input" data-testid="email-account-name" value={accountDraft.name} onChange={(event) => onAccountDraftChange({ ...accountDraft, name: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">邮箱</span>
+            <input className="input" data-testid="email-account-address" value={accountDraft.emailAddress} onChange={(event) => onAccountDraftChange({ ...accountDraft, emailAddress: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">Provider</span>
+            <select className="select" value={accountDraft.provider} onChange={(event) => updateEmailAccountProvider(event.target.value as EmailAccount["provider"])}>
+              {listEmailProviderCapabilities().map((provider) => (
+                <option key={provider.key} value={provider.key}>
+                  {provider.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="settings-item wide">
+            <strong>{selectedProviderCapability.label}</strong>
+            <div className="subtle">{selectedProviderCapability.description}</div>
+            <div className="toolbar" style={{ marginTop: 8 }}>
+              <span className={selectedProviderCapability.supportsSend ? "badge" : "danger-badge"}>发送 {selectedProviderCapability.supportsSend ? "已支持" : "需要 adapter"}</span>
+              <span className={selectedProviderCapability.supportsSync ? "badge" : "danger-badge"}>同步 {selectedProviderCapability.supportsSync ? "已支持" : "需要 adapter"}</span>
+              <span className={selectedProviderCapability.supportsOAuth ? "badge" : "badge"}>{selectedProviderCapability.connectionKind}</span>
+            </div>
+          </div>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={accountDraft.sendEnabled && selectedProviderCapability.supportsSend} onChange={(event) => onAccountDraftChange({ ...accountDraft, sendEnabled: event.target.checked && selectedProviderCapability.supportsSend })} disabled={!selectedProviderCapability.supportsSend} />
+            允许发送
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={accountDraft.syncEnabled && selectedProviderCapability.supportsSync} onChange={(event) => onAccountDraftChange({ ...accountDraft, syncEnabled: event.target.checked && selectedProviderCapability.supportsSync })} disabled={!selectedProviderCapability.supportsSync} />
+            允许同步
+          </label>
+          {selectedProviderSetupVisibility.showSmtpImapFields ? (
+            <>
+          <label>
+            <span className="subtle">SMTP Host</span>
+            <input className="input" data-testid="email-account-smtp-host" value={accountDraft.smtpHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpHost: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">SMTP Port</span>
+            <input className="input" type="number" value={accountDraft.smtpPort} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpPort: event.target.value })} />
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={accountDraft.smtpSecure} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpSecure: event.target.checked, smtpStartTls: event.target.checked ? false : accountDraft.smtpStartTls })} />
+            SMTP TLS
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={accountDraft.smtpStartTls} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpStartTls: event.target.checked, smtpSecure: event.target.checked ? false : accountDraft.smtpSecure })} />
+            SMTP STARTTLS
+          </label>
+          <label>
+            <span className="subtle">IMAP Host</span>
+            <input className="input" data-testid="email-account-imap-host" value={accountDraft.imapHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapHost: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">IMAP Port</span>
+            <input className="input" type="number" value={accountDraft.imapPort} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapPort: event.target.value })} />
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={accountDraft.imapSecure} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapSecure: event.target.checked })} />
+            IMAP TLS
+          </label>
+          <label>
+            <span className="subtle">用户名</span>
+            <input className="input" value={accountDraft.username} onChange={(event) => onAccountDraftChange({ ...accountDraft, username: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">密码/应用密码</span>
+            <input className="input" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">邮箱文件夹</span>
+            <input className="input" value={accountDraft.mailbox} onChange={(event) => onAccountDraftChange({ ...accountDraft, mailbox: event.target.value })} />
+          </label>
+            </>
+          ) : null}
+          {selectedProviderSetupVisibility.showOAuthFields ? (
+            <>
+          <label>
+            <span className="subtle">OAuth Access Token</span>
+            <input className="input" type="password" value={accountDraft.oauthAccessToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthAccessToken: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">OAuth Refresh Token</span>
+            <input className="input" type="password" value={accountDraft.oauthRefreshToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthRefreshToken: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">OAuth Expires At</span>
+            <input className="input" type="datetime-local" value={accountDraft.oauthExpiresAt} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthExpiresAt: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">OAuth Scope</span>
+            <input className="input" value={accountDraft.oauthScope} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthScope: event.target.value })} />
+          </label>
+            </>
+          ) : null}
+        </div>
+        {accountDraft.editingAccountId ? (
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <button className="primary-button" data-testid="email-account-update" type="button" onClick={onUpdateAccountFromDraft} disabled={disabled || !accountDraft.name.trim() || !accountDraft.emailAddress.trim()}>
+              <Save size={16} />
+              保存账户
+            </button>
+            <button className="secondary-button" type="button" onClick={onResetAccountDraft} disabled={disabled}>
+              取消编辑
+            </button>
+          </div>
+        ) : null}
+        <button className="primary-button" data-testid="email-account-create" type="button" style={{ marginTop: 12 }} onClick={onCreateAccount} disabled={disabled || Boolean(accountDraft.editingAccountId) || !accountDraft.name.trim() || !accountDraft.emailAddress.trim()}>
+          <Save size={16} />
+          创建账户
+        </button>
+
+        <button className="secondary-button" data-testid="email-oauth-start" type="button" style={{ marginTop: 8 }} onClick={onStartOAuth} disabled={disabled || Boolean(accountDraft.editingAccountId) || !accountDraft.emailAddress.trim() || !selectedProviderSetupVisibility.canStartOAuth}>
+          <Mail size={16} />
+          OAuth 授权
+        </button>
+
+          </>
+        ) : null}
+
+        {canManageEmailSettings ? (
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <button
+              className="secondary-button"
+              data-testid="email-sync-all"
+              type="button"
+              onClick={onSyncAllAccounts}
+              disabled={
+                disabled ||
+                !accounts.some((account) => {
+                  const capability = getEmailProviderCapability(account.provider);
+                  return account.status === "active" && account.syncEnabled && capability.supportsSync;
+                })
+              }
+            >
+              <RefreshCw size={16} />
+              同步全部
+            </button>
+          </div>
+        ) : null}
+
+        <div className="settings-list" style={{ marginTop: 16 }}>
+          {accounts.map((account) => {
+            const capability = getEmailProviderCapability(account.provider);
+            return (
+            <div className="settings-item" key={account.id}>
+              <strong>{account.name}</strong>
+              <div className="subtle">{account.emailAddress} · {account.provider} · {account.status}</div>
+              <div className="toolbar" style={{ marginTop: 8 }}>
+                <span className={account.sendEnabled && capability.supportsSend ? "badge" : "danger-badge"}>发送 {account.sendEnabled && capability.supportsSend ? "on" : "off"}</span>
+                <span className={account.syncEnabled && capability.supportsSync ? "badge" : "danger-badge"}>同步 {account.syncEnabled && capability.supportsSync ? "on" : "off"}</span>
+                <span className={account.connectionConfigured ? "badge" : "danger-badge"}>连接 {account.connectionConfigured ? "已配置" : "未配置"}</span>
+                {canManageEmailSettings ? (
+                  <>
+                <button className="secondary-button" type="button" onClick={() => onTestConnection(account.id)} disabled={disabled || !account.connectionConfigured}>
+                  <RefreshCw size={16} />
+                  测试连接
+                </button>
+                <button className="secondary-button" data-testid={`email-account-edit-${account.id}`} type="button" onClick={() => onEditAccount(account)} disabled={disabled}>
+                  编辑连接
+                </button>
+                <button className="secondary-button" type="button" onClick={() => onUpdateAccount(account.id, { sendEnabled: !account.sendEnabled })} disabled={disabled || !capability.supportsSend}>
+                  {account.sendEnabled ? "关闭发送" : "开启发送"}
+                </button>
+                <button className="secondary-button" type="button" onClick={() => onUpdateAccount(account.id, { syncEnabled: !account.syncEnabled })} disabled={disabled || !capability.supportsSync}>
+                  {account.syncEnabled ? "关闭同步" : "开启同步"}
+                </button>
+                <button
+                  className={account.status === "disabled" ? "secondary-button" : "danger-button"}
+                  type="button"
+                  onClick={() =>
+                    onUpdateAccount(
+                      account.id,
+                      account.status === "disabled" ? { status: "active" } : { status: "disabled", syncEnabled: false, sendEnabled: false }
+                    )
+                  }
+                  disabled={disabled}
+                >
+                  {account.status === "disabled" ? "启用" : "停用"}
+                </button>
+                <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !capability.supportsSync || account.status !== "active"}>
+                  <RefreshCw size={16} />
+                  同步
+                </button>
+                  </>
+                ) : null}
+              </div>
+              {canManageEmailSettings && account.lastConnectionError ? <div className="subtle">连接错误：{account.lastConnectionError}</div> : null}
+            </div>
+            );
+          })}
+          {accounts.length === 0 ? <div className="empty-state">还没有邮箱账户</div> : null}
+        </div>
+      </section>
+
+      {canManageEmailSettings ? <EmailDiagnosticsPanel diagnostics={diagnostics} connectionTestRun={connectionTestRun} disabled={disabled} onRefresh={onRefreshDiagnostics} onTestAll={onTestAllConnections} /> : null}
+
+      <section className="section">
+        <h2 className="page-title" style={{ fontSize: 18 }}>邮件线程</h2>
+        <div className="toolbar" style={{ marginTop: 8 }}>
+          {selectedThread?.summaryUpdatedAt ? <span className="subtle">Summary {formatDate(selectedThread.summaryUpdatedAt)}</span> : null}
+          {selectedThread?.aiAnalysisUpdatedAt ? <span className="subtle">Analysis {formatDate(selectedThread.aiAnalysisUpdatedAt)}</span> : null}
+          {selectedThread ? (
+            <label className="toolbar" style={{ gap: 6 }}>
+              <span className="subtle">关联记录</span>
+              <select className="select" data-testid="email-thread-record" value={selectedThreadRecordId} onChange={(event) => onUpdateThread(selectedThread.id, event.target.value)} disabled={disabled}>
+                <option value="">不关联</option>
+                {records.slice(0, 100).map((record) => (
+                  <option key={record.id} value={record.id}>{record.title}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={onAnalyzeThread} disabled={disabled || !selectedThread || !aiSettings.features.context_analysis}>
+            <Bot size={16} />
+            刷新分析
+          </button>
+          <button className="secondary-button" data-testid="email-thread-summarize" type="button" onClick={onSummarizeThread} disabled={disabled || !selectedThread || !aiSettings.features.auto_summarize}>
+            <Bot size={16} />
+            刷新摘要
+          </button>
+        </div>
+        <div className="settings-list" style={{ marginTop: 12 }}>
+          {threads.map((thread) => (
+            <button className={`settings-select ${thread.id === selectedThreadId ? "selected" : ""}`} key={thread.id} type="button" onClick={() => onSelectThread(thread.id)}>
+              <strong>{thread.subject}</strong>
+              <div className="subtle">{thread.participantEmails.join(", ")}</div>
+              {thread.summary ? <div>{thread.summary}</div> : null}
+              {thread.aiAnalysis ? <div className="subtle">{thread.aiAnalysis}</div> : null}
+            </button>
+          ))}
+          {threads.length === 0 ? <div className="empty-state">还没有邮件线程</div> : null}
+        </div>
+        {selectedThread?.aiAnalysis ? (
+          <div className="ai-box" style={{ marginTop: 12 }}>
+            <div className="activity-meta">AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.aiAnalysis}</div>
+            {renderEmailAiSources(selectedThread.aiAnalysisSources)}
+          </div>
+        ) : null}
+        <div className="activity-list" style={{ marginTop: 16 }}>
+          {selectedMessages.map((message) => (
+            <div className="activity-item" key={message.id}>
+              <div className="activity-meta">{message.direction} · {message.status} · {formatDate(message.createdAt)}</div>
+              {message.aiAssisted ? <span className="badge">AI 辅助{message.aiPurpose ? ` · ${message.aiPurpose}` : ""}</span> : null}
+              {message.aiAssisted ? renderEmailAiSources(message.aiSources) : null}
+              <strong>{message.subject}</strong>
+              {message.direction === "outbound" && message.status === "failed" ? (
+                <div className="toolbar" style={{ marginTop: 8 }}>
+                  {message.failureReason ? <span className="danger-badge">{message.failureReason}</span> : null}
+                  <button className="secondary-button" type="button" onClick={() => onRetryMessage(message.id)} disabled={disabled}>
+                    <RefreshCw size={14} />
+                    重试
+                  </button>
+                </div>
+              ) : null}
+              <div className="subtle">发件人 {message.from} · 收件人 {message.to.join(", ")}</div>
+              <div>{message.bodyText}</div>
+              {message.attachments?.length ? (
+                <div className="toolbar" style={{ marginTop: 8 }}>
+                  {message.attachments.map((attachment, index) => {
+                    const href = buildEmailAttachmentHref(message.id, index, attachment);
+                    const label = `${attachment.fileName} · ${attachment.contentType ?? "application/octet-stream"} · ${formatBytes(attachment.size)}`;
+                    return href ? (
+                      <a className="secondary-button" href={href} key={`${message.id}-attachment-${attachment.id ?? attachment.providerAttachmentId ?? index}`} rel={attachment.externalUrl ? "noreferrer" : undefined} target={attachment.externalUrl ? "_blank" : undefined}>
+                        <Download size={14} />
+                        {label}
+                      </a>
+                    ) : (
+                      <span className="badge" key={`${message.id}-attachment-${attachment.id ?? attachment.providerAttachmentId ?? index}`}>
+                        {label}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {message.translatedBodyText ? (
+                <div className="ai-box" data-testid="email-message-translation" style={{ marginTop: 8 }}>
+                  <div className="activity-meta">翻译 {message.translatedLocale ? `(${message.translatedLocale})` : ""}</div>
+                  <div>{message.translatedBodyText}</div>
+                  {renderEmailAiSources(message.translatedSources)}
+                </div>
+              ) : null}
+              <div className="toolbar" style={{ marginTop: 8 }}>
+                <button className="secondary-button" data-testid={`email-message-reply-${message.id}`} type="button" onClick={() => onReplyToMessage(message)} disabled={disabled}>
+                  <Send size={14} />
+                  回复
+                </button>
+                <button className="secondary-button" data-testid={`email-message-translate-${message.id}`} type="button" onClick={() => onGenerateAiForMessage(message, "translate")} disabled={disabled || !aiSettings.features.translate}>
+                  <Bot size={14} />
+                  翻译
+                </button>
+                <button className="secondary-button" data-testid={`email-message-analyze-${message.id}`} type="button" onClick={() => onGenerateAiForMessage(message, "context_analysis")} disabled={disabled || !aiSettings.features.context_analysis}>
+                  <Bot size={14} />
+                  分析
+                </button>
+              </div>
+            </div>
+          ))}
+          {selectedThread && selectedMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
+        </div>
+      </section>
+
+      <section className="section">
+        <h2 className="page-title" style={{ fontSize: 18 }}>撰写与 AI</h2>
+        <div className="form-grid" style={{ marginTop: 12 }}>
+          <label>
+            <span className="subtle">发件账户</span>
+            <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange({ ...emailDraft, accountId: event.target.value })}>
+              <option value="">选择账户</option>
+              {activeAccounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.emailAddress}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="subtle">关联记录</span>
+            <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange({ ...emailDraft, recordId: event.target.value })}>
+              <option value="">不关联</option>
+              {records.slice(0, 100).map((record) => (
+                <option key={record.id} value={record.id}>{record.title}</option>
+              ))}
+            </select>
+          </label>
+          <label className="wide">
+            <span className="subtle">收件人</span>
+            <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange({ ...emailDraft, to: event.target.value })} placeholder="buyer@example.com, team@example.com" />
+          </label>
+          <label>
+            <span className="subtle">CC</span>
+            <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange({ ...emailDraft, cc: event.target.value })} placeholder="manager@example.com" />
+          </label>
+          <label>
+            <span className="subtle">BCC</span>
+            <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange({ ...emailDraft, bcc: event.target.value })} placeholder="archive@example.com" />
+          </label>
+          <label className="wide">
+            <span className="subtle">主题</span>
+            <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange({ ...emailDraft, subject: event.target.value })} />
+          </label>
+          <label className="wide">
+            <span className="subtle">正文</span>
+            <textarea className="textarea" data-testid="email-compose-body" value={emailDraft.bodyText} onChange={(event) => onEmailDraftChange({ ...emailDraft, bodyText: event.target.value })} />
+          </label>
+          <label className="wide">
+            <span className="subtle">附件</span>
+            <input
+              className="input"
+              data-testid="email-compose-attachments"
+              multiple
+              type="file"
+              onChange={(event) => {
+                void addEmailAttachmentFiles(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {emailDraft.attachments?.length ? (
+            <div className="toolbar wide">
+              {emailDraft.attachments.map((attachment, index) => (
+                <button className="secondary-button" key={`${attachment.fileName}-${index}`} type="button" onClick={() => removeEmailAttachment(index)}>
+                  <Upload size={14} />
+                  {attachment.fileName} · {formatBytes(attachment.size)}
+                  <XCircle size={14} />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        {emailDraft.aiAssisted ? (
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <span className="badge">
+              AI 辅助草稿{emailDraft.aiPurpose ? ` · ${emailDraft.aiPurpose}` : ""}{emailDraft.aiGeneratedAt ? ` · ${formatDate(emailDraft.aiGeneratedAt)}` : ""}
+            </span>
+            {renderEmailAiSources(emailDraft.aiSources)}
+            <button
+              className="secondary-button"
+              data-testid="email-ai-clear-provenance"
+              type="button"
+              onClick={() =>
+                onEmailDraftChange({
+                  ...emailDraft,
+                  aiAssisted: false,
+                  aiPurpose: undefined,
+                  aiSourceMessageId: undefined,
+                  aiSources: undefined,
+                  aiGeneratedAt: undefined
+                })
+              }
+              disabled={disabled}
+            >
+              <XCircle size={14} />
+              清除 AI 标记
+            </button>
+          </div>
+        ) : null}
+        <div className="toolbar" style={{ marginTop: 12 }}>
+          <button className="primary-button" data-testid="email-send" type="button" onClick={onSend} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !emailDraft.bodyText.trim()}>
+            <Send size={16} />
+            发送
+          </button>
+        </div>
+
+        <div className="ai-box">
+          <div className="activity-meta"><Bot size={16} />邮件 AI</div>
+          {canManageEmailSettings ? (
+            <>
+          <div className="view-column-grid">
+            {Object.entries(aiSettings.features).map(([feature, enabled]) => {
+              const featureKey = feature as keyof EmailAiSettings["features"];
+              const meta = emailAiFeatureMeta[featureKey];
+              const dependencyBlocked = isEmailAiFeatureBlockedByDependency(featureKey, aiSettings.features);
+              const dependencyMessage = emailAiFeatureDependencyMessage(featureKey);
+              return (
+                <label className="settings-toggle" key={feature}>
+                  <input data-testid={`email-ai-feature-${feature}`} type="checkbox" checked={enabled && !dependencyBlocked} onChange={(event) => onToggleAiFeature(featureKey, event.target.checked)} disabled={dependencyBlocked} />
+                  <span>
+                    {meta.label}
+                    <small className="subtle" style={{ display: "block" }}>
+                      {dependencyBlocked && dependencyMessage ? dependencyMessage : meta.description}
+                    </small>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="form-grid" style={{ marginTop: 12 }}>
+            <label>
+              <span className="subtle">默认语言</span>
+              <input className="input" value={aiSettings.defaultLocale} onChange={(event) => onUpdateAiSettings({ defaultLocale: event.target.value })} />
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={aiSettings.requireSourceLinks} onChange={(event) => onUpdateAiSettings({ requireSourceLinks: event.target.checked })} />
+              要求来源引用
+            </label>
+            <label>
+              <span className="subtle">历史消息数</span>
+              <input className="input" max={20} min={1} type="number" value={aiSettings.maxHistoryMessages} onChange={(event) => onUpdateAiSettings({ maxHistoryMessages: numberInputValue(event.target.value, aiSettings.maxHistoryMessages) })} />
+            </label>
+            <label>
+              <span className="subtle">知识文章数</span>
+              <input className="input" max={20} min={0} type="number" value={aiSettings.maxKnowledgeArticles} onChange={(event) => onUpdateAiSettings({ maxKnowledgeArticles: numberInputValue(event.target.value, aiSettings.maxKnowledgeArticles) })} />
+            </label>
+            <label>
+              <span className="subtle">上下文字符预算</span>
+              <input className="input" max={20000} min={1000} step={500} type="number" value={aiSettings.maxContextChars} onChange={(event) => onUpdateAiSettings({ maxContextChars: numberInputValue(event.target.value, aiSettings.maxContextChars) })} />
+            </label>
+          </div>
+            </>
+          ) : null}
+          <label>
+            <span className="subtle">AI 动作</span>
+            <select className="select" data-testid="email-ai-purpose" value={aiPurpose} onChange={(event) => onAiPurposeChange(event.target.value as EmailAiGenerateResult["purpose"])}>
+              <option value="draft">写邮件</option>
+              <option value="translate">翻译</option>
+              <option value="context_analysis">上下文分析</option>
+              <option value="summarize">自动总结</option>
+            </select>
+          </label>
+          <label>
+            <span className="subtle">补充要求</span>
+            <input className="input" data-testid="email-ai-prompt" value={aiPrompt} onChange={(event) => onAiPromptChange(event.target.value)} />
+          </label>
+          <button className="secondary-button" data-testid="email-ai-generate" type="button" onClick={onGenerateAi} disabled={disabled || !selectedEmailAiPurposeEnabled}>
+            <Bot size={16} />
+            生成
+          </button>
+          {!selectedEmailAiPurposeEnabled ? <div className="subtle">当前 AI 动作已被开关关闭。</div> : null}
+          {aiResult ? (
+            <div className="activity-item">
+              <strong>{aiResult.enabled ? "AI 输出" : "该 AI 功能已关闭"}</strong>
+              {aiResult.suggestedSubject ? <div className="subtle">主题：{aiResult.suggestedSubject}</div> : null}
+              {aiResult.budget ? (
+                <div className="toolbar" style={{ marginTop: 8 }}>
+                  <span className="badge">上下文 {aiResult.budget.contextCharCount}/{aiResult.budget.maxContextChars}</span>
+                  <span className="badge">提示词 {aiResult.budget.modelPromptChars}</span>
+                  {aiResult.generationMode ? <span className={aiResult.generationMode === "provider_fallback" ? "danger-badge" : "badge"}>模式 {formatEmailAiGenerationMode(aiResult.generationMode)}</span> : null}
+                  {aiResult.budget.truncated ? <span className="danger-badge">已裁剪</span> : <span className="badge">未裁剪</span>}
+                  {aiResult.budget.outputTruncated ? <span className="danger-badge">输出已裁剪</span> : null}
+                </div>
+              ) : null}
+              {aiResult.providerError ? <div className="subtle">AI provider 回退：{aiResult.providerError}</div> : null}
+              <div style={{ whiteSpace: "pre-wrap" }}>{aiResult.text}</div>
+              {renderEmailAiSources(aiResult.sources)}
+            </div>
+          ) : null}
+          {canManageEmailSettings ? (
+          <div className="settings-item">
+            <strong>系统知识库</strong>
+            <div className="form-grid" style={{ marginTop: 8 }}>
+              <label>
+                <span className="subtle">标题</span>
+                <input className="input" data-testid="knowledge-title" value={knowledgeDraft.title} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, title: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">标签</span>
+                <input className="input" data-testid="knowledge-tags" value={knowledgeDraft.tags} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, tags: event.target.value })} placeholder="pricing, onboarding" />
+              </label>
+              <label className="settings-toggle">
+                <input type="checkbox" checked={knowledgeDraft.active} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, active: event.target.checked })} />
+                启用
+              </label>
+              <label className="wide">
+                <span className="subtle">内容</span>
+                <textarea className="textarea" data-testid="knowledge-body" value={knowledgeDraft.body} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, body: event.target.value })} />
+              </label>
+            </div>
+            <button className="secondary-button" data-testid="knowledge-create" type="button" style={{ marginTop: 8 }} onClick={onCreateKnowledgeArticle} disabled={disabled || !knowledgeDraft.title.trim() || !knowledgeDraft.body.trim()}>
+              <Save size={16} />
+              添加知识
+            </button>
+            <div className="toolbar" style={{ marginTop: 8 }}>
+              {knowledgeArticles.map((article) => (
+                <button
+                  className={article.active ? "secondary-button" : "danger-button"}
+                  key={article.id}
+                  type="button"
+                  onClick={() => onUpdateKnowledgeArticle(article.id, { active: !article.active })}
+                  disabled={disabled}
+                >
+                  {article.title} · {article.active ? "on" : "off"}
+                </button>
+              ))}
+              {knowledgeArticles.filter((article) => article.active).length === 0 ? <span className="subtle">暂无启用文章</span> : null}
+            </div>
+          </div>
+          ) : null}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2916,6 +4315,13 @@ function mergeActivities(...groups: Array<Array<Activity | null | undefined> | n
   );
 }
 
+function mergeEmailAccounts(current: EmailAccount[], updated: EmailAccount[]): EmailAccount[] {
+  const updates = new Map(updated.map((account) => [account.id, account]));
+  const merged = current.map((account) => updates.get(account.id) ?? account);
+  const currentIds = new Set(current.map((account) => account.id));
+  return [...merged, ...updated.filter((account) => !currentIds.has(account.id))];
+}
+
 function mergeImportJobs(current: CsvImportJob[], updatedForObject: CsvImportJob[], objectKey: string): CsvImportJob[] {
   return [
     ...updatedForObject,
@@ -3014,6 +4420,301 @@ async function postJson(url: string, body: unknown): Promise<void> {
   await fetchJson(url, { method: "POST", body });
 }
 
+function EmailDiagnosticsPanel({
+  diagnostics,
+  connectionTestRun,
+  disabled,
+  onRefresh,
+  onTestAll
+}: {
+  diagnostics: EmailSubsystemDiagnostics | null;
+  connectionTestRun: EmailConnectionTestRun | null;
+  disabled: boolean;
+  onRefresh: () => void;
+  onTestAll: () => void;
+}) {
+  const accounts = diagnostics?.accounts;
+  return (
+    <section className="section">
+      <div className="settings-panel-header">
+        <div>
+          <h2 className="page-title" style={{ fontSize: 18 }}>邮件诊断</h2>
+          <div className="subtle">检查部署所需的邮件密钥、OAuth、AI、队列和账号连接状态。</div>
+        </div>
+        <div className="toolbar">
+        <button className="secondary-button" type="button" onClick={onRefresh} disabled={disabled}>
+          <RefreshCw size={16} />
+          刷新诊断
+        </button>
+          <button className="secondary-button" type="button" onClick={onTestAll} disabled={disabled}>
+            <CheckCircle2 size={16} />
+            测试启用邮箱
+          </button>
+        </div>
+      </div>
+
+      {diagnostics ? (
+        <>
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <DiagnosticBadge status={diagnostics.status} label={`总体：${formatEmailDiagnosticStatus(diagnostics.status)}`} />
+            {diagnostics.jobs ? <DiagnosticBadge status={diagnostics.jobs.ok ? "ok" : "error"} label={`队列：${diagnostics.jobs.executor}/${diagnostics.jobs.queue}`} /> : null}
+          </div>
+
+          <div className="settings-list" style={{ marginTop: 12 }}>
+            <DiagnosticRow label="邮箱凭据加密" status={diagnostics.encryption.status} message={diagnostics.encryption.message} />
+            <DiagnosticRow label="OAuth state 签名" status={diagnostics.oauthState.status} message={diagnostics.oauthState.message} />
+            <DiagnosticRow label="OAuth callback" status={diagnostics.oauthCallback.status} message={`${diagnostics.oauthCallback.message}${diagnostics.oauthCallback.callbackUrl ? ` · ${diagnostics.oauthCallback.callbackUrl}` : ""}`} />
+            <DiagnosticRow label="邮件投递模式" status={diagnostics.deliveryMode.status} message={diagnostics.deliveryMode.message} />
+            <DiagnosticRow label="AI provider" status={diagnostics.aiProvider.status} message={diagnostics.aiProvider.message} />
+            <DiagnosticRow label="AI 上下文策略" status={diagnostics.aiContextPolicy.status} message={diagnostics.aiContextPolicy.message} />
+            <div className="toolbar">
+              <span className={diagnostics.aiContextPolicy.requireSourceLinks ? "badge" : "danger-badge"}>sources {diagnostics.aiContextPolicy.requireSourceLinks ? "required" : "optional"}</span>
+              <span className="badge">history {diagnostics.aiContextPolicy.maxHistoryMessages}</span>
+              <span className={diagnostics.aiContextPolicy.maxKnowledgeArticles > 0 ? "badge" : "danger-badge"}>knowledge {diagnostics.aiContextPolicy.maxKnowledgeArticles}</span>
+              <span className="badge">context {diagnostics.aiContextPolicy.maxContextChars}</span>
+              <span className="badge">automations {diagnostics.aiContextPolicy.enabledAutomationCount}</span>
+            </div>
+            <DiagnosticRow label="自动总结策略" status={diagnostics.autoSummaryPolicy.status} message={diagnostics.autoSummaryPolicy.message} />
+            <DiagnosticRow label="收信调度" status={diagnostics.syncScheduler.status} message={diagnostics.syncScheduler.message} />
+            <DiagnosticRow label="邮件发送认领" status={diagnostics.sendClaims.status} message={diagnostics.sendClaims.message} />
+            {diagnostics.sendClaims.staleMessages.map((message) => (
+              <div className="settings-item" key={message.id}>
+                <div className="settings-panel-header">
+                  <strong>{message.subject}</strong>
+                  <DiagnosticBadge status="warning" label="发送认领超时" />
+                </div>
+                <div className="subtle">
+                  message {message.id} 路 account {message.accountId}{message.sendAttemptedAt ? ` 路 ${formatDate(message.sendAttemptedAt)}` : ""}
+                </div>
+              </div>
+            ))}
+            <DiagnosticRow label="邮件 AI 自动化" status={diagnostics.aiAutomationFailures.status} message={diagnostics.aiAutomationFailures.message} />
+            {diagnostics.aiAutomationFailures.recentFailures.map((failure, index) => (
+              <div className="settings-item" key={`${failure.createdAt}-${failure.threadId ?? failure.sourceMessageId ?? index}`}>
+                <div className="settings-panel-header">
+                  <strong>{failure.purpose ?? "email_ai"}</strong>
+                  <DiagnosticBadge status="warning" label="自动化失败" />
+                </div>
+                <div className="subtle">{formatEmailAiAutomationFailure(failure)}</div>
+              </div>
+            ))}
+            <DiagnosticRow label="AI provider 回退" status={diagnostics.aiProviderFallbacks.status} message={diagnostics.aiProviderFallbacks.message} />
+            {diagnostics.aiProviderFallbacks.recentFallbacks.map((fallback, index) => (
+              <div className="settings-item" key={`${fallback.createdAt}-${fallback.threadId ?? fallback.sourceMessageId ?? index}`}>
+                <div className="settings-panel-header">
+                  <strong>{fallback.purpose ?? "email_ai"}</strong>
+                  <DiagnosticBadge status="warning" label="Provider 回退" />
+                </div>
+                <div className="subtle">{formatEmailAiProviderFallback(fallback)}</div>
+              </div>
+            ))}
+            {Object.values(diagnostics.oauthProviders).map((provider) => (
+              <DiagnosticRow key={provider.provider} label={`${getEmailProviderCapability(provider.provider).label} OAuth`} status={provider.status} message={provider.message} />
+            ))}
+          </div>
+
+          {accounts ? (
+            <div className="stats-grid" style={{ marginTop: 12 }}>
+              <Metric label="邮箱账户" value={accounts.total} icon={Mail} />
+              <Metric label="已启用同步" value={accounts.syncEnabled} icon={RefreshCw} />
+              <Metric label="已配置连接" value={accounts.connectionConfigured} icon={CheckCircle2} />
+              <Metric label="连接错误" value={accounts.withLastConnectionError} icon={XCircle} />
+            </div>
+          ) : null}
+
+          {accounts ? (
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              <span className="badge">active {accounts.active}</span>
+              <span className="badge">draft {accounts.draft}</span>
+              <span className="badge">disabled {accounts.disabled}</span>
+              <span className={accounts.error > 0 ? "danger-badge" : "badge"}>error {accounts.error}</span>
+              <span className={accounts.missingConnectionConfig > 0 ? "danger-badge" : "badge"}>未配置连接 {accounts.missingConnectionConfig}</span>
+            </div>
+          ) : null}
+
+          {connectionTestRun ? (
+            <div className="settings-list" style={{ marginTop: 12 }}>
+              <div className="settings-item">
+                <div className="settings-panel-header">
+                  <strong>最近连接测试</strong>
+                  <span className={connectionTestRun.failed > 0 ? "danger-badge" : "badge"}>
+                    {connectionTestRun.succeeded}/{connectionTestRun.tested} ok
+                  </span>
+                </div>
+                <div className="subtle">
+                  {formatDate(connectionTestRun.testedAt)} · total {connectionTestRun.total} · skipped {connectionTestRun.skipped}
+                </div>
+              </div>
+              {connectionTestRun.results.map((entry) => (
+                <div className="settings-item" key={entry.account.id}>
+                  <div className="settings-panel-header">
+                    <strong>{entry.account.emailAddress}</strong>
+                    <span className={entry.ok || entry.skipped ? "badge" : "danger-badge"}>
+                      {entry.ok ? "ok" : entry.skipped ? "skipped" : "failed"}
+                    </span>
+                  </div>
+                  <div className="subtle">{formatEmailConnectionTestResult(entry)}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="empty-state">点击刷新诊断，检查当前邮件部署状态。</div>
+      )}
+    </section>
+  );
+}
+
+function DiagnosticRow({ label, status, message }: { label: string; status: EmailDiagnosticStatus; message: string }) {
+  return (
+    <div className="settings-item">
+      <div className="settings-panel-header">
+        <strong>{label}</strong>
+        <DiagnosticBadge status={status} label={formatEmailDiagnosticStatus(status)} />
+      </div>
+      <div className="subtle">{message}</div>
+    </div>
+  );
+}
+
+function DiagnosticBadge({ status, label }: { status: EmailDiagnosticStatus; label: string }) {
+  return <span className={status === "ok" ? "badge" : "danger-badge"}>{label}</span>;
+}
+
+function formatEmailAiAutomationFailure(failure: EmailSubsystemDiagnostics["aiAutomationFailures"]["recentFailures"][number]): string {
+  const related = [
+    failure.threadId ? `thread ${failure.threadId}` : undefined,
+    failure.sourceMessageId ? `message ${failure.sourceMessageId}` : undefined
+  ].filter(Boolean);
+  return [formatDate(failure.createdAt), related.join(" · "), failure.errorMessage].filter(Boolean).join(" · ");
+}
+
+function formatEmailAiProviderFallback(fallback: EmailSubsystemDiagnostics["aiProviderFallbacks"]["recentFallbacks"][number]): string {
+  const related = [
+    fallback.generationMode,
+    fallback.threadId ? `thread ${fallback.threadId}` : undefined,
+    fallback.sourceMessageId ? `message ${fallback.sourceMessageId}` : undefined
+  ].filter(Boolean);
+  return [formatDate(fallback.createdAt), related.join(" 路 "), fallback.providerError].filter(Boolean).join(" 路 ");
+}
+
+function formatEmailAiGenerationMode(mode: NonNullable<EmailAiGenerateResult["generationMode"]>): string {
+  if (mode === "provider") {
+    return "Provider";
+  }
+  if (mode === "provider_fallback") {
+    return "Provider 回退";
+  }
+  if (mode === "queued") {
+    return "已排队";
+  }
+  if (mode === "disabled") {
+    return "已关闭";
+  }
+  return "本地";
+}
+
+function formatEmailConnectionTestResult(entry: EmailConnectionTestRun["results"][number]): string {
+  if (entry.skipped) {
+    return entry.reason ?? "已跳过";
+  }
+  if (!entry.ok) {
+    return entry.error ?? "连接测试失败";
+  }
+  const channels = [
+    entry.result?.smtp ? `SMTP ${entry.result.smtp}` : undefined,
+    entry.result?.imap ? `IMAP ${entry.result.imap}` : undefined,
+    entry.result?.oauth ? `OAuth ${entry.result.oauth}` : undefined,
+    entry.result?.oauthAccountEmail ? `已授权 ${entry.result.oauthAccountEmail}` : undefined
+  ].filter(Boolean);
+  return channels.join(" · ") || "连接正常";
+}
+
+function formatEmailDiagnosticStatus(status: EmailDiagnosticStatus): string {
+  if (status === "ok") {
+    return "正常";
+  }
+  if (status === "warning") {
+    return "警告";
+  }
+  return "错误";
+}
+
+function splitEmailList(value: string): string[] {
+  return value
+    .split(/[,\n;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function numberInputValue(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function readEmailAttachmentFile(file: File): Promise<EmailAttachment> {
+  if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
+    throw new Error(`附件 ${file.name} 超过 5 MB。`);
+  }
+  return {
+    fileName: file.name,
+    contentType: file.type || "application/octet-stream",
+    size: file.size,
+    contentBase64: await readFileAsBase64(file)
+  };
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const value = typeof reader.result === "string" ? reader.result : "";
+      resolve(value.includes(",") ? value.split(",").slice(1).join(",") : value);
+    });
+    reader.addEventListener("error", () => reject(new Error(`无法读取附件 ${file.name}。`)));
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildEmailConnectionConfig(draft: EmailAccountDraft) {
+  const oauthProvider = isOAuthEmailProvider(draft.provider) ? draft.provider : undefined;
+  const hasAnyConfig = [draft.smtpHost, draft.imapHost, draft.username, draft.password, draft.oauthAccessToken, draft.oauthRefreshToken].some((value) => value.trim());
+  if (!hasAnyConfig) {
+    return undefined;
+  }
+  return {
+    smtpHost: draft.smtpHost.trim() || undefined,
+    smtpPort: draft.smtpPort ? Number(draft.smtpPort) : undefined,
+    smtpSecure: draft.smtpSecure,
+    smtpStartTls: draft.smtpStartTls,
+    imapHost: draft.imapHost.trim() || undefined,
+    imapPort: draft.imapPort ? Number(draft.imapPort) : undefined,
+    imapSecure: draft.imapSecure,
+    username: draft.username.trim() || undefined,
+    password: draft.password || undefined,
+    mailbox: draft.mailbox.trim() || "INBOX",
+    oauthProvider,
+    accessToken: draft.oauthAccessToken.trim() || undefined,
+    refreshToken: draft.oauthRefreshToken.trim() || undefined,
+    expiresAt: draft.oauthExpiresAt ? new Date(draft.oauthExpiresAt).toISOString() : undefined,
+    scope: draft.oauthScope.trim() || undefined
+  };
+}
+
 async function fetchJson<T = unknown>(
   url: string,
   options: {
@@ -3042,5 +4743,5 @@ function titleFor(activeNav: NavKey, activeObjectLabel?: string): string {
     return activeObjectLabel ?? "";
   }
 
-  return navItems.find((item) => item.key === activeNav)?.label ?? "AI Agent CRM";
+  return navigationItems.find((item) => item.key === activeNav)?.label ?? "AI Agent CRM";
 }

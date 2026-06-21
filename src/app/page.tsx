@@ -18,6 +18,10 @@ export default async function Home() {
   const roles = context.role.permissions.includes("crm.admin") ? await repository.listRoles(context) : [];
   const apiKeys = context.role.permissions.includes("crm.admin") ? await repository.listApiKeys(context) : [];
   const webhooks = context.role.permissions.includes("crm.admin") ? await repository.listWebhooks(context) : [];
+  const emailAccounts = await repository.listEmailAccounts(context);
+  const emailThreads = await repository.listEmailThreads(context);
+  const emailAiSettings = await repository.getEmailAiSettings(context);
+  const knowledgeArticles = await repository.listKnowledgeArticles(context);
   const dashboardSummary = await repository.getDashboardSummary(context);
   const auditLogs = context.role.permissions.includes("crm.admin") ? await repository.listAuditLogs(context) : [];
   const backupFiles = context.role.permissions.includes("crm.admin") ? await listBackupFiles() : [];
@@ -57,6 +61,10 @@ export default async function Home() {
       roles={roles}
       apiKeys={apiKeys}
       webhooks={webhooks}
+      emailAccounts={emailAccounts}
+      emailThreads={emailThreads}
+      emailAiSettings={emailAiSettings}
+      knowledgeArticles={knowledgeArticles}
       auditLogs={auditLogs}
       backupFiles={backupFiles}
       importJobs={importJobs}

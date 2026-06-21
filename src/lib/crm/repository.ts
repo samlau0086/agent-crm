@@ -20,9 +20,13 @@ import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, nor
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
   createDefaultEmailAiSettings,
+  normalizeEmailAiFeatures,
   type EmailAssistantContext,
   type EmailAssistantPurpose
 } from "@/lib/email/assistant";
+import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
+import { decryptEmailConnectionConfig, encryptEmailConnectionConfig } from "@/lib/email/connection-config";
+import { getEmailProviderCapability } from "@/lib/email/providers";
 import type {
   Activity,
   ApiKey,
@@ -40,7 +44,10 @@ import type {
   CrmRecord,
   DashboardSummary,
   EmailAccount,
+  EmailAttachment,
+  EmailAiGenerationAuditInput,
   EmailAiSettings,
+  EmailConnectionConfig,
   EmailMessage,
   EmailThread,
   FieldDefinition,
@@ -70,6 +77,33 @@ type PrismaContext = PrismaClient;
 
 function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
   return (value ?? {}) as Record<string, unknown>;
+}
+
+function isPrismaUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+const DEFAULT_EMAIL_SEND_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
+const MIN_EMAIL_SEND_CLAIM_TIMEOUT_MS = 60 * 1000;
+
+function emailSendClaimStaleBefore(now = new Date()): Date {
+  return new Date(now.getTime() - emailSendClaimTimeoutMs());
+}
+
+function emailSendClaimTimeoutMs(): number {
+  const configured = Number(process.env.EMAIL_SEND_CLAIM_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_EMAIL_SEND_CLAIM_TIMEOUT_MS;
+  }
+  return Math.max(MIN_EMAIL_SEND_CLAIM_TIMEOUT_MS, Math.floor(configured));
+}
+
+function isEmailSendClaimStale(sendAttemptedAt: string | undefined, staleBefore: Date): boolean {
+  if (!sendAttemptedAt) {
+    return true;
+  }
+  const attemptedAt = new Date(sendAttemptedAt);
+  return Number.isNaN(attemptedAt.getTime()) || attemptedAt < staleBefore;
 }
 
 function asStages(value: Prisma.JsonValue): Pipeline["stages"] {
@@ -193,6 +227,8 @@ function mapEmailAccount(account: {
   status: string;
   syncEnabled: boolean;
   sendEnabled: boolean;
+  encryptedConnectionConfig?: string | null;
+  lastConnectionError?: string | null;
   createdById: string;
   lastSyncedAt: Date | null;
   createdAt: Date;
@@ -207,6 +243,8 @@ function mapEmailAccount(account: {
     status: account.status as EmailAccount["status"],
     syncEnabled: account.syncEnabled,
     sendEnabled: account.sendEnabled,
+    connectionConfigured: Boolean(account.encryptedConnectionConfig),
+    lastConnectionError: account.lastConnectionError ?? undefined,
     createdById: account.createdById,
     lastSyncedAt: account.lastSyncedAt?.toISOString(),
     createdAt: account.createdAt.toISOString(),
@@ -223,6 +261,9 @@ function mapEmailThread(thread: {
   recordId: string | null;
   summary: string | null;
   summaryUpdatedAt: Date | null;
+  aiAnalysis: string | null;
+  aiAnalysisSources: Prisma.JsonValue | null;
+  aiAnalysisUpdatedAt: Date | null;
   lastMessageAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -236,6 +277,9 @@ function mapEmailThread(thread: {
     recordId: thread.recordId ?? undefined,
     summary: thread.summary ?? undefined,
     summaryUpdatedAt: thread.summaryUpdatedAt?.toISOString(),
+    aiAnalysis: thread.aiAnalysis ?? undefined,
+    aiAnalysisSources: normalizeEmailAiSources(thread.aiAnalysisSources),
+    aiAnalysisUpdatedAt: thread.aiAnalysisUpdatedAt?.toISOString(),
     lastMessageAt: thread.lastMessageAt?.toISOString(),
     createdAt: thread.createdAt.toISOString(),
     updatedAt: thread.updatedAt.toISOString()
@@ -256,7 +300,20 @@ function mapEmailMessage(message: {
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
+  attachments: Prisma.JsonValue | null;
+  translatedBodyText: string | null;
+  translatedLocale: string | null;
+  translatedSources: Prisma.JsonValue | null;
+  translatedAt: Date | null;
+  aiAssisted: boolean;
+  aiPurpose: string | null;
+  aiSourceMessageId: string | null;
+  aiSources: Prisma.JsonValue | null;
+  aiGeneratedAt: Date | null;
   externalMessageId: string | null;
+  clientRequestId: string | null;
+  failureReason: string | null;
+  sendAttemptedAt: Date | null;
   sentAt: Date | null;
   receivedAt: Date | null;
   createdById: string | null;
@@ -276,7 +333,20 @@ function mapEmailMessage(message: {
     subject: message.subject,
     bodyText: message.bodyText,
     bodyHtml: message.bodyHtml ?? undefined,
+    attachments: normalizeEmailAttachments(message.attachments),
+    translatedBodyText: message.translatedBodyText ?? undefined,
+    translatedLocale: message.translatedLocale ?? undefined,
+    translatedSources: normalizeEmailAiSources(message.translatedSources),
+    translatedAt: message.translatedAt?.toISOString(),
+    aiAssisted: message.aiAssisted || undefined,
+    aiPurpose: (message.aiPurpose as EmailMessage["aiPurpose"]) ?? undefined,
+    aiSourceMessageId: message.aiSourceMessageId ?? undefined,
+    aiSources: normalizeEmailAiSources(message.aiSources),
+    aiGeneratedAt: message.aiGeneratedAt?.toISOString(),
     externalMessageId: message.externalMessageId ?? undefined,
+    clientRequestId: message.clientRequestId ?? undefined,
+    failureReason: message.failureReason ?? undefined,
+    sendAttemptedAt: message.sendAttemptedAt?.toISOString(),
     sentAt: message.sentAt?.toISOString(),
     receivedAt: message.receivedAt?.toISOString(),
     createdById: message.createdById ?? undefined,
@@ -320,7 +390,7 @@ function mapEmailAiSettings(settings: {
 }): EmailAiSettings {
   return {
     workspaceId: settings.workspaceId,
-    features: settings.features as EmailAiSettings["features"],
+    features: normalizeEmailAiFeatures(settings.features as Partial<EmailAiSettings["features"]>),
     defaultLocale: settings.defaultLocale,
     requireSourceLinks: settings.requireSourceLinks,
     maxHistoryMessages: settings.maxHistoryMessages,
@@ -570,6 +640,84 @@ function mapImportJobSourcePayload(value: Prisma.JsonValue | null | undefined, f
     return normalizeImportJobSourcePayload(value, fallbackObjectKey, fallbackStrategy);
   } catch {
     return undefined;
+  }
+}
+
+function normalizeEmailAttachments(value: unknown): EmailAttachment[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const attachments = value
+    .map((item): EmailAttachment | undefined => {
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+      const attachment = item as Partial<EmailAttachment>;
+      const fileName = typeof attachment.fileName === "string" ? attachment.fileName.trim() : "";
+      if (!fileName) {
+        return undefined;
+      }
+      return {
+        ...(typeof attachment.id === "string" && attachment.id.trim() ? { id: attachment.id.trim() } : {}),
+        fileName,
+        contentType: typeof attachment.contentType === "string" && attachment.contentType.trim() ? attachment.contentType.trim() : "application/octet-stream",
+        size: Number.isFinite(Number(attachment.size)) ? Math.max(0, Math.floor(Number(attachment.size))) : 0,
+        ...(typeof attachment.contentBase64 === "string" && attachment.contentBase64.trim() ? { contentBase64: attachment.contentBase64.trim() } : {}),
+        ...(typeof attachment.contentId === "string" && attachment.contentId.trim() ? { contentId: attachment.contentId.trim() } : {}),
+        ...(attachment.disposition === "inline" ? { disposition: "inline" as const } : attachment.disposition === "attachment" ? { disposition: "attachment" as const } : {}),
+        ...(typeof attachment.providerMessageId === "string" && attachment.providerMessageId.trim() ? { providerMessageId: attachment.providerMessageId.trim() } : {}),
+        ...(typeof attachment.providerAttachmentId === "string" && attachment.providerAttachmentId.trim() ? { providerAttachmentId: attachment.providerAttachmentId.trim() } : {}),
+        ...(typeof attachment.externalUrl === "string" && attachment.externalUrl.trim() ? { externalUrl: attachment.externalUrl.trim() } : {})
+      };
+    })
+    .filter((attachment): attachment is EmailAttachment => Boolean(attachment));
+  return attachments.length ? attachments : undefined;
+}
+
+function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAnalysisSources"]> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((source) => {
+      if (!source || typeof source !== "object") {
+        return undefined;
+      }
+      const item = source as Record<string, unknown>;
+      const label = typeof item.label === "string" ? item.label.trim() : "";
+      if (!label) {
+        return undefined;
+      }
+      return {
+        label,
+        ...(typeof item.recordId === "string" && item.recordId.trim() ? { recordId: item.recordId.trim() } : {}),
+        ...(typeof item.activityId === "string" && item.activityId.trim() ? { activityId: item.activityId.trim() } : {}),
+        ...(typeof item.messageId === "string" && item.messageId.trim() ? { messageId: item.messageId.trim() } : {}),
+        ...(typeof item.knowledgeArticleId === "string" && item.knowledgeArticleId.trim() ? { knowledgeArticleId: item.knowledgeArticleId.trim() } : {})
+      };
+    })
+    .filter((source): source is NonNullable<EmailThread["aiAnalysisSources"]>[number] => Boolean(source))
+    .slice(0, 20);
+}
+
+function assertEmailOutboundAiPurpose(direction: EmailMessage["direction"], aiAssisted: boolean | undefined, aiPurpose: EmailMessage["aiPurpose"]): void {
+  if (direction !== "outbound" || !aiAssisted) {
+    return;
+  }
+  if (!aiPurpose) {
+    throw new Error("AI assisted outbound email requires aiPurpose");
+  }
+  if (aiPurpose !== "draft" && aiPurpose !== "translate") {
+    throw new Error("AI assisted outbound email purpose must be draft or translate");
+  }
+}
+
+function assertEmailAiRecordThreadAlignment(recordId: string | undefined, thread: EmailThread | undefined): void {
+  if (!recordId || !thread?.recordId) {
+    return;
+  }
+  if (recordId !== thread.recordId) {
+    throw new Error("Email AI context record does not match the selected thread");
   }
 }
 
@@ -914,7 +1062,7 @@ export class PrismaCrmRepository {
   }
 
   async listEmailAccounts(context: RequestContext): Promise<EmailAccount[]> {
-    requirePermission(context, "crm.admin");
+    requirePermission(context, "crm.read");
     const accounts = await this.db.emailAccount.findMany({
       where: { workspaceId: context.workspaceId },
       orderBy: [{ emailAddress: "asc" }, { createdAt: "asc" }]
@@ -922,20 +1070,34 @@ export class PrismaCrmRepository {
     return accounts.map(mapEmailAccount);
   }
 
+  async getEmailAccount(context: RequestContext, accountId: string): Promise<EmailAccount> {
+    requirePermission(context, "crm.read");
+    return this.assertEmailAccount(context, accountId);
+  }
+
   async createEmailAccount(
     context: RequestContext,
-    input: Pick<EmailAccount, "name" | "emailAddress" | "provider"> & Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">>
+    input: Pick<EmailAccount, "name" | "emailAddress" | "provider"> &
+      Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">> & { connectionConfig?: EmailConnectionConfig }
   ): Promise<EmailAccount> {
     requirePermission(context, "crm.admin");
+    const toggles = normalizeEmailAccountToggles(input.provider, {
+      syncEnabled: input.syncEnabled ?? false,
+      sendEnabled: input.sendEnabled ?? false
+    });
+    const emailAddress = normalizeEmailAddress(input.emailAddress);
+    await this.assertEmailAccountEmailAvailable(context, emailAddress);
     const account = await this.db.emailAccount.create({
       data: {
         workspaceId: context.workspaceId,
         name: normalizeRequiredText(input.name, "Email account name"),
-        emailAddress: normalizeEmailAddress(input.emailAddress),
+        emailAddress,
         provider: input.provider,
         status: input.status ?? "draft",
-        syncEnabled: input.syncEnabled ?? false,
-        sendEnabled: input.sendEnabled ?? false,
+        syncEnabled: toggles.syncEnabled,
+        sendEnabled: toggles.sendEnabled,
+        encryptedConnectionConfig: input.connectionConfig ? encryptEmailConnectionConfig(input.connectionConfig) : undefined,
+        lastConnectionError: null,
         createdById: context.user.id
       }
     });
@@ -946,16 +1108,127 @@ export class PrismaCrmRepository {
     return mapEmailAccount(account);
   }
 
+  async updateEmailAccount(
+    context: RequestContext,
+    accountId: string,
+    input: Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "syncEnabled" | "sendEnabled" | "status">> & {
+      connectionConfig?: EmailConnectionConfig;
+      clearConnectionConfig?: boolean;
+    }
+  ): Promise<EmailAccount> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.assertEmailAccount(context, accountId);
+    const data: Prisma.EmailAccountUpdateInput = {};
+    const provider = input.provider ?? existing.provider;
+    const toggles = normalizeEmailAccountToggles(provider, {
+      syncEnabled: input.syncEnabled ?? existing.syncEnabled,
+      sendEnabled: input.sendEnabled ?? existing.sendEnabled
+    });
+    const emailAddress = input.emailAddress !== undefined ? normalizeEmailAddress(input.emailAddress) : existing.emailAddress;
+    await this.assertEmailAccountEmailAvailable(context, emailAddress, existing.id);
+    if (input.name !== undefined) data.name = normalizeRequiredText(input.name, "Email account name");
+    if (input.emailAddress !== undefined) data.emailAddress = emailAddress;
+    if (input.provider !== undefined) data.provider = input.provider;
+    if (input.status !== undefined) data.status = input.status;
+    data.syncEnabled = toggles.syncEnabled;
+    data.sendEnabled = toggles.sendEnabled;
+    if (input.connectionConfig) {
+      data.encryptedConnectionConfig = encryptEmailConnectionConfig(input.connectionConfig);
+      data.lastConnectionError = null;
+      if (input.status === undefined && existing.status === "draft") {
+        data.status = "active";
+      }
+    }
+    if (input.clearConnectionConfig) {
+      data.encryptedConnectionConfig = null;
+      data.lastConnectionError = null;
+      if (input.status === undefined) {
+        data.status = "draft";
+      }
+    }
+    const account = await this.db.emailAccount.update({
+      where: { id: existing.id },
+      data
+    });
+    await this.writeAuditLog(context, "update", "email_account", account.id, {
+      summary: `Updated email account ${account.emailAddress}`,
+      details: {
+        provider: account.provider,
+        status: account.status,
+        syncEnabled: account.syncEnabled,
+        sendEnabled: account.sendEnabled,
+        connectionConfigured: Boolean(account.encryptedConnectionConfig)
+      }
+    });
+    return mapEmailAccount(account);
+  }
+
+  async deleteEmailAccount(context: RequestContext, accountId: string): Promise<void> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.assertEmailAccount(context, accountId);
+    const messageCount = await this.db.emailMessage.count({
+      where: { workspaceId: context.workspaceId, accountId: existing.id }
+    });
+    if (messageCount > 0) {
+      const account = await this.db.emailAccount.update({
+        where: { id: existing.id },
+        data: {
+          status: "disabled",
+          syncEnabled: false,
+          sendEnabled: false
+        }
+      });
+      await this.writeAuditLog(context, "update", "email_account", account.id, {
+        summary: `Disabled email account ${account.emailAddress}`,
+        details: { reason: "account has email history", messageCount }
+      });
+      return;
+    }
+
+    await this.db.emailAccount.delete({ where: { id: existing.id } });
+    await this.writeAuditLog(context, "delete", "email_account", existing.id, {
+      summary: `Deleted email account ${existing.emailAddress}`,
+      details: { provider: existing.provider }
+    });
+  }
+
   async listEmailThreads(context: RequestContext, recordId?: string): Promise<EmailThread[]> {
     requirePermission(context, "crm.read");
     if (recordId) {
       await this.assertVisibleRecord(context, recordId);
     }
     const threads = await this.db.emailThread.findMany({
-      where: { workspaceId: context.workspaceId, ...(recordId ? { recordId } : {}) },
+      where: {
+        workspaceId: context.workspaceId,
+        ...(recordId ? { recordId } : await this.emailThreadAccessWhere(context))
+      },
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }]
     });
     return threads.map(mapEmailThread);
+  }
+
+  async getEmailThread(context: RequestContext, threadId: string): Promise<EmailThread> {
+    requirePermission(context, "crm.read");
+    return this.assertEmailThread(context, threadId);
+  }
+
+  async updateEmailThread(context: RequestContext, threadId: string, input: { recordId?: string | null }): Promise<EmailThread> {
+    requirePermission(context, "crm.write");
+    const thread = await this.assertEmailThread(context, threadId);
+    const data: Prisma.EmailThreadUpdateInput = {};
+    const previousRecordId = thread.recordId;
+    if (Object.prototype.hasOwnProperty.call(input, "recordId")) {
+      data.recordId = input.recordId ? (await this.assertVisibleRecord(context, input.recordId)).id : null;
+    }
+    const updated = await this.db.emailThread.update({
+      where: { id: thread.id },
+      data
+    });
+    await this.writeAuditLog(context, "update", "email_thread", thread.id, {
+      summary: `Updated email thread link ${thread.subject}`,
+      details: { threadId: thread.id, previousRecordId, recordId: updated.recordId ?? undefined }
+    });
+    return mapEmailThread(updated);
   }
 
   async listEmailMessages(context: RequestContext, threadId: string): Promise<EmailMessage[]> {
@@ -968,71 +1241,189 @@ export class PrismaCrmRepository {
     return messages.map(mapEmailMessage);
   }
 
+  async updateEmailThreadSummary(context: RequestContext, threadId: string, summary: string): Promise<EmailThread> {
+    requirePermission(context, "crm.write");
+    const thread = await this.assertEmailThread(context, threadId);
+    const updated = await this.db.emailThread.update({
+      where: { id: thread.id },
+      data: {
+        summary: normalizeRequiredText(summary, "Email thread summary"),
+        summaryUpdatedAt: new Date()
+      }
+    });
+    await this.writeAuditLog(context, "update", "email_thread", thread.id, {
+      summary: `Updated email thread summary ${thread.subject}`,
+      details: { threadId: thread.id, summaryLength: updated.summary?.length ?? 0 }
+    });
+    return mapEmailThread(updated);
+  }
+
+  async updateEmailThreadAnalysis(context: RequestContext, threadId: string, analysis: string, sources: EmailThread["aiAnalysisSources"] = []): Promise<EmailThread> {
+    requirePermission(context, "crm.write");
+    const thread = await this.assertEmailThread(context, threadId);
+    const aiAnalysisSources = await this.assertVisibleEmailAiSources(context, sources);
+    const updated = await this.db.emailThread.update({
+      where: { id: thread.id },
+      data: {
+        aiAnalysis: normalizeRequiredText(analysis, "Email thread analysis"),
+        aiAnalysisSources: aiAnalysisSources as Prisma.InputJsonValue,
+        aiAnalysisUpdatedAt: new Date()
+      }
+    });
+    await this.writeAuditLog(context, "update", "email_thread", thread.id, {
+      summary: `Updated email thread analysis ${thread.subject}`,
+      details: { threadId: thread.id, analysisLength: updated.aiAnalysis?.length ?? 0, sourceCount: aiAnalysisSources.length }
+    });
+    return mapEmailThread(updated);
+  }
+
   async recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "externalMessageId" | "status" | "sentAt" | "receivedAt" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "sentAt" | "receivedAt" | "createdById">> & {
         recordId?: string;
     }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
+    const normalizedExternalMessageId = input.externalMessageId?.trim() || undefined;
+    const normalizedClientRequestId = input.clientRequestId?.trim() || undefined;
+    const createdById = input.createdById ?? context.user.id;
+    if (normalizedExternalMessageId) {
+      const existing = await this.db.emailMessage.findFirst({
+        where: {
+          workspaceId: context.workspaceId,
+          accountId: account.id,
+          externalMessageId: normalizedExternalMessageId
+        }
+      });
+      if (existing) {
+        return mapEmailMessage(existing);
+      }
+    }
+    if (normalizedClientRequestId) {
+      const existing = await this.db.emailMessage.findFirst({
+        where: {
+          workspaceId: context.workspaceId,
+          accountId: account.id,
+          direction: input.direction,
+          createdById,
+          clientRequestId: normalizedClientRequestId
+        }
+      });
+      if (existing) {
+        return mapEmailMessage(existing);
+      }
+    }
     const requestedRecord = input.recordId ? await this.assertVisibleRecord(context, input.recordId) : undefined;
+    const autoLinkedRecord = requestedRecord
+      ? undefined
+      : await this.findVisibleRecordByEmailParticipants(context, account.emailAddress, [input.from, ...input.to, ...(input.cc ?? [])]);
+    const linkedRecordId = requestedRecord?.id ?? autoLinkedRecord?.id;
     const thread = input.threadId
-      ? await this.assertEmailThread(context, input.threadId)
-      : mapEmailThread(
-          await this.db.emailThread.create({
-            data: {
-              workspaceId: context.workspaceId,
-              accountId: account.id,
-              subject: normalizeRequiredText(input.subject, "Email subject"),
-              participantEmails: uniqueEmails([input.from, ...input.to]),
-              recordId: requestedRecord?.id
-            }
-          })
-        );
+        ? await this.assertEmailThread(context, input.threadId)
+      : (await this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], linkedRecordId)) ??
+        mapEmailThread(
+            await this.db.emailThread.create({
+              data: {
+                workspaceId: context.workspaceId,
+                accountId: account.id,
+                subject: normalizeRequiredText(input.subject, "Email subject"),
+                participantEmails: uniqueEmails([input.from, ...input.to]),
+                recordId: linkedRecordId
+              }
+            })
+          );
     if (thread.accountId !== account.id) {
       throw new Error("Email thread does not belong to this account");
     }
-    const linkedRecord = requestedRecord ?? (thread.recordId ? await this.assertVisibleRecord(context, thread.recordId) : undefined);
+    const linkedRecord = requestedRecord ?? (thread.recordId ? await this.assertVisibleRecord(context, thread.recordId) : undefined) ?? autoLinkedRecord;
+    const aiSourceMessageId = input.aiSourceMessageId?.trim() || undefined;
+    if (aiSourceMessageId) {
+      await this.getEmailMessage(context, aiSourceMessageId);
+    }
+    assertEmailOutboundAiPurpose(input.direction, input.aiAssisted, input.aiPurpose);
+    if (input.aiAssisted) {
+      requirePermission(context, "ai.use");
+    }
+    const aiSources = input.aiAssisted ? await this.assertVisibleEmailAiSources(context, input.aiSources) : [];
+    const settings = await this.ensureEmailAiSettings(context.workspaceId);
+    if (input.aiAssisted && settings.requireSourceLinks && aiSources.length === 0) {
+      throw new Error("AI assisted email requires at least one visible source");
+    }
 
-    const sentAt = input.sentAt ? new Date(input.sentAt) : input.direction === "outbound" ? new Date() : undefined;
-    const receivedAt = input.receivedAt ? new Date(input.receivedAt) : input.direction === "inbound" ? new Date() : undefined;
-    const message = await this.db.emailMessage.create({
-      data: {
-        workspaceId: context.workspaceId,
-        threadId: thread.id,
-        accountId: account.id,
-        direction: input.direction,
-        status: input.status ?? (input.direction === "inbound" ? "received" : "sent"),
-        fromAddress: normalizeEmailAddress(input.from),
-        toAddresses: uniqueEmails(input.to),
-        ccAddresses: uniqueEmails(input.cc ?? []),
-        bccAddresses: uniqueEmails(input.bcc ?? []),
-        subject: normalizeRequiredText(input.subject, "Email subject"),
-        bodyText: normalizeRequiredText(input.bodyText, "Email body"),
-        bodyHtml: input.bodyHtml?.trim() || undefined,
-        externalMessageId: input.externalMessageId?.trim() || undefined,
-        sentAt,
-        receivedAt,
-        createdById: input.createdById ?? context.user.id
+    const status = input.status ?? (input.direction === "inbound" ? "received" : "sent");
+    const sentAt = input.sentAt ? new Date(input.sentAt) : status === "sent" ? new Date() : undefined;
+    const receivedAt = input.receivedAt ? new Date(input.receivedAt) : status === "received" ? new Date() : undefined;
+    const attachments = normalizeEmailAttachments(input.attachments);
+    let message: Awaited<ReturnType<typeof this.db.emailMessage.create>>;
+    try {
+      message = await this.db.emailMessage.create({
+        data: {
+          workspaceId: context.workspaceId,
+          threadId: thread.id,
+          accountId: account.id,
+          direction: input.direction,
+          status,
+          fromAddress: normalizeEmailAddress(input.from),
+          toAddresses: uniqueEmails(input.to),
+          ccAddresses: uniqueEmails(input.cc ?? []),
+          bccAddresses: uniqueEmails(input.bcc ?? []),
+          subject: normalizeRequiredText(input.subject, "Email subject"),
+          bodyText: normalizeRequiredText(input.bodyText, "Email body"),
+          bodyHtml: input.bodyHtml?.trim() || undefined,
+          attachments: attachments ? ((attachments as unknown) as Prisma.InputJsonValue) : Prisma.JsonNull,
+          aiAssisted: input.aiAssisted ?? false,
+          aiPurpose: input.aiPurpose,
+          aiSourceMessageId,
+          aiSources: aiSources.length ? (aiSources as Prisma.InputJsonValue) : Prisma.JsonNull,
+          aiGeneratedAt: input.aiGeneratedAt ? new Date(input.aiGeneratedAt) : undefined,
+          externalMessageId: normalizedExternalMessageId,
+          clientRequestId: normalizedClientRequestId,
+          failureReason: status === "failed" ? "Delivery failed" : undefined,
+          sendAttemptedAt: input.sendAttemptedAt ? new Date(input.sendAttemptedAt) : status === "sending" ? new Date() : undefined,
+          sentAt,
+          receivedAt,
+          createdById
+        }
+      });
+    } catch (error) {
+      if (normalizedClientRequestId && isPrismaUniqueConstraintError(error)) {
+        const existing = await this.db.emailMessage.findFirst({
+          where: {
+            workspaceId: context.workspaceId,
+            accountId: account.id,
+            direction: input.direction,
+            createdById,
+            clientRequestId: normalizedClientRequestId
+          }
+        });
+        if (existing) {
+          return mapEmailMessage(existing);
+        }
       }
-    });
+      throw error;
+    }
 
     const mappedMessage = mapEmailMessage(message);
-    const settings = await this.ensureEmailAiSettings(context.workspaceId);
     const participantEmails = uniqueEmails([...thread.participantEmails, mappedMessage.from, ...mappedMessage.to, ...(mappedMessage.cc ?? [])]);
     const threadMessages = await this.db.emailMessage.findMany({
       where: { workspaceId: context.workspaceId, threadId: thread.id },
       orderBy: { createdAt: "asc" }
     });
+    const shouldWriteLocalSummary = !settings.features.auto_summarize || !thread.summaryUpdatedAt;
     await this.db.emailThread.update({
       where: { id: thread.id },
       data: {
         participantEmails,
         recordId: linkedRecord?.id ?? thread.recordId,
         lastMessageAt: new Date(emailMessageTime(mappedMessage)),
-        ...(settings.features.auto_summarize ? { summary: summarizeEmailThread(threadMessages.map(mapEmailMessage)), summaryUpdatedAt: new Date() } : {})
+        ...(shouldWriteLocalSummary
+          ? {
+              summary: summarizeEmailThread(threadMessages.map(mapEmailMessage)),
+              ...(!settings.features.auto_summarize ? { summaryUpdatedAt: new Date() } : {})
+            }
+          : {})
       }
     });
 
@@ -1040,16 +1431,287 @@ export class PrismaCrmRepository {
       await this.createActivity(context, {
         recordId: linkedRecord.id,
         type: "email",
-        title: `${input.direction === "inbound" ? "Received" : "Sent"} email: ${mappedMessage.subject}`,
+        title: `${emailActivityVerb(mappedMessage.status, input.direction)} email: ${mappedMessage.subject}`,
         body: mappedMessage.bodyText
       });
     }
     await this.writeAuditLog(context, "create", "email_message", message.id, {
       objectKey: linkedRecord?.objectKey,
       summary: `Recorded email ${mappedMessage.subject}`,
-      details: { direction: mappedMessage.direction, status: mappedMessage.status, threadId: mappedMessage.threadId, recordId: linkedRecord?.id }
+      details: {
+        direction: mappedMessage.direction,
+        status: mappedMessage.status,
+        threadId: mappedMessage.threadId,
+        recordId: linkedRecord?.id,
+        attachmentCount: mappedMessage.attachments?.length ?? 0,
+        aiAssisted: mappedMessage.aiAssisted ?? false,
+        aiPurpose: mappedMessage.aiPurpose,
+        aiSourceMessageId: mappedMessage.aiSourceMessageId,
+        aiSourceCount: mappedMessage.aiSources?.length ?? 0
+      }
+    });
+    scheduleEmailAutomationsBestEffort(context, this, getBackgroundJobExecutor(this), mappedMessage, settings);
+    return mappedMessage;
+  }
+
+  async sendEmailMessage(
+    context: RequestContext,
+    input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId">> & { recordId?: string }
+  ): Promise<EmailMessage> {
+    requirePermission(context, "crm.write");
+    const account = await this.assertEmailAccount(context, input.accountId);
+    if (!account.sendEnabled || account.status !== "active") {
+      throw new Error("Email account is not enabled for sending");
+    }
+
+    return this.recordEmailMessage(context, {
+      ...input,
+      direction: "outbound",
+      from: account.emailAddress,
+      status: "sent",
+      sentAt: new Date().toISOString()
+    });
+  }
+
+  async queueEmailMessage(
+    context: RequestContext,
+    input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId">> & { recordId?: string }
+  ): Promise<EmailMessage> {
+    requirePermission(context, "crm.write");
+    const account = await this.assertEmailAccount(context, input.accountId);
+    if (!account.sendEnabled || account.status !== "active") {
+      throw new Error("Email account is not enabled for sending");
+    }
+
+    return this.recordEmailMessage(context, {
+      ...input,
+      direction: "outbound",
+      from: account.emailAddress,
+      status: "queued"
+    });
+  }
+
+  async getEmailMessage(context: RequestContext, messageId: string): Promise<EmailMessage> {
+    requirePermission(context, "crm.read");
+    const message = await this.db.emailMessage.findFirst({
+      where: { id: messageId, workspaceId: context.workspaceId }
+    });
+    if (!message) {
+      throw new Error("Email message not found");
+    }
+    const thread = await this.assertEmailThread(context, message.threadId);
+    if (thread.accountId !== message.accountId) {
+      throw new Error("Email message thread mismatch");
+    }
+    return mapEmailMessage(message);
+  }
+
+  async findEmailMessageByExternalId(context: RequestContext, accountId: string, externalMessageId: string): Promise<EmailMessage | undefined> {
+    requirePermission(context, "crm.read");
+    await this.assertEmailAccount(context, accountId);
+    const normalizedExternalMessageId = externalMessageId.trim();
+    if (!normalizedExternalMessageId) {
+      return undefined;
+    }
+    const message = await this.db.emailMessage.findFirst({
+      where: {
+        workspaceId: context.workspaceId,
+        accountId,
+        externalMessageId: normalizedExternalMessageId
+      }
+    });
+    return message ? mapEmailMessage(message) : undefined;
+  }
+
+  async listEmailSendingMessages(context: RequestContext, limit = 50): Promise<EmailMessage[]> {
+    requirePermission(context, "crm.admin");
+    const messages = await this.db.emailMessage.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        direction: "outbound",
+        status: "sending"
+      },
+      orderBy: [{ sendAttemptedAt: "asc" }, { createdAt: "asc" }],
+      take: normalizeIntegerLimit(limit, 1, 100)
+    });
+    return messages.map(mapEmailMessage);
+  }
+
+  async updateEmailMessageStatus(
+    context: RequestContext,
+    messageId: string,
+    status: EmailMessage["status"],
+    options: { externalMessageId?: string; failureReason?: string | null } = {}
+  ): Promise<EmailMessage> {
+    requirePermission(context, "crm.write");
+    const existing = await this.getEmailMessage(context, messageId);
+    const now = new Date();
+    const updated = await this.db.emailMessage.update({
+      where: { id: existing.id },
+      data: {
+        status,
+        sentAt: status === "sent" ? now : null,
+        sendAttemptedAt: status === "sending" ? now : status === "queued" ? null : undefined,
+        externalMessageId: options.externalMessageId?.trim() || undefined,
+        failureReason:
+          status === "failed"
+            ? options.failureReason?.trim() || "Delivery failed"
+            : status === "queued" || status === "sending" || status === "sent"
+              ? null
+              : undefined
+      }
+    });
+    const mappedMessage = mapEmailMessage(updated);
+    await this.writeAuditLog(context, "update", "email_message", existing.id, {
+      summary: `Updated email status ${mappedMessage.subject}`,
+      details: { status, previousStatus: existing.status, threadId: existing.threadId }
     });
     return mappedMessage;
+  }
+
+  async claimEmailMessageForSending(context: RequestContext, messageId: string): Promise<{ message: EmailMessage; claimed: boolean }> {
+    requirePermission(context, "crm.write");
+    const existing = await this.getEmailMessage(context, messageId);
+    const staleBefore = emailSendClaimStaleBefore();
+    const isClaimableSending = existing.status === "sending" && isEmailSendClaimStale(existing.sendAttemptedAt, staleBefore);
+    if (existing.direction !== "outbound" || (existing.status !== "queued" && existing.status !== "failed" && !isClaimableSending)) {
+      return { message: existing, claimed: false };
+    }
+    const now = new Date();
+    const result = await this.db.emailMessage.updateMany({
+      where: {
+        id: existing.id,
+        workspaceId: context.workspaceId,
+        direction: "outbound",
+        OR: [
+          { status: { in: ["queued", "failed"] } },
+          {
+            status: "sending",
+            OR: [{ sendAttemptedAt: null }, { sendAttemptedAt: { lt: staleBefore } }]
+          }
+        ]
+      },
+      data: {
+        status: "sending",
+        sendAttemptedAt: now,
+        sentAt: null,
+        failureReason: null
+      }
+    });
+    const claimed = await this.getEmailMessage(context, messageId);
+    if (result.count > 0) {
+      await this.writeAuditLog(context, "update", "email_message", existing.id, {
+        summary: `Claimed email send ${claimed.subject}`,
+        details: { status: claimed.status, previousStatus: existing.status, threadId: claimed.threadId }
+      });
+    }
+    return { message: claimed, claimed: result.count > 0 };
+  }
+
+  async updateEmailMessageTranslation(context: RequestContext, messageId: string, text: string, locale: string, sources: EmailMessage["translatedSources"] = []): Promise<EmailMessage> {
+    requirePermission(context, "crm.write");
+    const existing = await this.getEmailMessage(context, messageId);
+    const translatedSources = await this.assertVisibleEmailAiSources(context, sources);
+    const updated = await this.db.emailMessage.update({
+      where: { id: existing.id },
+      data: {
+        translatedBodyText: normalizeRequiredText(text, "Email translation"),
+        translatedLocale: normalizeRequiredText(locale, "Translation locale"),
+        translatedSources: translatedSources as Prisma.InputJsonValue,
+        translatedAt: new Date()
+      }
+    });
+    const mappedMessage = mapEmailMessage(updated);
+    await this.writeAuditLog(context, "update", "email_message", existing.id, {
+      summary: `Translated email ${mappedMessage.subject}`,
+      details: { threadId: existing.threadId, locale: mappedMessage.translatedLocale, sourceCount: translatedSources.length }
+    });
+    return mappedMessage;
+  }
+
+  async syncEmailAccount(context: RequestContext, accountId: string): Promise<{ account: EmailAccount; importedCount: number; status: string }> {
+    requirePermission(context, "crm.admin");
+    const account = await this.assertEmailAccount(context, accountId);
+    if (!account.syncEnabled || account.status !== "active") {
+      throw new Error("Email account is not enabled for sync");
+    }
+
+    const updated = await this.db.emailAccount.update({
+      where: { id: account.id },
+      data: { lastSyncedAt: new Date() }
+    });
+    await this.writeAuditLog(context, "update", "email_account", account.id, {
+      summary: `Synced email account ${account.emailAddress}`,
+      details: { provider: account.provider, importedCount: 0 }
+    });
+    return { account: mapEmailAccount(updated), importedCount: 0, status: "synced" };
+  }
+
+  async getEmailAccountConnectionConfig(context: RequestContext, accountId: string): Promise<EmailConnectionConfig | undefined> {
+    requirePermission(context, "crm.write");
+    const account = await this.db.emailAccount.findFirst({
+      where: { id: accountId, workspaceId: context.workspaceId },
+      select: { encryptedConnectionConfig: true }
+    });
+    if (!account) {
+      throw new Error("Email account not found");
+    }
+    return account.encryptedConnectionConfig ? decryptEmailConnectionConfig(account.encryptedConnectionConfig) : undefined;
+  }
+
+  async updateEmailAccountConnectionConfig(context: RequestContext, accountId: string, config: EmailConnectionConfig): Promise<EmailAccount> {
+    requirePermission(context, "crm.write");
+    const existing = await this.assertEmailAccount(context, accountId);
+    const account = await this.db.emailAccount.update({
+      where: { id: accountId },
+      data: {
+        encryptedConnectionConfig: encryptEmailConnectionConfig(config),
+        lastConnectionError: null,
+        status: "active"
+      }
+    });
+    if (existing.status !== "active" || existing.lastConnectionError) {
+      await this.writeAuditLog(context, "update", "email_account", account.id, {
+        summary: `Email account connection restored ${account.emailAddress}`,
+        details: {
+          previousStatus: existing.status,
+          previousError: existing.lastConnectionError ?? null,
+          provider: account.provider
+        }
+      });
+    }
+    return mapEmailAccount(account);
+  }
+
+  async markEmailAccountConnectionError(context: RequestContext, accountId: string, errorMessage: string | null): Promise<EmailAccount> {
+    requirePermission(context, "crm.write");
+    const existing = await this.assertEmailAccount(context, accountId);
+    const normalizedError = errorMessage?.trim() || null;
+    const nextStatus = normalizedError ? "error" : "active";
+    const account = await this.db.emailAccount.update({
+      where: { id: accountId },
+      data: {
+        status: nextStatus,
+        lastConnectionError: normalizedError
+      }
+    });
+    if (existing.status !== nextStatus || (existing.lastConnectionError ?? null) !== normalizedError) {
+      await this.writeAuditLog(context, "update", "email_account", account.id, {
+        summary: normalizedError
+          ? `Email account connection failed ${account.emailAddress}`
+          : `Email account connection restored ${account.emailAddress}`,
+        details: {
+          previousStatus: existing.status,
+          status: nextStatus,
+          previousError: existing.lastConnectionError ?? null,
+          error: normalizedError,
+          provider: account.provider
+        }
+      });
+    }
+    return mapEmailAccount(account);
   }
 
   async listKnowledgeArticles(context: RequestContext, activeOnly = true): Promise<KnowledgeArticle[]> {
@@ -1059,6 +1721,17 @@ export class PrismaCrmRepository {
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }]
     });
     return articles.map(mapKnowledgeArticle);
+  }
+
+  async getKnowledgeArticle(context: RequestContext, articleId: string): Promise<KnowledgeArticle> {
+    requirePermission(context, "crm.read");
+    const article = await this.db.knowledgeArticle.findFirst({
+      where: { id: articleId, workspaceId: context.workspaceId }
+    });
+    if (!article) {
+      throw new Error("Knowledge article not found");
+    }
+    return mapKnowledgeArticle(article);
   }
 
   async createKnowledgeArticle(
@@ -1083,6 +1756,52 @@ export class PrismaCrmRepository {
     return mapKnowledgeArticle(article);
   }
 
+  async updateKnowledgeArticle(
+    context: RequestContext,
+    articleId: string,
+    input: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>
+  ): Promise<KnowledgeArticle> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.db.knowledgeArticle.findFirst({
+      where: { id: articleId, workspaceId: context.workspaceId }
+    });
+    if (!existing) {
+      throw new Error("Knowledge article not found");
+    }
+    const article = await this.db.knowledgeArticle.update({
+      where: { id: existing.id },
+      data: {
+        title: input.title !== undefined ? normalizeRequiredText(input.title, "Knowledge title") : undefined,
+        body: input.body !== undefined ? normalizeRequiredText(input.body, "Knowledge body") : undefined,
+        tags: input.tags !== undefined ? uniqueTags(input.tags) : undefined,
+        active: input.active
+      }
+    });
+    await this.writeAuditLog(context, "update", "knowledge_article", article.id, {
+      summary: `Updated knowledge article ${article.title}`,
+      details: { tags: article.tags, active: article.active }
+    });
+    return mapKnowledgeArticle(article);
+  }
+
+  async deleteKnowledgeArticle(context: RequestContext, articleId: string): Promise<void> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.db.knowledgeArticle.findFirst({
+      where: { id: articleId, workspaceId: context.workspaceId }
+    });
+    if (!existing) {
+      throw new Error("Knowledge article not found");
+    }
+    const article = await this.db.knowledgeArticle.update({
+      where: { id: existing.id },
+      data: { active: false }
+    });
+    await this.writeAuditLog(context, "update", "knowledge_article", article.id, {
+      summary: `Disabled knowledge article ${article.title}`,
+      details: { active: false }
+    });
+  }
+
   async getEmailAiSettings(context: RequestContext): Promise<EmailAiSettings> {
     requirePermission(context, "crm.read");
     return this.ensureEmailAiSettings(context.workspaceId);
@@ -1094,10 +1813,11 @@ export class PrismaCrmRepository {
   ): Promise<EmailAiSettings> {
     requirePermission(context, "crm.admin");
     const current = await this.ensureEmailAiSettings(context.workspaceId);
+    const features = normalizeEmailAiFeatures({ ...current.features, ...(patch.features ?? {}) });
     const updated = await this.db.emailAiSettings.update({
       where: { workspaceId: context.workspaceId },
       data: {
-        features: { ...current.features, ...(patch.features ?? {}) } as Prisma.InputJsonValue,
+        features: features as Prisma.InputJsonValue,
         defaultLocale: patch.defaultLocale?.trim() || current.defaultLocale,
         requireSourceLinks: patch.requireSourceLinks ?? current.requireSourceLinks,
         maxHistoryMessages: normalizeIntegerLimit(patch.maxHistoryMessages ?? current.maxHistoryMessages, 1, 20),
@@ -1114,11 +1834,20 @@ export class PrismaCrmRepository {
 
   async buildEmailAssistantContext(
     context: RequestContext,
-    input: { purpose: EmailAssistantPurpose; recordId?: string; threadId?: string; targetLocale?: string }
+    input: { purpose: EmailAssistantPurpose; recordId?: string; threadId?: string; sourceMessageId?: string; targetLocale?: string }
   ): Promise<EmailAssistantContext> {
     requirePermission(context, "ai.use");
     const settings = await this.ensureEmailAiSettings(context.workspaceId);
-    const thread = input.threadId ? await this.assertEmailThread(context, input.threadId) : undefined;
+    const sourceMessage = input.sourceMessageId ? await this.getEmailMessage(context, input.sourceMessageId) : undefined;
+    const thread = input.threadId
+      ? await this.assertEmailThread(context, input.threadId)
+      : sourceMessage
+        ? await this.assertEmailThread(context, sourceMessage.threadId)
+        : undefined;
+    if (sourceMessage && thread && sourceMessage.threadId !== thread.id) {
+      throw new Error("Source email message does not belong to this thread");
+    }
+    assertEmailAiRecordThreadAlignment(input.recordId, thread);
     const recordId = input.recordId ?? thread?.recordId;
     const record = recordId ? await this.assertVisibleRecord(context, recordId) : undefined;
     const fields = record ? await this.listFieldDefinitions(context, record.objectKey) : [];
@@ -1134,8 +1863,39 @@ export class PrismaCrmRepository {
       activities,
       thread,
       messages,
+      sourceMessage,
       knowledgeArticles,
       targetLocale: input.targetLocale
+    });
+  }
+
+  async recordEmailAiGeneration(context: RequestContext, input: EmailAiGenerationAuditInput): Promise<void> {
+    requirePermission(context, "ai.use");
+    await this.writeAuditLog(context, "create", "email_ai_generation", input.threadId ?? input.sourceMessageId ?? input.recordId, {
+      summary: `${input.enabled ? "Generated" : "Skipped"} email AI ${input.purpose}`,
+      details: {
+        purpose: input.purpose,
+        enabled: input.enabled,
+        recordId: input.recordId,
+        threadId: input.threadId,
+        sourceMessageId: input.sourceMessageId,
+        sourceCount: input.sourceCount,
+        sourceLabels: input.sourceLabels?.slice(0, 10),
+        targetLocale: input.targetLocale,
+        userPromptLength: input.userPromptLength ?? 0,
+        sourceTextLength: input.sourceTextLength ?? 0,
+        resultTextLength: input.resultTextLength ?? 0,
+        contextCharCount: input.contextCharCount ?? 0,
+        maxContextChars: input.maxContextChars ?? 0,
+        modelPromptChars: input.modelPromptChars ?? 0,
+        contextTruncated: input.contextTruncated ?? false,
+        outputTruncated: input.outputTruncated ?? false,
+        generationMode: input.generationMode,
+        providerError: normalizeEmailAiProviderError(input.providerError),
+        suggestedSubjectProvided: input.suggestedSubjectProvided ?? false,
+        automationFailed: input.automationFailed ?? false,
+        errorMessage: input.errorMessage
+      }
     });
   }
 
@@ -2176,6 +2936,20 @@ export class PrismaCrmRepository {
       orderBy: { createdAt: "desc" }
     });
     return activities.map(mapActivity);
+  }
+
+  async getActivity(context: RequestContext, activityId: string): Promise<Activity> {
+    requirePermission(context, "crm.read");
+    const activity = await this.db.activity.findFirst({
+      where: {
+        id: activityId,
+        ...(await this.visibleActivityWhere(context))
+      }
+    });
+    if (!activity) {
+      throw new Error("Activity not found");
+    }
+    return mapActivity(activity);
   }
 
   async createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId">): Promise<Activity> {
@@ -3449,6 +4223,20 @@ export class PrismaCrmRepository {
     return mapEmailAccount(account);
   }
 
+  private async assertEmailAccountEmailAvailable(context: RequestContext, emailAddress: string, exceptAccountId?: string): Promise<void> {
+    const existing = await this.db.emailAccount.findFirst({
+      where: {
+        workspaceId: context.workspaceId,
+        emailAddress,
+        ...(exceptAccountId ? { id: { not: exceptAccountId } } : {})
+      },
+      select: { id: true }
+    });
+    if (existing) {
+      throw new Error("Email account address already exists");
+    }
+  }
+
   private async assertEmailThread(context: RequestContext, threadId: string): Promise<EmailThread> {
     const thread = await this.db.emailThread.findFirst({
       where: { id: threadId, workspaceId: context.workspaceId }
@@ -3458,8 +4246,100 @@ export class PrismaCrmRepository {
     }
     if (thread.recordId) {
       await this.assertVisibleRecord(context, thread.recordId);
+    } else if (!canManageAllRecords(context)) {
+      const ownMessageCount = await this.db.emailMessage.count({
+        where: { workspaceId: context.workspaceId, threadId: thread.id, createdById: context.user.id }
+      });
+      if (ownMessageCount === 0) {
+        throw new Error("Email thread not found");
+      }
     }
     return mapEmailThread(thread);
+  }
+
+  private async emailThreadAccessWhere(context: RequestContext): Promise<Prisma.EmailThreadWhereInput> {
+    if (canManageAllRecords(context)) {
+      return {};
+    }
+
+    const ownerIds = await this.visibleOwnerIds(context);
+    const visibleRecords = await this.db.crmRecord.findMany({
+      where: { workspaceId: context.workspaceId, ownerId: { in: ownerIds } },
+      select: { id: true }
+    });
+    const ownMessages = await this.db.emailMessage.findMany({
+      where: { workspaceId: context.workspaceId, createdById: context.user.id },
+      select: { threadId: true },
+      distinct: ["threadId"]
+    });
+
+    return {
+      OR: [
+        { recordId: { in: visibleRecords.map((record) => record.id) } },
+        { recordId: null, id: { in: ownMessages.map((message) => message.threadId) } }
+      ]
+    };
+  }
+
+  private async findMatchingEmailThread(
+    context: RequestContext,
+    accountId: string,
+    accountEmail: string,
+    subject: string,
+    participants: string[],
+    recordId?: string
+  ): Promise<EmailThread | undefined> {
+    const normalizedSubject = normalizeEmailSubject(subject);
+    if (!normalizedSubject) {
+      return undefined;
+    }
+    const accountAddress = normalizeEmailAddress(accountEmail);
+    const participantSet = new Set(participants.map(normalizeEmailAddress).filter((email) => email !== accountAddress));
+    const threads = await this.db.emailThread.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        accountId,
+        ...(recordId ? { OR: [{ recordId }, { recordId: null }] } : {})
+      },
+      orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
+      take: 50
+    });
+    const match = threads.map(mapEmailThread).find((thread) => {
+      if (normalizeEmailSubject(thread.subject) !== normalizedSubject) {
+        return false;
+      }
+      if (recordId && thread.recordId === recordId) {
+        return true;
+      }
+      return thread.participantEmails.some((email) => {
+        const normalized = normalizeEmailAddress(email);
+        return normalized !== accountAddress && participantSet.has(normalized);
+      });
+    });
+    if (!match) {
+      return undefined;
+    }
+    return match.recordId ? this.assertEmailThread(context, match.id) : match;
+  }
+
+  private async findVisibleRecordByEmailParticipants(context: RequestContext, accountEmail: string, participants: string[]): Promise<CrmRecord | undefined> {
+    const accountAddress = normalizeEmailAddress(accountEmail);
+    const emails = Array.from(new Set(participants.map((participant) => normalizeEmailAddress(participant)).filter((email) => email !== accountAddress)));
+    for (const email of emails) {
+      const record = await this.db.crmRecord.findFirst({
+        where: {
+          workspaceId: context.workspaceId,
+          objectKey: "contacts",
+          data: { path: ["email"], equals: email },
+          ...(await this.recordAccessWhere(context))
+        },
+        orderBy: [{ updatedAt: "desc" }]
+      });
+      if (record) {
+        return mapRecord(record);
+      }
+    }
+    return undefined;
   }
 
   private async assertVisibleRecord(context: RequestContext, recordId: string): Promise<CrmRecord> {
@@ -3474,6 +4354,40 @@ export class PrismaCrmRepository {
       throw new Error("Record not found");
     }
     return mapRecord(record);
+  }
+
+  private async assertVisibleEmailAiSources(context: RequestContext, sources: unknown): Promise<NonNullable<EmailThread["aiAnalysisSources"]>> {
+    const normalizedSources = normalizeEmailAiSources(sources);
+    for (const source of normalizedSources) {
+      if (source.recordId) {
+        await this.assertVisibleRecord(context, source.recordId);
+      }
+      if (source.messageId) {
+        await this.getEmailMessage(context, source.messageId);
+      }
+      if (source.activityId) {
+        const activity = await this.db.activity.findFirst({
+          where: {
+            id: source.activityId,
+            ...(await this.visibleActivityWhere(context))
+          },
+          select: { id: true }
+        });
+        if (!activity) {
+          throw new Error("Activity not found");
+        }
+      }
+      if (source.knowledgeArticleId) {
+        const article = await this.db.knowledgeArticle.findFirst({
+          where: { id: source.knowledgeArticleId, workspaceId: context.workspaceId },
+          select: { id: true }
+        });
+        if (!article) {
+          throw new Error("Knowledge article not found");
+        }
+      }
+    }
+    return normalizedSources;
   }
 
   private async writeAuditLog(
@@ -3855,6 +4769,14 @@ function uniqueEmails(values: string[]): string[] {
   return Array.from(new Set(values.map(normalizeEmailAddress)));
 }
 
+function normalizeEmailSubject(value: string): string {
+  return value
+    .trim()
+    .replace(/^(\s*(re|fw|fwd)\s*:\s*)+/i, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 function uniqueTags(values: string[]): string[] {
   return Array.from(new Set(values.map((tag) => tag.trim().toLowerCase()).filter(Boolean))).slice(0, 50);
 }
@@ -3866,8 +4788,21 @@ function normalizeIntegerLimit(value: number, min: number, max: number): number 
   return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
+function emailActivityVerb(status: EmailMessage["status"], direction: EmailMessage["direction"]): string {
+  if (direction === "inbound") {
+    return "Received";
+  }
+  if (status === "queued") {
+    return "Queued";
+  }
+  if (status === "failed") {
+    return "Failed";
+  }
+  return "Sent";
+}
+
 function emailMessageTime(message: EmailMessage): string {
-  return message.sentAt ?? message.receivedAt ?? message.createdAt;
+  return message.receivedAt ?? message.sentAt ?? message.createdAt;
 }
 
 function summarizeEmailThread(messages: EmailMessage[]): string {
@@ -3994,4 +4929,17 @@ function importTemplateExampleValue(field: FieldDefinition): string {
   if (field.type === "user") return "user-id";
   if (field.type === "reference") return "record-id";
   return "";
+}
+
+function normalizeEmailAccountToggles(provider: EmailAccount["provider"], toggles: Pick<EmailAccount, "syncEnabled" | "sendEnabled">): Pick<EmailAccount, "syncEnabled" | "sendEnabled"> {
+  const capability = getEmailProviderCapability(provider);
+  return {
+    syncEnabled: capability.supportsSync ? toggles.syncEnabled : false,
+    sendEnabled: capability.supportsSend ? toggles.sendEnabled : false
+  };
+}
+
+function normalizeEmailAiProviderError(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, 500) : undefined;
 }

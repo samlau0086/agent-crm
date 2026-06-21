@@ -40,6 +40,18 @@ function validateEnv(values) {
   if (values.ALLOW_TEST_USER_HEADER === "true" && isProduction) {
     errors.push("ALLOW_TEST_USER_HEADER must not be enabled in production.");
   }
+  if (values.EMAIL_DELIVERY_MODE === "dry-run" && isProduction) {
+    errors.push("EMAIL_DELIVERY_MODE=dry-run must not be enabled in production.");
+  }
+  if (values.EMAIL_SYNC_INTERVAL_MS?.trim() && !isPositiveInteger(values.EMAIL_SYNC_INTERVAL_MS)) {
+    errors.push("EMAIL_SYNC_INTERVAL_MS must be a positive integer.");
+  }
+  if (values.EMAIL_SYNC_LIMIT?.trim() && !isIntegerInRange(values.EMAIL_SYNC_LIMIT, 1, 100)) {
+    errors.push("EMAIL_SYNC_LIMIT must be an integer between 1 and 100.");
+  }
+  if (values.EMAIL_SEND_CLAIM_TIMEOUT_MS?.trim() && !isPositiveInteger(values.EMAIL_SEND_CLAIM_TIMEOUT_MS)) {
+    errors.push("EMAIL_SEND_CLAIM_TIMEOUT_MS must be a positive integer.");
+  }
 
   if (isProduction) {
     validateProductionAppBaseUrl(values.APP_BASE_URL, errors, warnings, values.ALLOW_INSECURE_APP_BASE_URL === "true");
@@ -48,6 +60,20 @@ function validateEnv(values) {
     }
     if ((values.AI_PROVIDER ?? "openai-compatible") === "openai-compatible" && !values.AI_API_KEY?.trim()) {
       warnings.push("AI_API_KEY is empty; AI features will use the local read-only fallback.");
+    }
+    const emailConfigSecret = values.EMAIL_CONFIG_SECRET ?? values.APP_SECRET;
+    const oauthStateSecret = values.EMAIL_OAUTH_STATE_SECRET;
+    if (!values.EMAIL_CONFIG_SECRET?.trim() && !values.APP_SECRET?.trim()) {
+      errors.push("EMAIL_CONFIG_SECRET or APP_SECRET is required in production to encrypt mailbox credentials.");
+    } else if (emailConfigSecret.length < 16) {
+      errors.push("EMAIL_CONFIG_SECRET or APP_SECRET must be at least 16 characters.");
+    } else if (isPlaceholderSecret(emailConfigSecret)) {
+      errors.push("EMAIL_CONFIG_SECRET or APP_SECRET must be replaced with a deployment-specific random value.");
+    }
+    if (oauthStateSecret?.trim() && oauthStateSecret.length < 16) {
+      errors.push("EMAIL_OAUTH_STATE_SECRET must be at least 16 characters when set.");
+    } else if (oauthStateSecret?.trim() && isPlaceholderSecret(oauthStateSecret)) {
+      errors.push("EMAIL_OAUTH_STATE_SECRET must be replaced with a deployment-specific random value.");
     }
     if (values.ALLOW_PRIVATE_WEBHOOK_URLS === "true") {
       warnings.push("ALLOW_PRIVATE_WEBHOOK_URLS=true permits webhooks to target localhost or private network addresses.");
@@ -96,6 +122,20 @@ function validateProductionAppBaseUrl(value, errors, warnings, allowInsecure) {
 function isLoopbackHost(hostname) {
   const normalized = hostname.toLowerCase();
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+}
+
+function isPlaceholderSecret(value) {
+  return value.trim().toLowerCase().startsWith("replace-with-");
+}
+
+function isPositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0;
+}
+
+function isIntegerInRange(value, min, max) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max;
 }
 
 function parseArgs(values) {

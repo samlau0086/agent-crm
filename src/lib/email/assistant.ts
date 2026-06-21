@@ -6,7 +6,8 @@ import type {
   EmailMessage,
   EmailThread,
   FieldDefinition,
-  KnowledgeArticle
+  KnowledgeArticle,
+  RequestContext
 } from "@/lib/crm/types";
 
 export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize";
@@ -19,6 +20,7 @@ export interface EmailAssistantContextInput {
   activities?: Activity[];
   thread?: EmailThread;
   messages?: EmailMessage[];
+  sourceMessage?: EmailMessage;
   knowledgeArticles?: KnowledgeArticle[];
   targetLocale?: string;
 }
@@ -26,7 +28,13 @@ export interface EmailAssistantContextInput {
 export interface EmailAssistantContext {
   enabled: boolean;
   purpose: EmailAssistantPurpose;
+  recordId?: string;
+  threadId?: string;
+  sourceMessageId?: string;
   enabledFeatures: Record<EmailAiFeature, boolean>;
+  maxContextChars: number;
+  contextCharCount: number;
+  truncated: boolean;
   customerBrief: string;
   communicationSummary: string;
   knowledgeBrief: string;
@@ -41,14 +49,40 @@ const purposeFeature: Record<EmailAssistantPurpose, EmailAiFeature> = {
   summarize: "auto_summarize"
 };
 
+export function getEmailAiPurposeFeature(purpose: EmailAssistantPurpose): EmailAiFeature {
+  return purposeFeature[purpose];
+}
+
+export function isEmailAiPurposeEnabled(features: Partial<Record<EmailAiFeature, boolean>> | undefined, purpose: EmailAssistantPurpose): boolean {
+  return normalizeEmailAiFeatures(features)[getEmailAiPurposeFeature(purpose)];
+}
+
+export function canRunEmailAiAutomation(
+  context: Pick<RequestContext, "role">,
+  settings: EmailAiSettings,
+  automation: "auto_translate" | "auto_context_analysis" | "auto_summarize"
+): boolean {
+  if (!context.role.permissions.includes("ai.use")) {
+    return false;
+  }
+  const features = normalizeEmailAiFeatures(settings.features);
+  if (automation === "auto_translate") {
+    return features.translate && features.auto_translate;
+  }
+  if (automation === "auto_context_analysis") {
+    return features.context_analysis && features.auto_context_analysis;
+  }
+  return features.auto_summarize;
+}
+
 export function buildEmailAssistantContext(input: EmailAssistantContextInput): EmailAssistantContext {
   const enabledFeatures = normalizeEmailAiFeatures(input.settings.features);
   const purpose = input.purpose;
-  const enabled = enabledFeatures[purposeFeature[purpose]];
+  const featureEnabled = enabledFeatures[getEmailAiPurposeFeature(purpose)];
   const maxContextChars = normalizeLimit(input.settings.maxContextChars, 8000, 1000, 20000);
-  const messages = [...(input.messages ?? [])]
-    .sort((left, right) => messageTime(right).localeCompare(messageTime(left)))
-    .slice(0, normalizeLimit(input.settings.maxHistoryMessages, 8, 1, 20));
+  const maxHistoryMessages = normalizeLimit(input.settings.maxHistoryMessages, 8, 1, 20);
+  const shouldUseCompactSummary = purpose !== "summarize" && enabledFeatures.auto_summarize;
+  const messages = selectMessagesForContext(input.messages ?? [], input.thread, shouldUseCompactSummary, maxHistoryMessages, input.sourceMessage);
   const activities = [...(input.activities ?? [])]
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, 8);
@@ -59,29 +93,49 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
   const customerBrief = truncate(buildCustomerBrief(input.record, input.fields ?? []), maxContextChars * 0.25);
   const communicationSummary = truncate(buildCommunicationSummary(input.thread, messages, activities), maxContextChars * 0.45);
   const knowledgeBrief = truncate(buildKnowledgeBrief(knowledgeArticles), maxContextChars * 0.25);
+  const contextCharCount = customerBrief.length + communicationSummary.length + knowledgeBrief.length;
+  const truncated = [customerBrief, communicationSummary, knowledgeBrief].some((value) => value.includes("[truncated]"));
+  const sourceMessageSource =
+    input.sourceMessage && !messages.some((message) => message.id === input.sourceMessage?.id)
+      ? [{ label: input.sourceMessage.subject, messageId: input.sourceMessage.id }]
+      : [];
+  const sources = [
+    ...(input.record ? [{ label: input.record.title, recordId: input.record.id }] : []),
+    ...activities.slice(0, 3).map((activity) => ({ label: activity.title, activityId: activity.id })),
+    ...sourceMessageSource,
+    ...messages.slice(0, 5).map((message) => ({ label: message.subject, messageId: message.id })),
+    ...knowledgeArticles.map((article) => ({ label: article.title, knowledgeArticleId: article.id }))
+  ];
+  const missingRequiredSources = input.settings.requireSourceLinks && sources.length === 0;
+  const enabled = featureEnabled && !missingRequiredSources;
 
   return {
     enabled,
     purpose,
+    recordId: input.record?.id,
+    threadId: input.thread?.id,
+    sourceMessageId: input.sourceMessage?.id,
     enabledFeatures,
+    maxContextChars,
+    contextCharCount,
+    truncated,
     customerBrief,
     communicationSummary,
     knowledgeBrief,
-    instruction: buildInstruction(input, enabled),
-    sources: [
-      ...(input.record ? [{ label: input.record.title, recordId: input.record.id }] : []),
-      ...activities.slice(0, 3).map((activity) => ({ label: activity.title, activityId: activity.id })),
-      ...messages.slice(0, 5).map((message) => ({ label: message.subject, messageId: message.id })),
-      ...knowledgeArticles.map((article) => ({ label: article.title, knowledgeArticleId: article.id }))
-    ]
+    instruction: buildInstruction(input, enabled, featureEnabled ? (missingRequiredSources ? "missing_sources" : undefined) : "feature_disabled"),
+    sources
   };
 }
 
 export function normalizeEmailAiFeatures(features: Partial<Record<EmailAiFeature, boolean>> | undefined): Record<EmailAiFeature, boolean> {
+  const translate = features?.translate ?? false;
+  const contextAnalysis = features?.context_analysis ?? false;
   return {
     draft: features?.draft ?? false,
-    translate: features?.translate ?? false,
-    context_analysis: features?.context_analysis ?? false,
+    translate,
+    auto_translate: translate && (features?.auto_translate ?? false),
+    context_analysis: contextAnalysis,
+    auto_context_analysis: contextAnalysis && (features?.auto_context_analysis ?? false),
     auto_summarize: features?.auto_summarize ?? false
   };
 }
@@ -92,7 +146,9 @@ export function createDefaultEmailAiSettings(workspaceId: string, now: string): 
     features: {
       draft: false,
       translate: false,
+      auto_translate: false,
       context_analysis: false,
+      auto_context_analysis: false,
       auto_summarize: true
     },
     defaultLocale: "zh-CN",
@@ -129,12 +185,45 @@ function buildCommunicationSummary(thread: EmailThread | undefined, messages: Em
     .join("\n\n");
 }
 
+function filterMessagesForContext(messages: EmailMessage[], thread: EmailThread | undefined, autoSummarize: boolean): EmailMessage[] {
+  if (!autoSummarize || !thread?.summary || !thread.summaryUpdatedAt) {
+    return [...messages];
+  }
+  const summaryTime = Date.parse(thread.summaryUpdatedAt);
+  if (!Number.isFinite(summaryTime)) {
+    return [...messages];
+  }
+  return messages.filter((message) => {
+    const time = Date.parse(messageTime(message));
+    return Number.isFinite(time) && time > summaryTime;
+  });
+}
+
+function selectMessagesForContext(
+  messages: EmailMessage[],
+  thread: EmailThread | undefined,
+  autoSummarize: boolean,
+  maxHistoryMessages: number,
+  sourceMessage?: EmailMessage
+): EmailMessage[] {
+  const filtered = filterMessagesForContext(messages, thread, autoSummarize)
+    .filter((message) => message.id !== sourceMessage?.id)
+    .sort((left, right) => messageTime(right).localeCompare(messageTime(left)));
+  if (!sourceMessage) {
+    return filtered.slice(0, maxHistoryMessages);
+  }
+  return [sourceMessage, ...filtered.slice(0, Math.max(0, maxHistoryMessages - 1))].sort((left, right) => messageTime(right).localeCompare(messageTime(left)));
+}
+
 function buildKnowledgeBrief(articles: KnowledgeArticle[]): string {
   return articles.map((article) => `${article.title} [${article.tags.join(", ")}]\n${truncate(article.body, 700)}`).join("\n\n");
 }
 
-function buildInstruction(input: EmailAssistantContextInput, enabled: boolean): string {
+function buildInstruction(input: EmailAssistantContextInput, enabled: boolean, disabledReason?: "feature_disabled" | "missing_sources"): string {
   if (!enabled) {
+    if (disabledReason === "missing_sources") {
+      return `AI email feature "${input.purpose}" requires at least one CRM record, email message, activity, or knowledge article source. Link a record, select a thread/message, or add active knowledge before generating content.`;
+    }
     return `AI email feature "${input.purpose}" is disabled. Do not generate content for this action.`;
   }
 
