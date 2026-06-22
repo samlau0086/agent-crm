@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { findRecord, loginAsAdmin, openObject, waitForRecord } from "./helpers";
+import { findRecord, loginAsAdmin, openCreateRecordPanel, openListSettings, openObject, waitForRecord } from "./helpers";
 
 test("admin can complete the core CRM sales flow", async ({ page }) => {
   const suffix = `${Date.now()}`;
@@ -47,12 +47,14 @@ test("admin can complete the core CRM sales flow", async ({ page }) => {
     .toBeGreaterThan(0);
 
   await openObject(page, "companies");
+  await openCreateRecordPanel(page, "companies");
   await page.getByTestId("create-field-companies-domain").fill(`e2e-${suffix}.example.com`);
   await page.getByTestId("create-title-companies").fill(companyTitle);
   await page.getByTestId("create-record-companies").click();
   const company = await waitForRecord(page, "companies", companyTitle);
 
   await openObject(page, "contacts");
+  await openCreateRecordPanel(page, "contacts");
   await expect(page.getByTestId("topbar-export-records")).toHaveAttribute("href", /\/api\/records\/contacts\/export/);
   await page.getByTestId("create-field-contacts-email").fill(`contact-${suffix}@example.com`);
   await page.getByTestId("create-field-contacts-phone").fill("+86 139 0000 0000");
@@ -63,6 +65,7 @@ test("admin can complete the core CRM sales flow", async ({ page }) => {
   const contact = await waitForRecord(page, "contacts", contactTitle);
   expect(contact.data.companyId).toBe(company.id);
   expect(contact.ownerId).toBe("user-sales");
+  await openListSettings(page, "contacts");
   await page.getByTestId("view-filter-field-contacts").selectOption("companyId");
   await page.getByTestId("view-filter-value-contacts-search").fill(companyTitle);
   await expect(page.getByTestId("view-filter-value-contacts").locator(`option[value="${company.id}"]`)).toHaveCount(1);
@@ -102,6 +105,7 @@ test("admin can complete the core CRM sales flow", async ({ page }) => {
   expect(revokedBearerResponse.status()).toBe(401);
 
   await openObject(page, "deals");
+  await openCreateRecordPanel(page, "deals");
   await page.getByTestId("create-field-deals-amount").fill("660000");
   await page.getByTestId("create-field-deals-closeDate").fill("2026-08-31");
   await page.getByTestId("create-field-deals-companyId").selectOption(company.id);

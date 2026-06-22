@@ -30,7 +30,21 @@ export async function openObject(page: Page, objectKey: string) {
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-active-object", objectKey);
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-create-form-object", objectKey);
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-list-loading", "false");
+}
+
+export async function openCreateRecordPanel(page: Page, objectKey: string) {
+  await page.getByTestId(`open-create-record-${objectKey}`).click();
   await expect(page.getByTestId(`create-title-${objectKey}`)).toBeVisible();
+}
+
+export async function openImportPanel(page: Page) {
+  await page.getByRole("button", { name: "导入" }).click();
+  await expect(page.getByTestId("import-csv-input")).toBeVisible();
+}
+
+export async function openListSettings(page: Page, objectKey: string) {
+  await page.getByRole("button", { name: "列表设置" }).click();
+  await expect(page.getByTestId(`view-filter-field-${objectKey}`)).toBeVisible();
 }
 
 export async function waitForRecord(page: Page, objectKey: string, title: string): Promise<CrmRecordPayload> {

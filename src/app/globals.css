@@ -184,8 +184,13 @@ button {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
+}
+
+.workspace-grid.has-drawer {
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
+  align-items: start;
 }
 
 .section,
@@ -208,6 +213,33 @@ button {
 .detail-panel,
 .settings-panel {
   padding: 16px;
+}
+
+.record-drawer {
+  position: sticky;
+  top: 22px;
+  max-height: calc(100vh - 44px);
+  overflow: auto;
+}
+
+.drawer-header {
+  position: sticky;
+  top: -16px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -16px -16px 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
 }
 
 .section {
@@ -836,10 +868,16 @@ button {
   }
 
   .workspace-grid,
+  .workspace-grid.has-drawer,
   .email-grid,
   .settings-grid,
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .record-drawer {
+    position: static;
+    max-height: none;
   }
 
   .settings-editor-grid {

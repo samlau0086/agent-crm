@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { loginAsAdmin, openObject, waitForRecord } from "./helpers";
+import { loginAsAdmin, openCreateRecordPanel, openListSettings, openObject, waitForRecord } from "./helpers";
 
 test("admin can add notes tasks and manage the activity timeline", async ({ page }) => {
   const suffix = `${Date.now()}`;
@@ -12,18 +12,21 @@ test("admin can add notes tasks and manage the activity timeline", async ({ page
   await loginAsAdmin(page);
 
   await openObject(page, "companies");
+  await openCreateRecordPanel(page, "companies");
   await page.getByTestId("create-field-companies-domain").fill(`activity-${suffix}.example.com`);
   await page.getByTestId("create-title-companies").fill(companyTitle);
   await page.getByTestId("create-record-companies").click();
   const company = await waitForRecord(page, "companies", companyTitle);
 
   await openObject(page, "contacts");
+  await openCreateRecordPanel(page, "contacts");
   await page.getByTestId("create-field-contacts-email").fill(`activity-${suffix}@example.com`);
   await page.getByTestId("create-field-contacts-phone").fill("+86 137 0000 0000");
   await page.getByTestId("create-field-contacts-companyId").selectOption(company.id);
   await page.getByTestId("create-title-contacts").fill(contactTitle);
   await page.getByTestId("create-record-contacts").click();
   const contact = await waitForRecord(page, "contacts", contactTitle);
+  await openListSettings(page, "contacts");
   await page.getByTestId("view-filter-field-contacts").selectOption("");
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-list-loading", "false");
   await page.getByTestId("record-search-contacts").fill(contactTitle);

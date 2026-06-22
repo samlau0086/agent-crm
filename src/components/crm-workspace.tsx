@@ -103,6 +103,7 @@ interface CrmWorkspaceProps {
 }
 
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
+type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type AiSource = { label: string; objectKey?: string; recordId?: string; activityId?: string };
 type AiResponse = { text: string; sources: AiSource[] };
 type EmailAiSource = EmailAiSourceRef;
@@ -356,6 +357,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
   const [query, setQuery] = useState("");
+  const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>("closed");
+  const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
   const [createOwnerId, setCreateOwnerId] = useState(props.contextUser.id);
@@ -830,6 +833,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setActiveObjectKey(objectKey);
     setActiveNav(coreObjects.has(objectKey) ? (objectKey as NavKey) : "records");
     setQuery("");
+    setRecordPanelMode("closed");
+    setShowListSettings(false);
     setMessage(null);
     setError(null);
   }
@@ -838,6 +843,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecords((current) => mergeRecords(current, [record]));
     openObject(record.objectKey);
     setSelectedRecordId(record.id);
+    setRecordPanelMode("detail");
   }
 
   async function submitCreateRecord() {
@@ -856,6 +862,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
     setCreateValues(buildInitialValues(objectFields));
+    setRecordPanelMode("closed");
     router.refresh();
   }
 
@@ -888,6 +895,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
     await fetchJson(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, { method: "DELETE" });
     setMessage("记录已删除");
+    setRecordPanelMode("closed");
     router.refresh();
   }
 
@@ -1667,7 +1675,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
 
         {showRecordWorkspace && activeObject && (
-          <div className="workspace-grid">
+          <div className={`workspace-grid ${recordPanelMode !== "closed" ? "has-drawer" : ""}`}>
             <section className="table-shell">
               {activeViews.length > 0 && (
                 <div className="tabs" style={{ padding: "12px 12px 0" }}>
@@ -1697,18 +1705,26 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 <span className="icon-button" aria-label="当前列表由保存视图驱动" title="当前列表由保存视图驱动">
                   <Filter size={16} />
                 </span>
+                <button className="secondary-button" type="button" onClick={() => setShowListSettings((current) => !current)}>
+                  <LayoutList size={16} />
+                  列表设置
+                </button>
                 <a className="secondary-button" href={exportRecordsUrl} download={`${activeObject.key}-export.csv`} data-testid={`export-records-${activeObject.key}`}>
                   <Download size={16} />
                   导出
                 </a>
+                <button className="secondary-button" type="button" onClick={() => setRecordPanelMode("import")}>
+                  <Upload size={16} />
+                  导入
+                </button>
                 <button
                   className="primary-button"
-                  data-testid={`create-record-${activeObject.key}`}
+                  data-testid={`open-create-record-${activeObject.key}`}
                   type="button"
-                  onClick={() => runAction(submitCreateRecord)}
-                  disabled={isPending || !createTitle.trim()}
+                  onClick={() => setRecordPanelMode("create")}
+                  disabled={isPending}
                 >
-                  <Save size={16} />
+                  <UserRound size={16} />
                   新建
                 </button>
               </div>
@@ -1740,22 +1756,24 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   </button>
                 </div>
               </div>
-              <ViewConfigurator
-                activeView={activeView}
-                canManageViews={canManageViews}
-                draft={viewDraft}
-                fields={objectFields}
-                isPending={isPending}
-                allRecords={records}
-                objectKey={activeObject.key}
-                onChange={setViewDraft}
-                onCreate={() => runAction(submitCreateSavedView)}
-                onDelete={() => runAction(submitDeleteSavedView)}
-                onRecordsLoaded={mergeLoadedRecords}
-                onReset={() => setViewDraft(createViewDraft(activeView, objectFields))}
-                onUpdate={() => runAction(submitUpdateSavedView)}
-                users={props.users}
-              />
+              {showListSettings ? (
+                <ViewConfigurator
+                  activeView={activeView}
+                  canManageViews={canManageViews}
+                  draft={viewDraft}
+                  fields={objectFields}
+                  isPending={isPending}
+                  allRecords={records}
+                  objectKey={activeObject.key}
+                  onChange={setViewDraft}
+                  onCreate={() => runAction(submitCreateSavedView)}
+                  onDelete={() => runAction(submitDeleteSavedView)}
+                  onRecordsLoaded={mergeLoadedRecords}
+                  onReset={() => setViewDraft(createViewDraft(activeView, objectFields))}
+                  onUpdate={() => runAction(submitUpdateSavedView)}
+                  users={props.users}
+                />
+              ) : null}
               <div style={{ overflowX: "auto" }}>
                 <table className="record-table">
                   <thead>
@@ -1787,11 +1805,23 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               {filteredRecords.length === 0 && <div className="empty-state">当前对象下还没有记录</div>}
             </section>
 
-            <aside className="detail-panel">
+            {recordPanelMode !== "closed" && (
+            <aside className="detail-panel record-drawer">
+              <div className="drawer-header">
+                <div>
+                  <div className="subtle">当前对象</div>
+                  <h2 className="page-title" style={{ fontSize: 18 }}>{activeObject.label}</h2>
+                </div>
+                <button className="icon-button" type="button" aria-label="关闭面板" title="关闭面板" onClick={() => setRecordPanelMode("closed")}>
+                  <XCircle size={18} />
+                </button>
+              </div>
+
+              {recordPanelMode === "create" && (
               <section>
-                <h2 className="page-title" style={{ fontSize: 18 }}>
+                <h3 className="panel-title">
                   新建{activeObject.label}
-                </h2>
+                </h3>
                 <div className="form-grid" style={{ marginTop: 12 }}>
                   <label className="wide">
                     <span className="subtle">名称</span>
@@ -1823,12 +1853,26 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     />
                   ))}
                 </div>
+                <div className="toolbar" style={{ marginTop: 12 }}>
+                  <button
+                    className="primary-button"
+                    data-testid={`create-record-${activeObject.key}`}
+                    type="button"
+                    onClick={() => runAction(submitCreateRecord)}
+                    disabled={isPending || !createTitle.trim()}
+                  >
+                    <Save size={16} />
+                    保存新记录
+                  </button>
+                </div>
               </section>
+              )}
 
-              <section style={{ marginTop: 20 }}>
-                <h2 className="page-title" style={{ fontSize: 18 }}>
+              {recordPanelMode === "detail" && (
+              <section>
+                <h3 className="panel-title">
                   {selectedRecord ? `编辑${activeObject.label}` : `选择一个${activeObject.label}`}
-                </h2>
+                </h3>
                 {selectedRecord ? (
                   <>
                     <div className="form-grid" style={{ marginTop: 12 }}>
@@ -2038,16 +2082,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         )}
                       />
                     </section>
+
+                    {coreObjects.has(selectedRecord.objectKey) && (
+                      <AiAssistant
+                        record={selectedRecord}
+                        fields={selectedFields}
+                        activities={selectedActivities}
+                        question={aiQuestion}
+                        setQuestion={setAiQuestion}
+                        allRecords={records}
+                        users={props.users}
+                        onOpenRecord={openRecord}
+                      />
+                    )}
                   </>
                 ) : (
                   <div className="empty-state">请先从左侧列表选择一条记录</div>
                 )}
               </section>
+              )}
 
-              <section style={{ marginTop: 20 }}>
-                <h2 className="page-title" style={{ fontSize: 18 }}>
+              {recordPanelMode === "import" && (
+              <section>
+                <h3 className="panel-title">
                   CSV 导入
-                </h2>
+                </h3>
                 {canImport ? (
                   <>
                     <textarea
@@ -2183,7 +2242,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   <div className="empty-state">当前账号没有 crm.import 权限，不能导入 CSV。</div>
                 )}
               </section>
+              )}
             </aside>
+            )}
           </div>
         )}
 
@@ -2266,18 +2327,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           />
         )}
 
-        {selectedRecord && coreObjects.has(selectedRecord.objectKey) && (
-          <AiAssistant
-            record={selectedRecord}
-            fields={selectedFields}
-            activities={selectedActivities}
-            question={aiQuestion}
-            setQuestion={setAiQuestion}
-            allRecords={records}
-            users={props.users}
-            onOpenRecord={openRecord}
-          />
-        )}
       </main>
     </div>
   );

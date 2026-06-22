@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { loginAsAdmin, openObject } from "./helpers";
+import { loginAsAdmin, openImportPanel, openObject } from "./helpers";
 
 test("admin can manage csv import presets and inspect import job details", async ({ page }) => {
   const suffix = `${Date.now()}`;
@@ -98,6 +98,7 @@ test("admin can manage csv import presets and inspect import job details", async
   expect(deleteApiImportPresetResponse.ok()).toBe(true);
 
   await openObject(page, "contacts");
+  await openImportPanel(page);
   await page.getByTestId("import-csv-input").fill(`full_name,mail\nE2E Preset Contact ${suffix},preset-${suffix}@example.com`);
   await page.getByTestId("import-preview-submit").click();
   await expect(page.getByTestId("csv-mapping-full_name")).toBeVisible();
@@ -138,6 +139,7 @@ test("admin can manage csv import presets and inspect import job details", async
   await page.reload();
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-ready", "true");
   await openObject(page, "contacts");
+  await openImportPanel(page);
 
   await page.getByTestId(`import-job-details-${importJob.id}`).click();
   await expect(page.getByTestId("import-job-detail-panel")).toContainText(`E2E Import Preset Source ${suffix}`);

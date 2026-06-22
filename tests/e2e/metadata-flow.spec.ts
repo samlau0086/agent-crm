@@ -4,6 +4,7 @@ import {
   findFieldDefinition,
   findObjectDefinition,
   loginAsAdmin,
+  openCreateRecordPanel,
   openObject,
   waitForRecord,
   type CrmRecordPayload
@@ -26,6 +27,7 @@ test("admin can create custom objects and reference fields", async ({ page }) =>
   expect(invalidObjectPayload.details?.fieldErrors?.key?.length).toBeGreaterThan(0);
 
   await openObject(page, "companies");
+  await openCreateRecordPanel(page, "companies");
   await page.getByTestId("create-field-companies-domain").fill(`metadata-${suffix}.example.com`);
   await page.getByTestId("create-title-companies").fill(companyTitle);
   await page.getByTestId("create-record-companies").click();
@@ -67,6 +69,7 @@ test("admin can create custom objects and reference fields", async ({ page }) =>
   await page.getByTestId(`object-entry-${partnerKey}`).click();
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-active-object", partnerKey);
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-create-form-object", partnerKey);
+  await openCreateRecordPanel(page, partnerKey);
   await expect(page.getByTestId(`create-field-${partnerKey}-company_id`).locator(`option[value="${company.id}"]`)).toHaveCount(1);
 
   const lateCompanyTitle = `E2E Late Ref Company ${suffix}`;

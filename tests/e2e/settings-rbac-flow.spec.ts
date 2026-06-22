@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { findRecord, findUser, loginAsAdmin, openObject, type CrmRecordPayload } from "./helpers";
+import { findRecord, findUser, loginAsAdmin, openListSettings, openObject, type CrmRecordPayload } from "./helpers";
 
 test("admin can manage roles teams users and password setup", async ({ page, browser }) => {
   const suffix = `${Date.now()}`;
@@ -98,6 +98,7 @@ test("admin can manage roles teams users and password setup", async ({ page, bro
   const contact = (await contactResponse.json()) as CrmRecordPayload;
 
   await openObject(page, "contacts");
+  await openListSettings(page, "contacts");
   await page.getByTestId("view-filter-field-contacts").selectOption("");
   await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-list-loading", "false");
   await page.getByTestId("record-search-contacts").fill(contactTitle);
