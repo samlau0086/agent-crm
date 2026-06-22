@@ -384,11 +384,7 @@ jobs:
               echo "::error title=Invalid Postgres schema::DATABASE_URL schema must be a simple PostgreSQL identifier"
               exit 1
             fi
-            schema_permission="$(docker run --rm --add-host=host.docker.internal:host-gateway -e PSQL_URL="$psql_url" -e CRM_SCHEMA="$schema_name" postgres:16-alpine sh -s <<'CHECK_SCHEMA'
-            set -eu
-            psql "$PSQL_URL" -v ON_ERROR_STOP=1 -tAc "select case when has_schema_privilege(current_user, '$CRM_SCHEMA', 'USAGE') and has_schema_privilege(current_user, '$CRM_SCHEMA', 'CREATE') then 'ok' else 'missing_schema_privilege' end"
-            CHECK_SCHEMA
-            )"
+            schema_permission="$(docker run --rm --add-host=host.docker.internal:host-gateway postgres:16-alpine psql "$psql_url" -v ON_ERROR_STOP=1 -tAc "select case when has_schema_privilege(current_user, '$schema_name', 'USAGE') and has_schema_privilege(current_user, '$schema_name', 'CREATE') then 'ok' else 'missing_schema_privilege' end")"
             if [ "$schema_permission" != "ok" ]; then
               echo "::error title=Postgres schema permission denied::POSTGRES_USER must have USAGE and CREATE on schema ${schema_name}. Connect as a Postgres admin and run: GRANT USAGE, CREATE ON SCHEMA ${schema_name} TO ${POSTGRES_USER};"
               exit 1
