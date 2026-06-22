@@ -441,6 +441,231 @@ button {
   align-items: start;
 }
 
+.email-client {
+  display: grid;
+  grid-template-columns: 220px minmax(280px, 0.8fr) minmax(420px, 1.4fr);
+  gap: 12px;
+  align-items: start;
+  min-height: calc(100vh - 150px);
+}
+
+.email-rail,
+.email-thread-pane,
+.email-read-pane,
+.email-compose-pane {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.email-rail {
+  position: sticky;
+  top: 22px;
+  display: grid;
+  gap: 14px;
+  padding: 12px;
+}
+
+.email-compose-button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.email-rail-group {
+  display: grid;
+  gap: 8px;
+}
+
+.email-rail-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.email-rail-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.email-rail-item:hover,
+.email-rail-item.active {
+  background: #ecfdf5;
+  color: var(--accent-strong);
+}
+
+.email-account-chip {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.email-account-chip strong,
+.email-account-chip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.email-account-chip span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.email-thread-pane {
+  overflow: hidden;
+}
+
+.email-pane-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.email-pane-header.compact {
+  padding: 0 0 12px;
+  border-bottom: 0;
+}
+
+.email-thread-list {
+  display: grid;
+  max-height: calc(100vh - 230px);
+  overflow: auto;
+}
+
+.email-thread-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.email-thread-row:hover,
+.email-thread-row.selected {
+  background: #f8fafc;
+}
+
+.email-thread-row.selected {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.email-thread-subject {
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.email-thread-meta,
+.email-thread-snippet,
+.email-thread-date {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.email-thread-snippet {
+  grid-column: 1 / -1;
+}
+
+.email-thread-date {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.email-work-pane {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.email-read-pane,
+.email-compose-pane {
+  padding: 12px;
+}
+
+.email-read-pane {
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+}
+
+.email-thread-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.email-link-record {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: min(100%, 320px);
+}
+
+.email-message-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.email-message-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.email-message-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.email-message-body {
+  margin-top: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.email-compose-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.email-compose-body {
+  min-height: 150px;
+}
+
 .email-html-preview {
   margin-top: 8px;
 }
@@ -870,9 +1095,24 @@ button {
   .workspace-grid,
   .workspace-grid.has-drawer,
   .email-grid,
+  .email-client,
   .settings-grid,
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .email-rail,
+  .email-read-pane {
+    position: static;
+    max-height: none;
+  }
+
+  .email-thread-list {
+    max-height: none;
+  }
+
+  .email-message-header {
+    flex-direction: column;
   }
 
   .record-drawer {

@@ -2924,185 +2924,265 @@ function EmailWorkspace({
       ) : null}
 
       {view === "mail" ? (
-    <div className="email-grid">
-      <section className="section">
-        <h2 className="page-title" style={{ fontSize: 18 }}>邮件线程</h2>
-        <div className="toolbar" style={{ marginTop: 8 }}>
-          {selectedThread?.summaryUpdatedAt ? <span className="subtle">Summary {formatDate(selectedThread.summaryUpdatedAt)}</span> : null}
-          {selectedThread?.aiAnalysisUpdatedAt ? <span className="subtle">Analysis {formatDate(selectedThread.aiAnalysisUpdatedAt)}</span> : null}
-          {selectedThread ? (
-            <label className="toolbar" style={{ gap: 6 }}>
-              <span className="subtle">关联记录</span>
-              <select className="select" data-testid="email-thread-record" value={selectedThreadRecordId} onChange={(event) => onUpdateThread(selectedThread.id, event.target.value)} disabled={disabled}>
-                <option value="">不关联</option>
-                {records.slice(0, 100).map((record) => (
-                  <option key={record.id} value={record.id}>{record.title}</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={onAnalyzeThread} disabled={disabled || !selectedThread || !aiSettings.features.context_analysis}>
-            <Bot size={16} />
-            刷新分析
+    <div className="email-client">
+      <aside className="email-rail">
+        <button className="primary-button email-compose-button" type="button" onClick={() => document.querySelector<HTMLInputElement>("[data-testid='email-compose-to']")?.focus()}>
+          <Send size={16} />
+          写邮件
+        </button>
+        <div className="email-rail-group">
+          <button className="email-rail-item active" type="button">
+            <Mail size={16} />
+            收件箱
+            <span className="badge">{threads.length}</span>
           </button>
-          <button className="secondary-button" data-testid="email-thread-summarize" type="button" onClick={onSummarizeThread} disabled={disabled || !selectedThread || !aiSettings.features.auto_summarize}>
+          <button className="email-rail-item" type="button" onClick={() => onViewChange("settings")}>
+            <Settings size={16} />
+            邮箱设置
+          </button>
+          <button className="email-rail-item" type="button" onClick={() => onViewChange("ai")}>
             <Bot size={16} />
-            刷新摘要
+            AI 与知识库
           </button>
         </div>
-        <div className="settings-list" style={{ marginTop: 12 }}>
+        <div className="email-rail-group">
+          <div className="email-rail-title">发件账户</div>
+          {activeAccounts.map((account) => (
+            <div className="email-account-chip" key={account.id}>
+              <strong>{account.name}</strong>
+              <span>{account.emailAddress}</span>
+            </div>
+          ))}
+          {activeAccounts.length === 0 ? <div className="subtle">没有可发送账户</div> : null}
+        </div>
+      </aside>
+
+      <section className="email-thread-pane">
+        <div className="email-pane-header">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>邮件</h2>
+            <div className="subtle">{threads.length} 个线程</div>
+          </div>
+          {canManageEmailSettings ? (
+            <button
+              className="icon-button"
+              aria-label="同步全部邮箱"
+              title="同步全部邮箱"
+              type="button"
+              onClick={onSyncAllAccounts}
+              disabled={
+                disabled ||
+                !accounts.some((account) => {
+                  const capability = getEmailProviderCapability(account.provider);
+                  return account.status === "active" && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
+                })
+              }
+            >
+              <RefreshCw size={16} />
+            </button>
+          ) : null}
+        </div>
+        <div className="email-thread-list">
           {threads.map((thread) => (
-            <button className={`settings-select ${thread.id === selectedThreadId ? "selected" : ""}`} key={thread.id} type="button" onClick={() => onSelectThread(thread.id)}>
-              <strong>{thread.subject}</strong>
-              <div className="subtle">{thread.participantEmails.join(", ")}</div>
-              {thread.summary ? <div>{thread.summary}</div> : null}
-              {thread.aiAnalysis ? <div className="subtle">{thread.aiAnalysis}</div> : null}
+            <button className={`email-thread-row ${thread.id === selectedThreadId ? "selected" : ""}`} data-testid={`email-thread-row-${thread.id}`} key={thread.id} type="button" onClick={() => onSelectThread(thread.id)}>
+              <span className="email-thread-subject">{thread.subject}</span>
+              <span className="email-thread-meta">{thread.participantEmails.join(", ")}</span>
+              {thread.summary ? <span className="email-thread-snippet">{thread.summary}</span> : null}
+              {thread.aiAnalysis ? <span className="email-thread-snippet muted">{thread.aiAnalysis}</span> : null}
+              <span className="email-thread-date">{formatDate(thread.lastMessageAt ?? thread.updatedAt)}</span>
             </button>
           ))}
           {threads.length === 0 ? <div className="empty-state">还没有邮件线程</div> : null}
         </div>
-        {selectedThread?.summary ? (
-          <div className="ai-box" data-testid="email-thread-summary" style={{ marginTop: 12 }}>
-            <div className="activity-meta">Compact 摘要 {selectedThread.summaryUpdatedAt ? `(${formatDate(selectedThread.summaryUpdatedAt)})` : ""}</div>
-            <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.summary}</div>
-            <div className="toolbar" style={{ marginTop: 8 }}>
-              <span className="badge">用于后续 AI 上下文</span>
-              <span className="badge">减少长线程 token 消耗</span>
+      </section>
+
+      <div className="email-work-pane">
+        <section className="email-read-pane">
+          <div className="email-pane-header">
+            <div>
+              <h2 className="page-title" style={{ fontSize: 18 }}>{selectedThread?.subject ?? "选择邮件"}</h2>
+              {selectedThread ? <div className="subtle">{selectedThread.participantEmails.join(", ")}</div> : null}
+            </div>
+            <div className="toolbar">
+              {selectedThread?.summaryUpdatedAt ? <span className="subtle">Summary {formatDate(selectedThread.summaryUpdatedAt)}</span> : null}
+              {selectedThread?.aiAnalysisUpdatedAt ? <span className="subtle">Analysis {formatDate(selectedThread.aiAnalysisUpdatedAt)}</span> : null}
             </div>
           </div>
-        ) : null}
-        {selectedThread?.aiAnalysis ? (
-          <div className="ai-box" style={{ marginTop: 12 }}>
-            <div className="activity-meta">AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}</div>
-            <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.aiAnalysis}</div>
-            {renderEmailAiSources(selectedThread.aiAnalysisSources)}
-          </div>
-        ) : null}
-        <div className="activity-list" style={{ marginTop: 16 }}>
-          {selectedMessages.map((message) => (
-            <div className="activity-item" key={message.id}>
-              <div className="activity-meta">{message.direction} · {message.status} · {formatDate(message.createdAt)}</div>
-              {message.aiAssisted ? <span className="badge">AI 辅助{message.aiPurpose ? ` · ${message.aiPurpose}` : ""}</span> : null}
-              {message.aiAssisted ? renderEmailAiSources(message.aiSources) : null}
-              <strong>{message.subject}</strong>
-              {message.direction === "outbound" && message.status === "failed" ? (
-                <div className="toolbar" style={{ marginTop: 8 }}>
-                  {message.failureReason ? <span className="danger-badge">{message.failureReason}</span> : null}
-                  <button className="secondary-button" type="button" onClick={() => onRetryMessage(message.id)} disabled={disabled}>
-                    <RefreshCw size={14} />
-                    重试
-                  </button>
+          {selectedThread ? (
+            <div className="email-thread-actions">
+              <label className="email-link-record">
+                <span className="subtle">关联记录</span>
+                <select className="select" data-testid="email-thread-record" value={selectedThreadRecordId} onChange={(event) => onUpdateThread(selectedThread.id, event.target.value)} disabled={disabled}>
+                  <option value="">不关联</option>
+                  {records.slice(0, 100).map((record) => (
+                    <option key={record.id} value={record.id}>{record.title}</option>
+                  ))}
+                </select>
+              </label>
+              <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={onAnalyzeThread} disabled={disabled || !selectedThread || !aiSettings.features.context_analysis}>
+                <Bot size={16} />
+                刷新分析
+              </button>
+              <button className="secondary-button" data-testid="email-thread-summarize" type="button" onClick={onSummarizeThread} disabled={disabled || !selectedThread || !aiSettings.features.auto_summarize}>
+                <Bot size={16} />
+                刷新摘要
+              </button>
+            </div>
+          ) : null}
+          {selectedThread?.summary ? (
+            <div className="ai-box" data-testid="email-thread-summary">
+              <div className="activity-meta">Compact 摘要 {selectedThread.summaryUpdatedAt ? `(${formatDate(selectedThread.summaryUpdatedAt)})` : ""}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.summary}</div>
+              <div className="toolbar" style={{ marginTop: 8 }}>
+                <span className="badge">用于后续 AI 上下文</span>
+                <span className="badge">减少长线程 token 消耗</span>
+              </div>
+            </div>
+          ) : null}
+          {selectedThread?.aiAnalysis ? (
+            <div className="ai-box">
+              <div className="activity-meta">AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}</div>
+              <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.aiAnalysis}</div>
+              {renderEmailAiSources(selectedThread.aiAnalysisSources)}
+            </div>
+          ) : null}
+          <div className="email-message-list">
+            {selectedMessages.map((message) => (
+              <article className="email-message-card" key={message.id}>
+                <div className="email-message-header">
+                  <div>
+                    <strong>{message.subject}</strong>
+                    <div className="subtle">发件人 {message.from} · 收件人 {message.to.join(", ")}</div>
+                  </div>
+                  <div className="activity-meta">{message.direction} · {message.status} · {formatDate(message.createdAt)}</div>
                 </div>
-              ) : null}
-              <div className="subtle">发件人 {message.from} · 收件人 {message.to.join(", ")}</div>
-              <div>{message.bodyText}</div>
+                {message.aiAssisted ? <span className="badge">AI 辅助{message.aiPurpose ? ` · ${message.aiPurpose}` : ""}</span> : null}
+                {message.aiAssisted ? renderEmailAiSources(message.aiSources) : null}
+                {message.direction === "outbound" && message.status === "failed" ? (
+                  <div className="toolbar" style={{ marginTop: 8 }}>
+                    {message.failureReason ? <span className="danger-badge">{message.failureReason}</span> : null}
+                    <button className="secondary-button" type="button" onClick={() => onRetryMessage(message.id)} disabled={disabled}>
+                      <RefreshCw size={14} />
+                      重试
+                    </button>
+                  </div>
+                ) : null}
+                <div className="email-message-body">{message.bodyText}</div>
                 {hasEmailHtmlPreview(message) ? (
                   <details className="activity-item" style={{ marginTop: 8 }}>
                     <summary>HTML 预览</summary>
                     <iframe sandbox="" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview" title={`HTML preview ${message.id}`} />
                   </details>
                 ) : null}
-              {message.attachments?.length ? (
+                {message.attachments?.length ? (
+                  <div className="toolbar" style={{ marginTop: 8 }}>
+                    {message.attachments.map((attachment, index) => {
+                      const href = buildEmailAttachmentHref(message.id, index, attachment);
+                      const label = `${attachment.fileName} · ${attachment.contentType ?? "application/octet-stream"} · ${formatBytes(attachment.size)}`;
+                      return href ? (
+                        <a className="secondary-button" href={href} key={`${message.id}-attachment-${attachment.id ?? attachment.providerAttachmentId ?? index}`} rel={attachment.externalUrl ? "noreferrer" : undefined} target={attachment.externalUrl ? "_blank" : undefined}>
+                          <Download size={14} />
+                          {label}
+                        </a>
+                      ) : (
+                        <span className="badge" key={`${message.id}-attachment-${attachment.id ?? attachment.providerAttachmentId ?? index}`}>
+                          {label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {message.translatedBodyText ? (
+                  <div className="ai-box" data-testid="email-message-translation" style={{ marginTop: 8 }}>
+                    <div className="activity-meta">翻译 {message.translatedLocale ? `(${message.translatedLocale})` : ""}</div>
+                    <div>{message.translatedBodyText}</div>
+                    {renderEmailAiSources(message.translatedSources)}
+                  </div>
+                ) : null}
                 <div className="toolbar" style={{ marginTop: 8 }}>
-                  {message.attachments.map((attachment, index) => {
-                    const href = buildEmailAttachmentHref(message.id, index, attachment);
-                    const label = `${attachment.fileName} · ${attachment.contentType ?? "application/octet-stream"} · ${formatBytes(attachment.size)}`;
-                    return href ? (
-                      <a className="secondary-button" href={href} key={`${message.id}-attachment-${attachment.id ?? attachment.providerAttachmentId ?? index}`} rel={attachment.externalUrl ? "noreferrer" : undefined} target={attachment.externalUrl ? "_blank" : undefined}>
-                        <Download size={14} />
-                        {label}
-                      </a>
-                    ) : (
-                      <span className="badge" key={`${message.id}-attachment-${attachment.id ?? attachment.providerAttachmentId ?? index}`}>
-                        {label}
-                      </span>
-                    );
-                  })}
+                  <button className="secondary-button" data-testid={`email-message-reply-${message.id}`} type="button" onClick={() => onReplyToMessage(message)} disabled={disabled}>
+                    <Send size={14} />
+                    回复
+                  </button>
+                  <button className="secondary-button" data-testid={`email-message-translate-${message.id}`} type="button" onClick={() => onGenerateAiForMessage(message, "translate")} disabled={disabled || !aiSettings.features.translate}>
+                    <Bot size={14} />
+                    翻译
+                  </button>
+                  <button className="secondary-button" data-testid={`email-message-analyze-${message.id}`} type="button" onClick={() => onGenerateAiForMessage(message, "context_analysis")} disabled={disabled || !aiSettings.features.context_analysis}>
+                    <Bot size={14} />
+                    分析
+                  </button>
                 </div>
-              ) : null}
-              {message.translatedBodyText ? (
-                <div className="ai-box" data-testid="email-message-translation" style={{ marginTop: 8 }}>
-                  <div className="activity-meta">翻译 {message.translatedLocale ? `(${message.translatedLocale})` : ""}</div>
-                  <div>{message.translatedBodyText}</div>
-                  {renderEmailAiSources(message.translatedSources)}
-                </div>
-              ) : null}
-              <div className="toolbar" style={{ marginTop: 8 }}>
-                <button className="secondary-button" data-testid={`email-message-reply-${message.id}`} type="button" onClick={() => onReplyToMessage(message)} disabled={disabled}>
-                  <Send size={14} />
-                  回复
-                </button>
-                <button className="secondary-button" data-testid={`email-message-translate-${message.id}`} type="button" onClick={() => onGenerateAiForMessage(message, "translate")} disabled={disabled || !aiSettings.features.translate}>
-                  <Bot size={14} />
-                  翻译
-                </button>
-                <button className="secondary-button" data-testid={`email-message-analyze-${message.id}`} type="button" onClick={() => onGenerateAiForMessage(message, "context_analysis")} disabled={disabled || !aiSettings.features.context_analysis}>
-                  <Bot size={14} />
-                  分析
-                </button>
-              </div>
-            </div>
-          ))}
-          {selectedThread && selectedMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
-        </div>
-      </section>
+              </article>
+            ))}
+            {selectedThread && selectedMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
+            {!selectedThread ? <div className="empty-state">从中间列表选择一个邮件线程</div> : null}
+          </div>
+        </section>
 
-      <section className="section">
-        <h2 className="page-title" style={{ fontSize: 18 }}>撰写邮件</h2>
-        <div className="form-grid" style={{ marginTop: 12 }}>
-          <label>
-            <span className="subtle">发件账户</span>
-            <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId: event.target.value }))}>
-              <option value="">选择账户</option>
-              {activeAccounts.map((account) => (
-                <option key={account.id} value={account.id}>{account.emailAddress}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="subtle">关联记录</span>
-            <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: event.target.value }))}>
-              <option value="">不关联</option>
-              {records.slice(0, 100).map((record) => (
-                <option key={record.id} value={record.id}>{record.title}</option>
-              ))}
-            </select>
-          </label>
-          <label className="wide">
-            <span className="subtle">收件人</span>
-            <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: event.target.value }))} placeholder="buyer@example.com, team@example.com" />
-          </label>
-          <label>
-            <span className="subtle">CC</span>
-            <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: event.target.value }))} placeholder="manager@example.com" />
-          </label>
-          <label>
-            <span className="subtle">BCC</span>
-            <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: event.target.value }))} placeholder="archive@example.com" />
-          </label>
-          <label className="wide">
-            <span className="subtle">主题</span>
-            <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
-          </label>
-          <label className="wide">
-            <span className="subtle">正文</span>
-            <textarea className="textarea" data-testid="email-compose-body" value={emailDraft.bodyText} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bodyText: event.target.value }))} />
-          </label>
-          <label className="wide">
-            <span className="subtle">附件</span>
-            <input
-              className="input"
-              data-testid="email-compose-attachments"
-              multiple
-              type="file"
-              onChange={(event) => {
-                void addEmailAttachmentFiles(event.target.files);
-                event.target.value = "";
-              }}
-            />
-          </label>
+        <section className="email-compose-pane">
+          <div className="email-pane-header compact">
+            <h2 className="page-title" style={{ fontSize: 16 }}>撰写邮件</h2>
+            <button className="secondary-button" data-testid="email-open-ai" type="button" onClick={() => onViewChange("ai")}>
+              <Bot size={16} />
+              AI 辅助
+            </button>
+          </div>
+          <div className="email-compose-grid">
+            <label>
+              <span className="subtle">发件账户</span>
+              <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId: event.target.value }))}>
+                <option value="">选择账户</option>
+                {activeAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>{account.emailAddress}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="subtle">关联记录</span>
+              <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: event.target.value }))}>
+                <option value="">不关联</option>
+                {records.slice(0, 100).map((record) => (
+                  <option key={record.id} value={record.id}>{record.title}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="subtle">收件人</span>
+              <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: event.target.value }))} placeholder="buyer@example.com" />
+            </label>
+            <label>
+              <span className="subtle">CC</span>
+              <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: event.target.value }))} placeholder="manager@example.com" />
+            </label>
+            <label>
+              <span className="subtle">BCC</span>
+              <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: event.target.value }))} placeholder="archive@example.com" />
+            </label>
+            <label>
+              <span className="subtle">主题</span>
+              <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
+            </label>
+            <label>
+              <span className="subtle">正文</span>
+              <textarea className="textarea email-compose-body" data-testid="email-compose-body" value={emailDraft.bodyText} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bodyText: event.target.value }))} />
+            </label>
+            <label>
+              <span className="subtle">附件</span>
+              <input
+                className="input"
+                data-testid="email-compose-attachments"
+                multiple
+                type="file"
+                onChange={(event) => {
+                  void addEmailAttachmentFiles(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+          </div>
           {emailDraft.attachments?.length ? (
-            <div className="toolbar wide">
+            <div className="toolbar" style={{ marginTop: 10 }}>
               {emailDraft.attachments.map((attachment, index) => (
                 <button className="secondary-button" key={`${attachment.fileName}-${index}`} type="button" onClick={() => removeEmailAttachment(index)}>
                   <Upload size={14} />
@@ -3112,47 +3192,43 @@ function EmailWorkspace({
               ))}
             </div>
           ) : null}
-        </div>
-        {emailDraft.aiAssisted ? (
+          {emailDraft.aiAssisted ? (
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              <span className="badge">
+                AI 辅助草稿{emailDraft.aiPurpose ? ` · ${emailDraft.aiPurpose}` : ""}{emailDraft.aiGeneratedAt ? ` · ${formatDate(emailDraft.aiGeneratedAt)}` : ""}
+              </span>
+              <span className={emailDraft.aiSources?.length ? "badge" : "danger-badge"}>来源 {emailDraft.aiSources?.length ?? 0}</span>
+              <span className="badge">发送时保留 AI provenance</span>
+              {renderEmailAiSources(emailDraft.aiSources)}
+              <button
+                className="secondary-button"
+                data-testid="email-ai-clear-provenance"
+                type="button"
+                onClick={() =>
+                  onEmailDraftChange({
+                    ...emailDraft,
+                    aiAssisted: false,
+                    aiPurpose: undefined,
+                    aiSourceMessageId: undefined,
+                    aiSources: undefined,
+                    aiGeneratedAt: undefined
+                  })
+                }
+                disabled={disabled}
+              >
+                <XCircle size={14} />
+                清除 AI 标记
+              </button>
+            </div>
+          ) : null}
           <div className="toolbar" style={{ marginTop: 12 }}>
-            <span className="badge">
-              AI 辅助草稿{emailDraft.aiPurpose ? ` · ${emailDraft.aiPurpose}` : ""}{emailDraft.aiGeneratedAt ? ` · ${formatDate(emailDraft.aiGeneratedAt)}` : ""}
-            </span>
-            <span className={emailDraft.aiSources?.length ? "badge" : "danger-badge"}>来源 {emailDraft.aiSources?.length ?? 0}</span>
-            <span className="badge">发送时保留 AI provenance</span>
-            {renderEmailAiSources(emailDraft.aiSources)}
-            <button
-              className="secondary-button"
-              data-testid="email-ai-clear-provenance"
-              type="button"
-              onClick={() =>
-                onEmailDraftChange({
-                  ...emailDraft,
-                  aiAssisted: false,
-                  aiPurpose: undefined,
-                  aiSourceMessageId: undefined,
-                  aiSources: undefined,
-                  aiGeneratedAt: undefined
-                })
-              }
-              disabled={disabled}
-            >
-              <XCircle size={14} />
-              清除 AI 标记
+            <button className="primary-button" data-testid="email-send" type="button" onClick={onSend} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !emailDraft.bodyText.trim()}>
+              <Send size={16} />
+              发送
             </button>
           </div>
-        ) : null}
-        <div className="toolbar" style={{ marginTop: 12 }}>
-          <button className="primary-button" data-testid="email-send" type="button" onClick={onSend} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !emailDraft.bodyText.trim()}>
-            <Send size={16} />
-            发送
-          </button>
-          <button className="secondary-button" data-testid="email-open-ai" type="button" onClick={() => onViewChange("ai")}>
-            <Bot size={16} />
-            AI 辅助
-          </button>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
       ) : null}
 

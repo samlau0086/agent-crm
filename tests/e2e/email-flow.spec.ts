@@ -101,7 +101,7 @@ test("admin can use email workspace reply translate and send flow", async ({ pag
 
   await expect(page.getByText("E2E deployment reply").first()).toBeVisible();
   await page.getByTestId("email-tab-mail").click();
-  await page.getByText("E2E deployment reply").first().click();
+  await page.getByTestId(`email-thread-row-${thread.id}`).click();
   await expect(page.getByText("Please confirm the private deployment plan and launch training.")).toBeVisible();
 
   await page.getByTestId("email-tab-ai").click();
