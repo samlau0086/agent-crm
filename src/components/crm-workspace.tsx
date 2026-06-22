@@ -104,6 +104,7 @@ interface CrmWorkspaceProps {
 
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
+type EmailWorkspaceView = "mail" | "settings" | "ai";
 type AiSource = { label: string; objectKey?: string; recordId?: string; activityId?: string };
 type AiResponse = { text: string; sources: AiSource[] };
 type EmailAiSource = EmailAiSourceRef;
@@ -386,6 +387,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailThreads, setEmailThreads] = useState<EmailThread[]>(props.emailThreads);
   const [emailMessagesByThread, setEmailMessagesByThread] = useState<Record<string, EmailMessage[]>>({});
   const [selectedEmailThreadId, setSelectedEmailThreadId] = useState(props.emailThreads[0]?.id ?? "");
+  const [emailWorkspaceView, setEmailWorkspaceView] = useState<EmailWorkspaceView>("mail");
   const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
   const [emailAccountDraft, setEmailAccountDraft] = useState<EmailAccountDraft>(() => createEmptyEmailAccountDraft());
   const [emailDraft, setEmailDraft] = useState<EmailComposeDraft>({
@@ -514,6 +516,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const selectedNotes = useMemo(
     () => selectedActivities.filter((activity) => activity.type === "note"),
     [selectedActivities]
+  );
+  const selectedRecordEmailAddresses = useMemo(
+    () => (selectedRecord ? getRecordEmailAddresses(selectedFields, selectedRecord) : []),
+    [selectedFields, selectedRecord]
+  );
+  const selectedRecordEmailThreads = useMemo(
+    () => (selectedRecord ? getEmailThreadsForRecord(selectedRecord, records, emailThreads) : []),
+    [emailThreads, records, selectedRecord]
   );
   const openTasks = useMemo(
     () =>
@@ -1261,6 +1271,37 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailMessagesByThread((current) => ({ ...current, [threadId]: messages }));
   }
 
+  async function openEmailThread(threadId: string) {
+    selectEmailThread(threadId);
+    if (!emailMessagesByThread[threadId]) {
+      await loadEmailMessages(threadId);
+    }
+    setEmailWorkspaceView("mail");
+    setActiveNav("email");
+  }
+
+  function composeEmailForRecord(record: CrmRecord, emailAddress: string) {
+    setRecords((current) => mergeRecords(current, [record]));
+    setSelectedRecordId(record.id);
+    setSelectedEmailThreadId("");
+    setEmailAiResult(null);
+    setEmailDraft((current) =>
+      clearEmailDraftAiProvenance({
+        ...current,
+        accountId: current.accountId || emailAccounts.find((account) => account.status === "active" && account.sendEnabled && account.connectionConfigured)?.id || "",
+        recordId: record.id,
+        to: emailAddress,
+        cc: "",
+        bcc: "",
+        subject: "",
+        bodyText: "",
+        attachments: []
+      })
+    );
+    setEmailWorkspaceView("mail");
+    setActiveNav("email");
+  }
+
   function selectEmailThread(threadId: string) {
     if (threadId !== selectedEmailThreadId) {
       setEmailDraft((current) => clearEmailDraftAiProvenance(current));
@@ -1940,6 +1981,52 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       )}
                     </div>
 
+                    {(selectedRecordEmailAddresses.length > 0 || selectedRecordEmailThreads.length > 0) && (
+                      <section style={{ marginTop: 16 }}>
+                        <div className="property-name" style={{ marginBottom: 8 }}>
+                          邮件活动
+                        </div>
+                        {selectedRecordEmailAddresses.length > 0 ? (
+                          <div className="toolbar" style={{ marginBottom: 10 }}>
+                            {selectedRecordEmailAddresses.map((emailAddress) => (
+                              <button
+                                className="secondary-button"
+                                data-testid={`record-email-compose-${selectedRecord.id}-${sanitizeTestId(emailAddress)}`}
+                                key={emailAddress}
+                                type="button"
+                                onClick={() => composeEmailForRecord(selectedRecord, emailAddress)}
+                              >
+                                <Mail size={16} />
+                                {emailAddress}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {selectedRecordEmailThreads.length > 0 ? (
+                          <div className="settings-list">
+                            {selectedRecordEmailThreads.map((thread) => (
+                              <button
+                                className="settings-item record-title"
+                                data-testid={`record-email-thread-${thread.id}`}
+                                key={thread.id}
+                                type="button"
+                                onClick={() => runAction(() => openEmailThread(thread.id))}
+                              >
+                                <strong>{thread.subject}</strong>
+                                <div className="subtle">
+                                  {thread.participantEmails.join(", ")}
+                                  {thread.lastMessageAt ? ` · ${formatDate(thread.lastMessageAt)}` : ""}
+                                </div>
+                                {thread.summary ? <div>{thread.summary}</div> : null}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="empty-state">暂无关联邮件线程</div>
+                        )}
+                      </section>
+                    )}
+
                     {selectedRecord.objectKey === "deals" && (
                       <section style={{ marginTop: 16 }}>
                         <div className="property-name" style={{ marginBottom: 8 }}>
@@ -2254,6 +2341,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             threads={emailThreads}
             messagesByThread={emailMessagesByThread}
             selectedThreadId={selectedEmailThreadId}
+            view={emailWorkspaceView}
             selectedRecord={selectedRecord}
             records={records}
             aiSettings={emailAiSettings}
@@ -2273,6 +2361,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onKnowledgeDraftChange={setKnowledgeDraft}
             onAiPurposeChange={setEmailAiPurpose}
             onAiPromptChange={setEmailAiPrompt}
+            onViewChange={setEmailWorkspaceView}
             onSelectThread={(threadId) => {
               selectEmailThread(threadId);
               if (!emailMessagesByThread[threadId]) {
@@ -2402,6 +2491,7 @@ function EmailWorkspace({
   threads,
   messagesByThread,
   selectedThreadId,
+  view,
   selectedRecord,
   records,
   aiSettings,
@@ -2421,6 +2511,7 @@ function EmailWorkspace({
   onKnowledgeDraftChange,
   onAiPurposeChange,
   onAiPromptChange,
+  onViewChange,
   onSelectThread,
   onUpdateThread,
   onCreateAccount,
@@ -2451,6 +2542,7 @@ function EmailWorkspace({
   threads: EmailThread[];
   messagesByThread: Record<string, EmailMessage[]>;
   selectedThreadId: string;
+  view: EmailWorkspaceView;
   selectedRecord?: CrmRecord;
   records: CrmRecord[];
   aiSettings: EmailAiSettings;
@@ -2470,6 +2562,7 @@ function EmailWorkspace({
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
   onAiPurposeChange: (purpose: EmailAiGenerateResult["purpose"]) => void;
   onAiPromptChange: (prompt: string) => void;
+  onViewChange: (view: EmailWorkspaceView) => void;
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
   onCreateAccount: () => void;
@@ -2600,6 +2693,22 @@ function EmailWorkspace({
   }
 
   return (
+    <div className="email-workspace">
+      <div className="tabs email-tabs" data-testid="email-workspace-tabs">
+        <button className={`tab ${view === "mail" ? "active" : ""}`} data-testid="email-tab-mail" type="button" onClick={() => onViewChange("mail")}>
+          收发信
+        </button>
+        {canManageEmailSettings ? (
+          <button className={`tab ${view === "settings" ? "active" : ""}`} data-testid="email-tab-settings" type="button" onClick={() => onViewChange("settings")}>
+            邮箱设置
+          </button>
+        ) : null}
+        <button className={`tab ${view === "ai" ? "active" : ""}`} data-testid="email-tab-ai" type="button" onClick={() => onViewChange("ai")}>
+          AI 与知识库
+        </button>
+      </div>
+
+      {view === "settings" ? (
     <div className="email-grid">
       <section className="section">
         <div className="settings-panel-header">
@@ -2811,7 +2920,11 @@ function EmailWorkspace({
       </section>
 
       {canManageEmailSettings ? <EmailDiagnosticsPanel diagnostics={diagnostics} connectionTestRun={connectionTestRun} disabled={disabled} onRefresh={onRefreshDiagnostics} onTestAll={onTestAllConnections} onRetryMessage={onRetryMessage} /> : null}
+    </div>
+      ) : null}
 
+      {view === "mail" ? (
+    <div className="email-grid">
       <section className="section">
         <h2 className="page-title" style={{ fontSize: 18 }}>邮件线程</h2>
         <div className="toolbar" style={{ marginTop: 8 }}>
@@ -2935,7 +3048,7 @@ function EmailWorkspace({
       </section>
 
       <section className="section">
-        <h2 className="page-title" style={{ fontSize: 18 }}>撰写与 AI</h2>
+        <h2 className="page-title" style={{ fontSize: 18 }}>撰写邮件</h2>
         <div className="form-grid" style={{ marginTop: 12 }}>
           <label>
             <span className="subtle">发件账户</span>
@@ -3034,8 +3147,18 @@ function EmailWorkspace({
             <Send size={16} />
             发送
           </button>
+          <button className="secondary-button" data-testid="email-open-ai" type="button" onClick={() => onViewChange("ai")}>
+            <Bot size={16} />
+            AI 辅助
+          </button>
         </div>
+      </section>
+    </div>
+      ) : null}
 
+      {view === "ai" ? (
+      <section className="section">
+        <h2 className="page-title" style={{ fontSize: 18 }}>AI 与知识库</h2>
         <div className="ai-box">
           <div className="activity-meta"><Bot size={16} />邮件 AI</div>
           <div className="toolbar" data-testid="email-ai-policy-summary" style={{ marginTop: 8 }}>
@@ -3186,6 +3309,7 @@ function EmailWorkspace({
           ) : null}
         </div>
       </section>
+      ) : null}
     </div>
   );
 }
@@ -3233,6 +3357,46 @@ function Metric({ label, value, icon: Icon }: { label: string; value: string | n
       <span className="metric-value">{value}</span>
     </div>
   );
+}
+
+function getRecordEmailAddresses(fields: FieldDefinition[], record: CrmRecord): string[] {
+  const candidates = fields.flatMap((field) => {
+    const value = record.data[field.key];
+    if (typeof value !== "string") {
+      return [];
+    }
+    const keyLooksEmail = field.key.toLowerCase().includes("email");
+    const labelLooksEmail = field.label.toLowerCase().includes("邮箱") || field.label.toLowerCase().includes("email");
+    if (!keyLooksEmail && !labelLooksEmail && !looksLikeEmail(value)) {
+      return [];
+    }
+    return splitEmailList(value).filter(looksLikeEmail);
+  });
+
+  return [...new Set(candidates.map((email) => email.toLowerCase()))];
+}
+
+function getEmailThreadsForRecord(record: CrmRecord, records: CrmRecord[], threads: EmailThread[]): EmailThread[] {
+  const recordIds = new Set([record.id]);
+  if (record.objectKey === "companies") {
+    for (const candidate of records) {
+      if (candidate.objectKey === "contacts" && candidate.data.companyId === record.id) {
+        recordIds.add(candidate.id);
+      }
+    }
+  }
+
+  return threads
+    .filter((thread) => Boolean(thread.recordId && recordIds.has(thread.recordId)))
+    .sort((left, right) => new Date(right.lastMessageAt ?? right.updatedAt).getTime() - new Date(left.lastMessageAt ?? left.updatedAt).getTime());
+}
+
+function looksLikeEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function sanitizeTestId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function TaskView({

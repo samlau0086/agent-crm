@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { loginAsAdmin, waitForRecord, type CrmRecordPayload } from "./helpers";
+import { loginAsAdmin, openObject, waitForRecord, type CrmRecordPayload } from "./helpers";
 
 type EmailAccountPayload = {
   id: string;
@@ -85,6 +85,9 @@ test("admin can use email workspace reply translate and send flow", async ({ pag
 
   await page.goto("/");
   await page.getByTestId("nav-email").click();
+  await expect(page.getByTestId("email-tab-mail")).toHaveClass(/active/);
+  await expect(page.getByTestId("email-account-create")).toHaveCount(0);
+  await page.getByTestId("email-tab-settings").click();
   await expect(page.getByTestId("email-sync-all")).toBeEnabled();
   await page.getByTestId(`email-account-edit-${account.id}`).click();
   await page.getByTestId("email-account-name").fill(`E2E Rotated Mailbox ${suffix}`);
@@ -97,9 +100,11 @@ test("admin can use email workspace reply translate and send flow", async ({ pag
   expect(updatedAccount.connectionConfigured).toBe(true);
 
   await expect(page.getByText("E2E deployment reply").first()).toBeVisible();
+  await page.getByTestId("email-tab-mail").click();
   await page.getByText("E2E deployment reply").first().click();
   await expect(page.getByText("Please confirm the private deployment plan and launch training.")).toBeVisible();
 
+  await page.getByTestId("email-tab-ai").click();
   await page.getByTestId("knowledge-title").fill(`E2E AI Knowledge ${suffix}`);
   await page.getByTestId("knowledge-tags").fill("deployment, training");
   await page.getByTestId("knowledge-body").fill("Private deployment plans must include training schedule, owner handoff, and rollback contacts.");
@@ -119,6 +124,7 @@ test("admin can use email workspace reply translate and send flow", async ({ pag
   await page.getByTestId("email-ai-prompt").fill("Confirm the private deployment training plan");
   await expect(page.getByTestId("email-ai-generate")).toBeEnabled();
   await page.getByTestId("email-ai-generate").click();
+  await page.getByTestId("email-tab-mail").click();
   await expect(page.getByTestId("email-compose-body")).toContainText("Thank you for the recent conversation");
   await expect(page.getByTestId(`email-ai-source-record-${contact.id}`).first()).toBeVisible();
   await expect(page.getByTestId(`email-ai-source-message-${inbound.id}`).first()).toBeVisible();
@@ -135,6 +141,24 @@ test("admin can use email workspace reply translate and send flow", async ({ pag
 
   await page.getByTestId(`email-message-translate-${inbound.id}`).click();
   await expect(page.getByTestId("email-message-translation").filter({ hasText: "Content to translate" })).toBeVisible();
+
+  await openObject(page, "contacts");
+  await page.getByTestId("record-search-contacts").fill(contact.title);
+  await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-list-loading", "false");
+  await page.getByTestId(`record-row-${contact.id}`).click();
+  await expect(page.getByTestId(`record-email-thread-${inbound.threadId}`)).toBeVisible();
+  await page.getByTestId(`record-email-compose-${contact.id}-${String(contact.data.email).replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "")}`).click();
+  await expect(page.getByTestId("email-tab-mail")).toHaveClass(/active/);
+  await expect(page.getByTestId("email-compose-to")).toHaveValue(String(contact.data.email));
+  await expect(page.getByTestId("email-compose-subject")).toHaveValue("");
+
+  await openObject(page, "contacts");
+  await page.getByTestId("record-search-contacts").fill(contact.title);
+  await expect(page.getByTestId("crm-workspace")).toHaveAttribute("data-list-loading", "false");
+  await page.getByTestId(`record-row-${contact.id}`).click();
+  await page.getByTestId(`record-email-thread-${inbound.threadId}`).click();
+  await expect(page.getByTestId("email-tab-mail")).toHaveClass(/active/);
+  await expect(page.getByText("Please confirm the private deployment plan and launch training.")).toBeVisible();
 
   const messagesResponse = await page.request.get(`/api/email/threads/${inbound.threadId}/messages`);
   expect(messagesResponse.ok()).toBe(true);
