@@ -99,6 +99,9 @@ export interface EmailSyncSchedulerDiagnostics extends EmailDiagnosticCheck {
   intervalMs: number;
   limit?: number;
   userId: string;
+  configuredUserId: string;
+  userIdSource: "EMAIL_SYNC_USER_ID" | "JOB_USER_ID" | "default";
+  fallbackToAdmin: boolean;
   queueBacked: boolean;
   syncEnabledAccounts?: number;
 }
@@ -234,7 +237,8 @@ export function buildEmailSyncSchedulerDiagnostics(
   const parsedInterval = rawInterval ? Number(rawInterval) : 300000;
   const rawLimit = env.EMAIL_SYNC_LIMIT?.trim();
   const parsedLimit = rawLimit ? Number(rawLimit) : undefined;
-  const userId = env.EMAIL_SYNC_USER_ID?.trim() || env.JOB_USER_ID?.trim() || "user-admin";
+  const userIdentity = resolveEmailSyncUserIdentity(env);
+  const userId = userIdentity.userId;
   const queueBacked = (env.JOB_EXECUTOR ?? "inline").trim() === "redis";
   const syncEnabledAccounts = accounts?.syncEnabled;
 
@@ -243,6 +247,9 @@ export function buildEmailSyncSchedulerDiagnostics(
       status: "error",
       intervalMs: 300000,
       userId,
+      configuredUserId: userIdentity.configuredUserId,
+      userIdSource: userIdentity.userIdSource,
+      fallbackToAdmin: userIdentity.fallbackToAdmin,
       queueBacked,
       syncEnabledAccounts,
       message: "EMAIL_SYNC_INTERVAL_MS must be a positive integer when continuous mailbox sync is enabled"
@@ -255,6 +262,9 @@ export function buildEmailSyncSchedulerDiagnostics(
       status: "error",
       intervalMs,
       userId,
+      configuredUserId: userIdentity.configuredUserId,
+      userIdSource: userIdentity.userIdSource,
+      fallbackToAdmin: userIdentity.fallbackToAdmin,
       queueBacked,
       syncEnabledAccounts,
       message: "EMAIL_SYNC_LIMIT must be an integer between 1 and 100 when configured"
@@ -267,9 +277,12 @@ export function buildEmailSyncSchedulerDiagnostics(
       intervalMs,
       limit,
       userId,
+      configuredUserId: userIdentity.configuredUserId,
+      userIdSource: userIdentity.userIdSource,
+      fallbackToAdmin: userIdentity.fallbackToAdmin,
       queueBacked,
       syncEnabledAccounts,
-      message: `Email sync scheduler runs every ${intervalMs} ms as ${userId}${limit ? ` with limit ${limit}` : ""}; ${syncEnabledAccounts} sync-enabled account(s) will run inline unless JOB_EXECUTOR=redis is configured`
+      message: `Email sync scheduler runs every ${intervalMs} ms with preferred user ${userId} from ${userIdentity.userIdSource}${userIdentity.fallbackToAdmin ? " and can fall back to the first active crm.admin user" : ""}${limit ? ` with limit ${limit}` : ""}; ${syncEnabledAccounts} sync-enabled account(s) will run inline unless JOB_EXECUTOR=redis is configured`
     };
   }
 
@@ -278,9 +291,39 @@ export function buildEmailSyncSchedulerDiagnostics(
     intervalMs,
     limit,
     userId,
+    configuredUserId: userIdentity.configuredUserId,
+    userIdSource: userIdentity.userIdSource,
+    fallbackToAdmin: userIdentity.fallbackToAdmin,
     queueBacked,
     syncEnabledAccounts,
-    message: `Email sync scheduler runs every ${intervalMs} ms as ${userId}${limit ? ` with limit ${limit}` : ""}${queueBacked ? " and enqueues jobs through Redis" : ""}`
+    message: `Email sync scheduler runs every ${intervalMs} ms with preferred user ${userId} from ${userIdentity.userIdSource}${userIdentity.fallbackToAdmin ? " and can fall back to the first active crm.admin user" : ""}${limit ? ` with limit ${limit}` : ""}${queueBacked ? " and enqueues jobs through Redis" : ""}`
+  };
+}
+
+function resolveEmailSyncUserIdentity(env: NodeJS.ProcessEnv): Pick<EmailSyncSchedulerDiagnostics, "userId" | "configuredUserId" | "userIdSource" | "fallbackToAdmin"> {
+  const emailSyncUserId = env.EMAIL_SYNC_USER_ID?.trim();
+  if (emailSyncUserId) {
+    return {
+      userId: emailSyncUserId,
+      configuredUserId: emailSyncUserId,
+      userIdSource: "EMAIL_SYNC_USER_ID",
+      fallbackToAdmin: true
+    };
+  }
+  const jobUserId = env.JOB_USER_ID?.trim();
+  if (jobUserId) {
+    return {
+      userId: jobUserId,
+      configuredUserId: jobUserId,
+      userIdSource: "JOB_USER_ID",
+      fallbackToAdmin: true
+    };
+  }
+  return {
+    userId: "user-admin",
+    configuredUserId: "user-admin",
+    userIdSource: "default",
+    fallbackToAdmin: true
   };
 }
 

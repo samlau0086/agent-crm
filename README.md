@@ -86,10 +86,16 @@ Docker 私有化部署验收：
 npm run deploy:verify
 ```
 
-该命令会校验 Docker Compose 配置、构建镜像、启动服务、检查 `/api/health`，并在 `web` 容器内验证 PostgreSQL client、备份 dry-run 和邮件 diagnostics。上线前需要同时验证真实邮箱连接、AI provider 和邮件应用 smoke 流程时追加 `-- --run-email-connections --run-email-ai-provider --run-email-smoke`。没有 Docker 的开发环境可以先运行：
+该命令会校验 Docker Compose 配置、构建镜像、启动服务、检查 `/api/health`，并在 `web` 容器内验证 PostgreSQL client、备份 dry-run 和邮件 diagnostics。上线前需要同时验证真实邮箱连接、AI provider、邮件应用 smoke 流程并要求 `readiness.liveTrafficReady=true` 时运行：
 
 ```bash
-npm run deploy:verify -- --dry-run
+npm run deploy:verify:live-email
+```
+
+没有 Docker 的开发环境可以先运行：
+
+```bash
+npm run deploy:verify:dry-run
 ```
 
 ## GitHub Actions 部署到 VPS
@@ -101,12 +107,14 @@ GitHub Actions Secrets：
 - `VPS_HOST`：VPS IP 或域名。
 - `VPS_USER`：SSH 用户。
 - `VPS_SSH_KEY`：SSH 私钥。
-- `VPS_PORT`：SSH 端口，默认 `22`，可选。
-- `POSTGRES_PASSWORD`：外部 Postgres 密码。
+- `VPS_PORT`：SSH 端口，默认 `22`，可选；优先建议放在 Variables，同名 Secret 仍兼容。
+- `POSTGRES_PASSWORD`：外部 Postgres 密码；workflow 渲染 `DATABASE_URL` 时会自动 URL encode，手写 `DATABASE_URL` 时才需要自己编码。
 - `EMAIL_CONFIG_SECRET`：邮箱 SMTP/IMAP/OAuth 凭据加密密钥。至少 16 字符，建议 32 字符以上；必须长期稳定保存，不能每次部署重新生成。更换它会导致已有邮箱配置无法解密，除非先做密钥轮换迁移。
 - `EMAIL_OAUTH_STATE_SECRET`：Gmail/Outlook OAuth state 签名密钥。至少 16 字符，建议 32 字符以上；必须和 `EMAIL_CONFIG_SECRET` 使用不同随机值。
-- `APP_BASE_URL`：对外访问地址，例如 `https://crm.example.com`，可选。
-- `AI_API_KEY`、`GMAIL_OAUTH_CLIENT_ID`、`GMAIL_OAUTH_CLIENT_SECRET`、`OUTLOOK_OAUTH_CLIENT_ID`、`OUTLOOK_OAUTH_CLIENT_SECRET`：按需配置。
+- `APP_BASE_URL`：对外访问地址，例如 `https://crm.example.com`，可选；优先建议放在 Variables，同名 Secret 仍兼容。
+- `AI_API_KEY`：按需配置；如果启用 `RUN_EMAIL_AI_PROVIDER_TEST=true` 或 `REQUIRE_LIVE_EMAIL_READINESS=true`，该 Secret 必须存在，否则 workflow 会在部署前失败。
+- `GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET`：使用 Gmail OAuth 时成对配置；只配置其中一个会被部署校验拒绝。
+- `OUTLOOK_OAUTH_CLIENT_ID` / `OUTLOOK_OAUTH_CLIENT_SECRET`：使用 Outlook OAuth 时成对配置；只配置其中一个会被部署校验拒绝。
 - `GHCR_USERNAME`、`GHCR_TOKEN`：GHCR 私有包拉取凭据，可选；公开包或默认 token 可用时不需要。
 
 生成邮箱相关密钥：
@@ -127,14 +135,23 @@ openssl rand -base64 32
 GitHub Actions Variables：
 
 - `VPS_APP_PORT`：VPS 对外暴露的 Web 端口，例如 `3000`。手动运行 workflow 时填写的 `app_port` 会覆盖它。
+- `VPS_PORT`：SSH 端口，默认 `22`；会优先覆盖同名 Secret。
+- `APP_BASE_URL`：CRM 对外访问 origin，例如 `https://crm.example.com`；会优先覆盖同名 Secret。未设置时 workflow 会使用 `http://VPS_HOST:APP_PORT`。
 - `POSTGRES_HOST`：默认 `host.docker.internal`。你的外部 Postgres 容器映射为 `5433:5432` 时保持默认即可。
 - `POSTGRES_PORT`：默认 `5433`。
 - `POSTGRES_USER`：默认 `crm`。
 - `POSTGRES_DB`：默认 `ai_agent_crm`。
 - `ALLOW_INSECURE_APP_BASE_URL`：直接用 `http://ip:port` 部署时可设为 `true`；HTTPS 域名部署建议为 `false`。
-- `EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SYNC_USER_ID`、`AI_PROVIDER`、`AI_BASE_URL`、`AI_MODEL`、`AI_TIMEOUT_MS`、`GMAIL_OAUTH_SCOPE`、`OUTLOOK_OAUTH_SCOPE`：按需覆盖默认值。
+- `SEED_ON_EMPTY`、`EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SYNC_USER_ID`、`EMAIL_VERIFY_USER_ID`、`EMAIL_SEND_CLAIM_TIMEOUT_MS`、`AI_PROVIDER`、`AI_BASE_URL`、`AI_MODEL`、`AI_TIMEOUT_MS`、`GMAIL_OAUTH_SCOPE`、`OUTLOOK_OAUTH_SCOPE`：按需覆盖默认值。
+- `EMAIL_VERIFY_USER_ID`：部署后 `email:verify` 优先使用的管理员用户 ID，默认跟随 `EMAIL_SYNC_USER_ID`，再尝试 `user-admin`；如果该用户不存在，脚本会自动回退到第一个 active `crm.admin` 用户。全新空库可临时设置 `SEED_ON_EMPTY=true` 初始化演示管理员，随后改回 `false`。
+- `RUN_EMAIL_CONNECTION_TESTS`、`RUN_EMAIL_AI_PROVIDER_TEST`、`RUN_EMAIL_SMOKE_TEST`：设为 `true` 时，每次自动部署都会在 VPS 的 `web` 容器内运行对应的 `email:verify` 真实邮箱、AI provider 或应用 smoke 检查。手动运行 workflow 时，也可以用 `run_email_connections`、`run_email_ai_provider`、`run_email_smoke` 输入临时开启。
+- `REQUIRE_LIVE_EMAIL_READINESS`：设为 `true` 时，自动部署会追加 `email:verify --require-live-readiness`，并自动运行真实邮箱连接、AI provider 生成和 smoke 检查；只有 `readiness.liveTrafficReady=true` 才算成功。启用它后不需要再单独设置上面三个 `RUN_EMAIL_*` 变量。
+
+部署前 workflow 会先校验配置：邮件密钥必须不是 placeholder、长度至少 16 字符且两条值不同；启用 AI provider 验证或 live readiness 时必须设置 `AI_API_KEY`；Gmail/Outlook OAuth client id 和 secret 必须成对出现；`EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SEND_CLAIM_TIMEOUT_MS` 和 live readiness 组合也会在 SSH 前校验。
 
 当前 VPS 部署假设 Postgres 由另一个容器管理，并在 VPS 宿主机上映射 `5433:5432`。CRM 容器通过 `host.docker.internal:5433` 连接数据库；该部署栈只管理 `web`、`worker`、`email-sync` 和 `redis`，并把 Redis 数据和备份目录挂载到 `/opt/ai-agent-crm`。完整说明见 [`docs/vps-github-actions-deploy.md`](docs/vps-github-actions-deploy.md)。
+
+每次 VPS 部署都会先清理旧的邮件验证结果，再把最近一次 `email:verify` 的完整 JSON 结果保存为 `/opt/ai-agent-crm/email-verify-last.json`，并把紧凑摘要保存为 `/opt/ai-agent-crm/email-verify-last-summary.txt`，便于回看 `liveTrafficReady`、blockers 和 manualActions。没有 `jq` 时可用 `npm run email:verify:report -- --file email-verify-last.json --fail-on-not-ready=false` 查看摘要。
 
 ## 数据库
 

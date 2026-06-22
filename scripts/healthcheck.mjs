@@ -39,6 +39,8 @@ function formatHealthSummary(body) {
     `emailAiFallbacks=${body?.emailReadiness?.aiProviderFallbacks?.recentFallbackCount ?? body?.email?.aiProviderFallbacks?.recentFallbackCount ?? "unknown"}`,
     `emailAutoSummary=${body?.emailReadiness?.autoSummaryPolicy?.status ?? body?.email?.autoSummaryPolicy?.status ?? "unknown"}`,
     `emailSync=${body?.emailReadiness?.syncScheduler?.status ?? body?.email?.syncScheduler?.status ?? "unknown"}`,
+    `emailSyncUserSource=${body?.emailReadiness?.syncScheduler?.userIdSource ?? body?.email?.syncScheduler?.userIdSource ?? "unknown"}`,
+    `emailSyncFallback=${body?.emailReadiness?.syncScheduler?.fallbackToAdmin ?? body?.email?.syncScheduler?.fallbackToAdmin ?? "unknown"}`,
     `emailSendClaims=${body?.emailReadiness?.sendClaims?.staleCount ?? body?.email?.sendClaims?.staleCount ?? "unknown"}`
   ];
   if (body?.error) {

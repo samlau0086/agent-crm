@@ -884,9 +884,7 @@ await run("deployment verification can include real email ai and smoke checks", 
       "--skip-up",
       "--skip-backup",
       "--skip-health",
-      "--run-email-connections",
-      "--run-email-ai-provider",
-      "--run-email-smoke"
+      "--require-live-email"
     ],
     {
       cwd: process.cwd(),
@@ -897,9 +895,51 @@ await run("deployment verification can include real email ai and smoke checks", 
   assert.equal(result.status, 0, result.stderr);
   const plan = JSON.parse(result.stdout);
   const emailStep = plan.steps.find((step) => step.name === "Validate email subsystem diagnostics");
-  assert.equal(emailStep.args.includes("--test-connections"), true);
-  assert.equal(emailStep.args.includes("--test-ai-provider"), true);
-  assert.equal(emailStep.args.includes("--smoke"), true);
+  assert.equal(emailStep.args.includes("--test-connections"), false);
+  assert.equal(emailStep.args.includes("--test-ai-provider"), false);
+  assert.equal(emailStep.args.includes("--smoke"), false);
+  assert.equal(emailStep.args.includes("--require-live-readiness"), true);
+});
+
+await run("email verification report summarizes saved readiness json", async () => {
+  const directory = await makeTempDir("crm-email-verify-report");
+  const reportPath = join(directory, "email-verify-last.json");
+  await writeFile(
+    reportPath,
+    JSON.stringify(
+      {
+        ok: false,
+        liveReadinessRequired: true,
+        userId: "user-admin",
+        operationalUser: { resolvedUserId: "user-admin", fallbackUsed: false },
+        readiness: {
+          liveTrafficReady: false,
+          automatedChecksOk: true,
+          mailboxConnections: { passed: 1, tested: 2, required: true },
+          aiProvider: { status: "ok", verified: true },
+          applicationSmoke: { status: "error", verified: false },
+          blockers: ["smoke failed"],
+          warnings: ["one mailbox failed"],
+          manualActions: ["reconnect mailbox"]
+        }
+      },
+      null,
+      2
+    )
+  );
+
+  const result = spawnSync(process.execPath, ["scripts/email-verify-report.mjs", "--file", reportPath, "--fail-on-not-ready=false"], {
+    cwd: process.cwd(),
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /ok=false/);
+  assert.match(result.stdout, /liveTrafficReady=false/);
+  assert.match(result.stdout, /mailboxes=1\/2/);
+  assert.match(result.stdout, /applicationSmoke=error/);
+  assert.match(result.stdout, /blockers=1/);
+  assert.match(result.stdout, /- smoke failed/);
 });
 
 await run("github actions vps deployment publishes ghcr image and deploys compose under opt", () => {
@@ -908,17 +948,37 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   const envExample = readFileSync("deploy/vps.env.example", "utf8");
   const docs = readFileSync("docs/vps-github-actions-deploy.md", "utf8");
   const readme = readFileSync("README.md", "utf8");
+  const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 
   assert.match(workflow, /name: Deploy VPS/);
   assert.match(workflow, /branches:\s*\n\s*- main/);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /run_email_connections:/);
+  assert.match(workflow, /run_email_ai_provider:/);
+  assert.match(workflow, /run_email_smoke:/);
+  assert.match(workflow, /require_live_email:/);
   assert.match(workflow, /DEPLOY_PATH: \/opt\/ai-agent-crm/);
   assert.match(workflow, /docker\/build-push-action@v6/);
   assert.match(workflow, /ghcr\.io\/\$\{repository\}/);
   assert.match(workflow, /VPS_HOST/);
   assert.match(workflow, /VPS_SSH_KEY/);
+  assert.match(workflow, /VPS_PORT: \$\{\{ vars\.VPS_PORT \|\| secrets\.VPS_PORT \|\| '22' \}\}/);
+  assert.match(workflow, /APP_BASE_URL_CONFIGURED: \$\{\{ vars\.APP_BASE_URL \|\| secrets\.APP_BASE_URL \}\}/);
   assert.match(workflow, /POSTGRES_PASSWORD/);
   assert.match(workflow, /EMAIL_CONFIG_SECRET/);
+  assert.match(workflow, /Weak email secret/);
+  assert.match(workflow, /EMAIL_CONFIG_SECRET EMAIL_OAUTH_STATE_SECRET/);
+  assert.match(workflow, /must be at least 16 characters/);
+  assert.match(workflow, /Placeholder email secret/);
+  assert.match(workflow, /replace-with-\*/);
+  assert.match(workflow, /Duplicate email secrets/);
+  assert.match(workflow, /EMAIL_CONFIG_SECRET and EMAIL_OAUTH_STATE_SECRET must be different random values/);
+  assert.match(workflow, /RUN_EMAIL_AI_PROVIDER_TEST: \$\{\{ inputs\.run_email_ai_provider \|\| vars\.RUN_EMAIL_AI_PROVIDER_TEST \|\| 'false' \}\}/);
+  assert.match(workflow, /REQUIRE_LIVE_EMAIL_READINESS: \$\{\{ inputs\.require_live_email \|\| vars\.REQUIRE_LIVE_EMAIL_READINESS \|\| 'false' \}\}/);
+  assert.match(workflow, /Missing AI secret/);
+  assert.match(workflow, /AI_API_KEY is required when AI provider verification or live email readiness is enabled/);
+  assert.match(workflow, /Partial OAuth configuration/);
+  assert.match(workflow, /OAuth requires both \$\{id_name\} and \$\{secret_name\}/);
   assert.match(workflow, /APP_PORT must be an integer between 1 and 65535/);
   assert.match(workflow, /POSTGRES_HOST is required/);
   assert.match(workflow, /POSTGRES_PORT must be an integer between 1 and 65535/);
@@ -927,14 +987,64 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /POSTGRES_PORT: \$\{\{ vars\.POSTGRES_PORT \|\| '5433' \}\}/);
   assert.match(workflow, /POSTGRES_USER: \$\{\{ vars\.POSTGRES_USER \|\| 'crm' \}\}/);
   assert.match(workflow, /POSTGRES_DB: \$\{\{ vars\.POSTGRES_DB \|\| 'ai_agent_crm' \}\}/);
+  assert.match(workflow, /SEED_ON_EMPTY: \$\{\{ vars\.SEED_ON_EMPTY \|\| 'false' \}\}/);
+  assert.match(workflow, /EMAIL_DELIVERY_MODE: \$\{\{ vars\.EMAIL_DELIVERY_MODE \|\| 'live' \}\}/);
+  assert.match(workflow, /EMAIL_SYNC_INTERVAL_MS: \$\{\{ vars\.EMAIL_SYNC_INTERVAL_MS \|\| '300000' \}\}/);
+  assert.match(workflow, /EMAIL_SYNC_LIMIT: \$\{\{ vars\.EMAIL_SYNC_LIMIT \|\| '25' \}\}/);
+  assert.match(workflow, /EMAIL_SEND_CLAIM_TIMEOUT_MS: \$\{\{ vars\.EMAIL_SEND_CLAIM_TIMEOUT_MS \|\| '900000' \}\}/);
+  assert.match(workflow, /RUN_EMAIL_CONNECTION_TESTS: \$\{\{ inputs\.run_email_connections \|\| vars\.RUN_EMAIL_CONNECTION_TESTS \|\| 'false' \}\}/);
+  assert.match(workflow, /RUN_EMAIL_SMOKE_TEST: \$\{\{ inputs\.run_email_smoke \|\| vars\.RUN_EMAIL_SMOKE_TEST \|\| 'false' \}\}/);
+  assert.match(workflow, /require_bool\(\)/);
+  assert.match(workflow, /require_positive_integer\(\)/);
+  assert.match(workflow, /RUN_EMAIL_CONNECTION_TESTS RUN_EMAIL_AI_PROVIDER_TEST RUN_EMAIL_SMOKE_TEST REQUIRE_LIVE_EMAIL_READINESS SEED_ON_EMPTY/);
+  assert.match(workflow, /\$\{name\} must be true or false/);
+  assert.match(workflow, /EMAIL_DELIVERY_MODE must be live or dry-run/);
+  assert.match(workflow, /REQUIRE_LIVE_EMAIL_READINESS requires EMAIL_DELIVERY_MODE=live/);
+  assert.match(workflow, /\$\{name\} must be a positive integer/);
+  assert.match(workflow, /require_positive_integer EMAIL_SYNC_INTERVAL_MS/);
+  assert.match(workflow, /require_positive_integer EMAIL_SEND_CLAIM_TIMEOUT_MS/);
+  assert.match(workflow, /EMAIL_SYNC_LIMIT must be an integer between 1 and 100/);
+  assert.match(workflow, /EMAIL_VERIFY_USER_ID: \$\{\{ vars\.EMAIL_VERIFY_USER_ID \|\| vars\.EMAIL_SYNC_USER_ID \|\| 'user-admin' \}\}/);
+  assert.match(workflow, /EMAIL_SEND_CLAIM_TIMEOUT_MS: \$\{\{ vars\.EMAIL_SEND_CLAIM_TIMEOUT_MS \|\| '900000' \}\}/);
+  assert.match(workflow, /encodeURIComponent/);
   assert.match(workflow, /write_env DATABASE_URL "\$database_url"/);
+  assert.match(workflow, /write_env SEED_ON_EMPTY "\$SEED_ON_EMPTY"/);
+  assert.match(workflow, /write_env EMAIL_VERIFY_USER_ID "\$EMAIL_VERIFY_USER_ID"/);
+  assert.match(workflow, /write_env EMAIL_SEND_CLAIM_TIMEOUT_MS "\$EMAIL_SEND_CLAIM_TIMEOUT_MS"/);
+  assert.match(workflow, /name: Validate rendered VPS env file/);
+  assert.match(workflow, /NODE_ENV: production/);
+  assert.match(workflow, /node scripts\/validate-env\.mjs --env-file vps\.env/);
   assert.match(workflow, /scp .*deploy\/docker-compose\.vps\.yml/);
+  assert.match(workflow, /docker run --rm --add-host=host\.docker\.internal:host-gateway alpine:3\.20/);
+  assert.match(workflow, /nc -z -w 5/);
   assert.match(workflow, /docker compose pull/);
   assert.match(workflow, /docker compose up -d --remove-orphans/);
   assert.match(workflow, /curl --fail --retry 30/);
+  assert.match(workflow, /RUN_EMAIL_CONNECTION_TESTS/);
+  assert.match(workflow, /RUN_EMAIL_AI_PROVIDER_TEST/);
+  assert.match(workflow, /RUN_EMAIL_SMOKE_TEST/);
+  assert.match(workflow, /REQUIRE_LIVE_EMAIL_READINESS/);
+  assert.match(workflow, /if \[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \]; then[\s\S]*--require-live-readiness[\s\S]*else[\s\S]*RUN_EMAIL_CONNECTION_TESTS/);
+  assert.match(workflow, /--require-live-readiness/);
+  assert.match(workflow, /verify_stdout="\$\(mktemp\)"/);
+  assert.match(workflow, /verify_stderr="\$\(mktemp\)"/);
+  assert.match(workflow, /rm -f email-verify-last\.json email-verify-last-summary\.txt/);
+  assert.match(workflow, /scripts\/email-verify\.ts \$email_verify_args >"\$verify_stdout" 2>"\$verify_stderr"/);
+  assert.match(workflow, /cp "\$verify_stderr" email-verify-last-summary\.txt/);
+  assert.match(workflow, /chmod 600 email-verify-last-summary\.txt/);
+  assert.match(workflow, /cp "\$verify_stdout" email-verify-last\.json/);
+  assert.match(workflow, /chmod 600 email-verify-last\.json/);
+  assert.match(workflow, /cat "\$verify_stdout"/);
+  assert.match(workflow, /scripts\/email-verify\.ts \$email_verify_args/);
 
   assert.match(compose, /image: \$\{CRM_IMAGE:\?Set CRM_IMAGE\}/);
   assert.match(compose, /DATABASE_URL: \$\{DATABASE_URL:\?Set DATABASE_URL\}/);
+  assert.match(compose, /EMAIL_SEND_CLAIM_TIMEOUT_MS: \$\{EMAIL_SEND_CLAIM_TIMEOUT_MS:-900000\}/);
+  assert.match(compose, /EMAIL_VERIFY_USER_ID: \$\{EMAIL_VERIFY_USER_ID:-user-admin\}/);
+  assert.match(compose, /GMAIL_OAUTH_CLIENT_ID: \$\{GMAIL_OAUTH_CLIENT_ID:-\}/);
+  assert.match(compose, /OUTLOOK_OAUTH_CLIENT_SECRET: \$\{OUTLOOK_OAUTH_CLIENT_SECRET:-\}/);
+  assert.equal((compose.match(/^\s+GMAIL_OAUTH_CLIENT_ID: \$\{GMAIL_OAUTH_CLIENT_ID:-\}/gm) ?? []).length, 3);
+  assert.equal((compose.match(/^\s+OUTLOOK_OAUTH_TOKEN_URL:/gm) ?? []).length, 3);
   assert.match(compose, /"\$\{APP_PORT:-3000\}:3000"/);
   assert.match(compose, /host\.docker\.internal:host-gateway/);
   assert.match(compose, /\$\{CRM_DATA_DIR:-\/opt\/ai-agent-crm\}\/redis-data:\/data/);
@@ -946,10 +1056,37 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(envExample, /APP_PORT=3000/);
   assert.match(envExample, /POSTGRES_HOST=host\.docker\.internal/);
   assert.match(envExample, /POSTGRES_PORT=5433/);
-  assert.match(envExample, /DATABASE_URL=postgresql:\/\/crm:replace-with-url-safe-database-password@host\.docker\.internal:5433\/ai_agent_crm\?schema=public/);
+  assert.match(envExample, /SEED_ON_EMPTY=false/);
+  assert.match(envExample, /EMAIL_VERIFY_USER_ID=user-admin/);
+  assert.match(envExample, /POSTGRES_PASSWORD=replace-with-database-password/);
+  assert.match(envExample, /URL-encode POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB/);
+  assert.match(envExample, /DATABASE_URL=postgresql:\/\/crm:replace-with-url-encoded-database-password@host\.docker\.internal:5433\/ai_agent_crm\?schema=public/);
   assert.match(docs, /\/opt\/ai-agent-crm/);
   assert.match(docs, /VPS_APP_PORT/);
+  assert.match(docs, /APP_BASE_URL/);
+  assert.match(docs, /VPS_PORT/);
   assert.match(docs, /POSTGRES_PASSWORD/);
+  assert.match(docs, /URL-encodes/);
+  assert.match(docs, /EMAIL_SEND_CLAIM_TIMEOUT_MS/);
+  assert.match(docs, /EMAIL_VERIFY_USER_ID/);
+  assert.match(docs, /SEED_ON_EMPTY=true/);
+  assert.match(docs, /RUN_EMAIL_CONNECTION_TESTS/);
+  assert.match(docs, /REQUIRE_LIVE_EMAIL_READINESS/);
+  assert.match(docs, /AI_API_KEY.*RUN_EMAIL_AI_PROVIDER_TEST=true.*REQUIRE_LIVE_EMAIL_READINESS=true/);
+  assert.match(docs, /GMAIL_OAUTH_CLIENT_ID.*GMAIL_OAUTH_CLIENT_SECRET/);
+  assert.match(docs, /OUTLOOK_OAUTH_CLIENT_ID.*OUTLOOK_OAUTH_CLIENT_SECRET/);
+  assert.match(docs, /Pre-Deployment Validation/);
+  assert.match(docs, /AI_API_KEY.*missing while AI provider verification or live email readiness is enabled/);
+  assert.match(docs, /OAuth client id configured without the matching client secret/);
+  assert.match(docs, /EMAIL_DELIVERY_MODE.*live readiness enabled while delivery mode is not `live`/);
+  assert.match(docs, /EMAIL_SYNC_INTERVAL_MS.*EMAIL_SYNC_LIMIT.*EMAIL_SEND_CLAIM_TIMEOUT_MS/);
+  assert.match(docs, /validate-env\.mjs --env-file vps\.env/);
+  assert.match(docs, /email-verify-last\.json/);
+  assert.match(docs, /email-verify-last-summary\.txt/);
+  assert.match(docs, /email-verify-report\.mjs/);
+  assert.match(docs, /--file \/dev\/stdin/);
+  assert.match(docs, /old JSON file is not left behind/);
+  assert.match(docs, /scripts\/email-verify\.ts/);
   assert.match(docs, /Postgres host/);
   assert.match(docs, /host\.docker\.internal:5433/);
   assert.match(docs, /5433:5432/);
@@ -964,10 +1101,34 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(readme, /openssl rand -base64 32/);
   assert.match(readme, /不要提交到 Git/);
   assert.match(readme, /VPS_APP_PORT/);
+  assert.match(readme, /APP_BASE_URL/);
+  assert.match(readme, /VPS_PORT/);
   assert.match(readme, /POSTGRES_HOST/);
   assert.match(readme, /POSTGRES_PORT/);
+  assert.match(readme, /EMAIL_SEND_CLAIM_TIMEOUT_MS/);
+  assert.match(readme, /EMAIL_VERIFY_USER_ID/);
+  assert.match(readme, /AI_API_KEY.*RUN_EMAIL_AI_PROVIDER_TEST=true.*REQUIRE_LIVE_EMAIL_READINESS=true/);
+  assert.match(readme, /GMAIL_OAUTH_CLIENT_ID.*GMAIL_OAUTH_CLIENT_SECRET/);
+  assert.match(readme, /OUTLOOK_OAUTH_CLIENT_ID.*OUTLOOK_OAUTH_CLIENT_SECRET/);
+  assert.match(readme, /Gmail\/Outlook OAuth client id 和 secret 必须成对出现/);
+  assert.match(readme, /EMAIL_DELIVERY_MODE.*EMAIL_SYNC_INTERVAL_MS.*EMAIL_SYNC_LIMIT.*EMAIL_SEND_CLAIM_TIMEOUT_MS.*SSH 前校验/);
+  assert.match(readme, /SEED_ON_EMPTY=true/);
+  assert.match(readme, /RUN_EMAIL_CONNECTION_TESTS/);
+  assert.match(readme, /REQUIRE_LIVE_EMAIL_READINESS/);
+  assert.match(readme, /email-verify-last\.json/);
+  assert.match(readme, /email-verify-last-summary\.txt/);
+  assert.match(readme, /run_email_connections/);
   assert.match(readme, /host\.docker\.internal:5433/);
   assert.match(readme, /5433:5432/);
+  assert.equal(packageJson.scripts["deploy:verify:dry-run"], "node scripts/deploy-verify.mjs --dry-run");
+  assert.equal(
+    packageJson.scripts["deploy:verify:live-email"],
+    "node scripts/deploy-verify.mjs --run-email-connections --run-email-ai-provider --run-email-smoke --require-live-email"
+  );
+  assert.equal(packageJson.scripts["email:verify:report"], "node scripts/email-verify-report.mjs");
+  assert.match(readme, /deploy:verify:dry-run/);
+  assert.match(readme, /deploy:verify:live-email/);
+  assert.match(readme, /email:verify:report/);
 });
 
 await run("service health payload exposes email readiness summary", async () => {
@@ -1037,6 +1198,9 @@ await run("service health payload exposes email readiness summary", async () => 
   assert.equal(payload.emailReadiness.syncScheduler.status, "ok");
   assert.equal(payload.emailReadiness.syncScheduler.intervalMs, 120000);
   assert.equal(payload.emailReadiness.syncScheduler.limit, 25);
+  assert.equal(payload.emailReadiness.syncScheduler.configuredUserId, "user-admin");
+  assert.equal(payload.emailReadiness.syncScheduler.userIdSource, "EMAIL_SYNC_USER_ID");
+  assert.equal(payload.emailReadiness.syncScheduler.fallbackToAdmin, true);
   assert.equal(payload.emailReadiness.syncScheduler.queueBacked, true);
   assert.equal(payload.emailReadiness.sendClaims.status, "ok");
   assert.equal(payload.emailReadiness.sendClaims.staleCount, 0);
@@ -1058,8 +1222,10 @@ await run("health scripts report email readiness fields", () => {
   assert.match(healthcheck, /emailAiFallbacks/);
   assert.match(healthcheck, /emailAutoSummary/);
   assert.match(healthcheck, /emailSync/);
-  assert.match(healthcheck, /emailSendClaims/);
+  assert.match(healthcheck, /emailSyncUserSource/);
+  assert.match(healthcheck, /emailSyncFallback/);
   assert.match(healthcheck, /syncScheduler/);
+  assert.match(healthcheck, /emailSendClaims/);
   assert.match(deployVerify, /emailReadiness\?\.ok/);
   assert.match(deployVerify, /formatHealthSummary/);
   assert.match(deployVerify, /emailSecrets/);
@@ -1069,6 +1235,8 @@ await run("health scripts report email readiness fields", () => {
   assert.match(deployVerify, /emailAiFallbacks/);
   assert.match(deployVerify, /emailSendClaims/);
   assert.match(deployVerify, /emailSync/);
+  assert.match(deployVerify, /emailSyncUserSource/);
+  assert.match(deployVerify, /emailSyncFallback/);
   assert.match(deployVerify, /syncScheduler/);
 });
 
@@ -1136,10 +1304,38 @@ await run("email workspace diagnostics display ai automation eligibility policy"
   assert.match(source, /accounts\.activeConnectionConfigured/);
   assert.match(source, /accounts\.sendConnectionConfigured/);
   assert.match(source, /accounts\.syncConnectionConfigured/);
+  assert.match(source, /syncScheduler\.configuredUserId/);
+  assert.match(source, /syncScheduler\.userIdSource/);
+  assert.match(source, /syncScheduler\.fallbackToAdmin/);
   assert.match(source, /featureDependencies\.map/);
   assert.match(source, /dependency\.feature\} needs \{dependency\.dependsOn/);
   assert.match(source, /provider\.missingScopes\.length/);
   assert.match(source, /missing scopes: \$\{provider\.missingScopes\.join\(", "\)\}/);
+});
+
+await run("email workspace displays compact thread summary provenance", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /data-testid="email-thread-summary"/);
+  assert.match(source, /selectedThread\?\.summaryUpdatedAt/);
+  assert.match(source, /selectedThread\.summary/);
+  assert.match(source, /用于后续 AI 上下文/);
+  assert.match(source, /减少长线程 token 消耗/);
+});
+
+await run("email workspace labels ai output provenance and human review", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /data-testid="email-ai-result-provenance"/);
+  assert.match(source, /aiResult\.sources\.length \? "badge" : "danger-badge"/);
+  assert.match(source, /来源 \{aiResult\.sources\.length\}/);
+  assert.match(source, /发送前人工确认/);
+});
+
+await run("email workspace labels ai-assisted draft provenance before send", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /emailDraft\.aiSources\?\.length \? "badge" : "danger-badge"/);
+  assert.match(source, /来源 \{emailDraft\.aiSources\?\.length \?\? 0\}/);
+  assert.match(source, /发送时保留 AI provenance/);
+  assert.match(source, /aiGeneratedAt \? ` · \$\{formatDate\(emailDraft\.aiGeneratedAt\)\}`/);
 });
 
 await run("email ai feature toggles allow disabling stale dependent automations", () => {
@@ -1147,6 +1343,17 @@ await run("email ai feature toggles allow disabling stale dependent automations"
   assert.match(source, /checked=\{enabled\}/);
   assert.match(source, /disabled=\{dependencyBlocked && !enabled\}/);
   assert.match(source, /isEmailAiFeatureBlockedByDependency\(featureKey, aiSettings\.features\)/);
+});
+
+await run("email workspace summarizes ai token and automation policy", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /const enabledEmailAiAutomationCount = \[aiSettings\.features\.auto_translate, aiSettings\.features\.auto_context_analysis, aiSettings\.features\.auto_summarize\]\.filter\(Boolean\)\.length/);
+  assert.match(source, /const activeKnowledgeArticleCount = knowledgeArticles\.filter\(\(article\) => article\.active\)\.length/);
+  assert.match(source, /data-testid="email-ai-policy-summary"/);
+  assert.match(source, /自动任务 \{enabledEmailAiAutomationCount\}\/3/);
+  assert.match(source, /来源引用 \{aiSettings\.requireSourceLinks \? "必需" : "可选"\}/);
+  assert.match(source, /知识 \{activeKnowledgeArticleCount\}\/\{aiSettings\.maxKnowledgeArticles\}/);
+  assert.match(source, /data-testid="email-ai-token-policy"[\s\S]*草稿、队列、发送中和失败邮件不会进入自动 AI 上下文/);
 });
 
 await run("email workspace can edit existing knowledge articles for ai context", () => {
@@ -1173,8 +1380,19 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /function clearEmailDraftAiProvenance\(draft: EmailComposeDraft\): EmailComposeDraft/);
   assert.match(source, /aiAssisted:\s*false/);
   assert.match(source, /aiSources:\s*undefined/);
+  assert.match(source, /data-testid="email-compose-account"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, accountId: event\.target\.value \}\)/);
+  assert.match(source, /<span className="subtle">关联记录<\/span>[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, recordId: event\.target\.value \}\)/);
+  assert.match(source, /data-testid="email-compose-to"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, to: event\.target\.value \}\)/);
+  assert.match(source, /data-testid="email-compose-cc"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, cc: event\.target\.value \}\)/);
+  assert.match(source, /data-testid="email-compose-bcc"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, bcc: event\.target\.value \}\)/);
   assert.match(source, /data-testid="email-compose-subject"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, subject: event\.target\.value \}\)/);
   assert.match(source, /data-testid="email-compose-body"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, bodyText: event\.target\.value \}\)/);
+  assert.match(source, /const accountId = current\.accountId \|\| props\.emailAccounts\[0\]\?\.id \|\| "";\s*return accountId === current\.accountId \? current : clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId \}\);/);
+  assert.match(source, /const nextSelectedThreadId = props\.emailThreads\.some\(\(thread\) => thread\.id === selectedEmailThreadId\) \? selectedEmailThreadId : props\.emailThreads\[0\]\?\.id \?\? "";\s*if \(nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
+  assert.match(source, /setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId: account\.id \}\)\)/);
+  assert.match(source, /function selectEmailThread\(threadId: string\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(threadId\);[\s\S]*\}/);
+  assert.match(source, /clearEmailDraftAiProvenance\(\{ \.\.\.current, recordId: thread\.recordId \|\| "" \}\)/);
+  assert.match(source, /onSelectThread=\{\(threadId\) => \{[\s\S]*selectEmailThread\(threadId\);/);
   assert.match(source, /setEmailDraft\(\(current\) => \(\{[\s\S]*aiAssisted:\s*true[\s\S]*aiSources:\s*result\.sources/);
 });
 
@@ -1250,7 +1468,7 @@ await run("email ai execution routes use controlled context executors and audit"
 await run("email verification dry run describes diagnostics and manual mailbox checks", () => {
   const result = spawnSync(
     process.execPath,
-    ["--experimental-strip-types", "--import", "./scripts/register-alias.mjs", "scripts/email-verify.ts", "--dry-run", "--test-connections", "--test-ai-provider", "--smoke", "--user-id", "user-admin"],
+    ["--experimental-strip-types", "--import", "./scripts/register-alias.mjs", "scripts/email-verify.ts", "--dry-run", "--require-live-readiness", "--user-id", "user-admin"],
     {
       cwd: process.cwd(),
       encoding: "utf8"
@@ -1260,9 +1478,11 @@ await run("email verification dry run describes diagnostics and manual mailbox c
   assert.equal(result.status, 0, result.stderr);
   const plan = JSON.parse(result.stdout);
   assert.equal(plan.userId, "user-admin");
+  assert.match(plan.userResolution, /explicit --user-id/);
   assert.equal(plan.runConnectionTests, true);
   assert.equal(plan.runAiProviderTest, true);
   assert.equal(plan.runSmoke, true);
+  assert.equal(plan.requireLiveReadiness, true);
   assert.equal(plan.steps.some((step) => step.includes("sync scheduler policy") && step.includes("AI context policy") && step.includes("AI automation failure audit") && step.includes("AI provider fallback audit")), true);
   assert.equal(plan.steps.includes("Run provider connection tests for active configured accounts"), true);
   assert.equal(plan.steps.includes("Run a source-backed AI provider generation check and require generationMode=provider"), true);
@@ -1273,6 +1493,7 @@ await run("email verification dry run describes diagnostics and manual mailbox c
   assert.equal(plan.automatedVerification.some((step) => step.includes("email crm smoke flow")), true);
   assert.equal(plan.automatedVerification.some((step) => step.includes("--test-ai-provider") && step.includes("generationMode=provider")), true);
   assert.equal(plan.automatedVerification.some((step) => step.includes("--smoke")), true);
+  assert.equal(plan.automatedVerification.some((step) => step.includes("--require-live-readiness") && step.includes("liveTrafficReady=true")), true);
   assert.equal(plan.automatedVerification.some((step) => step.includes("stale send claim recovery")), true);
   assert.equal(plan.automatedVerification.some((step) => step.includes("tests/e2e/email-flow.spec.ts")), true);
   assert.equal(plan.requiredEnvironment.some((item) => item.includes("GMAIL_OAUTH_SCOPE") && item.includes("Gmail read plus send")), true);
@@ -1289,7 +1510,47 @@ await run("email verification dry run describes diagnostics and manual mailbox c
   assert.equal(plan.manualVerification.some((step) => step.includes("OAuth authorization")), true);
   assert.equal(plan.manualVerification.some((step) => step.includes("AI entries include source counts") && step.includes("generationMode") && step.includes("providerError")), true);
   const script = readFileSync("scripts/email-verify.ts", "utf8");
+  const operationalUser = readFileSync("scripts/operational-user.ts", "utf8");
+  assert.match(script, /resolveOperationalUser/);
+  assert.match(script, /const runConnectionTests = Boolean\(args\["test-connections"\] \|\| requireLiveReadiness\)/);
+  assert.match(script, /const runAiProviderTest = Boolean\(args\["test-ai-provider"\] \|\| requireLiveReadiness\)/);
+  assert.match(script, /const runSmoke = Boolean\(args\.smoke \|\| requireLiveReadiness\)/);
+  assert.match(script, /operationalUser:\s*\{/);
+  assert.match(script, /fallbackUsed:\s*userResolution\.fallbackUsed/);
+  assert.match(operationalUser, /export interface OperationalUserResolution/);
+  assert.match(operationalUser, /fallbackUsed: Boolean\(requestedUserId && requestedUserId !== context\.user\.id\)/);
+  assert.match(operationalUser, /findFirst/);
+  assert.match(operationalUser, /permissions:\s*\{\s*has:\s*requiredPermission/);
+  assert.match(operationalUser, /No active user with \$\{requiredPermission\}/);
   assert.match(script, /const readiness = buildEmailVerificationReadiness/);
+  assert.match(script, /console\.error\(formatEmailVerificationReadinessSummary\(readiness\)\)/);
+  assert.match(script, /interface SafeEmailConnectionTestResult/);
+  assert.match(script, /result: sanitizeConnectionTestResult\(result\.result\)/);
+  assert.match(script, /function sanitizeConnectionTestResult\(result: unknown\): SafeEmailConnectionTestResult/);
+  assert.match(script, /function sanitizeVerifierText\(value: string \| undefined\): string \| undefined/);
+  assert.match(script, /providerError: sanitizeVerifierText\(result\.providerError\)/);
+  assert.match(script, /error: sanitizeVerifierText\(error instanceof Error \? error\.message : "Connection test failed"\)/);
+  assert.match(script, /providerError: sanitizeVerifierText\(input\.aiProviderTest\?\.providerError\)/);
+  assert.match(script, /sanitizeVerifierText\(`connection:\$\{test\.emailAddress\}: \$\{test\.error \?\? "connection test failed"\}`\)/);
+  assert.match(script, /Bearer\|Basic/);
+  assert.match(script, /access_token\|refresh_token\|id_token\|api\[_-\]\?key\|client_secret\|password\|secret\|token/);
+  assert.match(script, /redacted-jwt/);
+  assert.match(script, /sk-\[redacted\]/);
+  assert.match(script, /value\.smtp === "ok" \|\| value\.smtp === "skipped"/);
+  assert.match(script, /value\.imap === "ok" \|\| value\.imap === "skipped"/);
+  assert.match(script, /value\.oauth === "ok" \|\| value\.oauth === "skipped"/);
+  assert.match(script, /oauthAccountEmail\.trim\(\)/);
+  assert.doesNotMatch(script, /result:\s*result\.result/);
+  assert.match(script, /function formatEmailVerificationReadinessSummary\(readiness: ReturnType<typeof buildEmailVerificationReadiness>\): string/);
+  assert.match(script, /automatedChecksOk=\$\{readiness\.automatedChecksOk\}/);
+  assert.match(script, /liveTrafficReady=\$\{readiness\.liveTrafficReady\}/);
+  assert.match(script, /mailboxes=\$\{readiness\.mailboxConnections\.passed\}\/\$\{readiness\.mailboxConnections\.tested\}/);
+  assert.match(script, /blockers: \$\{readiness\.blockers\.slice\(0, 5\)\.join\(" \| "\)\}/);
+  assert.match(script, /manualActions: \$\{readiness\.manualActions\.slice\(0, 5\)\.join\(" \| "\)\}/);
+  assert.match(script, /const ok = automatedChecksOk && \(!requireLiveReadiness \|\| readiness\.liveTrafficReady\)/);
+  assert.match(script, /Email live readiness is required but readiness\.liveTrafficReady=false/);
+  assert.match(script, /externalMailboxVerified &&\s*aiProviderVerified &&\s*applicationSmokeVerified/);
+  assert.doesNotMatch(script, /input\.runAiProviderTest \? aiProviderVerified : diagnostics\.aiProvider\.status === "ok"/);
   assert.match(script, /liveTrafficReady/);
   assert.match(script, /externalMailboxVerified/);
   assert.match(script, /manualActions/);
@@ -1566,10 +1827,15 @@ await run("email sync script dry run describes loop scheduler settings", () => {
   const plan = JSON.parse(result.stdout);
   assert.equal(plan.event, "email_sync_plan");
   assert.equal(plan.userId, "user-admin");
+  assert.match(plan.userResolution, /explicit --user-id/);
   assert.equal(plan.loop, true);
   assert.equal(plan.intervalMs, 60000);
   assert.equal(plan.limit, 25);
   assert.equal(plan.requiredPermission, "crm.admin");
+  const syncScript = readFileSync("scripts/email-sync.ts", "utf8");
+  assert.match(syncScript, /resolveOperationalUser/);
+  assert.match(syncScript, /operationalUser:\s*\{/);
+  assert.match(syncScript, /fallbackUsed:\s*userResolution\.fallbackUsed/);
 });
 
 await run("email sync script rejects invalid bounded sync limits", () => {
@@ -1603,6 +1869,54 @@ await run("production environment validation blocks placeholder email secrets", 
   assert.equal(result.status, 1);
   const payload = JSON.parse(result.stdout);
   assert.match(payload.errors.join("\n"), /deployment-specific random value/);
+});
+
+await run("production environment validation reads explicit env file", async () => {
+  const script = readFileSync("scripts/validate-env.mjs", "utf8");
+  assert.match(script, /env = \{\s*NODE_ENV: process\.env\.NODE_ENV,\s*\.\.\.readEnvFile\(String\(args\["env-file"\]\)\)\s*\}/);
+  assert.match(script, /if \(!options\.override && process\.env\[key\] !== undefined\) continue/);
+  assert.match(script, /function readEnvFile\(path\)/);
+
+  const directory = await makeTempDir("crm-validate-env-file");
+  const envFile = join(directory, "vps.env");
+  await writeFile(
+    envFile,
+    [
+      "DATABASE_URL='postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public'",
+      "APP_BASE_URL='https://crm.example.com'",
+      "ALLOW_INSECURE_APP_BASE_URL='false'",
+      "EMAIL_CONFIG_SECRET='test-email-config-secret-32-bytes'",
+      "EMAIL_OAUTH_STATE_SECRET='test-oauth-state-secret-32-bytes'",
+      "EMAIL_DELIVERY_MODE='live'",
+      "EMAIL_SYNC_INTERVAL_MS='300000'",
+      "EMAIL_SYNC_LIMIT='25'",
+      "EMAIL_SEND_CLAIM_TIMEOUT_MS='900000'"
+    ].join("\n")
+  );
+
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--env-file", envFile, "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      NODE_ENV: "production",
+      DATABASE_URL: "",
+      APP_BASE_URL: "not-a-url",
+      EMAIL_CONFIG_SECRET: "short",
+      EMAIL_OAUTH_STATE_SECRET: "short",
+      ALLOW_TEST_USER_HEADER: "true",
+      EMAIL_DELIVERY_MODE: "dry-run",
+      GMAIL_OAUTH_CLIENT_ID: "ambient-gmail-client"
+    }
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.errors, []);
 });
 
 await run("production environment validation blocks dangerous test auth header", () => {
@@ -1743,6 +2057,88 @@ await run("production environment validation blocks weak oauth state secret", ()
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ok, false);
   assert.match(payload.errors.join("\n"), /EMAIL_OAUTH_STATE_SECRET/);
+});
+
+await run("production environment validation blocks duplicate email secrets", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "same-email-secret-32-random-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "same-email-secret-32-random-bytes"
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.match(payload.errors.join("\n"), /different random values/);
+});
+
+await run("production environment validation blocks live ai readiness without api key", () => {
+  const result = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "test-oauth-state-secret-32-bytes",
+      REQUIRE_LIVE_EMAIL_READINESS: "true",
+      AI_API_KEY: ""
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.match(payload.errors.join("\n"), /AI_API_KEY is required/);
+});
+
+await run("production environment validation blocks partial oauth client pairs", () => {
+  const gmail = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "test-oauth-state-secret-32-bytes",
+      GMAIL_OAUTH_CLIENT_ID: "gmail-client",
+      GMAIL_OAUTH_CLIENT_SECRET: ""
+    }
+  });
+  assert.equal(gmail.status, 1);
+  const gmailPayload = JSON.parse(gmail.stdout);
+  assert.match(gmailPayload.errors.join("\n"), /GMAIL OAuth requires both/);
+  assert.doesNotMatch(gmail.stdout + gmail.stderr, /gmail-client/);
+
+  const outlook = spawnSync(process.execPath, ["scripts/validate-env.mjs", "--json"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public",
+      APP_BASE_URL: "https://crm.example.com",
+      EMAIL_CONFIG_SECRET: "test-email-config-secret-32-bytes",
+      EMAIL_OAUTH_STATE_SECRET: "test-oauth-state-secret-32-bytes",
+      OUTLOOK_OAUTH_CLIENT_ID: "",
+      OUTLOOK_OAUTH_CLIENT_SECRET: "outlook-secret"
+    }
+  });
+  assert.equal(outlook.status, 1);
+  const outlookPayload = JSON.parse(outlook.stdout);
+  assert.match(outlookPayload.errors.join("\n"), /OUTLOOK OAuth requires both/);
+  assert.doesNotMatch(outlook.stdout + outlook.stderr, /outlook-secret/);
 });
 
 await run("production environment validation blocks invalid oauth provider scopes", () => {
@@ -4235,6 +4631,10 @@ await run("email subsystem diagnostics report env readiness without secrets", as
   assert.equal(diagnostics.syncScheduler.intervalMs, 60000);
   assert.equal(diagnostics.syncScheduler.limit, 25);
   assert.equal(diagnostics.syncScheduler.userId, "email-sync-admin");
+  assert.equal(diagnostics.syncScheduler.configuredUserId, "email-sync-admin");
+  assert.equal(diagnostics.syncScheduler.userIdSource, "EMAIL_SYNC_USER_ID");
+  assert.equal(diagnostics.syncScheduler.fallbackToAdmin, true);
+  assert.match(diagnostics.syncScheduler.message, /preferred user email-sync-admin from EMAIL_SYNC_USER_ID/);
   assert.equal(diagnostics.syncScheduler.queueBacked, true);
   assert.equal(diagnostics.aiAutomationFailures.status, "ok");
   assert.equal(diagnostics.oauthProviders.gmail.status, "ok");

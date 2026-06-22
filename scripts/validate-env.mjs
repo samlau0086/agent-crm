@@ -1,9 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
 
 const args = parseArgs(process.argv.slice(2));
-loadEnvFile(".env");
-loadEnvFile(".env.local");
-const env = process.env;
+let env;
+if (args["env-file"]) {
+  env = {
+    NODE_ENV: process.env.NODE_ENV,
+    ...readEnvFile(String(args["env-file"]))
+  };
+} else {
+  loadEnvFile(".env");
+  loadEnvFile(".env.local");
+  env = process.env;
+}
 const result = validateEnv(env);
 
 if (args.json) {
@@ -61,6 +69,13 @@ function validateEnv(values) {
     if ((values.AI_PROVIDER ?? "openai-compatible") === "openai-compatible" && !values.AI_API_KEY?.trim()) {
       warnings.push("AI_API_KEY is empty; AI features will use the local read-only fallback.");
     }
+    if (
+      (values.RUN_EMAIL_AI_PROVIDER_TEST === "true" || values.REQUIRE_LIVE_EMAIL_READINESS === "true") &&
+      (values.AI_PROVIDER ?? "openai-compatible") === "openai-compatible" &&
+      !values.AI_API_KEY?.trim()
+    ) {
+      errors.push("AI_API_KEY is required when RUN_EMAIL_AI_PROVIDER_TEST=true or REQUIRE_LIVE_EMAIL_READINESS=true.");
+    }
     const emailConfigSecret = values.EMAIL_CONFIG_SECRET ?? values.APP_SECRET;
     const oauthStateSecret = values.EMAIL_OAUTH_STATE_SECRET;
     if (!values.EMAIL_CONFIG_SECRET?.trim() && !values.APP_SECRET?.trim()) {
@@ -75,6 +90,10 @@ function validateEnv(values) {
     } else if (oauthStateSecret?.trim() && isPlaceholderSecret(oauthStateSecret)) {
       errors.push("EMAIL_OAUTH_STATE_SECRET must be replaced with a deployment-specific random value.");
     }
+    if (emailConfigSecret?.trim() && oauthStateSecret?.trim() && emailConfigSecret === oauthStateSecret) {
+      errors.push("EMAIL_CONFIG_SECRET and EMAIL_OAUTH_STATE_SECRET must be different random values.");
+    }
+    validateOAuthClientPairs(values, errors);
     validateOAuthScopes(values, errors);
     if (values.ALLOW_PRIVATE_WEBHOOK_URLS === "true") {
       warnings.push("ALLOW_PRIVATE_WEBHOOK_URLS=true permits webhooks to target localhost or private network addresses.");
@@ -145,6 +164,16 @@ function validateOAuthScopes(values, errors) {
   }
 }
 
+function validateOAuthClientPairs(values, errors) {
+  for (const prefix of ["GMAIL", "OUTLOOK"]) {
+    const clientId = values[`${prefix}_OAUTH_CLIENT_ID`]?.trim();
+    const clientSecret = values[`${prefix}_OAUTH_CLIENT_SECRET`]?.trim();
+    if ((clientId && !clientSecret) || (!clientId && clientSecret)) {
+      errors.push(`${prefix} OAuth requires both ${prefix}_OAUTH_CLIENT_ID and ${prefix}_OAUTH_CLIENT_SECRET, or neither when OAuth is unused.`);
+    }
+  }
+}
+
 function getMissingGmailScopes(scope) {
   const scopes = parseScopeList(scope);
   const hasFullMail = scopes.includes("https://mail.google.com/");
@@ -196,16 +225,36 @@ function isIntegerInRange(value, min, max) {
 
 function parseArgs(values) {
   const parsed = {};
-  for (const value of values) {
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     if (!value.startsWith("--")) continue;
     const [key, inline] = value.slice(2).split("=", 2);
-    parsed[key] = inline ?? true;
+    if (inline !== undefined) {
+      parsed[key] = inline;
+      continue;
+    }
+    const next = values[index + 1];
+    if (!next || next.startsWith("--")) {
+      parsed[key] = true;
+      continue;
+    }
+    parsed[key] = next;
+    index += 1;
   }
   return parsed;
 }
 
-function loadEnvFile(path) {
-  if (!existsSync(path)) return;
+function loadEnvFile(path, options = {}) {
+  const values = readEnvFile(path);
+  for (const [key, value] of Object.entries(values)) {
+    if (!options.override && process.env[key] !== undefined) continue;
+    process.env[key] = value;
+  }
+}
+
+function readEnvFile(path) {
+  const values = {};
+  if (!existsSync(path)) return values;
 
   const content = readFileSync(path, "utf8");
   for (const line of content.split(/\r?\n/)) {
@@ -216,10 +265,9 @@ function loadEnvFile(path) {
     if (index <= 0) continue;
 
     const key = trimmed.slice(0, index).trim();
-    if (process.env[key] !== undefined) continue;
-
-    process.env[key] = unquote(trimmed.slice(index + 1).trim());
+    values[key] = unquote(trimmed.slice(index + 1).trim());
   }
+  return values;
 }
 
 function unquote(value) {

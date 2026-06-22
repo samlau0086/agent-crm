@@ -3,11 +3,12 @@ import { getRequestContextByUserId } from "@/lib/crm/repository";
 import { scheduleEmailSyncForActiveAccounts } from "@/lib/email/sync-scheduler";
 import { assertDatabaseReachable } from "./database-preflight.ts";
 import { loadLocalEnvFiles } from "./load-env.ts";
+import { configuredOperationalUserId, resolveOperationalUser, type OperationalUserResolution } from "./operational-user.ts";
 
 loadLocalEnvFiles();
 
 const args = parseArgs(process.argv.slice(2));
-const userId = String(args["user-id"] || process.env.EMAIL_SYNC_USER_ID || process.env.JOB_USER_ID || "user-admin");
+const userSelection = configuredOperationalUserId(args, ["EMAIL_SYNC_USER_ID", "JOB_USER_ID"]);
 const loop = Boolean(args.loop);
 const intervalMs = normalizePositiveInteger(args["interval-ms"], process.env.EMAIL_SYNC_INTERVAL_MS, 300000);
 const limit = normalizeSyncLimit(args.limit, process.env.EMAIL_SYNC_LIMIT);
@@ -19,7 +20,10 @@ try {
       JSON.stringify(
         {
           event: "email_sync_plan",
-          userId,
+          userId: userSelection.userId,
+          userResolution: userSelection.strict
+            ? "Use the explicit --user-id value and fail if it is unavailable or lacks crm.admin."
+            : "Try the configured user id first, then fall back to the first active user with crm.admin.",
           loop,
           intervalMs,
           limit,
@@ -34,26 +38,31 @@ try {
   }
 
   await assertDatabaseReachable({ label: "email-sync" });
-  const context = await getRequestContextByUserId(userId);
+  const userResolution = await resolveOperationalUser({
+    userId: userSelection.userId,
+    strict: userSelection.strict,
+    purpose: "email sync scheduling"
+  });
+  const context = userResolution.context;
 
   if (loop) {
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     while (!stopping) {
-      await runSync(context);
+      await runSync(context, userResolution);
       if (!stopping) {
         await sleep(intervalMs);
       }
     }
   } else {
-    await runSync(context);
+    await runSync(context, userResolution);
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
   process.exit(1);
 }
 
-async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUserId>>): Promise<void> {
+async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUserId>>, userResolution: OperationalUserResolution): Promise<void> {
   try {
     const summary = await scheduleEmailSyncForActiveAccounts(context, { limit });
     console.log(
@@ -62,6 +71,13 @@ async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUse
           event: "email_sync_scheduled",
           workspaceId: context.workspaceId,
           userId: context.user.id,
+          operationalUser: {
+            requestedUserId: userResolution.requestedUserId,
+            resolvedUserId: userResolution.resolvedUserId,
+            strict: userResolution.strict,
+            fallbackUsed: userResolution.fallbackUsed,
+            requiredPermission: userResolution.requiredPermission
+          },
           loop,
           intervalMs: loop ? intervalMs : undefined,
           limit: summary.limit,

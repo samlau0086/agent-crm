@@ -651,9 +651,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailThreads(props.emailThreads);
     setEmailAiSettings(props.emailAiSettings);
     setKnowledgeArticles(props.knowledgeArticles);
-    setEmailDraft((current) => ({ ...current, accountId: current.accountId || props.emailAccounts[0]?.id || "" }));
-    setSelectedEmailThreadId((current) => (props.emailThreads.some((thread) => thread.id === current) ? current : props.emailThreads[0]?.id ?? ""));
-  }, [props.emailAccounts, props.emailAiSettings, props.emailThreads, props.knowledgeArticles]);
+    setEmailDraft((current) => {
+      const accountId = current.accountId || props.emailAccounts[0]?.id || "";
+      return accountId === current.accountId ? current : clearEmailDraftAiProvenance({ ...current, accountId });
+    });
+    const nextSelectedThreadId = props.emailThreads.some((thread) => thread.id === selectedEmailThreadId) ? selectedEmailThreadId : props.emailThreads[0]?.id ?? "";
+    if (nextSelectedThreadId !== selectedEmailThreadId) {
+      setEmailDraft((current) => clearEmailDraftAiProvenance(current));
+      setSelectedEmailThreadId(nextSelectedThreadId);
+    }
+  }, [props.emailAccounts, props.emailAiSettings, props.emailThreads, props.knowledgeArticles, selectedEmailThreadId]);
 
   useEffect(() => {
     setSelectedImportPresetId((current) => (activeImportPresets.some((preset) => preset.id === current) ? current : ""));
@@ -1153,7 +1160,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     });
     setEmailAccounts((current) => [account, ...current.filter((candidate) => candidate.id !== account.id)]);
-    setEmailDraft((current) => ({ ...current, accountId: account.id }));
+    setEmailDraft((current) => clearEmailDraftAiProvenance({ ...current, accountId: account.id }));
     setEmailAccountDraft(createEmptyEmailAccountDraft());
     setMessage(`已创建邮箱账户：${account.emailAddress}`);
   }
@@ -1246,11 +1253,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailMessagesByThread((current) => ({ ...current, [threadId]: messages }));
   }
 
+  function selectEmailThread(threadId: string) {
+    if (threadId !== selectedEmailThreadId) {
+      setEmailDraft((current) => clearEmailDraftAiProvenance(current));
+    }
+    setSelectedEmailThreadId(threadId);
+  }
+
   async function refreshEmailThreads(options: { reloadSelectedMessages?: boolean } = {}) {
     const threads = await fetchJson<EmailThread[]>("/api/email/threads", { method: "GET" });
     const threadId = selectedEmailThreadId && threads.some((thread) => thread.id === selectedEmailThreadId) ? selectedEmailThreadId : threads[0]?.id ?? "";
     setEmailThreads(threads);
-    setSelectedEmailThreadId(threadId);
+    selectEmailThread(threadId);
     if (options.reloadSelectedMessages && threadId) {
       await loadEmailMessages(threadId);
     }
@@ -1262,7 +1276,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: { recordId: recordId || null }
     });
     setEmailThreads((current) => [thread, ...current.filter((candidate) => candidate.id !== thread.id)]);
-    setEmailDraft((current) => (current.recordId || selectedEmailThreadId !== thread.id ? current : { ...current, recordId: thread.recordId || "" }));
+    setEmailDraft((current) => (current.recordId || selectedEmailThreadId !== thread.id ? current : clearEmailDraftAiProvenance({ ...current, recordId: thread.recordId || "" })));
     setMessage(thread.recordId ? "邮件线程已关联到客户记录" : "邮件线程已取消关联记录");
   }
 
@@ -1288,7 +1302,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     });
     setEmailMessagesByThread((current) => ({ ...current, [message.threadId]: upsertEmailMessage(current[message.threadId] ?? [], message) }));
-    setSelectedEmailThreadId(message.threadId);
+    selectEmailThread(message.threadId);
     setEmailDraft((current) => ({ ...current, clientRequestId: createEmailClientRequestId(), to: "", cc: "", bcc: "", subject: "", bodyText: "", attachments: [], aiAssisted: false, aiPurpose: undefined, aiSourceMessageId: undefined, aiSources: undefined, aiGeneratedAt: undefined }));
     setMessage(formatEmailSendResultMessage(message));
     router.refresh();
@@ -1309,7 +1323,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   function replyToEmailMessage(message: EmailMessage) {
     const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
     const account = emailAccounts.find((candidate) => candidate.id === message.accountId);
-    setSelectedEmailThreadId(message.threadId);
+    selectEmailThread(message.threadId);
     setEmailDraft((current) => ({
       ...current,
       ...buildEmailReplyDraft({
@@ -1452,13 +1466,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (source.messageId) {
       const threadEntry = Object.entries(emailMessagesByThread).find(([, messages]) => messages.some((message) => message.id === source.messageId));
       if (threadEntry) {
-        setSelectedEmailThreadId(threadEntry[0]);
+        selectEmailThread(threadEntry[0]);
         setActiveNav("email");
         return;
       }
       const message = await fetchJson<EmailMessage>(`/api/email/messages/${source.messageId}`, { method: "GET" });
       await loadEmailMessages(message.threadId);
-      setSelectedEmailThreadId(message.threadId);
+      selectEmailThread(message.threadId);
       setActiveNav("email");
       return;
     }
@@ -2199,7 +2213,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onAiPurposeChange={setEmailAiPurpose}
             onAiPromptChange={setEmailAiPrompt}
             onSelectThread={(threadId) => {
-              setSelectedEmailThreadId(threadId);
+              selectEmailThread(threadId);
               if (!emailMessagesByThread[threadId]) {
                 runAction(() => loadEmailMessages(threadId));
               }
@@ -2441,6 +2455,8 @@ function EmailWorkspace({
   const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
   const selectedProviderSetupVisibility = getEmailProviderSetupVisibility(accountDraft.provider);
   const selectedEmailAiPurposeEnabled = isEmailAiPurposeEnabled(aiSettings.features, aiPurpose);
+  const enabledEmailAiAutomationCount = [aiSettings.features.auto_translate, aiSettings.features.auto_context_analysis, aiSettings.features.auto_summarize].filter(Boolean).length;
+  const activeKnowledgeArticleCount = knowledgeArticles.filter((article) => article.active).length;
 
   function updateEmailAccountProvider(provider: EmailAccount["provider"]) {
     const capability = getEmailProviderCapability(provider);
@@ -2783,6 +2799,16 @@ function EmailWorkspace({
           ))}
           {threads.length === 0 ? <div className="empty-state">还没有邮件线程</div> : null}
         </div>
+        {selectedThread?.summary ? (
+          <div className="ai-box" data-testid="email-thread-summary" style={{ marginTop: 12 }}>
+            <div className="activity-meta">Compact 摘要 {selectedThread.summaryUpdatedAt ? `(${formatDate(selectedThread.summaryUpdatedAt)})` : ""}</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.summary}</div>
+            <div className="toolbar" style={{ marginTop: 8 }}>
+              <span className="badge">用于后续 AI 上下文</span>
+              <span className="badge">减少长线程 token 消耗</span>
+            </div>
+          </div>
+        ) : null}
         {selectedThread?.aiAnalysis ? (
           <div className="ai-box" style={{ marginTop: 12 }}>
             <div className="activity-meta">AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}</div>
@@ -2864,7 +2890,7 @@ function EmailWorkspace({
         <div className="form-grid" style={{ marginTop: 12 }}>
           <label>
             <span className="subtle">发件账户</span>
-            <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange({ ...emailDraft, accountId: event.target.value })}>
+            <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId: event.target.value }))}>
               <option value="">选择账户</option>
               {activeAccounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.emailAddress}</option>
@@ -2873,7 +2899,7 @@ function EmailWorkspace({
           </label>
           <label>
             <span className="subtle">关联记录</span>
-            <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange({ ...emailDraft, recordId: event.target.value })}>
+            <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: event.target.value }))}>
               <option value="">不关联</option>
               {records.slice(0, 100).map((record) => (
                 <option key={record.id} value={record.id}>{record.title}</option>
@@ -2882,15 +2908,15 @@ function EmailWorkspace({
           </label>
           <label className="wide">
             <span className="subtle">收件人</span>
-            <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange({ ...emailDraft, to: event.target.value })} placeholder="buyer@example.com, team@example.com" />
+            <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: event.target.value }))} placeholder="buyer@example.com, team@example.com" />
           </label>
           <label>
             <span className="subtle">CC</span>
-            <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange({ ...emailDraft, cc: event.target.value })} placeholder="manager@example.com" />
+            <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: event.target.value }))} placeholder="manager@example.com" />
           </label>
           <label>
             <span className="subtle">BCC</span>
-            <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange({ ...emailDraft, bcc: event.target.value })} placeholder="archive@example.com" />
+            <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: event.target.value }))} placeholder="archive@example.com" />
           </label>
           <label className="wide">
             <span className="subtle">主题</span>
@@ -2930,6 +2956,8 @@ function EmailWorkspace({
             <span className="badge">
               AI 辅助草稿{emailDraft.aiPurpose ? ` · ${emailDraft.aiPurpose}` : ""}{emailDraft.aiGeneratedAt ? ` · ${formatDate(emailDraft.aiGeneratedAt)}` : ""}
             </span>
+            <span className={emailDraft.aiSources?.length ? "badge" : "danger-badge"}>来源 {emailDraft.aiSources?.length ?? 0}</span>
+            <span className="badge">发送时保留 AI provenance</span>
             {renderEmailAiSources(emailDraft.aiSources)}
             <button
               className="secondary-button"
@@ -2961,6 +2989,18 @@ function EmailWorkspace({
 
         <div className="ai-box">
           <div className="activity-meta"><Bot size={16} />邮件 AI</div>
+          <div className="toolbar" data-testid="email-ai-policy-summary" style={{ marginTop: 8 }}>
+            <span className={enabledEmailAiAutomationCount ? "badge" : "danger-badge"}>自动任务 {enabledEmailAiAutomationCount}/3</span>
+            <span className={aiSettings.requireSourceLinks ? "badge" : "danger-badge"}>来源引用 {aiSettings.requireSourceLinks ? "必需" : "可选"}</span>
+            <span className="badge">历史 {aiSettings.maxHistoryMessages} 封</span>
+            <span className={activeKnowledgeArticleCount ? "badge" : "danger-badge"}>知识 {activeKnowledgeArticleCount}/{aiSettings.maxKnowledgeArticles}</span>
+            <span className="badge">预算 {aiSettings.maxContextChars}</span>
+          </div>
+          {enabledEmailAiAutomationCount > 0 ? (
+            <div className="subtle" data-testid="email-ai-token-policy" style={{ marginTop: 6 }}>
+              自动任务只处理已提交的入站 received 和出站 sent 邮件；草稿、队列、发送中和失败邮件不会进入自动 AI 上下文。
+            </div>
+          ) : null}
           {canManageEmailSettings ? (
             <>
           <div className="view-column-grid">
@@ -3037,6 +3077,10 @@ function EmailWorkspace({
                   {aiResult.budget.outputTruncated ? <span className="danger-badge">输出已裁剪</span> : null}
                 </div>
               ) : null}
+              <div className="toolbar" data-testid="email-ai-result-provenance" style={{ marginTop: 8 }}>
+                <span className={aiResult.sources.length ? "badge" : "danger-badge"}>来源 {aiResult.sources.length}</span>
+                <span className="badge">发送前人工确认</span>
+              </div>
               {aiResult.providerError ? <div className="subtle">AI provider 回退：{aiResult.providerError}</div> : null}
               <div style={{ whiteSpace: "pre-wrap" }}>{aiResult.text}</div>
               {renderEmailAiSources(aiResult.sources)}
@@ -4563,6 +4607,11 @@ function EmailDiagnosticsPanel({
             </div>
             <DiagnosticRow label="自动总结策略" status={diagnostics.autoSummaryPolicy.status} message={diagnostics.autoSummaryPolicy.message} />
             <DiagnosticRow label="收信调度" status={diagnostics.syncScheduler.status} message={diagnostics.syncScheduler.message} />
+            <div className="toolbar">
+              <span className="badge">user {diagnostics.syncScheduler.configuredUserId}</span>
+              <span className="badge">source {diagnostics.syncScheduler.userIdSource}</span>
+              <span className={diagnostics.syncScheduler.fallbackToAdmin ? "badge" : "danger-badge"}>admin fallback {diagnostics.syncScheduler.fallbackToAdmin ? "on" : "off"}</span>
+            </div>
             <DiagnosticRow label="邮件发送认领" status={diagnostics.sendClaims.status} message={diagnostics.sendClaims.message} />
             {diagnostics.sendClaims.staleMessages.map((message) => (
               <div className="settings-item" key={message.id}>

@@ -4,18 +4,20 @@ import { generateEmailAiOutput } from "@/lib/email/ai-generation";
 import { buildEmailAssistantContext, createDefaultEmailAiSettings } from "@/lib/email/assistant";
 import { assertDatabaseReachable } from "./database-preflight.ts";
 import { loadLocalEnvFiles } from "./load-env.ts";
+import { configuredOperationalUserId, resolveOperationalUser } from "./operational-user.ts";
 import type { CrmRecord, EmailAiSettings, EmailMessage, FieldDefinition, KnowledgeArticle, RequestContext } from "@/lib/crm/types";
 import type { EmailDiagnosticCheck, EmailSubsystemDiagnostics } from "@/lib/email/diagnostics";
 
 loadLocalEnvFiles();
 
 const args = parseArgs(process.argv.slice(2));
-const userId = String(args["user-id"] ?? process.env.EMAIL_VERIFY_USER_ID ?? process.env.JOB_USER_ID ?? "user-admin");
-const runConnectionTests = Boolean(args["test-connections"]);
-const runAiProviderTest = Boolean(args["test-ai-provider"]);
-const runSmoke = Boolean(args.smoke);
+const userSelection = configuredOperationalUserId(args, ["EMAIL_VERIFY_USER_ID", "JOB_USER_ID"]);
+const requireLiveReadiness = Boolean(args["require-live-readiness"]);
+const runConnectionTests = Boolean(args["test-connections"] || requireLiveReadiness);
+const runAiProviderTest = Boolean(args["test-ai-provider"] || requireLiveReadiness);
+const runSmoke = Boolean(args.smoke || requireLiveReadiness);
 const keepSmokeData = Boolean(args["keep-smoke-data"]);
-const plan = buildEmailVerificationPlan({ userId, runConnectionTests, runAiProviderTest, runSmoke });
+const plan = buildEmailVerificationPlan({ userId: userSelection.userId, strictUserId: userSelection.strict, runConnectionTests, runAiProviderTest, runSmoke, requireLiveReadiness });
 
 if (args["dry-run"]) {
   console.log(JSON.stringify(plan, null, 2));
@@ -24,16 +26,21 @@ if (args["dry-run"]) {
 
 try {
   await assertDatabaseReachable({ label: "email-verify" });
-  const { getCrmRepository, getRequestContextByUserId } = await import("@/lib/crm/repository");
+  const { getCrmRepository } = await import("@/lib/crm/repository");
   const { checkEmailSubsystemDiagnosticsForContext } = await import("@/lib/email/diagnostics");
   const repository = getCrmRepository();
-  const context = await getRequestContextByUserId(userId);
+  const userResolution = await resolveOperationalUser({
+    userId: userSelection.userId,
+    strict: userSelection.strict,
+    purpose: "email verification"
+  });
+  const context = userResolution.context;
   const accounts = await repository.listEmailAccounts(context);
   const diagnostics = await checkEmailSubsystemDiagnosticsForContext(context, repository, { includeJobs: true });
   const connectionTests = runConnectionTests ? await testConnections(context, repository, accounts) : [];
   const aiProviderTest = runAiProviderTest ? await testAiProvider() : undefined;
   const applicationSmoke = runSmoke ? await runApplicationSmoke(context, repository, { keepSmokeData }) : undefined;
-  const ok = diagnostics.ok && connectionTests.every((test) => test.ok) && (aiProviderTest?.ok ?? true) && (applicationSmoke?.ok ?? true);
+  const automatedChecksOk = diagnostics.ok && connectionTests.every((test) => test.ok) && (aiProviderTest?.ok ?? true) && (applicationSmoke?.ok ?? true);
   const readiness = buildEmailVerificationReadiness({
     diagnostics,
     connectionTests,
@@ -43,12 +50,22 @@ try {
     runAiProviderTest,
     runSmoke
   });
+  const ok = automatedChecksOk && (!requireLiveReadiness || readiness.liveTrafficReady);
 
+  console.error(formatEmailVerificationReadinessSummary(readiness));
   console.log(
     JSON.stringify(
       {
         ok,
+        liveReadinessRequired: requireLiveReadiness,
         userId: context.user.id,
+        operationalUser: {
+          requestedUserId: userResolution.requestedUserId,
+          resolvedUserId: userResolution.resolvedUserId,
+          strict: userResolution.strict,
+          fallbackUsed: userResolution.fallbackUsed,
+          requiredPermission: userResolution.requiredPermission
+        },
         workspaceId: context.workspaceId,
         readiness,
         diagnostics,
@@ -63,6 +80,9 @@ try {
   );
 
   if (!ok) {
+    if (requireLiveReadiness && !readiness.liveTrafficReady) {
+      console.error("Email live readiness is required but readiness.liveTrafficReady=false.");
+    }
     process.exit(1);
   }
 } catch (error) {
@@ -70,12 +90,16 @@ try {
   process.exit(1);
 }
 
-function buildEmailVerificationPlan(options: { userId: string; runConnectionTests: boolean; runAiProviderTest: boolean; runSmoke: boolean }) {
+function buildEmailVerificationPlan(options: { userId: string; strictUserId: boolean; runConnectionTests: boolean; runAiProviderTest: boolean; runSmoke: boolean; requireLiveReadiness: boolean }) {
   return {
     userId: options.userId,
+    userResolution: options.strictUserId
+      ? "Use the explicit --user-id value and fail if it is unavailable or lacks crm.admin."
+      : "Try the configured user id first, then fall back to the first active user with crm.admin.",
     runConnectionTests: options.runConnectionTests,
     runAiProviderTest: options.runAiProviderTest,
     runSmoke: options.runSmoke,
+    requireLiveReadiness: options.requireLiveReadiness,
     steps: [
       "Load admin request context",
       "List workspace email accounts",
@@ -101,6 +125,7 @@ function buildEmailVerificationPlan(options: { userId: string; runConnectionTest
       "npm run email:verify checks environment readiness and can run real provider connection tests with -- --test-connections.",
       "npm run email:verify -- --test-ai-provider calls the configured OpenAI-compatible provider with bounded CRM, email, and knowledge context and fails unless generationMode=provider.",
       "npm run email:verify -- --smoke runs the same application-level smoke flow against the configured database using dry-run email delivery in the script process, including stale send claim recovery.",
+      "npm run email:verify -- --require-live-readiness runs real mailbox, AI provider, and smoke checks, then fails unless readiness.liveTrafficReady=true.",
       "npm run test:e2e -- tests/e2e/email-flow.spec.ts covers the browser email workspace path when Postgres is reachable at DATABASE_URL."
     ],
     readinessReport: {
@@ -122,7 +147,7 @@ function buildEmailVerificationPlan(options: { userId: string; runConnectionTest
         "diagnostics status ok",
         "live email delivery mode",
         "at least one active configured mailbox with successful --test-connections result",
-        "AI provider verified with --test-ai-provider when AI is expected in production",
+        "AI provider verified with --test-ai-provider",
         "application smoke verified with --smoke before launch"
       ]
     },
@@ -204,7 +229,7 @@ async function testAiProvider() {
   return {
     ok,
     generationMode: result.generationMode,
-    providerError: result.providerError,
+    providerError: sanitizeVerifierText(result.providerError),
     sourceCount: result.sources.length,
     textLength: result.text.length,
     suggestedSubjectProvided: Boolean(result.suggestedSubject),
@@ -219,8 +244,15 @@ interface EmailConnectionVerificationResult {
   accountId: string;
   emailAddress: string;
   ok: boolean;
-  result?: unknown;
+  result?: SafeEmailConnectionTestResult;
   error?: string;
+}
+
+interface SafeEmailConnectionTestResult {
+  smtp?: "ok" | "skipped";
+  imap?: "ok" | "skipped";
+  oauth?: "ok" | "skipped";
+  oauthAccountEmail?: string;
 }
 
 interface EmailProviderVerificationResult {
@@ -274,18 +306,43 @@ async function testConnections(
         accountId: account.id,
         emailAddress: account.emailAddress,
         ok: true,
-        result: result.result
+        result: sanitizeConnectionTestResult(result.result)
       });
     } catch (error) {
       results.push({
         accountId: account.id,
         emailAddress: account.emailAddress,
         ok: false,
-        error: error instanceof Error ? error.message : "Connection test failed"
+        error: sanitizeVerifierText(error instanceof Error ? error.message : "Connection test failed")
       });
     }
   }
   return results;
+}
+
+function sanitizeConnectionTestResult(result: unknown): SafeEmailConnectionTestResult {
+  if (!result || typeof result !== "object") {
+    return {};
+  }
+  const value = result as Record<string, unknown>;
+  return {
+    ...(value.smtp === "ok" || value.smtp === "skipped" ? { smtp: value.smtp } : {}),
+    ...(value.imap === "ok" || value.imap === "skipped" ? { imap: value.imap } : {}),
+    ...(value.oauth === "ok" || value.oauth === "skipped" ? { oauth: value.oauth } : {}),
+    ...(typeof value.oauthAccountEmail === "string" && value.oauthAccountEmail.trim() ? { oauthAccountEmail: value.oauthAccountEmail.trim() } : {})
+  };
+}
+
+function sanitizeVerifierText(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return value
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "$1 [redacted]")
+    .replace(/\b(access_token|refresh_token|id_token|api[_-]?key|client_secret|password|secret|token)\s*[:=]\s*["']?[^"',\s}]+/gi, "$1=[redacted]")
+    .replace(/(authorization["']?\s*[:=]\s*["']?)(?:Bearer|Basic)?\s*[^"',\s}]+/gi, "$1[redacted]")
+    .replace(/[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{16,}/g, "[redacted-jwt]")
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-[redacted]");
 }
 
 function buildEmailVerificationReadiness(input: EmailVerificationReadinessInput) {
@@ -309,8 +366,8 @@ function buildEmailVerificationReadiness(input: EmailVerificationReadinessInput)
     diagnostics.status === "ok" &&
     diagnostics.deliveryMode.status === "ok" &&
     externalMailboxVerified &&
-    (input.runAiProviderTest ? aiProviderVerified : diagnostics.aiProvider.status === "ok") &&
-    (input.runSmoke ? applicationSmokeVerified : false);
+    aiProviderVerified &&
+    applicationSmokeVerified;
 
   return {
     automatedChecksOk:
@@ -334,7 +391,7 @@ function buildEmailVerificationReadiness(input: EmailVerificationReadinessInput)
     ai: {
       providerStatus: diagnostics.aiProvider.status,
       generationMode: input.aiProviderTest?.generationMode,
-      providerError: input.aiProviderTest?.providerError,
+      providerError: sanitizeVerifierText(input.aiProviderTest?.providerError),
       sourceCount: input.aiProviderTest?.sourceCount,
       requireSourceLinks: diagnostics.aiContextPolicy.requireSourceLinks,
       enabledFeatures: diagnostics.aiContextPolicy.enabledFeatures,
@@ -357,10 +414,34 @@ function buildEmailVerificationReadiness(input: EmailVerificationReadinessInput)
         }
       ])
     ),
-    blockers: diagnosticMessages.errors.concat(connectionFailures.map((test) => `connection:${test.emailAddress}: ${test.error ?? "connection test failed"}`)),
+    blockers: diagnosticMessages.errors.concat(connectionFailures.map((test) => sanitizeVerifierText(`connection:${test.emailAddress}: ${test.error ?? "connection test failed"}`))),
     warnings: diagnosticMessages.warnings,
     manualActions
   };
+}
+
+function formatEmailVerificationReadinessSummary(readiness: ReturnType<typeof buildEmailVerificationReadiness>): string {
+  const lines = [
+    [
+      "[email-verify]",
+      `automatedChecksOk=${readiness.automatedChecksOk}`,
+      `liveTrafficReady=${readiness.liveTrafficReady}`,
+      `mailboxes=${readiness.mailboxConnections.passed}/${readiness.mailboxConnections.tested}`,
+      `mailboxFailures=${readiness.mailboxConnections.failed}`,
+      `aiProviderVerified=${readiness.aiProviderVerified}`,
+      `applicationSmokeVerified=${readiness.applicationSmokeVerified}`,
+      `blockers=${readiness.blockers.length}`,
+      `warnings=${readiness.warnings.length}`,
+      `manualActions=${readiness.manualActions.length}`
+    ].join(" ")
+  ];
+  if (readiness.blockers.length) {
+    lines.push(`[email-verify] blockers: ${readiness.blockers.slice(0, 5).join(" | ")}`);
+  }
+  if (readiness.manualActions.length) {
+    lines.push(`[email-verify] manualActions: ${readiness.manualActions.slice(0, 5).join(" | ")}`);
+  }
+  return lines.join("\n");
 }
 
 function collectDiagnosticMessages(diagnostics: EmailSubsystemDiagnostics): { errors: string[]; warnings: string[] } {
@@ -382,13 +463,13 @@ function collectDiagnosticMessages(diagnostics: EmailSubsystemDiagnostics): { er
   const warnings: string[] = [];
   for (const item of checks) {
     if (item.check.status === "error") {
-      errors.push(`${item.name}: ${item.check.message}`);
+      errors.push(sanitizeVerifierText(`${item.name}: ${item.check.message}`) ?? `${item.name}: redacted error`);
     } else if (item.check.status === "warning") {
-      warnings.push(`${item.name}: ${item.check.message}`);
+      warnings.push(sanitizeVerifierText(`${item.name}: ${item.check.message}`) ?? `${item.name}: redacted warning`);
     }
   }
   if (diagnostics.jobs && !diagnostics.jobs.ok) {
-    errors.push(`jobs: ${diagnostics.jobs.error ?? "job executor is not healthy"}`);
+    errors.push(sanitizeVerifierText(`jobs: ${diagnostics.jobs.error ?? "job executor is not healthy"}`) ?? "jobs: redacted error");
   }
   if (diagnostics.accounts && diagnostics.accounts.active > diagnostics.accounts.activeConnectionConfigured) {
     warnings.push("accounts: at least one active mailbox is missing connection configuration");

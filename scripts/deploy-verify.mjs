@@ -70,9 +70,10 @@ function buildSteps(parsed, options) {
         "--import",
         "./scripts/register-alias.mjs",
         "scripts/email-verify.ts",
-        ...(parsed["run-email-connections"] ? ["--test-connections"] : []),
-        ...(parsed["run-email-ai-provider"] ? ["--test-ai-provider"] : []),
-        ...(parsed["run-email-smoke"] ? ["--smoke"] : [])
+        ...(parsed["run-email-connections"] && !parsed["require-live-email"] ? ["--test-connections"] : []),
+        ...(parsed["run-email-ai-provider"] && !parsed["require-live-email"] ? ["--test-ai-provider"] : []),
+        ...(parsed["run-email-smoke"] && !parsed["require-live-email"] ? ["--smoke"] : []),
+        ...(parsed["require-live-email"] ? ["--require-live-readiness"] : [])
       ])
     );
   }
@@ -199,6 +200,8 @@ function formatHealthSummary(payload) {
     `emailAiFallbacks=${payload?.emailReadiness?.aiProviderFallbacks?.recentFallbackCount ?? payload?.email?.aiProviderFallbacks?.recentFallbackCount ?? "unknown"}`,
     `emailAutoSummary=${payload?.emailReadiness?.autoSummaryPolicy?.status ?? payload?.email?.autoSummaryPolicy?.status ?? "unknown"}`,
     `emailSync=${payload?.emailReadiness?.syncScheduler?.status ?? payload?.email?.syncScheduler?.status ?? "unknown"}`,
+    `emailSyncUserSource=${payload?.emailReadiness?.syncScheduler?.userIdSource ?? payload?.email?.syncScheduler?.userIdSource ?? "unknown"}`,
+    `emailSyncFallback=${payload?.emailReadiness?.syncScheduler?.fallbackToAdmin ?? payload?.email?.syncScheduler?.fallbackToAdmin ?? "unknown"}`,
     `emailSendClaims=${payload?.emailReadiness?.sendClaims?.staleCount ?? payload?.email?.sendClaims?.staleCount ?? "unknown"}`
   ].join(" ");
 }

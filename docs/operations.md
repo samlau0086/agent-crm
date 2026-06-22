@@ -41,12 +41,12 @@ npm run deploy:verify
 - 在 `web` 容器内执行 `node scripts/validate-env.mjs`
 - 在 `web` 容器内检查 `pg_dump --version`
 - 在 `web` 容器内执行一次备份 dry-run
-- 在 `web` 容器内执行邮件 diagnostics；上线前追加 `-- --run-email-connections --run-email-ai-provider --run-email-smoke` 会同时测试真实 SMTP/IMAP/Gmail/Outlook 账号连接、OpenAI-compatible AI provider 和邮件应用 smoke 流程
+- 在 `web` 容器内执行邮件 diagnostics；上线前运行 `npm run deploy:verify:live-email` 会同时测试真实 SMTP/IMAP/Gmail/Outlook 账号连接、OpenAI-compatible AI provider、邮件应用 smoke 流程，并要求 `readiness.liveTrafficReady=true`
 
 只查看将要执行的步骤，不启动容器：
 
 ```bash
-npm run deploy:verify -- --dry-run
+npm run deploy:verify:dry-run
 ```
 
 需要在验收时创建一份真实备份：
@@ -61,15 +61,18 @@ npm run deploy:verify -- --run-backup
 npm run deploy:verify -- --health-url http://127.0.0.1:8080/api/health
 ```
 
+如果使用 npm 11 发现参数没有透传到脚本，可在 `npm run deploy:verify` 后使用额外的 `--`，例如 `npm run deploy:verify -- -- --run-backup`；固定场景优先使用上面的 `deploy:verify:dry-run` 和 `deploy:verify:live-email`。
+
 生产环境建议显式设置：
 
 - `APP_BASE_URL=https://crm.example.com`: 应用对外访问地址，用于登录跳转、密码设置链接和邮箱 OAuth callback；不要依赖请求 `Origin` 头。
 - `SEED_ON_EMPTY=false`: 避免空库自动灌入演示数据。
 - `RUN_MIGRATIONS=true`: 容器启动时执行 Prisma 迁移。
-- `AI_API_KEY`: 不配置时 AI 会使用本地只读 fallback。
+- `AI_API_KEY`: 不配置时 AI 会使用本地只读 fallback；启用 `RUN_EMAIL_AI_PROVIDER_TEST=true` 或 `REQUIRE_LIVE_EMAIL_READINESS=true` 时必须配置。
 - `EMAIL_DELIVERY_MODE`: 默认为 `live`；`dry-run` 只用于本地或 E2E，生产校验会拒绝。
 - `EMAIL_CONFIG_SECRET`: 邮箱凭据加密密钥，至少 16 字符；建议由 `npm run config:secrets` 生成，更换密钥前需要先规划已有邮箱配置的重新加密。
 - `EMAIL_OAUTH_STATE_SECRET`: OAuth state 签名密钥，至少 16 字符；建议由 `npm run config:secrets` 生成，Gmail/Outlook 授权回调会用到。
+- `GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET` 和 `OUTLOOK_OAUTH_CLIENT_ID` / `OUTLOOK_OAUTH_CLIENT_SECRET`: 使用对应 OAuth 邮箱时必须成对配置。
 - `BACKUP_DIR=/app/backups`: Web 管理台列出和下载备份文件的目录。
 - `DB_MAINTENANCE_MODE=direct`: 容器内使用 PostgreSQL client 直连 `DATABASE_URL` 做备份。
 - `HEALTHCHECK_TIMEOUT_MS=5000`: 按部署环境网络情况调整。

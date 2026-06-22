@@ -14,6 +14,26 @@ on:
         description: "Optional image tag suffix; defaults to the commit SHA"
         required: false
         default: ""
+      run_email_connections:
+        description: "Run real mailbox connection checks after deployment"
+        required: false
+        type: boolean
+        default: false
+      run_email_ai_provider:
+        description: "Run an OpenAI-compatible provider check after deployment"
+        required: false
+        type: boolean
+        default: false
+      run_email_smoke:
+        description: "Run the CRM email application smoke check after deployment"
+        required: false
+        type: boolean
+        default: false
+      require_live_email:
+        description: "Fail unless email verifier reports liveTrafficReady=true"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-vps
@@ -86,6 +106,20 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           EMAIL_CONFIG_SECRET: ${{ secrets.EMAIL_CONFIG_SECRET }}
           EMAIL_OAUTH_STATE_SECRET: ${{ secrets.EMAIL_OAUTH_STATE_SECRET }}
+          SEED_ON_EMPTY: ${{ vars.SEED_ON_EMPTY || 'false' }}
+          EMAIL_DELIVERY_MODE: ${{ vars.EMAIL_DELIVERY_MODE || 'live' }}
+          EMAIL_SYNC_INTERVAL_MS: ${{ vars.EMAIL_SYNC_INTERVAL_MS || '300000' }}
+          EMAIL_SYNC_LIMIT: ${{ vars.EMAIL_SYNC_LIMIT || '25' }}
+          EMAIL_SEND_CLAIM_TIMEOUT_MS: ${{ vars.EMAIL_SEND_CLAIM_TIMEOUT_MS || '900000' }}
+          RUN_EMAIL_CONNECTION_TESTS: ${{ inputs.run_email_connections || vars.RUN_EMAIL_CONNECTION_TESTS || 'false' }}
+          RUN_EMAIL_AI_PROVIDER_TEST: ${{ inputs.run_email_ai_provider || vars.RUN_EMAIL_AI_PROVIDER_TEST || 'false' }}
+          RUN_EMAIL_SMOKE_TEST: ${{ inputs.run_email_smoke || vars.RUN_EMAIL_SMOKE_TEST || 'false' }}
+          REQUIRE_LIVE_EMAIL_READINESS: ${{ inputs.require_live_email || vars.REQUIRE_LIVE_EMAIL_READINESS || 'false' }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          GMAIL_OAUTH_CLIENT_ID: ${{ secrets.GMAIL_OAUTH_CLIENT_ID }}
+          GMAIL_OAUTH_CLIENT_SECRET: ${{ secrets.GMAIL_OAUTH_CLIENT_SECRET }}
+          OUTLOOK_OAUTH_CLIENT_ID: ${{ secrets.OUTLOOK_OAUTH_CLIENT_ID }}
+          OUTLOOK_OAUTH_CLIENT_SECRET: ${{ secrets.OUTLOOK_OAUTH_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           missing=0
@@ -95,6 +129,68 @@ jobs:
               missing=1
             fi
           done
+          require_bool() {
+            local name="$1"
+            local value="${!name:-false}"
+            if [ "$value" != "true" ] && [ "$value" != "false" ]; then
+              echo "::error title=Invalid boolean::${name} must be true or false"
+              missing=1
+            fi
+          }
+          require_positive_integer() {
+            local name="$1"
+            local value="${!name:-}"
+            if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ]; then
+              echo "::error title=Invalid positive integer::${name} must be a positive integer"
+              missing=1
+            fi
+          }
+          for name in EMAIL_CONFIG_SECRET EMAIL_OAUTH_STATE_SECRET; do
+            value="${!name:-}"
+            if [ -n "$value" ] && [ "${#value}" -lt 16 ]; then
+              echo "::error title=Weak email secret::${name} must be at least 16 characters; use npm run config:secrets or openssl rand -base64 32"
+              missing=1
+            fi
+            if [[ "$value" == replace-with-* ]] || [[ "$value" == *placeholder* ]]; then
+              echo "::error title=Placeholder email secret::${name} must be replaced with a deployment-specific random value"
+              missing=1
+            fi
+          done
+          if [ -n "${EMAIL_CONFIG_SECRET:-}" ] && [ "$EMAIL_CONFIG_SECRET" = "${EMAIL_OAUTH_STATE_SECRET:-}" ]; then
+            echo "::error title=Duplicate email secrets::EMAIL_CONFIG_SECRET and EMAIL_OAUTH_STATE_SECRET must be different random values"
+            missing=1
+          fi
+          if { [ "${RUN_EMAIL_AI_PROVIDER_TEST:-false}" = "true" ] || [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ]; } && [ -z "${AI_API_KEY:-}" ]; then
+            echo "::error title=Missing AI secret::AI_API_KEY is required when AI provider verification or live email readiness is enabled"
+            missing=1
+          fi
+          for provider in GMAIL OUTLOOK; do
+            id_name="${provider}_OAUTH_CLIENT_ID"
+            secret_name="${provider}_OAUTH_CLIENT_SECRET"
+            id_value="${!id_name:-}"
+            secret_value="${!secret_name:-}"
+            if { [ -n "$id_value" ] && [ -z "$secret_value" ]; } || { [ -z "$id_value" ] && [ -n "$secret_value" ]; }; then
+              echo "::error title=Partial OAuth configuration::${provider} OAuth requires both ${id_name} and ${secret_name}, or neither when OAuth is unused"
+              missing=1
+            fi
+          done
+          for name in RUN_EMAIL_CONNECTION_TESTS RUN_EMAIL_AI_PROVIDER_TEST RUN_EMAIL_SMOKE_TEST REQUIRE_LIVE_EMAIL_READINESS SEED_ON_EMPTY; do
+            require_bool "$name"
+          done
+          if [ "$EMAIL_DELIVERY_MODE" != "live" ] && [ "$EMAIL_DELIVERY_MODE" != "dry-run" ]; then
+            echo "::error title=Invalid email delivery mode::EMAIL_DELIVERY_MODE must be live or dry-run"
+            missing=1
+          fi
+          if [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ] && [ "$EMAIL_DELIVERY_MODE" != "live" ]; then
+            echo "::error title=Invalid live readiness delivery mode::REQUIRE_LIVE_EMAIL_READINESS requires EMAIL_DELIVERY_MODE=live"
+            missing=1
+          fi
+          require_positive_integer EMAIL_SYNC_INTERVAL_MS
+          require_positive_integer EMAIL_SEND_CLAIM_TIMEOUT_MS
+          if ! [[ "$EMAIL_SYNC_LIMIT" =~ ^[0-9]+$ ]] || [ "$EMAIL_SYNC_LIMIT" -lt 1 ] || [ "$EMAIL_SYNC_LIMIT" -gt 100 ]; then
+            echo "::error title=Invalid email sync limit::EMAIL_SYNC_LIMIT must be an integer between 1 and 100"
+            missing=1
+          fi
           app_port="${APP_PORT_INPUT:-${VPS_APP_PORT:-3000}}"
           if ! [[ "$app_port" =~ ^[0-9]+$ ]] || [ "$app_port" -lt 1 ] || [ "$app_port" -gt 65535 ]; then
             echo "::error title=Invalid app port::APP_PORT must be an integer between 1 and 65535"
@@ -120,7 +216,7 @@ jobs:
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_PORT: ${{ vars.VPS_PORT || secrets.VPS_PORT || '22' }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
           set -euo pipefail
@@ -133,7 +229,7 @@ jobs:
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_PORT: ${{ vars.VPS_PORT || secrets.VPS_PORT || '22' }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SUDO: ${{ vars.VPS_SUDO || 'sudo' }}
         run: |
@@ -157,19 +253,22 @@ jobs:
           APP_PORT_INPUT: ${{ inputs.app_port }}
           VPS_APP_PORT: ${{ vars.VPS_APP_PORT }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          APP_BASE_URL_SECRET: ${{ secrets.APP_BASE_URL }}
+          APP_BASE_URL_CONFIGURED: ${{ vars.APP_BASE_URL || secrets.APP_BASE_URL }}
           ALLOW_INSECURE_APP_BASE_URL: ${{ vars.ALLOW_INSECURE_APP_BASE_URL || 'true' }}
           POSTGRES_HOST: ${{ vars.POSTGRES_HOST || 'host.docker.internal' }}
           POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5433' }}
           POSTGRES_DB: ${{ vars.POSTGRES_DB || 'ai_agent_crm' }}
           POSTGRES_USER: ${{ vars.POSTGRES_USER || 'crm' }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          SEED_ON_EMPTY: ${{ vars.SEED_ON_EMPTY || 'false' }}
           EMAIL_CONFIG_SECRET: ${{ secrets.EMAIL_CONFIG_SECRET }}
           EMAIL_OAUTH_STATE_SECRET: ${{ secrets.EMAIL_OAUTH_STATE_SECRET }}
           EMAIL_DELIVERY_MODE: ${{ vars.EMAIL_DELIVERY_MODE || 'live' }}
           EMAIL_SYNC_INTERVAL_MS: ${{ vars.EMAIL_SYNC_INTERVAL_MS || '300000' }}
           EMAIL_SYNC_LIMIT: ${{ vars.EMAIL_SYNC_LIMIT || '25' }}
           EMAIL_SYNC_USER_ID: ${{ vars.EMAIL_SYNC_USER_ID || 'user-admin' }}
+          EMAIL_VERIFY_USER_ID: ${{ vars.EMAIL_VERIFY_USER_ID || vars.EMAIL_SYNC_USER_ID || 'user-admin' }}
+          EMAIL_SEND_CLAIM_TIMEOUT_MS: ${{ vars.EMAIL_SEND_CLAIM_TIMEOUT_MS || '900000' }}
           AI_PROVIDER: ${{ vars.AI_PROVIDER || 'openai-compatible' }}
           AI_BASE_URL: ${{ vars.AI_BASE_URL || 'https://api.openai.com/v1' }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
@@ -184,7 +283,7 @@ jobs:
         run: |
           set -euo pipefail
           app_port="${APP_PORT_INPUT:-${VPS_APP_PORT:-3000}}"
-          app_base_url="${APP_BASE_URL_SECRET:-http://${VPS_HOST}:${app_port}}"
+          app_base_url="${APP_BASE_URL_CONFIGURED:-http://${VPS_HOST}:${app_port}}"
           database_url="$(node -e 'const e = process.env; const encode = encodeURIComponent; console.log(`postgresql://${encode(e.POSTGRES_USER)}:${encode(e.POSTGRES_PASSWORD)}@${e.POSTGRES_HOST}:${e.POSTGRES_PORT}/${encode(e.POSTGRES_DB)}?schema=public`);')"
           : > vps.env
           write_env() {
@@ -207,7 +306,7 @@ jobs:
           write_env POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
           write_env DATABASE_URL "$database_url"
           write_env RUN_MIGRATIONS "true"
-          write_env SEED_ON_EMPTY "false"
+          write_env SEED_ON_EMPTY "$SEED_ON_EMPTY"
           write_env DB_WAIT_TIMEOUT_MS "90000"
           write_env EMAIL_DELIVERY_MODE "$EMAIL_DELIVERY_MODE"
           write_env EMAIL_CONFIG_SECRET "$EMAIL_CONFIG_SECRET"
@@ -215,7 +314,8 @@ jobs:
           write_env EMAIL_SYNC_INTERVAL_MS "$EMAIL_SYNC_INTERVAL_MS"
           write_env EMAIL_SYNC_LIMIT "$EMAIL_SYNC_LIMIT"
           write_env EMAIL_SYNC_USER_ID "$EMAIL_SYNC_USER_ID"
-          write_env EMAIL_SEND_CLAIM_TIMEOUT_MS "900000"
+          write_env EMAIL_VERIFY_USER_ID "$EMAIL_VERIFY_USER_ID"
+          write_env EMAIL_SEND_CLAIM_TIMEOUT_MS "$EMAIL_SEND_CLAIM_TIMEOUT_MS"
           write_env AI_PROVIDER "$AI_PROVIDER"
           write_env AI_BASE_URL "$AI_BASE_URL"
           write_env AI_API_KEY "$AI_API_KEY"
@@ -228,11 +328,19 @@ jobs:
           write_env OUTLOOK_OAUTH_CLIENT_SECRET "$OUTLOOK_OAUTH_CLIENT_SECRET"
           write_env OUTLOOK_OAUTH_SCOPE "$OUTLOOK_OAUTH_SCOPE"
 
+      - name: Validate rendered VPS env file
+        shell: bash
+        env:
+          NODE_ENV: production
+        run: |
+          set -euo pipefail
+          node scripts/validate-env.mjs --env-file vps.env
+
       - name: Upload deployment files
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_PORT: ${{ vars.VPS_PORT || secrets.VPS_PORT || '22' }}
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           set -euo pipefail
@@ -243,23 +351,63 @@ jobs:
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_PORT: ${{ vars.VPS_PORT || secrets.VPS_PORT || '22' }}
           VPS_USER: ${{ secrets.VPS_USER }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+          RUN_EMAIL_CONNECTION_TESTS: ${{ inputs.run_email_connections || vars.RUN_EMAIL_CONNECTION_TESTS || 'false' }}
+          RUN_EMAIL_AI_PROVIDER_TEST: ${{ inputs.run_email_ai_provider || vars.RUN_EMAIL_AI_PROVIDER_TEST || 'false' }}
+          RUN_EMAIL_SMOKE_TEST: ${{ inputs.run_email_smoke || vars.RUN_EMAIL_SMOKE_TEST || 'false' }}
+          REQUIRE_LIVE_EMAIL_READINESS: ${{ inputs.require_live_email || vars.REQUIRE_LIVE_EMAIL_READINESS || 'false' }}
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/ai_agent_crm_deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' GHCR_USERNAME='$GHCR_USERNAME' GHCR_TOKEN='$GHCR_TOKEN' sh -s" <<'REMOTE'
+            "DEPLOY_PATH='$DEPLOY_PATH' GHCR_USERNAME='$GHCR_USERNAME' GHCR_TOKEN='$GHCR_TOKEN' RUN_EMAIL_CONNECTION_TESTS='$RUN_EMAIL_CONNECTION_TESTS' RUN_EMAIL_AI_PROVIDER_TEST='$RUN_EMAIL_AI_PROVIDER_TEST' RUN_EMAIL_SMOKE_TEST='$RUN_EMAIL_SMOKE_TEST' REQUIRE_LIVE_EMAIL_READINESS='$REQUIRE_LIVE_EMAIL_READINESS' sh -s" <<'REMOTE'
           set -eu
           cd "$DEPLOY_PATH"
           if [ -n "${GHCR_TOKEN:-}" ]; then
             printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
           fi
           docker compose config >/dev/null
+          postgres_host="$(grep -E '^POSTGRES_HOST=' .env | sed -E "s/^POSTGRES_HOST='?([^']*)'?.*/\1/")"
+          postgres_port="$(grep -E '^POSTGRES_PORT=' .env | sed -E "s/^POSTGRES_PORT='?([^']*)'?.*/\1/")"
+          docker run --rm --add-host=host.docker.internal:host-gateway alpine:3.20 sh -c "nc -z -w 5 '${postgres_host:-host.docker.internal}' '${postgres_port:-5433}'"
           docker compose pull
           docker compose up -d --remove-orphans
           docker compose ps
           port="$(grep -E '^APP_PORT=' .env | sed -E "s/^APP_PORT='?([^']*)'?.*/\1/")"
           curl --fail --retry 30 --retry-delay 3 --retry-connrefused "http://127.0.0.1:${port:-3000}/api/health"
+          email_verify_args=""
+          if [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ]; then
+            email_verify_args="$email_verify_args --require-live-readiness"
+          else
+            if [ "${RUN_EMAIL_CONNECTION_TESTS:-false}" = "true" ]; then
+              email_verify_args="$email_verify_args --test-connections"
+            fi
+            if [ "${RUN_EMAIL_AI_PROVIDER_TEST:-false}" = "true" ]; then
+              email_verify_args="$email_verify_args --test-ai-provider"
+            fi
+            if [ "${RUN_EMAIL_SMOKE_TEST:-false}" = "true" ]; then
+              email_verify_args="$email_verify_args --smoke"
+            fi
+          fi
+          verify_stdout="$(mktemp)"
+          verify_stderr="$(mktemp)"
+          rm -f email-verify-last.json email-verify-last-summary.txt
+          set +e
+          docker compose exec -T web node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-verify.ts $email_verify_args >"$verify_stdout" 2>"$verify_stderr"
+          verify_code="$?"
+          set -e
+          cat "$verify_stderr" >&2
+          if [ -s "$verify_stderr" ]; then
+            cp "$verify_stderr" email-verify-last-summary.txt
+            chmod 600 email-verify-last-summary.txt
+          fi
+          if [ -s "$verify_stdout" ]; then
+            cp "$verify_stdout" email-verify-last.json
+            chmod 600 email-verify-last.json
+            cat "$verify_stdout"
+          fi
+          rm -f "$verify_stdout" "$verify_stderr"
+          exit "$verify_code"
           REMOTE

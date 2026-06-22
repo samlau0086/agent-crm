@@ -46,6 +46,9 @@ export interface ServiceHealthEmailReadiness {
     intervalMs: number;
     limit?: number;
     userId: string;
+    configuredUserId: string;
+    userIdSource: EmailSubsystemDiagnostics["syncScheduler"]["userIdSource"];
+    fallbackToAdmin: boolean;
     queueBacked: boolean;
     syncEnabledAccounts?: number;
   };
@@ -143,6 +146,9 @@ export function buildEmailReadiness(email: EmailSubsystemDiagnostics): ServiceHe
       intervalMs: email.syncScheduler.intervalMs,
       limit: email.syncScheduler.limit,
       userId: email.syncScheduler.userId,
+      configuredUserId: email.syncScheduler.configuredUserId,
+      userIdSource: email.syncScheduler.userIdSource,
+      fallbackToAdmin: email.syncScheduler.fallbackToAdmin,
       queueBacked: email.syncScheduler.queueBacked,
       syncEnabledAccounts: email.syncScheduler.syncEnabledAccounts
     },
