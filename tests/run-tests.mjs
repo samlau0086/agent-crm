@@ -1226,7 +1226,7 @@ await run("health scripts report email readiness fields", () => {
   assert.match(healthcheck, /emailSyncFallback/);
   assert.match(healthcheck, /syncScheduler/);
   assert.match(healthcheck, /emailSendClaims/);
-  assert.match(deployVerify, /emailReadiness\?\.ok/);
+  assert.doesNotMatch(deployVerify, /emailReadiness\?\.ok/);
   assert.match(deployVerify, /formatHealthSummary/);
   assert.match(deployVerify, /emailSecrets/);
   assert.match(deployVerify, /emailOAuthState/);
@@ -1238,6 +1238,27 @@ await run("health scripts report email readiness fields", () => {
   assert.match(deployVerify, /emailSyncUserSource/);
   assert.match(deployVerify, /emailSyncFallback/);
   assert.match(deployVerify, /syncScheduler/);
+});
+
+await run("service health stays up when optional email readiness has errors", async () => {
+  const email = await checkEmailSubsystemDiagnostics({
+    env: {
+      EMAIL_CONFIG_SECRET: "",
+      EMAIL_OAUTH_STATE_SECRET: "",
+      APP_BASE_URL: "http://crm.example.com",
+      EMAIL_DELIVERY_MODE: "live"
+    }
+  });
+  const payload = buildServiceHealthPayload({
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    database: "ok",
+    jobs: { ok: true, executor: "redis", queue: "ok", redis: "ok" },
+    email
+  });
+
+  assert.equal(email.ok, false);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.emailReadiness.ok, false);
 });
 
 await run("public api docs describe email and ai mail endpoints", () => {

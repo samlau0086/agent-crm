@@ -135,7 +135,7 @@ async function waitForHealth(url, timeout) {
     try {
       const response = await fetch(url, { signal: controller.signal });
       const payload = await response.json().catch(() => ({}));
-      if (response.ok && payload.ok === true && payload.database === "ok" && payload.emailReadiness?.ok !== false) {
+      if (response.ok && payload.ok === true && payload.database === "ok") {
         console.error(`Health check passed: ${url} ${formatHealthSummary(payload)}`);
         return;
       }

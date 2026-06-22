@@ -1,5 +1,5 @@
 const port = process.env.PORT ?? "3000";
-const host = process.env.HOSTNAME ?? "127.0.0.1";
+const host = process.env.HEALTHCHECK_HOST ?? "127.0.0.1";
 const timeoutMs = Number(process.env.HEALTHCHECK_TIMEOUT_MS ?? 5000);
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), timeoutMs);

@@ -374,10 +374,40 @@ jobs:
           postgres_port="$(grep -E '^POSTGRES_PORT=' .env | sed -E "s/^POSTGRES_PORT='?([^']*)'?.*/\1/")"
           docker run --rm --add-host=host.docker.internal:host-gateway alpine:3.20 sh -c "nc -z -w 5 '${postgres_host:-host.docker.internal}' '${postgres_port:-5433}'"
           docker compose pull
+          dump_diagnostics() {
+            echo "::group::docker compose ps"
+            docker compose ps || true
+            echo "::endgroup::"
+            echo "::group::web health inspect"
+            docker inspect --format '{{json .State.Health}}' ai-agent-crm-web-1 || true
+            echo "::endgroup::"
+            echo "::group::web logs"
+            docker compose logs --no-color --tail=200 web || true
+            echo "::endgroup::"
+            echo "::group::worker logs"
+            docker compose logs --no-color --tail=120 worker || true
+            echo "::endgroup::"
+            echo "::group::email-sync logs"
+            docker compose logs --no-color --tail=120 email-sync || true
+            echo "::endgroup::"
+            echo "::group::redis logs"
+            docker compose logs --no-color --tail=80 redis || true
+            echo "::endgroup::"
+          }
+          set +e
           docker compose up -d --remove-orphans
+          compose_up_code="$?"
+          set -e
+          if [ "$compose_up_code" -ne 0 ]; then
+            dump_diagnostics
+            exit "$compose_up_code"
+          fi
           docker compose ps
           port="$(grep -E '^APP_PORT=' .env | sed -E "s/^APP_PORT='?([^']*)'?.*/\1/")"
-          curl --fail --retry 30 --retry-delay 3 --retry-connrefused "http://127.0.0.1:${port:-3000}/api/health"
+          if ! curl --fail --retry 30 --retry-delay 3 --retry-connrefused "http://127.0.0.1:${port:-3000}/api/health"; then
+            dump_diagnostics
+            exit 1
+          fi
           email_verify_args=""
           if [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ]; then
             email_verify_args="$email_verify_args --require-live-readiness"

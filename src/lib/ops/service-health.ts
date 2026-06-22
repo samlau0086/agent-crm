@@ -84,7 +84,7 @@ export interface ServiceHealthPayload {
 
 export function buildServiceHealthPayload(input: ServiceHealthInput): ServiceHealthPayload {
   const errors = input.errors?.filter(Boolean) ?? [];
-  const ok = input.database === "ok" && input.jobs.ok && input.email.ok;
+  const ok = input.database === "ok" && input.jobs.ok;
 
   return {
     ok,
