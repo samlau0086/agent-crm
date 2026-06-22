@@ -1543,10 +1543,13 @@ await run("email verification dry run describes diagnostics and manual mailbox c
   const script = readFileSync("scripts/email-verify.ts", "utf8");
   const operationalUser = readFileSync("scripts/operational-user.ts", "utf8");
   assert.match(script, /resolveOperationalUser/);
+  assert.match(script, /const requiresOperationalUser = runConnectionTests \|\| runSmoke \|\| requireLiveReadiness/);
+  assert.match(script, /checkEmailSubsystemDiagnostics\(\{ includeJobs: true \}\)/);
+  assert.match(script, /No workspace-scoped email verification checks were requested/);
   assert.match(script, /const runConnectionTests = Boolean\(args\["test-connections"\] \|\| requireLiveReadiness\)/);
   assert.match(script, /const runAiProviderTest = Boolean\(args\["test-ai-provider"\] \|\| requireLiveReadiness\)/);
   assert.match(script, /const runSmoke = Boolean\(args\.smoke \|\| requireLiveReadiness\)/);
-  assert.match(script, /operationalUser:\s*\{/);
+  assert.match(script, /operationalUser:\s*userResolution/);
   assert.match(script, /fallbackUsed:\s*userResolution\.fallbackUsed/);
   assert.match(operationalUser, /export interface OperationalUserResolution/);
   assert.match(operationalUser, /fallbackUsed: Boolean\(requestedUserId && requestedUserId !== context\.user\.id\)/);

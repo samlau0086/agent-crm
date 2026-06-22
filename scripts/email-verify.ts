@@ -27,19 +27,24 @@ if (args["dry-run"]) {
 try {
   await assertDatabaseReachable({ label: "email-verify" });
   const { getCrmRepository } = await import("@/lib/crm/repository");
-  const { checkEmailSubsystemDiagnosticsForContext } = await import("@/lib/email/diagnostics");
+  const { checkEmailSubsystemDiagnostics, checkEmailSubsystemDiagnosticsForContext } = await import("@/lib/email/diagnostics");
   const repository = getCrmRepository();
-  const userResolution = await resolveOperationalUser({
-    userId: userSelection.userId,
-    strict: userSelection.strict,
-    purpose: "email verification"
-  });
-  const context = userResolution.context;
-  const accounts = await repository.listEmailAccounts(context);
-  const diagnostics = await checkEmailSubsystemDiagnosticsForContext(context, repository, { includeJobs: true });
-  const connectionTests = runConnectionTests ? await testConnections(context, repository, accounts) : [];
+  const requiresOperationalUser = runConnectionTests || runSmoke || requireLiveReadiness;
+  const userResolution = requiresOperationalUser
+    ? await resolveOperationalUser({
+      userId: userSelection.userId,
+      strict: userSelection.strict,
+      purpose: "email verification"
+    })
+    : undefined;
+  const context = userResolution?.context;
+  const accounts = context ? await repository.listEmailAccounts(context) : [];
+  const diagnostics = context
+    ? await checkEmailSubsystemDiagnosticsForContext(context, repository, { includeJobs: true })
+    : await checkEmailSubsystemDiagnostics({ includeJobs: true });
+  const connectionTests = runConnectionTests && context ? await testConnections(context, repository, accounts) : [];
   const aiProviderTest = runAiProviderTest ? await testAiProvider() : undefined;
-  const applicationSmoke = runSmoke ? await runApplicationSmoke(context, repository, { keepSmokeData }) : undefined;
+  const applicationSmoke = runSmoke && context ? await runApplicationSmoke(context, repository, { keepSmokeData }) : undefined;
   const automatedChecksOk = diagnostics.ok && connectionTests.every((test) => test.ok) && (aiProviderTest?.ok ?? true) && (applicationSmoke?.ok ?? true);
   const readiness = buildEmailVerificationReadiness({
     diagnostics,
@@ -55,18 +60,23 @@ try {
   console.error(formatEmailVerificationReadinessSummary(readiness));
   console.log(
     JSON.stringify(
-      {
-        ok,
-        liveReadinessRequired: requireLiveReadiness,
-        userId: context.user.id,
-        operationalUser: {
-          requestedUserId: userResolution.requestedUserId,
-          resolvedUserId: userResolution.resolvedUserId,
-          strict: userResolution.strict,
-          fallbackUsed: userResolution.fallbackUsed,
-          requiredPermission: userResolution.requiredPermission
-        },
-        workspaceId: context.workspaceId,
+        {
+          ok,
+          liveReadinessRequired: requireLiveReadiness,
+          userId: context?.user.id,
+          operationalUser: userResolution
+            ? {
+              requestedUserId: userResolution.requestedUserId,
+              resolvedUserId: userResolution.resolvedUserId,
+              strict: userResolution.strict,
+              fallbackUsed: userResolution.fallbackUsed,
+              requiredPermission: userResolution.requiredPermission
+            }
+            : {
+              required: false,
+              reason: "No workspace-scoped email verification checks were requested."
+            },
+          workspaceId: context?.workspaceId,
         readiness,
         diagnostics,
         connectionTests,
