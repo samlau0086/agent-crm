@@ -262,6 +262,7 @@ export interface EmailAiGenerationAuditInput {
   generationMode?: EmailAiGenerationMode;
   providerError?: string;
   suggestedSubjectProvided?: boolean;
+  persisted?: boolean;
   automationFailed?: boolean;
   errorMessage?: string;
 }

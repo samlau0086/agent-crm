@@ -37,6 +37,7 @@ export async function translateEmailMessage(
     targetLocale
   });
   const result = await generateEmailAiOutput({ context: assistantContext, sourceText: message.bodyText });
+  const persisted = result.enabled && result.generationMode === "provider";
   await repository.recordEmailAiGeneration(context, {
     purpose: "translate",
     enabled: result.enabled,
@@ -54,9 +55,10 @@ export async function translateEmailMessage(
     contextTruncated: result.budget.truncated,
     outputTruncated: result.budget.outputTruncated,
     generationMode: result.generationMode,
-    providerError: result.providerError
+    providerError: result.providerError,
+    persisted
   });
-  if (!result.enabled) {
+  if (!persisted) {
     return message;
   }
   return repository.updateEmailMessageTranslation(context, message.id, result.text, targetLocale, result.sources);

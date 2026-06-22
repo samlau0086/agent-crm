@@ -1,4 +1,5 @@
 import type { EmailAttachment, EmailConnectionConfig } from "@/lib/crm/types";
+import { normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
 import type { EmailSendInput } from "@/lib/email/provider";
 import type { InboundEmail } from "@/lib/email/smtp-imap";
 import { assertOAuthConfig, refreshOAuthAccessToken, type OAuthProviderConfig } from "@/lib/email/oauth";
@@ -36,6 +37,7 @@ export interface OAuthMailApiOptions {
 
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
 const OUTLOOK_API_BASE = "https://graph.microsoft.com/v1.0";
+const GMAIL_INBOX_QUERY = "in:inbox";
 
 export async function testOAuthConnection(
   provider: "gmail" | "outlook",
@@ -123,7 +125,7 @@ export async function downloadOAuthAttachment(
     );
     await assertOk(response, "Gmail attachment download");
     const payload = (await response.json()) as { data?: string; size?: number };
-    const contentBase64 = normalizeBase64(payload.data ?? "");
+    const contentBase64 = normalizeEmailAttachmentBase64(payload.data ?? "");
     return {
       config: refreshed,
       fileName: attachment.fileName,
@@ -164,7 +166,7 @@ export async function fetchRecentOAuthEmails(
     do {
       const url = new URL(`${GMAIL_API_BASE}/users/me/messages`);
       url.searchParams.set("maxResults", String(Math.min(25, limit - messages.length)));
-      url.searchParams.set("q", "in:anywhere");
+      url.searchParams.set("q", GMAIL_INBOX_QUERY);
       if (pageToken) {
         url.searchParams.set("pageToken", pageToken);
       }
@@ -235,7 +237,7 @@ function buildOutlookMessagesUrl(top: number): string {
     $orderby: "receivedDateTime desc",
     $expand: "attachments"
   });
-  return `${OUTLOOK_API_BASE}/me/messages?${params.toString()}`;
+  return `${OUTLOOK_API_BASE}/me/mailFolders/inbox/messages?${params.toString()}`;
 }
 
 async function ensureOAuthAccess(
@@ -305,7 +307,7 @@ function buildAttachmentPart(boundary: string, attachment: EmailAttachment): str
     `Content-Disposition: ${disposition}; filename="${fileName}"`,
     attachment.contentId ? `Content-ID: <${sanitizeHeader(attachment.contentId)}>` : undefined,
     "",
-    foldBase64(normalizeBase64(attachment.contentBase64 ?? ""))
+    foldBase64(normalizeEmailAttachmentBase64(attachment.contentBase64 ?? ""))
   ]
     .filter((line) => line !== undefined)
     .join("\r\n");
@@ -343,7 +345,7 @@ function toGraphAttachment(attachment: EmailAttachment): Record<string, unknown>
     "@odata.type": "#microsoft.graph.fileAttachment",
     name: attachment.fileName,
     contentType: attachment.contentType || "application/octet-stream",
-    contentBytes: normalizeBase64(attachment.contentBase64 ?? ""),
+    contentBytes: normalizeEmailAttachmentBase64(attachment.contentBase64 ?? ""),
     ...(attachment.contentId ? { contentId: attachment.contentId, isInline: attachment.disposition === "inline" } : {})
   };
 }
@@ -354,10 +356,6 @@ function normalizeOutboundAttachments(attachments: EmailAttachment[] | undefined
 
 function messageBoundary(seed: string | undefined): string {
   return `ai-agent-crm-${Buffer.from(seed || `${Date.now()}`).toString("base64url").slice(0, 24)}`;
-}
-
-function normalizeBase64(value: string): string {
-  return value.replace(/-/g, "+").replace(/_/g, "/").replace(/\s+/g, "");
 }
 
 function foldBase64(value: string): string {
@@ -391,7 +389,8 @@ function parseGmailMessage(payload: unknown): InboundEmail | undefined {
   const to = parseAddressList(headers.to);
   const cc = parseAddressList(headers.cc);
   const subject = headers.subject || "(no subject)";
-  const bodyText = decodeGmailBody(message.payload) || message.snippet || "(empty)";
+  const bodies = decodeGmailBodies(message.payload);
+  const bodyText = bodies.bodyText || message.snippet || "(empty)";
   const attachments = collectGmailAttachments(message.payload, message.id);
   return from
     ? {
@@ -401,8 +400,9 @@ function parseGmailMessage(payload: unknown): InboundEmail | undefined {
         ...(cc.length ? { cc } : {}),
         subject,
         bodyText,
+        bodyHtml: bodies.bodyHtml,
         attachments,
-        receivedAt: message.internalDate ? new Date(Number(message.internalDate)).toISOString() : undefined
+        receivedAt: safeEpochMillisIsoDate(message.internalDate)
       }
     : undefined;
 }
@@ -422,6 +422,7 @@ function parseOutlookMessage(payload: unknown): InboundEmail | undefined {
   };
   const from = message.from?.emailAddress?.address;
   const cc = (message.ccRecipients ?? []).map((recipient) => recipient.emailAddress?.address).filter((address): address is string => Boolean(address));
+  const bodies = parseOutlookBodies(message.body, message.bodyPreview);
   return from
     ? {
         externalMessageId: message.id,
@@ -429,9 +430,10 @@ function parseOutlookMessage(payload: unknown): InboundEmail | undefined {
         to: (message.toRecipients ?? []).map((recipient) => recipient.emailAddress?.address).filter((address): address is string => Boolean(address)),
         ...(cc.length ? { cc } : {}),
         subject: message.subject || "(no subject)",
-        bodyText: parseOutlookBody(message.body, message.bodyPreview),
+        bodyText: bodies.bodyText,
+        bodyHtml: bodies.bodyHtml,
         attachments: collectOutlookAttachments(message),
-        receivedAt: message.receivedDateTime
+        receivedAt: safeIsoDate(message.receivedDateTime)
       }
     : undefined;
 }
@@ -455,17 +457,18 @@ interface GmailPart {
   parts?: unknown[];
 }
 
-function decodeGmailBody(part: GmailPart | undefined): string {
+function decodeGmailBodies(part: GmailPart | undefined): { bodyText: string; bodyHtml?: string } {
   const parts = flattenGmailParts(part);
   const textPart = parts.find((candidate) => candidate.mimeType?.toLowerCase() === "text/plain" && candidate.body?.data);
-  if (textPart?.body?.data) {
-    return Buffer.from(textPart.body.data, "base64url").toString("utf8").trim();
-  }
   const htmlPart = parts.find((candidate) => candidate.mimeType?.toLowerCase() === "text/html" && candidate.body?.data);
-  if (htmlPart?.body?.data) {
-    return stripHtml(Buffer.from(htmlPart.body.data, "base64url").toString("utf8"));
+  const bodyHtml = htmlPart?.body?.data ? Buffer.from(htmlPart.body.data, "base64url").toString("utf8").trim() : undefined;
+  if (textPart?.body?.data) {
+    return { bodyText: Buffer.from(textPart.body.data, "base64url").toString("utf8").trim(), bodyHtml };
   }
-  return "";
+  if (bodyHtml) {
+    return { bodyText: stripHtml(bodyHtml), bodyHtml };
+  }
+  return { bodyText: "" };
 }
 
 function flattenGmailParts(part: GmailPart | undefined): GmailPart[] {
@@ -496,12 +499,15 @@ function collectGmailAttachments(part: GmailPart | undefined, providerMessageId?
   return attachments.length ? attachments : undefined;
 }
 
-function parseOutlookBody(body: { contentType?: string; content?: string } | undefined, preview: string | undefined): string {
+function parseOutlookBodies(body: { contentType?: string; content?: string } | undefined, preview: string | undefined): { bodyText: string; bodyHtml?: string } {
   const content = body?.content?.trim();
   if (!content) {
-    return preview || "(empty)";
+    return { bodyText: preview || "(empty)" };
   }
-  return body?.contentType?.toLowerCase() === "html" ? stripHtml(content) || preview || "(empty)" : content;
+  if (body?.contentType?.toLowerCase() === "html") {
+    return { bodyText: stripHtml(content) || preview || "(empty)", bodyHtml: content };
+  }
+  return { bodyText: content };
 }
 
 function stripHtml(value: string): string {
@@ -522,6 +528,28 @@ function stripHtml(value: string): string {
     .replace(/\n\s+/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function safeIsoDate(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const date = new Date(normalized);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+function safeEpochMillisIsoDate(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const millis = Number(normalized);
+  if (!Number.isFinite(millis)) {
+    return undefined;
+  }
+  const date = new Date(millis);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
 function collectOutlookAttachments(message: { id?: string; hasAttachments?: boolean; attachments?: Array<{ id?: string; name?: string; contentType?: string; size?: number; isInline?: boolean; contentId?: string }> }): EmailAttachment[] | undefined {

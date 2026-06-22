@@ -25,6 +25,9 @@ export async function runEmailAutomationsBestEffort(
   message: EmailMessage,
   settings: EmailAiSettings
 ): Promise<void> {
+  if (!isEmailMessageEligibleForAutomation(message)) {
+    return;
+  }
   const tasks: Array<Promise<void>> = [];
   if (message.direction === "inbound" && canRunEmailAiAutomation(context, settings, "auto_translate")) {
     tasks.push(
@@ -46,7 +49,7 @@ export async function runEmailAutomationsBestEffort(
       })
     );
   }
-  if (canRunEmailAiAutomation(context, settings, "auto_context_analysis")) {
+  if (message.direction === "inbound" && canRunEmailAiAutomation(context, settings, "auto_context_analysis")) {
     tasks.push(
       runAutomationTask(context, repository, {
         purpose: "context_analysis",
@@ -57,6 +60,10 @@ export async function runEmailAutomationsBestEffort(
     );
   }
   await Promise.all(tasks);
+}
+
+export function isEmailMessageEligibleForAutomation(message: Pick<EmailMessage, "direction" | "status">): boolean {
+  return (message.direction === "inbound" && message.status === "received") || (message.direction === "outbound" && message.status === "sent");
 }
 
 export function shouldRunEmailAutoSummary(settings: EmailAiSettings, thread: EmailThread | undefined, messages: EmailMessage[]): boolean {

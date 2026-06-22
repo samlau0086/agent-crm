@@ -1,4 +1,4 @@
-import { Socket } from "node:net";
+import { canOpenTcpConnection, checkDockerComposeAvailability, formatDatabasePreflightFailure, getDatabaseConnectionTarget as parseDatabaseConnectionTarget } from "./runtime-preflight.mjs";
 
 export interface DatabaseTarget {
   host: string;
@@ -20,49 +20,19 @@ export async function assertDatabaseReachable(options: DatabasePreflightOptions)
   const target = getDatabaseConnectionTarget(databaseUrl);
   const ok = await canOpenTcpConnection(target.host, target.port, options.timeoutMs ?? Number(process.env.EMAIL_DATABASE_PREFLIGHT_TIMEOUT_MS ?? 5000));
   if (!ok) {
+    const dockerCompose = await checkDockerComposeAvailability();
     throw new Error(
-      [
-        `[${options.label}] Cannot reach PostgreSQL at ${target.host}:${target.port}.`,
-        "[email] Start the local database before running email verification, sync, or worker jobs.",
-        "[email] With Docker Desktop available, run: docker compose up -d postgres",
-        "[email] The compose file exposes Postgres on 127.0.0.1:54329 to match .env.local/.env.example."
-      ].join("\n")
+      formatDatabasePreflightFailure({
+        label: options.label,
+        target,
+        purpose: "running email verification, sync, or worker jobs",
+        skipEnvName: "EMAIL_SKIP_DATABASE_PREFLIGHT",
+        dockerCompose
+      })
     );
   }
 }
 
 export function getDatabaseConnectionTarget(databaseUrl: string | undefined): DatabaseTarget {
-  if (!databaseUrl?.trim()) {
-    throw new Error("[email] DATABASE_URL is required for email verification and sync.");
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(databaseUrl);
-  } catch {
-    throw new Error("[email] DATABASE_URL is not a valid URL.");
-  }
-  return {
-    host: parsed.hostname,
-    port: Number(parsed.port || "5432")
-  };
-}
-
-function canOpenTcpConnection(host: string, portNumber: number, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolveConnection) => {
-    const socket = new Socket();
-    let settled = false;
-    const finish = (ok: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      socket.destroy();
-      resolveConnection(ok);
-    };
-    socket.setTimeout(timeoutMs);
-    socket.once("connect", () => finish(true));
-    socket.once("timeout", () => finish(false));
-    socket.once("error", () => finish(false));
-    socket.connect(portNumber, host);
-  });
+  return parseDatabaseConnectionTarget(databaseUrl, "[email]") as DatabaseTarget;
 }

@@ -2,6 +2,7 @@ import { getCrmRepository, type PrismaCrmRepository } from "@/lib/crm/repository
 import type { EmailAccount, RequestContext } from "@/lib/crm/types";
 import { requirePermission } from "@/lib/auth/rbac";
 import { getBackgroundJobExecutor, type BackgroundJobExecutor } from "@/lib/jobs/executor";
+import { getEmailProviderCapability } from "@/lib/email/providers";
 
 export interface ScheduledEmailSyncAccount {
   accountId: string;
@@ -61,5 +62,5 @@ export async function scheduleEmailSyncForActiveAccounts(
 }
 
 function isEligibleForBackgroundSync(account: EmailAccount): boolean {
-  return account.status === "active" && account.syncEnabled;
+  return account.status === "active" && account.syncEnabled && account.connectionConfigured && getEmailProviderCapability(account.provider).supportsSync;
 }

@@ -1,7 +1,7 @@
-import { MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
+import { MAX_EMAIL_ATTACHMENT_BYTES, normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
 
 export function buildEmailAttachmentResponse(fileName: string, contentType: string | undefined, contentBase64: string): Response {
-  const bytes = Buffer.from(normalizeBase64(contentBase64), "base64");
+  const bytes = Buffer.from(normalizeEmailAttachmentBase64(contentBase64), "base64");
   if (bytes.length > MAX_EMAIL_ATTACHMENT_BYTES) {
     throw new Error(`Email attachment exceeds ${MAX_EMAIL_ATTACHMENT_BYTES} bytes`);
   }
@@ -14,10 +14,6 @@ export function buildEmailAttachmentResponse(fileName: string, contentType: stri
       "cache-control": "private, max-age=60"
     }
   });
-}
-
-function normalizeBase64(value: string): string {
-  return value.replace(/-/g, "+").replace(/_/g, "/").replace(/\s+/g, "");
 }
 
 function sanitizeContentType(value: string | undefined): string {

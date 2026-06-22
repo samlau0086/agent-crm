@@ -4,6 +4,7 @@ import { requirePermission } from "@/lib/auth/rbac";
 import { getEmailDeliveryMode } from "@/lib/email/delivery-mode";
 import { EMAIL_AUTO_SUMMARY_MIN_NEW_MESSAGES } from "@/lib/email/automations";
 import { normalizeEmailAiFeatures } from "@/lib/email/assistant";
+import { MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "@/lib/email/ai-generation";
 import { getOAuthEmailProviderCapability, oauthEmailProviderKeys, type OAuthEmailProviderType } from "@/lib/email/providers";
 import { checkJobHealth, type JobHealth } from "@/lib/ops/health";
 
@@ -18,6 +19,8 @@ export interface OAuthProviderDiagnostic extends EmailDiagnosticCheck {
   provider: OAuthEmailProviderType;
   configured: boolean;
   required: boolean;
+  scope: string;
+  missingScopes: string[];
 }
 
 export interface EmailAccountDiagnostics {
@@ -29,6 +32,9 @@ export interface EmailAccountDiagnostics {
   syncEnabled: number;
   sendEnabled: number;
   connectionConfigured: number;
+  activeConnectionConfigured: number;
+  syncConnectionConfigured: number;
+  sendConnectionConfigured: number;
   missingConnectionConfig: number;
   withLastConnectionError: number;
   byProvider: Record<EmailProviderType, number>;
@@ -73,6 +79,20 @@ export interface EmailAiContextPolicyDiagnostics extends EmailDiagnosticCheck {
   maxContextChars: number;
   enabledFeatures: EmailAiSettings["features"];
   enabledAutomationCount: number;
+  featureDependencies: Array<{
+    feature: keyof EmailAiSettings["features"];
+    dependsOn: keyof EmailAiSettings["features"];
+  }>;
+  automationEligibleStatuses: {
+    inbound: EmailMessage["status"][];
+    outbound: EmailMessage["status"][];
+  };
+  autoContextAnalysisScope: "inbound_received_only";
+  budgetPolicy: {
+    maxModelPromptChars: number;
+    maxGeneratedOutputChars: number;
+    maxSuggestedSubjectChars: number;
+  };
 }
 
 export interface EmailSyncSchedulerDiagnostics extends EmailDiagnosticCheck {
@@ -198,7 +218,7 @@ export async function checkEmailSubsystemDiagnostics(options: EmailSubsystemDiag
     diagnostics.aiProviderFallbacks.status,
     ...Object.values(diagnostics.oauthProviders).map((diagnostic) => diagnostic.status),
     diagnostics.jobs && !diagnostics.jobs.ok ? "error" : "ok",
-    accountDiagnostics && accountDiagnostics.active > accountDiagnostics.connectionConfigured ? "warning" : "ok",
+    accountDiagnostics && accountDiagnostics.active > accountDiagnostics.activeConnectionConfigured ? "warning" : "ok",
     accountDiagnostics && accountDiagnostics.error > 0 ? "warning" : "ok"
   ].filter(Boolean) as EmailDiagnosticStatus[];
   diagnostics.status = statuses.includes("error") ? "error" : statuses.includes("warning") ? "warning" : "ok";
@@ -314,6 +334,20 @@ export function buildEmailAiContextPolicyDiagnostics(settings: EmailAiSettings |
     enabledFeatures.auto_context_analysis,
     enabledFeatures.auto_summarize
   ].filter(Boolean).length;
+  const featureDependencies: EmailAiContextPolicyDiagnostics["featureDependencies"] = [
+    { feature: "auto_translate", dependsOn: "translate" },
+    { feature: "auto_context_analysis", dependsOn: "context_analysis" }
+  ];
+  const automationEligibleStatuses: EmailAiContextPolicyDiagnostics["automationEligibleStatuses"] = {
+    inbound: ["received"],
+    outbound: ["sent"]
+  };
+  const autoContextAnalysisScope: EmailAiContextPolicyDiagnostics["autoContextAnalysisScope"] = "inbound_received_only";
+  const budgetPolicy: EmailAiContextPolicyDiagnostics["budgetPolicy"] = {
+    maxModelPromptChars: MAX_EMAIL_MODEL_PROMPT_CHARS,
+    maxGeneratedOutputChars: MAX_EMAIL_AI_OUTPUT_CHARS,
+    maxSuggestedSubjectChars: MAX_EMAIL_AI_SUBJECT_CHARS
+  };
 
   if (!settings) {
     return {
@@ -326,6 +360,10 @@ export function buildEmailAiContextPolicyDiagnostics(settings: EmailAiSettings |
       maxContextChars,
       enabledFeatures,
       enabledAutomationCount,
+      featureDependencies,
+      automationEligibleStatuses,
+      autoContextAnalysisScope,
+      budgetPolicy,
       message: "Email AI workspace settings were not loaded; context policy is enforced when a workspace request runs"
     };
   }
@@ -344,13 +382,22 @@ export function buildEmailAiContextPolicyDiagnostics(settings: EmailAiSettings |
     maxKnowledgeArticles,
     maxContextChars,
     enabledFeatures,
-    enabledAutomationCount,
-    message: [
-      requireSourceLinks ? "Source references are required" : "Source references are optional",
-      `history ${maxHistoryMessages} messages`,
-      `knowledge ${maxKnowledgeArticles} articles`,
-      `context budget ${maxContextChars} chars`,
-      `automations ${enabledAutomationCount} enabled`
+      enabledAutomationCount,
+      featureDependencies,
+      automationEligibleStatuses,
+      autoContextAnalysisScope,
+      budgetPolicy,
+      message: [
+        requireSourceLinks ? "Source references are required" : "Source references are optional",
+        `history ${maxHistoryMessages} messages`,
+        `knowledge ${maxKnowledgeArticles} articles`,
+        `context budget ${maxContextChars} chars`,
+        `model prompt cap ${budgetPolicy.maxModelPromptChars} chars`,
+        `output cap ${budgetPolicy.maxGeneratedOutputChars} chars`,
+        `automations ${enabledAutomationCount} enabled`,
+        "dependencies auto_translate->translate, auto_context_analysis->context_analysis",
+        "automation states inbound received/outbound sent",
+        "auto analysis inbound only"
     ].join("; ")
   };
 }
@@ -469,6 +516,9 @@ export function buildEmailAccountDiagnostics(accounts: EmailAccount[]): EmailAcc
     syncEnabled: accounts.filter((account) => account.syncEnabled).length,
     sendEnabled: accounts.filter((account) => account.sendEnabled).length,
     connectionConfigured: accounts.filter((account) => account.connectionConfigured).length,
+    activeConnectionConfigured: accounts.filter((account) => account.status === "active" && account.connectionConfigured).length,
+    syncConnectionConfigured: accounts.filter((account) => account.status === "active" && account.syncEnabled && account.connectionConfigured).length,
+    sendConnectionConfigured: accounts.filter((account) => account.status === "active" && account.sendEnabled && account.connectionConfigured).length,
     missingConnectionConfig: accounts.filter((account) => !account.connectionConfigured).length,
     withLastConnectionError: accounts.filter((account) => Boolean(account.lastConnectionError)).length,
     byProvider
@@ -551,15 +601,31 @@ function buildOAuthProviderDiagnostics(env: NodeJS.ProcessEnv, usedProviders: Se
 }
 
 function checkOAuthProvider(provider: OAuthEmailProviderType, env: NodeJS.ProcessEnv, required: boolean): OAuthProviderDiagnostic {
-  const prefix = getOAuthEmailProviderCapability(provider).oauthEnvPrefix;
+  const capability = getOAuthEmailProviderCapability(provider);
+  const prefix = capability.oauthEnvPrefix;
   const configured = Boolean(env[`${prefix}_OAUTH_CLIENT_ID`]?.trim() && env[`${prefix}_OAUTH_CLIENT_SECRET`]?.trim());
+  const scope = env[`${prefix}_OAUTH_SCOPE`]?.trim() || capability.defaultScope;
+  const missingScopes = getMissingOAuthScopes(provider, scope);
   if (configured) {
+    if (missingScopes.length) {
+      return {
+        provider,
+        configured,
+        required,
+        scope,
+        missingScopes,
+        status: "error",
+        message: `${prefix}_OAUTH_SCOPE is missing required permission(s): ${missingScopes.join(", ")}`
+      };
+    }
     return {
       provider,
       configured,
       required,
+      scope,
+      missingScopes,
       status: "ok",
-      message: `${prefix}_OAUTH_CLIENT_ID and ${prefix}_OAUTH_CLIENT_SECRET are configured`
+      message: `${prefix}_OAUTH_CLIENT_ID, ${prefix}_OAUTH_CLIENT_SECRET, and ${prefix}_OAUTH_SCOPE are configured`
     };
   }
 
@@ -567,11 +633,41 @@ function checkOAuthProvider(provider: OAuthEmailProviderType, env: NodeJS.Proces
     provider,
     configured,
     required,
+    scope,
+    missingScopes,
     status: required ? "error" : "warning",
     message: required
       ? `${prefix}_OAUTH_CLIENT_ID and ${prefix}_OAUTH_CLIENT_SECRET are required because ${provider} accounts exist`
       : `${prefix}_OAUTH_CLIENT_ID and ${prefix}_OAUTH_CLIENT_SECRET are not configured`
   };
+}
+
+function getMissingOAuthScopes(provider: OAuthEmailProviderType, scope: string): string[] {
+  const scopes = scope
+    .split(/\s+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const has = (value: string) => scopes.includes(value.toLowerCase());
+  const hasAny = (values: string[]) => values.some(has);
+
+  if (provider === "gmail") {
+    const hasFullMail = has("https://mail.google.com/");
+    const hasRead = hasAny(["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.modify"]);
+    const hasSend = hasAny(["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.compose"]);
+    return [
+      !hasFullMail && !hasRead ? "gmail.readonly or https://mail.google.com/" : undefined,
+      !hasFullMail && !hasSend ? "gmail.send or https://mail.google.com/" : undefined
+    ].filter((item): item is string => Boolean(item));
+  }
+
+  const hasRead = hasAny(["https://graph.microsoft.com/mail.read", "https://graph.microsoft.com/mail.readwrite"]);
+  const hasSend = has("https://graph.microsoft.com/mail.send");
+  const hasOffline = has("offline_access");
+  return [
+    !hasRead ? "Mail.Read or Mail.ReadWrite" : undefined,
+    !hasSend ? "Mail.Send" : undefined,
+    !hasOffline ? "offline_access" : undefined
+  ].filter((item): item is string => Boolean(item));
 }
 
 const DEFAULT_EMAIL_SEND_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;

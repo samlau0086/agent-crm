@@ -70,7 +70,9 @@ function buildSteps(parsed, options) {
         "--import",
         "./scripts/register-alias.mjs",
         "scripts/email-verify.ts",
-        ...(parsed["run-email-connections"] ? ["--test-connections"] : [])
+        ...(parsed["run-email-connections"] ? ["--test-connections"] : []),
+        ...(parsed["run-email-ai-provider"] ? ["--test-ai-provider"] : []),
+        ...(parsed["run-email-smoke"] ? ["--smoke"] : [])
       ])
     );
   }

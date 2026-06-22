@@ -409,6 +409,25 @@ button {
   align-items: start;
 }
 
+.email-html-preview {
+  margin-top: 8px;
+}
+
+.email-html-preview summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-weight: 650;
+}
+
+.email-html-preview iframe {
+  width: 100%;
+  min-height: 220px;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
 .settings-grid-wide {
   align-items: start;
 }

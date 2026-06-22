@@ -84,13 +84,16 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
   const shouldUseCompactSummary = purpose !== "summarize" && enabledFeatures.auto_summarize;
   const messages = selectMessagesForContext(input.messages ?? [], input.thread, shouldUseCompactSummary, maxHistoryMessages, input.sourceMessage);
   const activities = [...(input.activities ?? [])]
+    .filter((activity) => activity.type !== "email")
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, 8);
-  const knowledgeArticles = (input.knowledgeArticles ?? [])
-    .filter((article) => article.active)
-    .slice(0, normalizeLimit(input.settings.maxKnowledgeArticles, 5, 0, 20));
+  const rawCustomerBrief = buildCustomerBrief(input.record, input.fields ?? []);
+  const knowledgeArticles = rankKnowledgeArticles(
+    input.knowledgeArticles ?? [],
+    buildKnowledgeQuery(input, rawCustomerBrief, messages, activities)
+  ).slice(0, normalizeLimit(input.settings.maxKnowledgeArticles, 5, 0, 20));
 
-  const customerBrief = truncate(buildCustomerBrief(input.record, input.fields ?? []), maxContextChars * 0.25);
+  const customerBrief = truncate(rawCustomerBrief, maxContextChars * 0.25);
   const communicationSummary = truncate(buildCommunicationSummary(input.thread, messages, activities), maxContextChars * 0.45);
   const knowledgeBrief = truncate(buildKnowledgeBrief(knowledgeArticles), maxContextChars * 0.25);
   const contextCharCount = customerBrief.length + communicationSummary.length + knowledgeBrief.length;
@@ -186,17 +189,22 @@ function buildCommunicationSummary(thread: EmailThread | undefined, messages: Em
 }
 
 function filterMessagesForContext(messages: EmailMessage[], thread: EmailThread | undefined, autoSummarize: boolean): EmailMessage[] {
+  const committedMessages = messages.filter(isEmailMessageUsableForContext);
   if (!autoSummarize || !thread?.summary || !thread.summaryUpdatedAt) {
-    return [...messages];
+    return committedMessages;
   }
   const summaryTime = Date.parse(thread.summaryUpdatedAt);
   if (!Number.isFinite(summaryTime)) {
-    return [...messages];
+    return committedMessages;
   }
-  return messages.filter((message) => {
+  return committedMessages.filter((message) => {
     const time = Date.parse(messageTime(message));
     return Number.isFinite(time) && time > summaryTime;
   });
+}
+
+function isEmailMessageUsableForContext(message: EmailMessage): boolean {
+  return message.direction === "inbound" ? message.status === "received" : message.status === "sent";
 }
 
 function selectMessagesForContext(
@@ -217,6 +225,65 @@ function selectMessagesForContext(
 
 function buildKnowledgeBrief(articles: KnowledgeArticle[]): string {
   return articles.map((article) => `${article.title} [${article.tags.join(", ")}]\n${truncate(article.body, 700)}`).join("\n\n");
+}
+
+function rankKnowledgeArticles(articles: KnowledgeArticle[], queryText: string): KnowledgeArticle[] {
+  const terms = tokenizeKnowledgeQuery(queryText);
+  return articles
+    .filter((article) => article.active)
+    .map((article, index) => ({
+      article,
+      index,
+      score: scoreKnowledgeArticle(article, terms)
+    }))
+    .sort((left, right) => right.score - left.score || right.article.updatedAt.localeCompare(left.article.updatedAt) || left.index - right.index)
+    .map((item) => item.article);
+}
+
+function buildKnowledgeQuery(input: EmailAssistantContextInput, customerBrief: string, messages: EmailMessage[], activities: Activity[]): string {
+  return [
+    input.purpose,
+    input.thread?.subject,
+    customerBrief,
+    input.sourceMessage?.subject,
+    input.sourceMessage?.bodyText,
+    ...messages.flatMap((message) => [message.subject, message.bodyText]),
+    ...activities.flatMap((activity) => [activity.title, activity.body])
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function scoreKnowledgeArticle(article: KnowledgeArticle, terms: string[]): number {
+  if (!terms.length) {
+    return 0;
+  }
+  const title = normalizeKnowledgeText(article.title);
+  const body = normalizeKnowledgeText(article.body);
+  const tags = article.tags.map(normalizeKnowledgeText);
+  let score = 0;
+  for (const term of terms) {
+    if (title.includes(term)) {
+      score += 6;
+    }
+    if (tags.some((tag) => tag.includes(term) || term.includes(tag))) {
+      score += 8;
+    }
+    if (body.includes(term)) {
+      score += 2;
+    }
+  }
+  return score;
+}
+
+function tokenizeKnowledgeQuery(value: string): string[] {
+  const normalized = normalizeKnowledgeText(value);
+  const matches = normalized.match(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu) ?? [];
+  return Array.from(new Set(matches.filter((term) => term.length >= 2))).slice(0, 80);
+}
+
+function normalizeKnowledgeText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function buildInstruction(input: EmailAssistantContextInput, enabled: boolean, disabledReason?: "feature_disabled" | "missing_sources"): string {

@@ -56,7 +56,7 @@ Mail flow:
 - `GET /api/email/messages/:id`: read a visible message.
 - `GET /api/email/messages/:id/attachments/:index`: download stored or provider-backed attachment content.
 - `POST /api/email/send`: queue or send an outbound email through the configured provider adapter. Include a stable optional `clientRequestId` per compose/send attempt so client retries return the same outbound message instead of creating a duplicate queued email.
-- `POST /api/email/messages/:id/retry`: requeue a failed outbound message through the same send path.
+- `POST /api/email/messages/:id/retry`: requeue a failed outbound message or recover a stale `sending` message through the same send path.
 - `POST /api/email/sync`: sync one mailbox account, with optional bounded `limit` from 1 to 100 messages.
 - `POST /api/email/sync-all`: schedule sync for all active `syncEnabled` mailbox accounts, with optional bounded `limit` from 1 to 100 messages per account.
 

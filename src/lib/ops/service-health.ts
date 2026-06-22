@@ -29,6 +29,10 @@ export interface ServiceHealthEmailReadiness {
     maxContextChars: number;
     enabledFeatures: EmailSubsystemDiagnostics["aiContextPolicy"]["enabledFeatures"];
     enabledAutomationCount: number;
+    featureDependencies: EmailSubsystemDiagnostics["aiContextPolicy"]["featureDependencies"];
+    automationEligibleStatuses: EmailSubsystemDiagnostics["aiContextPolicy"]["automationEligibleStatuses"];
+    autoContextAnalysisScope: EmailSubsystemDiagnostics["aiContextPolicy"]["autoContextAnalysisScope"];
+    budgetPolicy: EmailSubsystemDiagnostics["aiContextPolicy"]["budgetPolicy"];
   };
   autoSummaryPolicy: {
     status: EmailSubsystemDiagnostics["autoSummaryPolicy"]["status"];
@@ -60,7 +64,7 @@ export interface ServiceHealthEmailReadiness {
     recentFallbackCount: number;
   };
   accounts?: NonNullable<EmailSubsystemDiagnostics["accounts"]>;
-  oauthProviders: Record<string, { status: string; configured: boolean; required: boolean }>;
+  oauthProviders: Record<string, { status: string; configured: boolean; required: boolean; missingScopes: string[] }>;
   jobs?: JobHealth;
 }
 
@@ -98,7 +102,8 @@ export function buildEmailReadiness(email: EmailSubsystemDiagnostics): ServiceHe
       {
         status: diagnostic.status,
         configured: diagnostic.configured,
-        required: diagnostic.required
+        required: diagnostic.required,
+        missingScopes: diagnostic.missingScopes
       }
     ])
   );
@@ -120,7 +125,11 @@ export function buildEmailReadiness(email: EmailSubsystemDiagnostics): ServiceHe
       maxKnowledgeArticles: email.aiContextPolicy.maxKnowledgeArticles,
       maxContextChars: email.aiContextPolicy.maxContextChars,
       enabledFeatures: email.aiContextPolicy.enabledFeatures,
-      enabledAutomationCount: email.aiContextPolicy.enabledAutomationCount
+      enabledAutomationCount: email.aiContextPolicy.enabledAutomationCount,
+      featureDependencies: email.aiContextPolicy.featureDependencies,
+      automationEligibleStatuses: email.aiContextPolicy.automationEligibleStatuses,
+      autoContextAnalysisScope: email.aiContextPolicy.autoContextAnalysisScope,
+      budgetPolicy: email.aiContextPolicy.budgetPolicy
     },
     autoSummaryPolicy: {
       status: email.autoSummaryPolicy.status,

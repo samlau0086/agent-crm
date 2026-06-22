@@ -1,7 +1,7 @@
 import net from "node:net";
 import tls from "node:tls";
 import type { EmailAttachment, EmailConnectionConfig } from "@/lib/crm/types";
-import { MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
+import { MAX_EMAIL_ATTACHMENT_BYTES, normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
 import type { EmailSendInput } from "@/lib/email/provider";
 
 export interface InboundEmail {
@@ -11,6 +11,7 @@ export interface InboundEmail {
   cc?: string[];
   subject: string;
   bodyText: string;
+  bodyHtml?: string;
   attachments?: EmailAttachment[];
   receivedAt?: string;
 }
@@ -309,7 +310,7 @@ function buildRfc822Message(input: EmailSendInput, from: string): string {
     `From: ${sanitizeHeader(from)}`,
     `To: ${formatAddressHeader(input.to)}`,
     input.cc?.length ? `Cc: ${formatAddressHeader(input.cc)}` : undefined,
-    `Subject: ${sanitizeHeader(input.subject)}`,
+    `Subject: ${encodeHeader(input.subject)}`,
     input.messageId ? `Message-ID: ${formatOutboundMessageId(input.messageId)}` : undefined,
     input.inReplyTo ? `In-Reply-To: ${sanitizeHeader(input.inReplyTo)}` : undefined,
     input.references?.length ? `References: ${input.references.map(sanitizeHeader).filter(Boolean).join(" ")}` : undefined,
@@ -338,7 +339,7 @@ function buildRfc822Message(input: EmailSendInput, from: string): string {
 }
 
 function buildAttachmentPart(boundary: string, attachment: EmailAttachment): string {
-  const fileName = sanitizeHeader(attachment.fileName);
+  const fileName = encodeHeader(attachment.fileName);
   const disposition = attachment.disposition === "inline" ? "inline" : "attachment";
   return [
     `--${boundary}`,
@@ -347,7 +348,7 @@ function buildAttachmentPart(boundary: string, attachment: EmailAttachment): str
     `Content-Disposition: ${disposition}; filename="${fileName}"`,
     attachment.contentId ? `Content-ID: <${sanitizeHeader(attachment.contentId)}>` : undefined,
     "",
-    foldBase64(normalizeBase64(attachment.contentBase64 ?? ""))
+    foldBase64(normalizeEmailAttachmentBase64(attachment.contentBase64 ?? ""))
   ]
     .filter((line) => line !== undefined)
     .join("\r\n");
@@ -376,6 +377,11 @@ function formatOutboundMessageId(value: string): string {
 
 function formatAddressHeader(values: string[]): string {
   return values.map(sanitizeHeader).filter(Boolean).join(", ");
+}
+
+function encodeHeader(value: string): string {
+  const sanitized = sanitizeHeader(value);
+  return /[^\x20-\x7e]/.test(sanitized) ? `=?UTF-8?B?${Buffer.from(sanitized, "utf8").toString("base64")}?=` : sanitized;
 }
 
 function parseUidSearch(response: string): string[] {
@@ -407,8 +413,9 @@ export function parseRawEmailMessage(messageText: string): InboundEmail | undefi
     ...(cc.length ? { cc } : {}),
     subject: decodeHeader(headers.subject ?? "(no subject)"),
     bodyText: parsedBody.bodyText.trim().slice(0, 20000),
+    bodyHtml: parsedBody.bodyHtml?.trim().slice(0, 20000),
     attachments: parsedBody.attachments,
-    receivedAt: headers.date ? new Date(headers.date).toISOString() : undefined
+    receivedAt: safeIsoDate(headers.date)
   };
 }
 
@@ -442,13 +449,23 @@ interface ParsedContentType {
   params: Record<string, string>;
 }
 
-function parseMimeBody(body: string, contentType: ParsedContentType, headers: Record<string, string>): { bodyText: string; attachments?: EmailAttachment[] } {
+function parseMimeBody(body: string, contentType: ParsedContentType, headers: Record<string, string>): { bodyText: string; bodyHtml?: string; attachments?: EmailAttachment[] } {
   if (contentType.mimeType.startsWith("multipart/") && contentType.params.boundary) {
     const parts = splitMultipartBody(body, contentType.params.boundary);
     const parsedParts = parts.map(parseMimePart);
-    const bodyText = parsedParts.find((part) => part.bodyText)?.bodyText ?? "";
+    const bodyHtml = parsedParts.find((part) => part.bodyHtml)?.bodyHtml;
+    const bodyText = parsedParts.find((part) => part.bodyText)?.bodyText ?? (bodyHtml ? stripHtml(bodyHtml) : "");
     const attachments = parsedParts.flatMap((part) => part.attachments ?? []);
-    return { bodyText, attachments: attachments.length ? attachments : undefined };
+    return { bodyText, bodyHtml, attachments: attachments.length ? attachments : undefined };
+  }
+
+  if (contentType.mimeType === "text/html") {
+    const bodyHtml = decodeMimeText(body, headers["content-transfer-encoding"]);
+    return {
+      bodyText: stripHtml(bodyHtml),
+      bodyHtml,
+      attachments: undefined
+    };
   }
 
   return {
@@ -457,7 +474,7 @@ function parseMimeBody(body: string, contentType: ParsedContentType, headers: Re
   };
 }
 
-function parseMimePart(raw: string): { bodyText?: string; attachments?: EmailAttachment[] } {
+function parseMimePart(raw: string): { bodyText?: string; bodyHtml?: string; attachments?: EmailAttachment[] } {
   const [rawHeaders, ...bodyParts] = raw.split(/\r?\n\r?\n/);
   const headers = parseHeaders(rawHeaders);
   const contentType = parseContentType(headers["content-type"]);
@@ -470,18 +487,14 @@ function parseMimePart(raw: string): { bodyText?: string; attachments?: EmailAtt
   const fileName = decodeHeader(disposition.params.filename ?? contentType.params.name ?? "");
   const isAttachment = Boolean(fileName) || disposition.value === "attachment" || disposition.value === "inline";
   if (isAttachment) {
-    const contentBase64 =
-      headers["content-transfer-encoding"]?.toLowerCase() === "base64"
-        ? normalizeBase64(body)
-        : Buffer.from(decodeMimeText(body, headers["content-transfer-encoding"]), "utf8").toString("base64");
-    const size = Buffer.from(contentBase64, "base64").length;
+    const content = parseAttachmentContent(body, headers["content-transfer-encoding"]);
     return {
       attachments: [
         {
           fileName: fileName || "attachment",
           contentType: contentType.mimeType || "application/octet-stream",
-          size,
-          ...(size <= MAX_EMAIL_ATTACHMENT_BYTES ? { contentBase64 } : {}),
+          size: content.size,
+          ...(content.contentBase64 && content.size <= MAX_EMAIL_ATTACHMENT_BYTES ? { contentBase64: content.contentBase64 } : {}),
           ...(headers["content-id"] ? { contentId: headers["content-id"].replace(/[<>]/g, "").trim() } : {}),
           ...(disposition.value === "inline" ? { disposition: "inline" as const } : { disposition: "attachment" as const })
         }
@@ -492,7 +505,24 @@ function parseMimePart(raw: string): { bodyText?: string; attachments?: EmailAtt
   if (contentType.mimeType === "text/plain" || !contentType.mimeType) {
     return { bodyText: decodeMimeText(body, headers["content-transfer-encoding"]) };
   }
+  if (contentType.mimeType === "text/html") {
+    const bodyHtml = decodeMimeText(body, headers["content-transfer-encoding"]);
+    return { bodyText: stripHtml(bodyHtml), bodyHtml };
+  }
   return {};
+}
+
+function parseAttachmentContent(body: string, transferEncoding: string | undefined): { contentBase64?: string; size: number } {
+  if (transferEncoding?.toLowerCase() === "base64") {
+    try {
+      const contentBase64 = normalizeEmailAttachmentBase64(body);
+      return { contentBase64, size: Buffer.from(contentBase64, "base64").length };
+    } catch {
+      return { size: 0 };
+    }
+  }
+  const contentBase64 = Buffer.from(decodeMimeText(body, transferEncoding), "utf8").toString("base64");
+  return { contentBase64, size: Buffer.from(contentBase64, "base64").length };
 }
 
 function splitMultipartBody(body: string, boundary: string): string[] {
@@ -535,6 +565,26 @@ function decodeMimeText(value: string, transferEncoding?: string): string {
   return value;
 }
 
+function stripHtml(value: string): string {
+  return value
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function decodeQuotedPrintable(value: string): string {
   const normalized = value.replace(/=\r?\n/g, "");
   return normalized.replace(/=([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
@@ -544,6 +594,15 @@ function decodeHeader(value: string): string {
   return value
     .replace(/=\?utf-8\?b\?([^?]+)\?=/gi, (_match, encoded: string) => Buffer.from(encoded, "base64").toString("utf8"))
     .replace(/=\?utf-8\?q\?([^?]+)\?=/gi, (_match, encoded: string) => decodeQuotedPrintable(encoded.replace(/_/g, " ")));
+}
+
+function safeIsoDate(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const date = new Date(normalized);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
 function escapeImap(value: string): string {

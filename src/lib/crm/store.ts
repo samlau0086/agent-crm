@@ -740,6 +740,9 @@ export class CrmStore {
       summary: `Updated email status ${message.subject}`,
       details: { status, previousStatus, threadId: message.threadId }
     });
+    if (status === "sent" && previousStatus !== "sent") {
+      this.triggerEmailAutomations(context, message);
+    }
     return clone(message);
   }
 
@@ -833,7 +836,7 @@ export class CrmStore {
     if (aiSourceMessageId) {
       this.getEmailMessage(context, aiSourceMessageId);
     }
-    assertEmailOutboundAiPurpose(input.direction, input.aiAssisted, input.aiPurpose);
+    assertEmailOutboundAiPurpose(input.direction, input.aiAssisted, input.aiPurpose, input.aiGeneratedAt);
     if (input.aiAssisted) {
       requirePermission(context, "ai.use");
     }
@@ -1065,6 +1068,7 @@ export class CrmStore {
         generationMode: input.generationMode,
         providerError: normalizeEmailAiProviderError(input.providerError),
         suggestedSubjectProvided: input.suggestedSubjectProvided ?? false,
+        persisted: input.persisted,
         automationFailed: input.automationFailed ?? false,
         errorMessage: input.errorMessage
       }
@@ -3024,9 +3028,13 @@ function isEmailSendClaimStale(sendAttemptedAt: string | undefined, staleBefore:
 }
 
 function summarizeEmailThread(messages: EmailMessage[]): string {
-  const ordered = [...messages].sort((left, right) => emailMessageTime(left).localeCompare(emailMessageTime(right)));
+  const ordered = messages.filter(isEmailMessageCommittedForSummary).sort((left, right) => emailMessageTime(left).localeCompare(emailMessageTime(right)));
   const latest = ordered.slice(-5).map((message) => `${message.direction}: ${message.subject} (${message.status})`).join("; ");
   return latest || "No email messages yet.";
+}
+
+function isEmailMessageCommittedForSummary(message: EmailMessage): boolean {
+  return message.direction === "inbound" ? message.status === "received" : message.status === "sent";
 }
 
 function normalizeEmailAttachments(value: unknown): EmailAttachment[] | undefined {
@@ -3086,7 +3094,12 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
     .slice(0, 20);
 }
 
-function assertEmailOutboundAiPurpose(direction: EmailMessage["direction"], aiAssisted: boolean | undefined, aiPurpose: EmailMessage["aiPurpose"]): void {
+function assertEmailOutboundAiPurpose(
+  direction: EmailMessage["direction"],
+  aiAssisted: boolean | undefined,
+  aiPurpose: EmailMessage["aiPurpose"],
+  aiGeneratedAt?: string
+): void {
   if (direction !== "outbound" || !aiAssisted) {
     return;
   }
@@ -3095,6 +3108,9 @@ function assertEmailOutboundAiPurpose(direction: EmailMessage["direction"], aiAs
   }
   if (aiPurpose !== "draft" && aiPurpose !== "translate") {
     throw new Error("AI assisted outbound email purpose must be draft or translate");
+  }
+  if (!aiGeneratedAt || Number.isNaN(Date.parse(aiGeneratedAt))) {
+    throw new Error("AI assisted outbound email requires aiGeneratedAt");
   }
 }
 

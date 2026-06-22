@@ -41,7 +41,7 @@ npm run deploy:verify
 - 在 `web` 容器内执行 `node scripts/validate-env.mjs`
 - 在 `web` 容器内检查 `pg_dump --version`
 - 在 `web` 容器内执行一次备份 dry-run
-- 在 `web` 容器内执行邮件 diagnostics；追加 `-- --run-email-connections` 会测试真实 SMTP/IMAP/Gmail/Outlook 账号连接
+- 在 `web` 容器内执行邮件 diagnostics；上线前追加 `-- --run-email-connections --run-email-ai-provider --run-email-smoke` 会同时测试真实 SMTP/IMAP/Gmail/Outlook 账号连接、OpenAI-compatible AI provider 和邮件应用 smoke 流程
 
 只查看将要执行的步骤，不启动容器：
 

@@ -14,16 +14,17 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     if (message.direction !== "outbound") {
       throw new Error("Only outbound email messages can be retried");
     }
-    if (message.status !== "failed") {
-      throw new Error("Only failed email messages can be retried");
+    if (message.status !== "failed" && message.status !== "sending") {
+      throw new Error("Only failed or sending email messages can be retried");
     }
 
-    const queued = await repository.updateEmailMessageStatus(context, message.id, "queued");
+    const retryMessage =
+      message.status === "failed" ? await repository.updateEmailMessageStatus(context, message.id, "queued") : message;
     const executor = getBackgroundJobExecutor(repository);
     try {
-      return ok(await executor.runEmailSendJob(context, { messageId: queued.id }));
+      return ok(await executor.runEmailSendJob(context, { messageId: retryMessage.id }));
     } catch (sendError) {
-      return ok(await getFailedEmailSendResultOrThrow(context, repository, queued.id, sendError), { status: 202 });
+      return ok(await getFailedEmailSendResultOrThrow(context, repository, retryMessage.id, sendError), { status: 202 });
     }
   } catch (error) {
     return handleApiError(error, request);

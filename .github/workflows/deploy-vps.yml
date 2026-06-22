@@ -1,0 +1,265 @@
+name: Deploy VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      app_port:
+        description: "Host port to expose on the VPS"
+        required: false
+        default: "3000"
+      image_tag:
+        description: "Optional image tag suffix; defaults to the commit SHA"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DEPLOY_PATH: /opt/ai-agent-crm
+
+jobs:
+  build-and-deploy:
+    name: Build image and deploy to VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tags
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          image="ghcr.io/${repository}"
+          tag="${{ inputs.image_tag }}"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_SHA}"
+          fi
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "ref=${image}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "latest=${image}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.ref }}
+            ${{ steps.image.outputs.latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validate deployment configuration
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          APP_PORT_INPUT: ${{ inputs.app_port }}
+          VPS_APP_PORT: ${{ vars.VPS_APP_PORT }}
+          POSTGRES_HOST: ${{ vars.POSTGRES_HOST || 'host.docker.internal' }}
+          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5433' }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB || 'ai_agent_crm' }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER || 'crm' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          EMAIL_CONFIG_SECRET: ${{ secrets.EMAIL_CONFIG_SECRET }}
+          EMAIL_OAUTH_STATE_SECRET: ${{ secrets.EMAIL_OAUTH_STATE_SECRET }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in VPS_HOST VPS_USER VPS_SSH_KEY POSTGRES_PASSWORD EMAIL_CONFIG_SECRET EMAIL_OAUTH_STATE_SECRET; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Missing secret::${name} is required for VPS deployment"
+              missing=1
+            fi
+          done
+          app_port="${APP_PORT_INPUT:-${VPS_APP_PORT:-3000}}"
+          if ! [[ "$app_port" =~ ^[0-9]+$ ]] || [ "$app_port" -lt 1 ] || [ "$app_port" -gt 65535 ]; then
+            echo "::error title=Invalid app port::APP_PORT must be an integer between 1 and 65535"
+            missing=1
+          fi
+          if [ -z "$POSTGRES_HOST" ]; then
+            echo "::error title=Missing Postgres host::POSTGRES_HOST is required; use host.docker.internal for a Postgres container published on the VPS host"
+            missing=1
+          fi
+          if ! [[ "$POSTGRES_PORT" =~ ^[0-9]+$ ]] || [ "$POSTGRES_PORT" -lt 1 ] || [ "$POSTGRES_PORT" -gt 65535 ]; then
+            echo "::error title=Invalid Postgres port::POSTGRES_PORT must be an integer between 1 and 65535"
+            missing=1
+          fi
+          for name in POSTGRES_DB POSTGRES_USER; do
+            if ! [[ "${!name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+              echo "::error title=Invalid Postgres identifier::${name} must contain only letters, numbers, and underscores, and cannot start with a number"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Prepare SSH
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/ai_agent_crm_deploy_key
+          chmod 600 ~/.ssh/ai_agent_crm_deploy_key
+          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Create remote deployment directory
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SUDO: ${{ vars.VPS_SUDO || 'sudo' }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/ai_agent_crm_deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' VPS_SUDO='$VPS_SUDO' sh -s" <<'REMOTE'
+          set -eu
+          if [ "$(id -u)" -eq 0 ]; then
+            SUDO=""
+          else
+            SUDO="${VPS_SUDO:-sudo}"
+          fi
+          $SUDO mkdir -p "$DEPLOY_PATH/backups" "$DEPLOY_PATH/redis-data"
+          $SUDO chown -R "$(id -u):$(id -g)" "$DEPLOY_PATH"
+          REMOTE
+
+      - name: Render VPS env file
+        shell: bash
+        env:
+          CRM_IMAGE: ${{ steps.image.outputs.ref }}
+          APP_PORT_INPUT: ${{ inputs.app_port }}
+          VPS_APP_PORT: ${{ vars.VPS_APP_PORT }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          APP_BASE_URL_SECRET: ${{ secrets.APP_BASE_URL }}
+          ALLOW_INSECURE_APP_BASE_URL: ${{ vars.ALLOW_INSECURE_APP_BASE_URL || 'true' }}
+          POSTGRES_HOST: ${{ vars.POSTGRES_HOST || 'host.docker.internal' }}
+          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5433' }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB || 'ai_agent_crm' }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER || 'crm' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          EMAIL_CONFIG_SECRET: ${{ secrets.EMAIL_CONFIG_SECRET }}
+          EMAIL_OAUTH_STATE_SECRET: ${{ secrets.EMAIL_OAUTH_STATE_SECRET }}
+          EMAIL_DELIVERY_MODE: ${{ vars.EMAIL_DELIVERY_MODE || 'live' }}
+          EMAIL_SYNC_INTERVAL_MS: ${{ vars.EMAIL_SYNC_INTERVAL_MS || '300000' }}
+          EMAIL_SYNC_LIMIT: ${{ vars.EMAIL_SYNC_LIMIT || '25' }}
+          EMAIL_SYNC_USER_ID: ${{ vars.EMAIL_SYNC_USER_ID || 'user-admin' }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'openai-compatible' }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL || 'https://api.openai.com/v1' }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'gpt-4.1-mini' }}
+          AI_TIMEOUT_MS: ${{ vars.AI_TIMEOUT_MS || '10000' }}
+          GMAIL_OAUTH_CLIENT_ID: ${{ secrets.GMAIL_OAUTH_CLIENT_ID }}
+          GMAIL_OAUTH_CLIENT_SECRET: ${{ secrets.GMAIL_OAUTH_CLIENT_SECRET }}
+          GMAIL_OAUTH_SCOPE: ${{ vars.GMAIL_OAUTH_SCOPE || 'https://mail.google.com/' }}
+          OUTLOOK_OAUTH_CLIENT_ID: ${{ secrets.OUTLOOK_OAUTH_CLIENT_ID }}
+          OUTLOOK_OAUTH_CLIENT_SECRET: ${{ secrets.OUTLOOK_OAUTH_CLIENT_SECRET }}
+          OUTLOOK_OAUTH_SCOPE: ${{ vars.OUTLOOK_OAUTH_SCOPE || 'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send offline_access' }}
+        run: |
+          set -euo pipefail
+          app_port="${APP_PORT_INPUT:-${VPS_APP_PORT:-3000}}"
+          app_base_url="${APP_BASE_URL_SECRET:-http://${VPS_HOST}:${app_port}}"
+          database_url="$(node -e 'const e = process.env; const encode = encodeURIComponent; console.log(`postgresql://${encode(e.POSTGRES_USER)}:${encode(e.POSTGRES_PASSWORD)}@${e.POSTGRES_HOST}:${e.POSTGRES_PORT}/${encode(e.POSTGRES_DB)}?schema=public`);')"
+          : > vps.env
+          write_env() {
+            local key="$1"
+            local value="$2"
+            value="${value//$'\n'/}"
+            value="${value//\'/\'\\\'\'}"
+            printf "%s='%s'\n" "$key" "$value" >> vps.env
+          }
+          write_env COMPOSE_PROJECT_NAME "ai-agent-crm"
+          write_env CRM_IMAGE "$CRM_IMAGE"
+          write_env CRM_DATA_DIR "$DEPLOY_PATH"
+          write_env APP_PORT "$app_port"
+          write_env APP_BASE_URL "$app_base_url"
+          write_env ALLOW_INSECURE_APP_BASE_URL "$ALLOW_INSECURE_APP_BASE_URL"
+          write_env POSTGRES_HOST "$POSTGRES_HOST"
+          write_env POSTGRES_PORT "$POSTGRES_PORT"
+          write_env POSTGRES_DB "$POSTGRES_DB"
+          write_env POSTGRES_USER "$POSTGRES_USER"
+          write_env POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+          write_env DATABASE_URL "$database_url"
+          write_env RUN_MIGRATIONS "true"
+          write_env SEED_ON_EMPTY "false"
+          write_env DB_WAIT_TIMEOUT_MS "90000"
+          write_env EMAIL_DELIVERY_MODE "$EMAIL_DELIVERY_MODE"
+          write_env EMAIL_CONFIG_SECRET "$EMAIL_CONFIG_SECRET"
+          write_env EMAIL_OAUTH_STATE_SECRET "$EMAIL_OAUTH_STATE_SECRET"
+          write_env EMAIL_SYNC_INTERVAL_MS "$EMAIL_SYNC_INTERVAL_MS"
+          write_env EMAIL_SYNC_LIMIT "$EMAIL_SYNC_LIMIT"
+          write_env EMAIL_SYNC_USER_ID "$EMAIL_SYNC_USER_ID"
+          write_env EMAIL_SEND_CLAIM_TIMEOUT_MS "900000"
+          write_env AI_PROVIDER "$AI_PROVIDER"
+          write_env AI_BASE_URL "$AI_BASE_URL"
+          write_env AI_API_KEY "$AI_API_KEY"
+          write_env AI_MODEL "$AI_MODEL"
+          write_env AI_TIMEOUT_MS "$AI_TIMEOUT_MS"
+          write_env GMAIL_OAUTH_CLIENT_ID "$GMAIL_OAUTH_CLIENT_ID"
+          write_env GMAIL_OAUTH_CLIENT_SECRET "$GMAIL_OAUTH_CLIENT_SECRET"
+          write_env GMAIL_OAUTH_SCOPE "$GMAIL_OAUTH_SCOPE"
+          write_env OUTLOOK_OAUTH_CLIENT_ID "$OUTLOOK_OAUTH_CLIENT_ID"
+          write_env OUTLOOK_OAUTH_CLIENT_SECRET "$OUTLOOK_OAUTH_CLIENT_SECRET"
+          write_env OUTLOOK_OAUTH_SCOPE "$OUTLOOK_OAUTH_SCOPE"
+
+      - name: Upload deployment files
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/ai_agent_crm_deploy_key -P "$VPS_PORT" deploy/docker-compose.vps.yml "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/docker-compose.yml"
+          scp -i ~/.ssh/ai_agent_crm_deploy_key -P "$VPS_PORT" vps.env "$VPS_USER@$VPS_HOST:$DEPLOY_PATH/.env"
+
+      - name: Deploy on VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/ai_agent_crm_deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' GHCR_USERNAME='$GHCR_USERNAME' GHCR_TOKEN='$GHCR_TOKEN' sh -s" <<'REMOTE'
+          set -eu
+          cd "$DEPLOY_PATH"
+          if [ -n "${GHCR_TOKEN:-}" ]; then
+            printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+          fi
+          docker compose config >/dev/null
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker compose ps
+          port="$(grep -E '^APP_PORT=' .env | sed -E "s/^APP_PORT='?([^']*)'?.*/\1/")"
+          curl --fail --retry 30 --retry-delay 3 --retry-connrefused "http://127.0.0.1:${port:-3000}/api/health"
+          REMOTE

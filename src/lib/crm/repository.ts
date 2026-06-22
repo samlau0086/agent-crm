@@ -700,7 +700,12 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
     .slice(0, 20);
 }
 
-function assertEmailOutboundAiPurpose(direction: EmailMessage["direction"], aiAssisted: boolean | undefined, aiPurpose: EmailMessage["aiPurpose"]): void {
+function assertEmailOutboundAiPurpose(
+  direction: EmailMessage["direction"],
+  aiAssisted: boolean | undefined,
+  aiPurpose: EmailMessage["aiPurpose"],
+  aiGeneratedAt?: string
+): void {
   if (direction !== "outbound" || !aiAssisted) {
     return;
   }
@@ -709,6 +714,9 @@ function assertEmailOutboundAiPurpose(direction: EmailMessage["direction"], aiAs
   }
   if (aiPurpose !== "draft" && aiPurpose !== "translate") {
     throw new Error("AI assisted outbound email purpose must be draft or translate");
+  }
+  if (!aiGeneratedAt || Number.isNaN(Date.parse(aiGeneratedAt))) {
+    throw new Error("AI assisted outbound email requires aiGeneratedAt");
   }
 }
 
@@ -1342,7 +1350,7 @@ export class PrismaCrmRepository {
     if (aiSourceMessageId) {
       await this.getEmailMessage(context, aiSourceMessageId);
     }
-    assertEmailOutboundAiPurpose(input.direction, input.aiAssisted, input.aiPurpose);
+    assertEmailOutboundAiPurpose(input.direction, input.aiAssisted, input.aiPurpose, input.aiGeneratedAt);
     if (input.aiAssisted) {
       requirePermission(context, "ai.use");
     }
@@ -1568,6 +1576,10 @@ export class PrismaCrmRepository {
       summary: `Updated email status ${mappedMessage.subject}`,
       details: { status, previousStatus: existing.status, threadId: existing.threadId }
     });
+    if (status === "sent" && existing.status !== "sent") {
+      const settings = await this.ensureEmailAiSettings(context.workspaceId);
+      scheduleEmailAutomationsBestEffort(context, this, getBackgroundJobExecutor(this), mappedMessage, settings);
+    }
     return mappedMessage;
   }
 
@@ -1893,6 +1905,7 @@ export class PrismaCrmRepository {
         generationMode: input.generationMode,
         providerError: normalizeEmailAiProviderError(input.providerError),
         suggestedSubjectProvided: input.suggestedSubjectProvided ?? false,
+        persisted: input.persisted,
         automationFailed: input.automationFailed ?? false,
         errorMessage: input.errorMessage
       }
@@ -4806,12 +4819,16 @@ function emailMessageTime(message: EmailMessage): string {
 }
 
 function summarizeEmailThread(messages: EmailMessage[]): string {
-  const ordered = [...messages].sort((left, right) => emailMessageTime(left).localeCompare(emailMessageTime(right)));
+  const ordered = messages.filter(isEmailMessageCommittedForSummary).sort((left, right) => emailMessageTime(left).localeCompare(emailMessageTime(right)));
   const latest = ordered
     .slice(-5)
     .map((message) => `${message.direction}: ${message.subject} (${message.status})`)
     .join("; ");
   return latest || "No email messages yet.";
+}
+
+function isEmailMessageCommittedForSummary(message: EmailMessage): boolean {
+  return message.direction === "inbound" ? message.status === "received" : message.status === "sent";
 }
 
 function coerceRow(row: Record<string, string>, fields: FieldDefinition[]): Record<string, unknown> {

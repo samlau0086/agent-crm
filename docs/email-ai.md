@@ -25,7 +25,7 @@ Provider-specific sync and send implementations should be added behind adapters 
 - `POST /api/email/threads/:id/analyze`: refresh read-only AI thread analysis and next-action guidance when `context_analysis` is enabled.
 - `POST /api/email/messages`: record an inbound received message and optionally link it to a CRM record. Public outbound delivery must use `POST /api/email/send` so provider delivery, queue state, recipient policy, and failure auditing stay consistent.
 - `GET /api/email/messages/:id`: read one visible message for source navigation, reply drafting, or AI provenance display.
-- `POST /api/email/messages/:id/retry`: requeue a failed outbound message and run or enqueue the send job.
+- `POST /api/email/messages/:id/retry`: requeue a failed outbound message, or ask the send job to reclaim a stale `sending` message, without bypassing the provider adapter.
 - `POST /api/email/messages/:id/translate`: translate one message through the shared AI context and persist the translated text on the message.
 - `POST /api/email/send`: create a queued outbound CRM message with `to`, optional `cc`, and optional `bcc`, then send it through the configured provider adapter inline or through the background queue.
 - `POST /api/email/sync`: trigger provider sync for an account and update sync metadata.
@@ -45,7 +45,7 @@ The API records messages and thread state through repository methods. SMTP/IMAP,
 `src/lib/email/provider.ts` defines the provider boundary:
 
 - `send(context, input)` persists outbound messages through the repository.
-- `sendQueued(context, messageId)` sends an already queued outbound message, then marks it `sent` or `failed`.
+- `sendQueued(context, messageId)` atomically claims a queued, failed, or stale `sending` outbound message, then marks it `sent` or `failed`.
 - `sync(context, accountId)` updates account sync state and is the extension point for importing provider messages.
 
 The first adapter is repository-backed so the product workflow is usable without hard-coding a vendor. SMTP/IMAP, Gmail, Outlook, or custom provider adapters can replace it behind the same interface.
@@ -69,7 +69,8 @@ The built-in SMTP/IMAP adapter supports:
 
 - SMTP send over direct TLS or STARTTLS, with `AUTH PLAIN`.
 - To, CC, and BCC recipients for outbound mail.
-- IMAP sync from a configured mailbox, importing recent messages into CRM email threads.
+- RFC822/MIME headers encode non-ASCII subjects and attachment names for multilingual sales email.
+- IMAP sync from a configured mailbox, importing recent messages into CRM email threads while preserving both plain text and available HTML bodies.
 - Adapter-level failure recording on the email account.
 
 Sync requires provider connection configuration. Active accounts without SMTP/IMAP or OAuth credentials fail sync explicitly and record a connection error instead of reporting a zero-message success.
@@ -109,12 +110,14 @@ The OAuth helper validates provider/account alignment and can refresh expired ac
 - `OUTLOOK_OAUTH_TOKEN_URL`
 - `OUTLOOK_OAUTH_SCOPE`
 
-The SMTP/IMAP adapter does not handle Gmail or Outlook accounts implicitly. Gmail accounts send through the Gmail API and sync recent messages through Gmail message APIs. Outlook accounts send through Microsoft Graph `sendMail` and sync recent messages through Graph message APIs. Refreshed access tokens are written back to encrypted account configuration.
+OAuth diagnostics validate both credentials and scope before real mailbox tests run. Gmail must use `https://mail.google.com/` or include both Gmail read and send scopes. Outlook must include `Mail.Read` or `Mail.ReadWrite`, `Mail.Send`, and `offline_access` so inbox sync, outbound send, and token refresh all work.
+
+The SMTP/IMAP adapter does not handle Gmail or Outlook accounts implicitly. Gmail accounts send through the Gmail API and sync recent inbox messages through Gmail message APIs. Outlook accounts send through Microsoft Graph `sendMail` and sync recent inbox messages through Graph message APIs. Refreshed access tokens are written back to encrypted account configuration.
 
 Current scope:
 
 - OAuth token storage and refresh are implemented.
-- Gmail/Outlook API send and recent-message sync are implemented behind `EmailProviderAdapter`.
+- Gmail/Outlook API send and recent inbox-message sync are implemented behind `EmailProviderAdapter`; inbound sync preserves provider HTML bodies on `EmailMessage.bodyHtml` while AI context continues to use bounded plain text and compact summaries.
 - `POST /api/email/oauth/start` returns a signed authorization URL for Gmail or Outlook.
 - `GET /api/email/oauth/callback` validates signed state, exchanges the authorization code, and creates an active encrypted email account, or updates the existing account with the same normalized email address so token rotation and reconnect flows do not create duplicates. Browser callbacks redirect back to the CRM workspace with `emailOAuth=connected`, `emailAccountId`, and `emailAccountCreated` query parameters; OAuth errors redirect back with `emailOAuth=error` and a bounded `emailOAuthError`. JSON clients still receive the connected account payload or structured API error.
 - The email account UI includes an OAuth authorization button for Gmail and Outlook.
@@ -136,33 +139,35 @@ Email sync and queued email send run through the shared background job executor:
 - `EMAIL_DELIVERY_MODE=dry-run` can be used in non-production E2E or local verification to record outbound messages without contacting SMTP, Gmail, or Outlook. Production validation rejects this mode.
 - Redis mode checks the same caller permissions before enqueueing: email sync requires `crm.admin`, queued send requires `crm.write`, and AI translation, analysis, and summarization require `ai.use`.
 - `POST /api/email/send` persists a `queued` outbound message before execution. The worker sends that message through the same provider adapter and updates the status to `sent`; provider failures mark the message `failed` and can be retried by the job worker.
-- Outbound messages can include up to 10 small attachments as structured JSON. SMTP and Gmail send them as multipart MIME; Outlook sends them as Graph `fileAttachment` objects. Inbound sync stores provider attachment metadata, including provider message and attachment ids when available, and `GET /api/email/messages/:id/attachments/:index` downloads stored bytes or retrieves Gmail/Outlook content through the provider adapter.
+- Outbound messages can include up to 10 small attachments as structured JSON. SMTP and Gmail send them as multipart MIME; Outlook sends them as Graph `fileAttachment` objects. Inbound sync stores provider attachment metadata, including provider message and attachment ids when available, and preserves HTML bodies separately from the plain-text body used for AI context. `GET /api/email/messages/:id/attachments/:index` downloads stored bytes or retrieves Gmail/Outlook content through the provider adapter.
 - Outbound sends enforce a sales-email policy before provider delivery: at most 100 total recipients across `to`, `cc`, and `bcc`, and no duplicate recipient across those fields. Policy failures keep queued messages from reaching SMTP, Gmail, or Outlook and store a message-level failure reason.
-- AI-assisted outbound drafts carry bounded provenance (`aiAssisted`, `aiPurpose`, optional source message id, structured `aiSources`, and generation timestamp) through queueing and delivery. Source message and CRM record refs are validated before persistence. The system does not store the AI prompt or duplicate the generated body into audit metadata, and sending still requires the user to submit the composed email.
-- The compose UI shows an AI-assisted draft marker before send and lets the user clear that marker after manual rewrite.
-- `POST /api/email/messages/:id/retry` moves a failed outbound message back to `queued` and uses the same send job path, so manual retries do not bypass provider adapters or audit logging.
+- AI-assisted outbound drafts carry bounded provenance (`aiAssisted`, `aiPurpose`, optional source message id, structured `aiSources`, and required `aiGeneratedAt` generation timestamp) through queueing and delivery. Source message and CRM record refs are validated before persistence. The system does not store the AI prompt or duplicate the generated body into audit metadata, and sending still requires the user to submit the composed email.
+- The compose UI shows an AI-assisted draft marker before send, lets the user clear that marker, and automatically removes AI provenance when the user manually rewrites the subject or body before sending.
+- `POST /api/email/messages/:id/retry` moves a failed outbound message back to `queued`, or lets the send claim logic recover a stale `sending` message, using the same send job path so manual retries do not bypass provider adapters or audit logging.
 - The worker consumes email jobs through the same provider adapter used by manual actions.
 
 Operational entry points:
 
 - `POST /api/email/send` queues or runs one outbound message.
-- `POST /api/email/messages/:id/retry` queues or runs one failed outbound message again.
+- `POST /api/email/messages/:id/retry` queues or runs one failed outbound message again, and can recover stale `sending` messages reported by diagnostics.
 - `POST /api/email/messages/:id/translate` queues or runs one message translation and stores the result.
 - `POST /api/email/sync` queues or runs one account.
-- `POST /api/email/sync-all` queues or runs every active account with `syncEnabled=true`.
-- `POST /api/email/test-connections` explicitly tests every active configured account against its provider and returns per-account success, failure, and skipped results.
+- `POST /api/email/sync-all` queues or runs every active account with `syncEnabled=true`, provider sync support, and completed connection configuration.
+- `POST /api/email/test-connections` explicitly tests every active configured account against its provider and returns per-account success, failure, and skipped results. Readiness uses same-account intersections such as active+configured, send-enabled+configured, and sync-enabled+configured, so a disabled configured mailbox cannot mask an active mailbox that still needs credentials.
+- The email workspace refreshes the thread list and the selected thread's messages after manual single-account or all-account sync completes, so newly imported messages are visible without waiting for a full page navigation.
 - Automatic thread summarization runs through the same AI summarization service as `POST /api/email/threads/:id/summarize`; inline mode updates the compact memory immediately, while Redis mode queues `email_summarize`.
 - Manual `POST /api/email/threads/:id/summarize` calls use the same background executor. Redis mode returns `queued=true`, the current thread, and a queued placeholder result while the worker refreshes the compact summary later.
 - `npm run worker` processes queued `email_sync`, `email_send`, `email_translate`, `email_analyze`, and `email_summarize` jobs through the same provider adapter and AI context rules as manual actions.
-- `npm run email:sync` schedules sync once for every active account with `syncEnabled=true`.
+- `npm run email:sync` schedules sync once for every active account with `syncEnabled=true`, provider sync support, and completed connection configuration.
 - `npm run email:sync -- --loop` runs the same scheduler continuously. Set `EMAIL_SYNC_INTERVAL_MS` to control the polling interval; it defaults to 300000 ms. Set `EMAIL_SYNC_LIMIT` or pass `-- --limit <1-100>` to cap how many messages each account syncs per run.
 - The Docker Compose stack includes an `email-sync` service that runs `email:sync -- --loop`, enqueues account sync jobs through Redis, and leaves provider execution to the `worker` service.
 - Set `EMAIL_SYNC_USER_ID` to the admin user that should own the audit context; it defaults to `user-admin`.
-- `npm run email:verify` prints email subsystem diagnostics and a manual real-mailbox verification checklist. Add `-- --test-connections` to test all active configured accounts against SMTP/IMAP, Gmail, or Outlook provider APIs. Set `EMAIL_VERIFY_USER_ID` or pass `-- --user-id <admin-user-id>` when `user-admin` is not available.
+- `npm run email:verify` prints email subsystem diagnostics and a manual real-mailbox verification checklist. Add `-- --test-connections` to test all active configured accounts against SMTP/IMAP, Gmail, or Outlook provider APIs. Add `-- --test-ai-provider` to call the configured OpenAI-compatible AI provider with bounded CRM, email, and knowledge context; the check fails unless the result reports `generationMode=provider`. Set `EMAIL_VERIFY_USER_ID` or pass `-- --user-id <admin-user-id>` when `user-admin` is not available.
+- `npm run deploy:verify -- --run-email-connections --run-email-ai-provider --run-email-smoke` runs the same real mailbox, AI provider, and application smoke gates inside the `web` container as part of deployment verification.
 - Email operational scripts (`worker`, `email:sync`, and `email:verify`) load `.env` and `.env.local` before connecting to the database, without overriding environment variables already supplied by the shell, Docker, or the process manager.
-- Email operational scripts also run a PostgreSQL TCP preflight before Prisma starts. Set `EMAIL_SKIP_DATABASE_PREFLIGHT=true` only for emergency troubleshooting when another layer already guarantees database readiness.
-- `npm run email:verify -- --smoke` runs an application-level smoke flow against the configured database. It creates a temporary email account, contact record, knowledge article, inbound email, AI-assisted outbound draft, and small attachment, then sends through dry-run delivery inside the script process and cleans up the temporary data by default. Add `-- --keep-smoke-data` only when you intentionally want to inspect the generated smoke records.
-- `npm test` includes an email CRM smoke flow that links a customer record, inbound email history, knowledge context, AI drafting, source references, attachment handling, dry-run send, and audit metadata. This does not replace a real mailbox test, but it keeps the core application path covered when Docker or a browser is unavailable.
+- Email operational scripts also run a PostgreSQL TCP preflight before Prisma starts. When the configured local Postgres port is closed, the preflight also checks whether Docker Compose is available and reports the next local recovery command, such as `docker compose up -d postgres redis`. Set `EMAIL_SKIP_DATABASE_PREFLIGHT=true` only for emergency troubleshooting when another layer already guarantees database readiness.
+- `npm run email:verify -- --smoke` runs an application-level smoke flow against the configured database. It creates a temporary email account, contact record, knowledge article, inbound email, AI-assisted outbound draft, and small attachment, then sends through dry-run delivery, verifies stale send claim recovery, and cleans up the temporary data by default. Add `-- --keep-smoke-data` only when you intentionally want to inspect the generated smoke records.
+- `npm test` includes an email CRM smoke flow that links a customer record, inbound email history, knowledge context, AI drafting, source references, attachment handling, dry-run send, stale send claim recovery, and audit metadata. This does not replace a real mailbox test, but it keeps the core application path covered when Docker or a browser is unavailable.
 - Browser E2E uses the production `next start` server through `scripts/e2e-next-start.mjs`. Run `npm run build` first and ensure Postgres is reachable at the `DATABASE_URL` host and port. The compose file exposes Postgres on `127.0.0.1:54329`, matching `.env.local` and `.env.example`; if that port changes, update compose and `DATABASE_URL` together.
 - Browser E2E server scripts run a PostgreSQL TCP preflight before starting Next. Use `E2E_SKIP_DATABASE_PREFLIGHT=true` only when another test fixture already guarantees database readiness.
 
@@ -172,9 +177,11 @@ Failed outbound sends keep the provider error on `EmailMessage.failureReason`. R
 
 Outbound sends can include an optional `clientRequestId` on `POST /api/email/send`. The value is scoped to workspace, mailbox account, and user, then stored on `EmailMessage`; retrying the same request id returns the existing outbound message instead of creating another queued email. Use a stable id per compose/send attempt, not a new random value for every retry.
 
-Queued outbound sends are atomically claimed as `sending` before provider delivery. `sendAttemptedAt` records the claim time, and `EMAIL_SEND_CLAIM_TIMEOUT_MS` controls when a stale `sending` claim can be reclaimed after a crashed worker; it defaults to 900000 ms and is clamped to at least 60000 ms.
+Queued outbound sends are atomically claimed as `sending` before provider delivery. `sendAttemptedAt` records the claim time, and `EMAIL_SEND_CLAIM_TIMEOUT_MS` controls when a stale `sending` claim can be reclaimed after a crashed worker; it defaults to 900000 ms and is clamped to at least 60000 ms. Admin diagnostics list stale send claims and expose a recovery action that routes through the normal retry endpoint.
 
 Provider sync is idempotent per mailbox account. Imported messages are deduplicated by `workspaceId + accountId + externalMessageId`, so running IMAP, Gmail, or Outlook sync repeatedly does not duplicate timeline entries or expand future AI context with repeated message bodies. The same external message id may still appear in another mailbox account.
+
+Malformed provider timestamps are ignored at the adapter boundary instead of failing the whole sync run. IMAP `Date`, Gmail `internalDate`, and Outlook `receivedDateTime` values only populate `receivedAt` when they parse to a valid timestamp.
 
 ## AI Toggles
 
@@ -190,6 +197,8 @@ Email AI features are controlled independently:
 When a feature is disabled, the assistant context builder returns `enabled=false` and instructs the caller not to generate that output.
 The compose UI uses the same purpose-to-feature mapping as the assistant context builder, so disabled AI actions are blocked before the request and still rechecked server-side.
 Automatic AI jobs also require the acting context to have `ai.use`. This prevents a write-only CRM user from recording an email and triggering AI translation or AI summarization as a side effect.
+Automatic jobs only run for committed communication states: inbound `received` messages and outbound `sent` messages. Queued, sending, draft, or failed outbound messages do not spend AI tokens; when an outbound queued message later becomes `sent`, the delivery status update can trigger thread summarization. Automatic context analysis is limited to inbound customer messages so outbound sales drafts do not create redundant next-step analysis. Email diagnostics and service health expose this eligibility policy as `automationEligibleStatuses` and `autoContextAnalysisScope`.
+Manual AI context uses the same committed-history rule for thread history: inbound `received` and outbound `sent` messages are included, while queued, sending, draft, and failed outbound bodies are excluded unless the user explicitly selected one as the source message. This keeps unsent drafts and delivery failures from becoming customer facts in future prompts.
 Server-side AI jobs still write skipped `email_ai_generation` audit entries when a feature is disabled; they do not call the model provider and do not write generated text back to email messages or threads.
 When `requireSourceLinks=true`, generation is also blocked until the request has at least one CRM record, email message, activity, or active knowledge article source.
 Missing feature keys in existing workspace settings are normalized to safe defaults; new AI automations such as `auto_translate` default to off.
@@ -204,19 +213,23 @@ Missing feature keys in existing workspace settings are normalized to safe defau
 - `AI_MODEL`
 - `AI_TIMEOUT_MS`
 
-When no API key is configured, or the provider fails, the endpoint returns a local bounded fallback. Results expose `generationMode` as `provider`, `provider_fallback`, `local`, `queued`, or `disabled`; provider failures also include a bounded `providerError` summary. The model prompt is assembled from the linked customer record, recent communication summary, recent messages, CRM activities, and active knowledge articles. Feature toggles are enforced before any model call. Generated email AI output is also bounded before it can be returned, persisted as translation/summary/analysis, or recorded in audit metadata; results expose `budget.outputTruncated` when the generated body or suggested subject had to be clipped.
+When no API key is configured, or the provider fails, the endpoint returns a local bounded fallback. Results expose `generationMode` as `provider`, `provider_fallback`, `local`, `queued`, or `disabled`; provider failures also include a bounded `providerError` summary. The model prompt is assembled from the linked customer record, recent communication summary, recent messages, CRM activities, and active knowledge articles. Knowledge articles are selected with a deterministic relevance rank against the customer record, thread, source message, recent message bodies, and activities before `maxKnowledgeArticles` is applied; this keeps the first version dependency-free while leaving a clean replacement point for vector search or external knowledge connectors. Feature toggles are enforced before any model call. Generated email AI output is also bounded before it can be returned, persisted as translation/summary/analysis, or recorded in audit metadata; results expose `budget.outputTruncated` when the generated body or suggested subject had to be clipped. Email diagnostics and service health expose the same hard budget policy (`budgetPolicy.maxModelPromptChars`, `budgetPolicy.maxGeneratedOutputChars`, and `budgetPolicy.maxSuggestedSubjectChars`) so operators can monitor prompt and output limits without reading implementation constants.
 
 The email workspace can run AI against compose text or against an individual message in the selected thread:
 
 - Draft generation returns a clean customer-facing body plus an optional `suggestedSubject`; source references remain in the structured `sources` array and are not appended to the email body.
-- Message `Translate` sends the message body as `sourceText` with `sourceMessageId`, the thread, and linked CRM record context, then stores the translated text and `translatedSources` on `EmailMessage`.
+- Message `Translate` sends the message body as `sourceText` with `sourceMessageId`, the thread, and linked CRM record context, then stores the translated text and `translatedSources` on `EmailMessage` only when the configured model provider succeeds.
 - Message `Analyze` sends the message body as `sourceText` with `sourceMessageId` and asks for context analysis plus the next sales action.
 - Thread `Analyze` stores the generated analysis on `EmailThread.aiAnalysis` with `aiAnalysisUpdatedAt` and `aiAnalysisSources`; it is a recommendation cache only and does not update deals, contacts, tasks, amounts, or stages.
 - Both actions keep source references to CRM records, email messages, activities, or knowledge articles when `requireSourceLinks=true`.
+- Messages with synced HTML bodies expose a collapsed HTML preview in the workspace. The preview is rendered inside a sandboxed iframe with an inline CSP; AI drafting, translation, analysis, and summarization continue to use `bodyText` rather than raw HTML.
 
 When `sourceMessageId` is supplied without an explicit `threadId`, the context builder resolves the message's thread and linked CRM record before building the prompt. This keeps message-level AI entry points aligned with customer background, communication history, and knowledge articles. Draft and summarize requests can use `sourceMessageId` as their only CRM context input. The resolved record, thread, and source message identifiers are returned in AI results so generation audit entries and AI-assisted outbound drafts preserve the inferred provenance.
 
-AI generation writes `email_ai_generation` audit entries with purpose, enabled/skipped status, generation mode, bounded provider error summary, source counts, source labels, related record/thread/message ids, context budget, context/output truncation status, and text lengths. The audit log intentionally does not store generated email bodies, user prompts, or source text. Email diagnostics also surfaces recent `automationFailed=true` AI audit entries and recent `generationMode=provider_fallback` entries so admins can see when automatic translation/summarization fails or when the remote model provider is unavailable without blocking email intake.
+Provider-backed `translate` results are persisted as message translation cache. Local fallback and `provider_fallback` translation outputs are audited but not saved to `EmailMessage.translatedBodyText`, because fallback text is only an operational placeholder and must not be presented as a real translation.
+The email workspace shows an explicit "translation not saved" message in that case, so users do not mistake an empty translation panel for a completed translation. Compose-level translation also avoids replacing the draft body unless the configured model provider succeeds.
+
+AI generation writes `email_ai_generation` audit entries with purpose, enabled/skipped status, generation mode, bounded provider error summary, source counts, source labels, related record/thread/message ids, context budget, context/output truncation status, text lengths, and whether the generated result was persisted. The audit log intentionally does not store generated email bodies, user prompts, or source text. Email diagnostics also surfaces recent `automationFailed=true` AI audit entries, recent `generationMode=provider_fallback` entries, and AI budget policy caps so admins can see when automatic translation/summarization fails, when the remote model provider is unavailable, and what prompt/output ceilings are enforced without blocking email intake.
 
 ## Context Sources
 

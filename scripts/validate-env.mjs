@@ -75,6 +75,7 @@ function validateEnv(values) {
     } else if (oauthStateSecret?.trim() && isPlaceholderSecret(oauthStateSecret)) {
       errors.push("EMAIL_OAUTH_STATE_SECRET must be replaced with a deployment-specific random value.");
     }
+    validateOAuthScopes(values, errors);
     if (values.ALLOW_PRIVATE_WEBHOOK_URLS === "true") {
       warnings.push("ALLOW_PRIVATE_WEBHOOK_URLS=true permits webhooks to target localhost or private network addresses.");
     }
@@ -117,6 +118,61 @@ function validateProductionAppBaseUrl(value, errors, warnings, allowInsecure) {
   if (url.protocol === "http:" && !isLoopbackHost(url.hostname) && !allowInsecure) {
     errors.push("APP_BASE_URL must use https for non-local production deployments. Set ALLOW_INSECURE_APP_BASE_URL=true only for trusted private networks.");
   }
+}
+
+function validateOAuthScopes(values, errors) {
+  const providers = [
+    {
+      prefix: "GMAIL",
+      configured: Boolean(values.GMAIL_OAUTH_CLIENT_ID?.trim() && values.GMAIL_OAUTH_CLIENT_SECRET?.trim()),
+      scope: values.GMAIL_OAUTH_SCOPE?.trim() || "https://mail.google.com/",
+      missing: (scope) => getMissingGmailScopes(scope)
+    },
+    {
+      prefix: "OUTLOOK",
+      configured: Boolean(values.OUTLOOK_OAUTH_CLIENT_ID?.trim() && values.OUTLOOK_OAUTH_CLIENT_SECRET?.trim()),
+      scope: values.OUTLOOK_OAUTH_SCOPE?.trim() || "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send offline_access",
+      missing: (scope) => getMissingOutlookScopes(scope)
+    }
+  ];
+
+  for (const provider of providers) {
+    if (!provider.configured) continue;
+    const missingScopes = provider.missing(provider.scope);
+    if (missingScopes.length) {
+      errors.push(`${provider.prefix}_OAUTH_SCOPE is missing required permission(s): ${missingScopes.join(", ")}.`);
+    }
+  }
+}
+
+function getMissingGmailScopes(scope) {
+  const scopes = parseScopeList(scope);
+  const hasFullMail = scopes.includes("https://mail.google.com/");
+  const hasRead = scopes.includes("https://www.googleapis.com/auth/gmail.readonly") || scopes.includes("https://www.googleapis.com/auth/gmail.modify");
+  const hasSend = scopes.includes("https://www.googleapis.com/auth/gmail.send") || scopes.includes("https://www.googleapis.com/auth/gmail.compose");
+  return [
+    !hasFullMail && !hasRead ? "gmail.readonly or https://mail.google.com/" : undefined,
+    !hasFullMail && !hasSend ? "gmail.send or https://mail.google.com/" : undefined
+  ].filter(Boolean);
+}
+
+function getMissingOutlookScopes(scope) {
+  const scopes = parseScopeList(scope);
+  const hasRead = scopes.includes("https://graph.microsoft.com/mail.read") || scopes.includes("https://graph.microsoft.com/mail.readwrite");
+  const hasSend = scopes.includes("https://graph.microsoft.com/mail.send");
+  const hasOffline = scopes.includes("offline_access");
+  return [
+    !hasRead ? "Mail.Read or Mail.ReadWrite" : undefined,
+    !hasSend ? "Mail.Send" : undefined,
+    !hasOffline ? "offline_access" : undefined
+  ].filter(Boolean);
+}
+
+function parseScopeList(scope) {
+  return scope
+    .split(/\s+/)
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function isLoopbackHost(hostname) {

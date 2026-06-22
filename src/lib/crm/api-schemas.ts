@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_EMAIL_ATTACHMENT_BASE64_CHARS, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
+import { isValidEmailAttachmentBase64, MAX_EMAIL_ATTACHMENT_BASE64_CHARS, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
 import { MAX_OUTBOUND_EMAIL_RECIPIENTS, validateOutboundEmailRecipientPolicy } from "@/lib/email/outbound-policy";
 
 export const MAX_CSV_IMPORT_CHARS = 5_000_000;
@@ -269,8 +269,8 @@ const emailAttachmentSchema = z
     externalUrl: z.string().trim().url().max(2000).optional()
   })
   .strict()
-  .refine((value) => !value.contentBase64 || /^[A-Za-z0-9+/=_-]+$/.test(value.contentBase64), {
-    message: "Attachment contentBase64 must be base64 or base64url text"
+  .refine((value) => !value.contentBase64 || isValidEmailAttachmentBase64(value.contentBase64), {
+    message: "Attachment contentBase64 must be valid base64 or base64url text"
   });
 const emailAttachmentsSchema = z.array(emailAttachmentSchema).max(10).optional();
 const emailAiSourceSchema = z
@@ -418,6 +418,13 @@ export const emailSendSchema = z
         code: z.ZodIssueCode.custom,
         path: ["aiPurpose"],
         message: "aiPurpose is required when aiAssisted is true"
+      });
+    }
+    if (value.aiAssisted && !value.aiGeneratedAt) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["aiGeneratedAt"],
+        message: "aiGeneratedAt is required when aiAssisted is true"
       });
     }
     if (!value.aiAssisted && (value.aiPurpose || value.aiSourceMessageId || value.aiSources?.length || value.aiGeneratedAt)) {

@@ -177,6 +177,7 @@ type EmailComposeDraft = EmailComposeReplyDraft & {
   clientRequestId: string;
 };
 type KnowledgeArticleDraft = {
+  editingArticleId?: string;
   title: string;
   body: string;
   tags: string;
@@ -233,12 +234,42 @@ function createEmailClientRequestId(): string {
   return `email-send:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 12)}`;
 }
 
+function clearEmailDraftAiProvenance(draft: EmailComposeDraft): EmailComposeDraft {
+  if (!draft.aiAssisted && !draft.aiPurpose && !draft.aiSourceMessageId && !draft.aiSources?.length && !draft.aiGeneratedAt) {
+    return draft;
+  }
+  return {
+    ...draft,
+    aiAssisted: false,
+    aiPurpose: undefined,
+    aiSourceMessageId: undefined,
+    aiSources: undefined,
+    aiGeneratedAt: undefined
+  };
+}
+
 function upsertEmailMessage(messages: EmailMessage[], message: EmailMessage): EmailMessage[] {
   const index = messages.findIndex((candidate) => candidate.id === message.id);
   if (index === -1) {
     return [...messages, message];
   }
   return messages.map((candidate) => (candidate.id === message.id ? message : candidate));
+}
+
+function buildEmailHtmlPreview(bodyHtml: string): string {
+  return [
+    "<!doctype html>",
+    '<html><head><meta charset="utf-8">',
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: cid:; style-src \'unsafe-inline\'; font-src data:;">',
+    "<style>html,body{margin:0;padding:12px;background:#fff;color:#111827;font:14px/1.5 Arial,sans-serif;overflow-wrap:anywhere;}table{max-width:100%;}img{max-width:100%;height:auto;}</style>",
+    "</head><body>",
+    bodyHtml,
+    "</body></html>"
+  ].join("");
+}
+
+function hasEmailHtmlPreview(message: EmailMessage): boolean {
+  return Boolean(message.bodyHtml?.trim());
 }
 
 const navigationItems: typeof navItems = navItems.some((item) => item.key === "email")
@@ -1138,6 +1169,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setMessage(`邮箱同步失败：${result.account.emailAddress}`);
       return;
     }
+    await refreshEmailThreads({ reloadSelectedMessages: true });
     setMessage(`邮箱同步完成：扫描 ${result.scannedCount ?? result.importedCount} 封，新增 ${result.importedCount} 封，跳过重复 ${result.skippedDuplicateCount ?? 0} 封${result.hasMore ? "，仍有更多历史邮件" : ""}`);
     router.refresh();
   }
@@ -1148,6 +1180,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (failed.length) {
       setError(`邮箱批量同步完成，但 ${failed.length} 个账号失败：${failed.map((account) => account.emailAddress).join(", ")}`);
     }
+    await refreshEmailThreads({ reloadSelectedMessages: true });
     setMessage(`邮箱批量同步完成：已调度 ${result.scheduledCount} 个，跳过 ${result.skippedCount} 个，失败 ${failed.length} 个`);
     router.refresh();
   }
@@ -1211,6 +1244,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   async function loadEmailMessages(threadId: string) {
     const messages = await fetchJson<EmailMessage[]>(`/api/email/threads/${threadId}/messages`, { method: "GET" });
     setEmailMessagesByThread((current) => ({ ...current, [threadId]: messages }));
+  }
+
+  async function refreshEmailThreads(options: { reloadSelectedMessages?: boolean } = {}) {
+    const threads = await fetchJson<EmailThread[]>("/api/email/threads", { method: "GET" });
+    const threadId = selectedEmailThreadId && threads.some((thread) => thread.id === selectedEmailThreadId) ? selectedEmailThreadId : threads[0]?.id ?? "";
+    setEmailThreads(threads);
+    setSelectedEmailThreadId(threadId);
+    if (options.reloadSelectedMessages && threadId) {
+      await loadEmailMessages(threadId);
+    }
   }
 
   async function updateEmailThread(threadId: string, recordId: string) {
@@ -1298,7 +1341,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     });
     setEmailAiResult(result);
-    if (result.enabled && (emailAiPurpose === "draft" || emailAiPurpose === "translate")) {
+    const canApplyResultToDraft = result.enabled && (emailAiPurpose === "draft" || (emailAiPurpose === "translate" && result.generationMode === "provider"));
+    if (canApplyResultToDraft) {
       setEmailDraft((current) => ({
         ...current,
         subject: emailAiPurpose === "draft" && !current.subject.trim() ? result.suggestedSubject ?? current.subject : current.subject,
@@ -1309,6 +1353,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         aiSources: result.sources,
         aiGeneratedAt: new Date().toISOString()
       }));
+    } else if (result.enabled && emailAiPurpose === "translate") {
+      setMessage("翻译未应用到正文：需要配置可用 AI provider。");
     }
   }
 
@@ -1325,9 +1371,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEmailAiResult({
         enabled: Boolean(translated.translatedBodyText),
         purpose: "translate",
-        text: translated.translatedBodyText ?? "",
+        text: translated.translatedBodyText ?? "翻译未保存：需要配置可用 AI provider；本地回退或 provider 失败不会写入邮件翻译缓存。",
         sources: translated.translatedSources?.length ? translated.translatedSources : [{ label: translated.subject, messageId: translated.id }]
       });
+      setMessage(translated.translatedBodyText ? "邮件翻译已保存。" : "翻译未保存：需要配置可用 AI provider。");
       return;
     }
     const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
@@ -1451,6 +1498,23 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function createKnowledgeArticle() {
+    if (knowledgeDraft.editingArticleId) {
+      const article = await fetchJson<KnowledgeArticle>(`/api/knowledge/articles/${knowledgeDraft.editingArticleId}`, {
+        method: "PATCH",
+        body: {
+          title: knowledgeDraft.title,
+          body: knowledgeDraft.body,
+          tags: splitEmailList(knowledgeDraft.tags),
+          active: knowledgeDraft.active
+        }
+      });
+      setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)]);
+      setKnowledgeDraft({ title: "", body: "", tags: "", active: true });
+      setMessage(`知识库文章已保存：${article.title}`);
+      router.refresh();
+      return;
+    }
+
     const article = await fetchJson<KnowledgeArticle>("/api/knowledge/articles", {
       method: "POST",
       body: {
@@ -1466,7 +1530,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
-  async function updateKnowledgeArticle(articleId: string, patch: Partial<Pick<KnowledgeArticle, "active">>) {
+  async function updateKnowledgeArticle(articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) {
     const article = await fetchJson<KnowledgeArticle>(`/api/knowledge/articles/${articleId}`, {
       method: "PATCH",
       body: patch
@@ -2365,13 +2429,13 @@ function EmailWorkspace({
   onRefreshDiagnostics: () => void;
   onTestAllConnections: () => void;
   onCreateKnowledgeArticle: () => void;
-  onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "active">>) => void;
+  onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
   onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars">>) => void;
 }) {
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedMessages = selectedThread ? messagesByThread[selectedThread.id] ?? [] : [];
-  const activeAccounts = accounts.filter((account) => account.status === "active" && account.sendEnabled && getEmailProviderCapability(account.provider).supportsSend);
+  const activeAccounts = accounts.filter((account) => account.status === "active" && account.sendEnabled && account.connectionConfigured && getEmailProviderCapability(account.provider).supportsSend);
   const linkedRecordId = emailDraft.recordId || selectedRecord?.id || selectedThread?.recordId || "";
   const selectedThreadRecordId = selectedThread?.recordId || "";
   const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
@@ -2617,7 +2681,7 @@ function EmailWorkspace({
                 disabled ||
                 !accounts.some((account) => {
                   const capability = getEmailProviderCapability(account.provider);
-                  return account.status === "active" && account.syncEnabled && capability.supportsSync;
+                  return account.status === "active" && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
                 })
               }
             >
@@ -2666,7 +2730,7 @@ function EmailWorkspace({
                 >
                   {account.status === "disabled" ? "启用" : "停用"}
                 </button>
-                <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !capability.supportsSync || account.status !== "active"}>
+                <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || account.status !== "active"}>
                   <RefreshCw size={16} />
                   同步
                 </button>
@@ -2681,7 +2745,7 @@ function EmailWorkspace({
         </div>
       </section>
 
-      {canManageEmailSettings ? <EmailDiagnosticsPanel diagnostics={diagnostics} connectionTestRun={connectionTestRun} disabled={disabled} onRefresh={onRefreshDiagnostics} onTestAll={onTestAllConnections} /> : null}
+      {canManageEmailSettings ? <EmailDiagnosticsPanel diagnostics={diagnostics} connectionTestRun={connectionTestRun} disabled={disabled} onRefresh={onRefreshDiagnostics} onTestAll={onTestAllConnections} onRetryMessage={onRetryMessage} /> : null}
 
       <section className="section">
         <h2 className="page-title" style={{ fontSize: 18 }}>邮件线程</h2>
@@ -2744,6 +2808,12 @@ function EmailWorkspace({
               ) : null}
               <div className="subtle">发件人 {message.from} · 收件人 {message.to.join(", ")}</div>
               <div>{message.bodyText}</div>
+                {hasEmailHtmlPreview(message) ? (
+                  <details className="activity-item" style={{ marginTop: 8 }}>
+                    <summary>HTML 预览</summary>
+                    <iframe sandbox="" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview" title={`HTML preview ${message.id}`} />
+                  </details>
+                ) : null}
               {message.attachments?.length ? (
                 <div className="toolbar" style={{ marginTop: 8 }}>
                   {message.attachments.map((attachment, index) => {
@@ -2824,11 +2894,11 @@ function EmailWorkspace({
           </label>
           <label className="wide">
             <span className="subtle">主题</span>
-            <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange({ ...emailDraft, subject: event.target.value })} />
+            <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
           </label>
           <label className="wide">
             <span className="subtle">正文</span>
-            <textarea className="textarea" data-testid="email-compose-body" value={emailDraft.bodyText} onChange={(event) => onEmailDraftChange({ ...emailDraft, bodyText: event.target.value })} />
+            <textarea className="textarea" data-testid="email-compose-body" value={emailDraft.bodyText} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bodyText: event.target.value }))} />
           </label>
           <label className="wide">
             <span className="subtle">附件</span>
@@ -2901,7 +2971,7 @@ function EmailWorkspace({
               const dependencyMessage = emailAiFeatureDependencyMessage(featureKey);
               return (
                 <label className="settings-toggle" key={feature}>
-                  <input data-testid={`email-ai-feature-${feature}`} type="checkbox" checked={enabled && !dependencyBlocked} onChange={(event) => onToggleAiFeature(featureKey, event.target.checked)} disabled={dependencyBlocked} />
+                  <input data-testid={`email-ai-feature-${feature}`} type="checkbox" checked={enabled} onChange={(event) => onToggleAiFeature(featureKey, event.target.checked)} disabled={dependencyBlocked && !enabled} />
                   <span>
                     {meta.label}
                     <small className="subtle" style={{ display: "block" }}>
@@ -2975,6 +3045,7 @@ function EmailWorkspace({
           {canManageEmailSettings ? (
           <div className="settings-item">
             <strong>系统知识库</strong>
+            {knowledgeDraft.editingArticleId ? <div className="subtle">正在编辑已有知识条目，保存后会更新 AI 邮件可用的知识库内容。</div> : null}
             <div className="form-grid" style={{ marginTop: 8 }}>
               <label>
                 <span className="subtle">标题</span>
@@ -2995,15 +3066,22 @@ function EmailWorkspace({
             </div>
             <button className="secondary-button" data-testid="knowledge-create" type="button" style={{ marginTop: 8 }} onClick={onCreateKnowledgeArticle} disabled={disabled || !knowledgeDraft.title.trim() || !knowledgeDraft.body.trim()}>
               <Save size={16} />
-              添加知识
+              {knowledgeDraft.editingArticleId ? "保存知识" : "添加知识"}
             </button>
+            {knowledgeDraft.editingArticleId ? (
+              <button className="ghost-button" data-testid="knowledge-edit-cancel" type="button" style={{ marginTop: 8, marginLeft: 8 }} onClick={() => onKnowledgeDraftChange({ title: "", body: "", tags: "", active: true })} disabled={disabled}>
+                <XCircle size={16} />
+                取消编辑
+              </button>
+            ) : null}
             <div className="toolbar" style={{ marginTop: 8 }}>
               {knowledgeArticles.map((article) => (
                 <button
                   className={article.active ? "secondary-button" : "danger-button"}
+                  data-testid="knowledge-edit"
                   key={article.id}
                   type="button"
-                  onClick={() => onUpdateKnowledgeArticle(article.id, { active: !article.active })}
+                  onClick={() => onKnowledgeDraftChange({ editingArticleId: article.id, title: article.title, body: article.body, tags: article.tags.join(", "), active: article.active })}
                   disabled={disabled}
                 >
                   {article.title} · {article.active ? "on" : "off"}
@@ -4425,13 +4503,15 @@ function EmailDiagnosticsPanel({
   connectionTestRun,
   disabled,
   onRefresh,
-  onTestAll
+  onTestAll,
+  onRetryMessage
 }: {
   diagnostics: EmailSubsystemDiagnostics | null;
   connectionTestRun: EmailConnectionTestRun | null;
   disabled: boolean;
   onRefresh: () => void;
   onTestAll: () => void;
+  onRetryMessage: (messageId: string) => void;
 }) {
   const accounts = diagnostics?.accounts;
   return (
@@ -4472,7 +4552,14 @@ function EmailDiagnosticsPanel({
               <span className="badge">history {diagnostics.aiContextPolicy.maxHistoryMessages}</span>
               <span className={diagnostics.aiContextPolicy.maxKnowledgeArticles > 0 ? "badge" : "danger-badge"}>knowledge {diagnostics.aiContextPolicy.maxKnowledgeArticles}</span>
               <span className="badge">context {diagnostics.aiContextPolicy.maxContextChars}</span>
+              <span className="badge">prompt cap {diagnostics.aiContextPolicy.budgetPolicy.maxModelPromptChars}</span>
+              <span className="badge">output cap {diagnostics.aiContextPolicy.budgetPolicy.maxGeneratedOutputChars}</span>
               <span className="badge">automations {diagnostics.aiContextPolicy.enabledAutomationCount}</span>
+              {diagnostics.aiContextPolicy.featureDependencies.map((dependency) => (
+                <span className="badge" key={`${dependency.feature}-${dependency.dependsOn}`}>{dependency.feature} needs {dependency.dependsOn}</span>
+              ))}
+              <span className="badge">states inbound {diagnostics.aiContextPolicy.automationEligibleStatuses.inbound.join("/")}, outbound {diagnostics.aiContextPolicy.automationEligibleStatuses.outbound.join("/")}</span>
+              <span className="badge">analysis {diagnostics.aiContextPolicy.autoContextAnalysisScope}</span>
             </div>
             <DiagnosticRow label="自动总结策略" status={diagnostics.autoSummaryPolicy.status} message={diagnostics.autoSummaryPolicy.message} />
             <DiagnosticRow label="收信调度" status={diagnostics.syncScheduler.status} message={diagnostics.syncScheduler.message} />
@@ -4481,7 +4568,13 @@ function EmailDiagnosticsPanel({
               <div className="settings-item" key={message.id}>
                 <div className="settings-panel-header">
                   <strong>{message.subject}</strong>
-                  <DiagnosticBadge status="warning" label="发送认领超时" />
+                  <div className="toolbar">
+                    <DiagnosticBadge status="warning" label="发送认领超时" />
+                    <button className="secondary-button" type="button" onClick={() => onRetryMessage(message.id)} disabled={disabled}>
+                      <RefreshCw size={14} />
+                      恢复发送
+                    </button>
+                  </div>
                 </div>
                 <div className="subtle">
                   message {message.id} 路 account {message.accountId}{message.sendAttemptedAt ? ` 路 ${formatDate(message.sendAttemptedAt)}` : ""}
@@ -4509,7 +4602,12 @@ function EmailDiagnosticsPanel({
               </div>
             ))}
             {Object.values(diagnostics.oauthProviders).map((provider) => (
-              <DiagnosticRow key={provider.provider} label={`${getEmailProviderCapability(provider.provider).label} OAuth`} status={provider.status} message={provider.message} />
+              <DiagnosticRow
+                key={provider.provider}
+                label={`${getEmailProviderCapability(provider.provider).label} OAuth`}
+                status={provider.status}
+                message={`${provider.message}${provider.missingScopes.length ? ` · missing scopes: ${provider.missingScopes.join(", ")}` : ""}`}
+              />
             ))}
           </div>
 
@@ -4518,6 +4616,9 @@ function EmailDiagnosticsPanel({
               <Metric label="邮箱账户" value={accounts.total} icon={Mail} />
               <Metric label="已启用同步" value={accounts.syncEnabled} icon={RefreshCw} />
               <Metric label="已配置连接" value={accounts.connectionConfigured} icon={CheckCircle2} />
+              <Metric label="活跃已配置" value={accounts.activeConnectionConfigured} icon={CheckCircle2} />
+              <Metric label="可发送连接" value={accounts.sendConnectionConfigured} icon={Send} />
+              <Metric label="可同步连接" value={accounts.syncConnectionConfigured} icon={RefreshCw} />
               <Metric label="连接错误" value={accounts.withLastConnectionError} icon={XCircle} />
             </div>
           ) : null}

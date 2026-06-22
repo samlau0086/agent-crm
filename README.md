@@ -86,11 +86,55 @@ Docker 私有化部署验收：
 npm run deploy:verify
 ```
 
-该命令会校验 Docker Compose 配置、构建镜像、启动服务、检查 `/api/health`，并在 `web` 容器内验证 PostgreSQL client、备份 dry-run 和邮件 diagnostics。需要同时测试真实邮箱连接时追加 `-- --run-email-connections`。没有 Docker 的开发环境可以先运行：
+该命令会校验 Docker Compose 配置、构建镜像、启动服务、检查 `/api/health`，并在 `web` 容器内验证 PostgreSQL client、备份 dry-run 和邮件 diagnostics。上线前需要同时验证真实邮箱连接、AI provider 和邮件应用 smoke 流程时追加 `-- --run-email-connections --run-email-ai-provider --run-email-smoke`。没有 Docker 的开发环境可以先运行：
 
 ```bash
 npm run deploy:verify -- --dry-run
 ```
+
+## GitHub Actions 部署到 VPS
+
+项目包含 [`.github/workflows/deploy-vps.yml`](.github/workflows/deploy-vps.yml)，用于把镜像发布到 GHCR，并通过 SSH 在 VPS 的 `/opt/ai-agent-crm` 目录用 Docker Compose 运行。VPS 专用 Compose 文件见 [`deploy/docker-compose.vps.yml`](deploy/docker-compose.vps.yml)，示例环境变量见 [`deploy/vps.env.example`](deploy/vps.env.example)。
+
+GitHub Actions Secrets：
+
+- `VPS_HOST`：VPS IP 或域名。
+- `VPS_USER`：SSH 用户。
+- `VPS_SSH_KEY`：SSH 私钥。
+- `VPS_PORT`：SSH 端口，默认 `22`，可选。
+- `POSTGRES_PASSWORD`：外部 Postgres 密码。
+- `EMAIL_CONFIG_SECRET`：邮箱 SMTP/IMAP/OAuth 凭据加密密钥。至少 16 字符，建议 32 字符以上；必须长期稳定保存，不能每次部署重新生成。更换它会导致已有邮箱配置无法解密，除非先做密钥轮换迁移。
+- `EMAIL_OAUTH_STATE_SECRET`：Gmail/Outlook OAuth state 签名密钥。至少 16 字符，建议 32 字符以上；必须和 `EMAIL_CONFIG_SECRET` 使用不同随机值。
+- `APP_BASE_URL`：对外访问地址，例如 `https://crm.example.com`，可选。
+- `AI_API_KEY`、`GMAIL_OAUTH_CLIENT_ID`、`GMAIL_OAUTH_CLIENT_SECRET`、`OUTLOOK_OAUTH_CLIENT_ID`、`OUTLOOK_OAUTH_CLIENT_SECRET`：按需配置。
+- `GHCR_USERNAME`、`GHCR_TOKEN`：GHCR 私有包拉取凭据，可选；公开包或默认 token 可用时不需要。
+
+生成邮箱相关密钥：
+
+```bash
+npm run config:secrets
+```
+
+也可以用 OpenSSL 生成两条不同的随机值：
+
+```bash
+openssl rand -base64 32
+openssl rand -base64 32
+```
+
+把两条值分别保存为 GitHub Actions Secrets：`EMAIL_CONFIG_SECRET` 和 `EMAIL_OAUTH_STATE_SECRET`。不要提交到 Git，也不要用 `.env.example` 里的 placeholder。
+
+GitHub Actions Variables：
+
+- `VPS_APP_PORT`：VPS 对外暴露的 Web 端口，例如 `3000`。手动运行 workflow 时填写的 `app_port` 会覆盖它。
+- `POSTGRES_HOST`：默认 `host.docker.internal`。你的外部 Postgres 容器映射为 `5433:5432` 时保持默认即可。
+- `POSTGRES_PORT`：默认 `5433`。
+- `POSTGRES_USER`：默认 `crm`。
+- `POSTGRES_DB`：默认 `ai_agent_crm`。
+- `ALLOW_INSECURE_APP_BASE_URL`：直接用 `http://ip:port` 部署时可设为 `true`；HTTPS 域名部署建议为 `false`。
+- `EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SYNC_USER_ID`、`AI_PROVIDER`、`AI_BASE_URL`、`AI_MODEL`、`AI_TIMEOUT_MS`、`GMAIL_OAUTH_SCOPE`、`OUTLOOK_OAUTH_SCOPE`：按需覆盖默认值。
+
+当前 VPS 部署假设 Postgres 由另一个容器管理，并在 VPS 宿主机上映射 `5433:5432`。CRM 容器通过 `host.docker.internal:5433` 连接数据库；该部署栈只管理 `web`、`worker`、`email-sync` 和 `redis`，并把 Redis 数据和备份目录挂载到 `/opt/ai-agent-crm`。完整说明见 [`docs/vps-github-actions-deploy.md`](docs/vps-github-actions-deploy.md)。
 
 ## 数据库
 

@@ -87,10 +87,15 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     if (message.direction !== "outbound") {
       throw new Error("Only outbound email messages can be sent");
     }
-    if (message.status !== "queued" && message.status !== "failed") {
+    if (message.status !== "queued" && message.status !== "failed" && message.status !== "sending") {
       return message;
     }
-    const account = await this.repository.getEmailAccount(context, message.accountId);
+    const claim = await this.claimMessageForSending(context, message);
+    if (!claim.claimed) {
+      return claim.message;
+    }
+    const claimedMessage = claim.message;
+    const account = await this.repository.getEmailAccount(context, claimedMessage.accountId);
     try {
       if (!account.sendEnabled || account.status !== "active") {
         throw new Error("Email account is not enabled for sending");
@@ -98,14 +103,9 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       assertProviderSupports(account, "send");
     } catch (error) {
       const messageText = error instanceof Error ? error.message : "Email account is not enabled for sending";
-      const failed = await this.repository.updateEmailMessageStatus(context, message.id, "failed", { failureReason: messageText });
+      const failed = await this.repository.updateEmailMessageStatus(context, claimedMessage.id, "failed", { failureReason: messageText });
       throw Object.assign(new Error(messageText), { emailMessage: failed });
     }
-    const claim = await this.claimMessageForSending(context, message);
-    if (!claim.claimed) {
-      return claim.message;
-    }
-    const claimedMessage = claim.message;
     const input: EmailSendInput = {
       accountId: claimedMessage.accountId,
       threadId: claimedMessage.threadId,
@@ -318,6 +318,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
           cc: message.cc,
           subject: message.subject,
           bodyText: message.bodyText || "(empty)",
+          bodyHtml: message.bodyHtml,
           attachments: message.attachments,
           externalMessageId: message.externalMessageId,
           receivedAt: message.receivedAt
