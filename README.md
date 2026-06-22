@@ -149,7 +149,7 @@ GitHub Actions Variables：
 
 部署前 workflow 会先校验配置：邮件密钥必须不是 placeholder、长度至少 16 字符且两条值不同；启用 AI provider 验证或 live readiness 时必须设置 `AI_API_KEY`；Gmail/Outlook OAuth client id 和 secret 必须成对出现；`EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SEND_CLAIM_TIMEOUT_MS` 和 live readiness 组合也会在 SSH 前校验。
 
-当前 VPS 部署默认创建专用 `pgvector/pgvector:pg16` 数据库容器，CRM 容器通过 `postgres:5432` 连接数据库；该部署栈管理 `web`、`worker`、`email-sync`、`postgres` 和 `redis`，并把 Postgres 数据、Redis 数据和备份目录挂载到 `/opt/ai-agent-crm`。完整说明见 [`docs/vps-github-actions-deploy.md`](docs/vps-github-actions-deploy.md)。
+当前 VPS 部署默认创建专用 `pgvector/pgvector:pg16` 数据库容器，CRM 容器通过 `postgres:5432` 连接数据库；该部署栈管理 `web`、`worker`、`email-sync`、`postgres` 和 `redis`，并把 Postgres 数据、Redis 数据和备份目录挂载到 `/opt/ai-agent-crm`。workflow 会把 `/opt/ai-agent-crm/postgres-data` 修正为 Postgres 容器需要的 `999:999` 权限，避免 `global/pg_filenode.map: Permission denied` 这类启动错误。完整说明见 [`docs/vps-github-actions-deploy.md`](docs/vps-github-actions-deploy.md)。
 
 每次 VPS 部署都会先清理旧的邮件验证结果，再把最近一次 `email:verify` 的完整 JSON 结果保存为 `/opt/ai-agent-crm/email-verify-last.json`，并把紧凑摘要保存为 `/opt/ai-agent-crm/email-verify-last-summary.txt`，便于回看 `liveTrafficReady`、blockers 和 manualActions。没有 `jq` 时可用 `npm run email:verify:report -- --file email-verify-last.json --fail-on-not-ready=false` 查看摘要。
 

@@ -244,7 +244,10 @@ jobs:
             SUDO="${VPS_SUDO:-sudo}"
           fi
           $SUDO mkdir -p "$DEPLOY_PATH/backups" "$DEPLOY_PATH/redis-data" "$DEPLOY_PATH/postgres-data"
-          $SUDO chown -R "$(id -u):$(id -g)" "$DEPLOY_PATH"
+          $SUDO chown "$(id -u):$(id -g)" "$DEPLOY_PATH"
+          $SUDO chown -R "$(id -u):$(id -g)" "$DEPLOY_PATH/backups" "$DEPLOY_PATH/redis-data"
+          $SUDO chown -R 999:999 "$DEPLOY_PATH/postgres-data"
+          $SUDO chmod 700 "$DEPLOY_PATH/postgres-data"
           REMOTE
 
       - name: Render VPS env file

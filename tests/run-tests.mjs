@@ -965,6 +965,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /VPS_PORT: \$\{\{ vars\.VPS_PORT \|\| secrets\.VPS_PORT \|\| '22' \}\}/);
   assert.match(workflow, /APP_BASE_URL_CONFIGURED: \$\{\{ vars\.APP_BASE_URL \|\| secrets\.APP_BASE_URL \}\}/);
   assert.match(workflow, /POSTGRES_PASSWORD/);
+  assert.match(workflow, /chown -R 999:999 "\$DEPLOY_PATH\/postgres-data"/);
+  assert.match(workflow, /chmod 700 "\$DEPLOY_PATH\/postgres-data"/);
   assert.match(workflow, /EMAIL_CONFIG_SECRET/);
   assert.match(workflow, /Weak email secret/);
   assert.match(workflow, /EMAIL_CONFIG_SECRET EMAIL_OAUTH_STATE_SECRET/);
@@ -1099,6 +1101,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(docs, /Postgres host/);
   assert.match(docs, /pgvector\/pgvector:pg16/);
   assert.match(docs, /postgres-data/);
+  assert.match(docs, /999:999/);
+  assert.match(docs, /pg_filenode\.map: Permission denied/);
   assert.match(docs, /5433:5432/);
   assert.match(readme, /GitHub Actions 部署到 VPS/);
   assert.match(readme, /GitHub Actions Secrets/);
