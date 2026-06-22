@@ -68,6 +68,24 @@ After rendering `vps.env`, GitHub Actions also runs `NODE_ENV=production node sc
 
 For a Postgres container that maps `5433:5432` on the VPS host, keep `POSTGRES_HOST=host.docker.internal` and `POSTGRES_PORT=5433`. The VPS compose file adds `host.docker.internal:host-gateway` so Linux containers can reach the host-mapped port.
 
+The configured `POSTGRES_USER` must have `USAGE` and `CREATE` on the target schema, because Prisma migrations create `_prisma_migrations` and CRM tables in `public`. If deployment fails with `permission denied for schema public`, connect to the target database as a Postgres administrator and run:
+
+```sql
+GRANT CONNECT ON DATABASE ai_agent_crm TO crm;
+GRANT USAGE, CREATE ON SCHEMA public TO crm;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO crm;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO crm;
+```
+
+For a dedicated fresh database, prefer creating or transferring ownership to the CRM user:
+
+```sql
+CREATE DATABASE ai_agent_crm OWNER crm;
+-- or, for an existing dedicated database:
+ALTER DATABASE ai_agent_crm OWNER TO crm;
+ALTER SCHEMA public OWNER TO crm;
+```
+
 Redis is still managed by this CRM Compose stack and is private to the Compose network. Only the web app is exposed through `APP_PORT`.
 
 ## What Gets Created On The VPS

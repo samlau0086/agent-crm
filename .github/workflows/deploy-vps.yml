@@ -373,6 +373,25 @@ jobs:
           postgres_host="$(grep -E '^POSTGRES_HOST=' .env | sed -E "s/^POSTGRES_HOST='?([^']*)'?.*/\1/")"
           postgres_port="$(grep -E '^POSTGRES_PORT=' .env | sed -E "s/^POSTGRES_PORT='?([^']*)'?.*/\1/")"
           docker run --rm --add-host=host.docker.internal:host-gateway alpine:3.20 sh -c "nc -z -w 5 '${postgres_host:-host.docker.internal}' '${postgres_port:-5433}'"
+          set -a
+          . ./.env
+          set +a
+          psql_url="${DATABASE_URL%%\?*}"
+          schema_name="$(printf '%s' "$DATABASE_URL" | sed -n "s/.*[?&]schema=\([^&]*\).*/\1/p")"
+          schema_name="${schema_name:-public}"
+          if ! printf '%s' "$schema_name" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            echo "::error title=Invalid Postgres schema::DATABASE_URL schema must be a simple PostgreSQL identifier"
+            exit 1
+          fi
+          schema_permission="$(docker run --rm --add-host=host.docker.internal:host-gateway -e PSQL_URL="$psql_url" -e CRM_SCHEMA="$schema_name" postgres:16-alpine sh -s <<'CHECK_SCHEMA'
+          set -eu
+          psql "$PSQL_URL" -v ON_ERROR_STOP=1 -tAc "select case when has_schema_privilege(current_user, '$CRM_SCHEMA', 'USAGE') and has_schema_privilege(current_user, '$CRM_SCHEMA', 'CREATE') then 'ok' else 'missing_schema_privilege' end"
+          CHECK_SCHEMA
+          )"
+          if [ "$schema_permission" != "ok" ]; then
+            echo "::error title=Postgres schema permission denied::POSTGRES_USER must have USAGE and CREATE on schema ${schema_name}. Connect as a Postgres admin and run: GRANT USAGE, CREATE ON SCHEMA ${schema_name} TO ${POSTGRES_USER};"
+            exit 1
+          fi
           docker compose pull
           dump_diagnostics() {
             echo "::group::docker compose ps"
