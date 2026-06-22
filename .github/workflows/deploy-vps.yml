@@ -100,8 +100,8 @@ jobs:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           APP_PORT_INPUT: ${{ inputs.app_port }}
           VPS_APP_PORT: ${{ vars.VPS_APP_PORT }}
-          POSTGRES_HOST: ${{ vars.POSTGRES_HOST || 'host.docker.internal' }}
-          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5433' }}
+          POSTGRES_HOST: ${{ vars.POSTGRES_HOST || 'postgres' }}
+          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5432' }}
           POSTGRES_DB: ${{ vars.POSTGRES_DB || 'ai_agent_crm' }}
           POSTGRES_USER: ${{ vars.POSTGRES_USER || 'crm' }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
@@ -198,7 +198,7 @@ jobs:
             missing=1
           fi
           if [ -z "$POSTGRES_HOST" ]; then
-            echo "::error title=Missing Postgres host::POSTGRES_HOST is required; use host.docker.internal for a Postgres container published on the VPS host"
+            echo "::error title=Missing Postgres host::POSTGRES_HOST is required; use postgres for the managed pgvector service or host.docker.internal for an external host-published Postgres"
             missing=1
           fi
           if ! [[ "$POSTGRES_PORT" =~ ^[0-9]+$ ]] || [ "$POSTGRES_PORT" -lt 1 ] || [ "$POSTGRES_PORT" -gt 65535 ]; then
@@ -243,7 +243,7 @@ jobs:
           else
             SUDO="${VPS_SUDO:-sudo}"
           fi
-          $SUDO mkdir -p "$DEPLOY_PATH/backups" "$DEPLOY_PATH/redis-data"
+          $SUDO mkdir -p "$DEPLOY_PATH/backups" "$DEPLOY_PATH/redis-data" "$DEPLOY_PATH/postgres-data"
           $SUDO chown -R "$(id -u):$(id -g)" "$DEPLOY_PATH"
           REMOTE
 
@@ -256,8 +256,8 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           APP_BASE_URL_CONFIGURED: ${{ vars.APP_BASE_URL || secrets.APP_BASE_URL }}
           ALLOW_INSECURE_APP_BASE_URL: ${{ vars.ALLOW_INSECURE_APP_BASE_URL || 'true' }}
-          POSTGRES_HOST: ${{ vars.POSTGRES_HOST || 'host.docker.internal' }}
-          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5433' }}
+          POSTGRES_HOST: ${{ vars.POSTGRES_HOST || 'postgres' }}
+          POSTGRES_PORT: ${{ vars.POSTGRES_PORT || '5432' }}
           POSTGRES_DB: ${{ vars.POSTGRES_DB || 'ai_agent_crm' }}
           POSTGRES_USER: ${{ vars.POSTGRES_USER || 'crm' }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
@@ -372,25 +372,27 @@ jobs:
           docker compose config >/dev/null
           postgres_host="$(grep -E '^POSTGRES_HOST=' .env | sed -E "s/^POSTGRES_HOST='?([^']*)'?.*/\1/")"
           postgres_port="$(grep -E '^POSTGRES_PORT=' .env | sed -E "s/^POSTGRES_PORT='?([^']*)'?.*/\1/")"
-          docker run --rm --add-host=host.docker.internal:host-gateway alpine:3.20 sh -c "nc -z -w 5 '${postgres_host:-host.docker.internal}' '${postgres_port:-5433}'"
-          set -a
-          . ./.env
-          set +a
-          psql_url="${DATABASE_URL%%\?*}"
-          schema_name="$(printf '%s' "$DATABASE_URL" | sed -n "s/.*[?&]schema=\([^&]*\).*/\1/p")"
-          schema_name="${schema_name:-public}"
-          if ! printf '%s' "$schema_name" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
-            echo "::error title=Invalid Postgres schema::DATABASE_URL schema must be a simple PostgreSQL identifier"
-            exit 1
-          fi
-          schema_permission="$(docker run --rm --add-host=host.docker.internal:host-gateway -e PSQL_URL="$psql_url" -e CRM_SCHEMA="$schema_name" postgres:16-alpine sh -s <<'CHECK_SCHEMA'
-          set -eu
-          psql "$PSQL_URL" -v ON_ERROR_STOP=1 -tAc "select case when has_schema_privilege(current_user, '$CRM_SCHEMA', 'USAGE') and has_schema_privilege(current_user, '$CRM_SCHEMA', 'CREATE') then 'ok' else 'missing_schema_privilege' end"
-          CHECK_SCHEMA
-          )"
-          if [ "$schema_permission" != "ok" ]; then
-            echo "::error title=Postgres schema permission denied::POSTGRES_USER must have USAGE and CREATE on schema ${schema_name}. Connect as a Postgres admin and run: GRANT USAGE, CREATE ON SCHEMA ${schema_name} TO ${POSTGRES_USER};"
-            exit 1
+          if [ "${postgres_host:-postgres}" != "postgres" ]; then
+            docker run --rm --add-host=host.docker.internal:host-gateway alpine:3.20 sh -c "nc -z -w 5 '${postgres_host}' '${postgres_port:-5432}'"
+            set -a
+            . ./.env
+            set +a
+            psql_url="${DATABASE_URL%%\?*}"
+            schema_name="$(printf '%s' "$DATABASE_URL" | sed -n "s/.*[?&]schema=\([^&]*\).*/\1/p")"
+            schema_name="${schema_name:-public}"
+            if ! printf '%s' "$schema_name" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+              echo "::error title=Invalid Postgres schema::DATABASE_URL schema must be a simple PostgreSQL identifier"
+              exit 1
+            fi
+            schema_permission="$(docker run --rm --add-host=host.docker.internal:host-gateway -e PSQL_URL="$psql_url" -e CRM_SCHEMA="$schema_name" postgres:16-alpine sh -s <<'CHECK_SCHEMA'
+            set -eu
+            psql "$PSQL_URL" -v ON_ERROR_STOP=1 -tAc "select case when has_schema_privilege(current_user, '$CRM_SCHEMA', 'USAGE') and has_schema_privilege(current_user, '$CRM_SCHEMA', 'CREATE') then 'ok' else 'missing_schema_privilege' end"
+            CHECK_SCHEMA
+            )"
+            if [ "$schema_permission" != "ok" ]; then
+              echo "::error title=Postgres schema permission denied::POSTGRES_USER must have USAGE and CREATE on schema ${schema_name}. Connect as a Postgres admin and run: GRANT USAGE, CREATE ON SCHEMA ${schema_name} TO ${POSTGRES_USER};"
+              exit 1
+            fi
           fi
           docker compose pull
           dump_diagnostics() {
@@ -411,6 +413,9 @@ jobs:
             echo "::endgroup::"
             echo "::group::redis logs"
             docker compose logs --no-color --tail=80 redis || true
+            echo "::endgroup::"
+            echo "::group::postgres logs"
+            docker compose logs --no-color --tail=120 postgres || true
             echo "::endgroup::"
           }
           set +e

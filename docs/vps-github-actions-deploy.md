@@ -7,8 +7,7 @@ This workflow deploys the CRM to one VPS with Docker Compose. It builds the appl
 - Docker Engine with the Compose plugin installed.
 - An SSH user that can write to `/opt/ai-agent-crm`, or can run passwordless `sudo`.
 - Inbound firewall access to the chosen app port, for example `3000`.
-- A separate Postgres service reachable from CRM containers. For your current VPS layout, the existing Postgres container is published as `5433:5432` on the host, so CRM connects to `host.docker.internal:5433`.
-- Enough disk space under `/opt/ai-agent-crm` for Redis data and backups.
+- Enough disk space under `/opt/ai-agent-crm` for Postgres, Redis data, and backups.
 
 ## Required GitHub Secrets
 
@@ -34,8 +33,8 @@ Optional repository variables:
 - `VPS_PORT`: SSH port, default `22`; this variable takes precedence over the legacy secret.
 - `APP_BASE_URL`: external CRM origin, for example `https://crm.example.com`; this variable takes precedence over the legacy secret. If omitted, the workflow uses `http://VPS_HOST:APP_PORT`.
 - `ALLOW_INSECURE_APP_BASE_URL`: defaults to `true` only for direct `http://ip:port` deployments. Set it to `false` when using HTTPS.
-- `POSTGRES_HOST`, default `host.docker.internal`.
-- `POSTGRES_PORT`, default `5433`.
+- `POSTGRES_HOST`, default `postgres` for the managed pgvector service.
+- `POSTGRES_PORT`, default `5432`.
 - `POSTGRES_DB`, `POSTGRES_USER`, `SEED_ON_EMPTY`, `EMAIL_DELIVERY_MODE`, `EMAIL_SYNC_INTERVAL_MS`, `EMAIL_SYNC_LIMIT`, `EMAIL_SYNC_USER_ID`, `EMAIL_VERIFY_USER_ID`, `EMAIL_SEND_CLAIM_TIMEOUT_MS`, `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_TIMEOUT_MS`, `GMAIL_OAUTH_SCOPE`, `OUTLOOK_OAUTH_SCOPE`.
 - `RUN_EMAIL_CONNECTION_TESTS`, `RUN_EMAIL_AI_PROVIDER_TEST`, `RUN_EMAIL_SMOKE_TEST`: set to `true` to make every automatic deployment run the corresponding `email:verify` gate.
 - `REQUIRE_LIVE_EMAIL_READINESS`: set to `true` to fail deployment unless `email:verify --require-live-readiness` reports `readiness.liveTrafficReady=true`. This verifier mode automatically runs real mailbox connection checks, AI provider generation checks, and smoke checks, so the three individual `RUN_EMAIL_*` variables are not required when this is enabled.
@@ -59,14 +58,16 @@ After rendering `vps.env`, GitHub Actions also runs `NODE_ENV=production node sc
 
 - Web host port: `APP_PORT`, supplied by manual workflow input `app_port`, repository variable `VPS_APP_PORT`, or default `3000`.
 - SSH port: repository variable `VPS_PORT`, GitHub secret `VPS_PORT`, or default `22`.
-- Postgres host from CRM containers: repository variable `POSTGRES_HOST`, default `host.docker.internal`.
-- Postgres port from CRM containers: repository variable `POSTGRES_PORT`, default `5433`.
+- Postgres host from CRM containers: repository variable `POSTGRES_HOST`, default `postgres`.
+- Postgres port from CRM containers: repository variable `POSTGRES_PORT`, default `5432`.
 - Postgres user: repository variable `POSTGRES_USER`, default `crm`.
 - Postgres database: repository variable `POSTGRES_DB`, default `ai_agent_crm`.
 - Postgres password: GitHub secret `POSTGRES_PASSWORD`.
 - Generated database URL: `postgresql://POSTGRES_USER:POSTGRES_PASSWORD@POSTGRES_HOST:POSTGRES_PORT/POSTGRES_DB?schema=public`, with user, password, and database name URL-encoded by the workflow.
 
-For a Postgres container that maps `5433:5432` on the VPS host, keep `POSTGRES_HOST=host.docker.internal` and `POSTGRES_PORT=5433`. The VPS compose file adds `host.docker.internal:host-gateway` so Linux containers can reach the host-mapped port.
+By default the VPS Compose stack starts a dedicated `pgvector/pgvector:pg16` container named `postgres`, stores data under `/opt/ai-agent-crm/postgres-data`, and keeps the database private to the Compose network. This avoids cross-container ownership drift and leaves the database ready for future vector search features.
+
+If you intentionally keep an external Postgres container mapped as `5433:5432` on the VPS host, set `POSTGRES_HOST=host.docker.internal` and `POSTGRES_PORT=5433`. The VPS compose file keeps `host.docker.internal:host-gateway` so Linux containers can reach a host-published external database.
 
 The configured `POSTGRES_USER` must have `USAGE` and `CREATE` on the target schema, because Prisma migrations create `_prisma_migrations` and CRM tables in `public`. If deployment fails with `permission denied for schema public`, connect to the target database as a Postgres administrator and run:
 
@@ -86,7 +87,7 @@ ALTER DATABASE ai_agent_crm OWNER TO crm;
 ALTER SCHEMA public OWNER TO crm;
 ```
 
-Redis is still managed by this CRM Compose stack and is private to the Compose network. Only the web app is exposed through `APP_PORT`.
+Postgres and Redis are managed by this CRM Compose stack and are private to the Compose network. Only the web app is exposed through `APP_PORT`.
 
 ## What Gets Created On The VPS
 
@@ -94,10 +95,11 @@ Redis is still managed by this CRM Compose stack and is private to the Compose n
 
 - `docker-compose.yml`: uploaded from `deploy/docker-compose.vps.yml`.
 - `.env`: rendered by the workflow from GitHub secrets and variables.
+- `postgres-data/`: bound to the managed `pgvector/pgvector:pg16` database.
 - `redis-data/`: bound to Redis append-only data.
 - `backups/`: mounted into the web container at `/app/backups`.
 
-Only the web app port is exposed by this stack. The existing external Postgres container keeps its own lifecycle and storage.
+Only the web app port is exposed by this stack.
 
 ## Deploy
 

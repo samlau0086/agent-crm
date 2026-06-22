@@ -137,8 +137,8 @@ GitHub Actions Variables：
 - `VPS_APP_PORT`：VPS 对外暴露的 Web 端口，例如 `3000`。手动运行 workflow 时填写的 `app_port` 会覆盖它。
 - `VPS_PORT`：SSH 端口，默认 `22`；会优先覆盖同名 Secret。
 - `APP_BASE_URL`：CRM 对外访问 origin，例如 `https://crm.example.com`；会优先覆盖同名 Secret。未设置时 workflow 会使用 `http://VPS_HOST:APP_PORT`。
-- `POSTGRES_HOST`：默认 `host.docker.internal`。你的外部 Postgres 容器映射为 `5433:5432` 时保持默认即可。
-- `POSTGRES_PORT`：默认 `5433`。
+- `POSTGRES_HOST`：默认 `postgres`，使用部署栈内置的 `pgvector/pgvector:pg16` 数据库容器。若你坚持使用外部 Postgres 容器并映射为 `5433:5432`，可改为 `host.docker.internal`。
+- `POSTGRES_PORT`：默认 `5432`；外部 Postgres 容器映射为 `5433:5432` 时改为 `5433`。
 - `POSTGRES_USER`：默认 `crm`。
 - `POSTGRES_DB`：默认 `ai_agent_crm`。
 - `ALLOW_INSECURE_APP_BASE_URL`：直接用 `http://ip:port` 部署时可设为 `true`；HTTPS 域名部署建议为 `false`。
@@ -149,7 +149,7 @@ GitHub Actions Variables：
 
 部署前 workflow 会先校验配置：邮件密钥必须不是 placeholder、长度至少 16 字符且两条值不同；启用 AI provider 验证或 live readiness 时必须设置 `AI_API_KEY`；Gmail/Outlook OAuth client id 和 secret 必须成对出现；`EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SEND_CLAIM_TIMEOUT_MS` 和 live readiness 组合也会在 SSH 前校验。
 
-当前 VPS 部署假设 Postgres 由另一个容器管理，并在 VPS 宿主机上映射 `5433:5432`。CRM 容器通过 `host.docker.internal:5433` 连接数据库；该部署栈只管理 `web`、`worker`、`email-sync` 和 `redis`，并把 Redis 数据和备份目录挂载到 `/opt/ai-agent-crm`。完整说明见 [`docs/vps-github-actions-deploy.md`](docs/vps-github-actions-deploy.md)。
+当前 VPS 部署默认创建专用 `pgvector/pgvector:pg16` 数据库容器，CRM 容器通过 `postgres:5432` 连接数据库；该部署栈管理 `web`、`worker`、`email-sync`、`postgres` 和 `redis`，并把 Postgres 数据、Redis 数据和备份目录挂载到 `/opt/ai-agent-crm`。完整说明见 [`docs/vps-github-actions-deploy.md`](docs/vps-github-actions-deploy.md)。
 
 每次 VPS 部署都会先清理旧的邮件验证结果，再把最近一次 `email:verify` 的完整 JSON 结果保存为 `/opt/ai-agent-crm/email-verify-last.json`，并把紧凑摘要保存为 `/opt/ai-agent-crm/email-verify-last-summary.txt`，便于回看 `liveTrafficReady`、blockers 和 manualActions。没有 `jq` 时可用 `npm run email:verify:report -- --file email-verify-last.json --fail-on-not-ready=false` 查看摘要。
 

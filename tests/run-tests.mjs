@@ -983,8 +983,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /POSTGRES_HOST is required/);
   assert.match(workflow, /POSTGRES_PORT must be an integer between 1 and 65535/);
   assert.match(workflow, /Invalid Postgres identifier/);
-  assert.match(workflow, /POSTGRES_HOST: \$\{\{ vars\.POSTGRES_HOST \|\| 'host\.docker\.internal' \}\}/);
-  assert.match(workflow, /POSTGRES_PORT: \$\{\{ vars\.POSTGRES_PORT \|\| '5433' \}\}/);
+  assert.match(workflow, /POSTGRES_HOST: \$\{\{ vars\.POSTGRES_HOST \|\| 'postgres' \}\}/);
+  assert.match(workflow, /POSTGRES_PORT: \$\{\{ vars\.POSTGRES_PORT \|\| '5432' \}\}/);
   assert.match(workflow, /POSTGRES_USER: \$\{\{ vars\.POSTGRES_USER \|\| 'crm' \}\}/);
   assert.match(workflow, /POSTGRES_DB: \$\{\{ vars\.POSTGRES_DB \|\| 'ai_agent_crm' \}\}/);
   assert.match(workflow, /SEED_ON_EMPTY: \$\{\{ vars\.SEED_ON_EMPTY \|\| 'false' \}\}/);
@@ -1015,8 +1015,10 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /NODE_ENV: production/);
   assert.match(workflow, /node scripts\/validate-env\.mjs --env-file vps\.env/);
   assert.match(workflow, /scp .*deploy\/docker-compose\.vps\.yml/);
+  assert.match(workflow, /if \[ "\$\{postgres_host:-postgres\}" != "postgres" \]; then/);
   assert.match(workflow, /docker run --rm --add-host=host\.docker\.internal:host-gateway alpine:3\.20/);
   assert.match(workflow, /nc -z -w 5/);
+  assert.match(workflow, /Postgres schema permission denied/);
   assert.match(workflow, /docker compose pull/);
   assert.match(workflow, /docker compose up -d --remove-orphans/);
   assert.match(workflow, /curl --fail --retry 30/);
@@ -1047,20 +1049,27 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.equal((compose.match(/^\s+OUTLOOK_OAUTH_TOKEN_URL:/gm) ?? []).length, 3);
   assert.match(compose, /"\$\{APP_PORT:-3000\}:3000"/);
   assert.match(compose, /host\.docker\.internal:host-gateway/);
+  assert.match(compose, /^\s+postgres:\s*$/m);
+  assert.match(compose, /image: pgvector\/pgvector:pg16/);
+  assert.match(compose, /POSTGRES_DB: \$\{POSTGRES_DB:-ai_agent_crm\}/);
+  assert.match(compose, /POSTGRES_USER: \$\{POSTGRES_USER:-crm\}/);
+  assert.match(compose, /POSTGRES_PASSWORD: \$\{POSTGRES_PASSWORD:\?Set POSTGRES_PASSWORD\}/);
+  assert.match(compose, /pg_isready -U/);
   assert.match(compose, /\$\{CRM_DATA_DIR:-\/opt\/ai-agent-crm\}\/redis-data:\/data/);
+  assert.match(compose, /\$\{CRM_DATA_DIR:-\/opt\/ai-agent-crm\}\/postgres-data:\/var\/lib\/postgresql\/data/);
   assert.match(compose, /\$\{CRM_DATA_DIR:-\/opt\/ai-agent-crm\}\/backups:\/app\/backups/);
-  assert.doesNotMatch(compose, /^\s+postgres:\s*$/m);
   assert.doesNotMatch(compose, /build:\s*\n/);
 
   assert.match(envExample, /CRM_DATA_DIR=\/opt\/ai-agent-crm/);
   assert.match(envExample, /APP_PORT=3000/);
-  assert.match(envExample, /POSTGRES_HOST=host\.docker\.internal/);
-  assert.match(envExample, /POSTGRES_PORT=5433/);
+  assert.match(envExample, /pgvector\/pgvector:pg16/);
+  assert.match(envExample, /POSTGRES_HOST=postgres/);
+  assert.match(envExample, /POSTGRES_PORT=5432/);
   assert.match(envExample, /SEED_ON_EMPTY=false/);
   assert.match(envExample, /EMAIL_VERIFY_USER_ID=user-admin/);
   assert.match(envExample, /POSTGRES_PASSWORD=replace-with-database-password/);
   assert.match(envExample, /URL-encode POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB/);
-  assert.match(envExample, /DATABASE_URL=postgresql:\/\/crm:replace-with-url-encoded-database-password@host\.docker\.internal:5433\/ai_agent_crm\?schema=public/);
+  assert.match(envExample, /DATABASE_URL=postgresql:\/\/crm:replace-with-url-encoded-database-password@postgres:5432\/ai_agent_crm\?schema=public/);
   assert.match(docs, /\/opt\/ai-agent-crm/);
   assert.match(docs, /VPS_APP_PORT/);
   assert.match(docs, /APP_BASE_URL/);
@@ -1088,7 +1097,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(docs, /old JSON file is not left behind/);
   assert.match(docs, /scripts\/email-verify\.ts/);
   assert.match(docs, /Postgres host/);
-  assert.match(docs, /host\.docker\.internal:5433/);
+  assert.match(docs, /pgvector\/pgvector:pg16/);
+  assert.match(docs, /postgres-data/);
   assert.match(docs, /5433:5432/);
   assert.match(readme, /GitHub Actions 部署到 VPS/);
   assert.match(readme, /GitHub Actions Secrets/);
@@ -1118,8 +1128,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(readme, /email-verify-last\.json/);
   assert.match(readme, /email-verify-last-summary\.txt/);
   assert.match(readme, /run_email_connections/);
-  assert.match(readme, /host\.docker\.internal:5433/);
-  assert.match(readme, /5433:5432/);
+  assert.match(readme, /pgvector\/pgvector:pg16/);
+  assert.match(readme, /postgres:5432/);
   assert.equal(packageJson.scripts["deploy:verify:dry-run"], "node scripts/deploy-verify.mjs --dry-run");
   assert.equal(
     packageJson.scripts["deploy:verify:live-email"],
