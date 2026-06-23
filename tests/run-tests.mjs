@@ -1459,10 +1459,15 @@ await run("record create and detail panels render full width in the main content
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /recordPanelMode !== "closed"[\s\S]*<aside className="detail-panel record-drawer">/);
+  assert.match(source, /recordPanelMode === "closed" && \([\s\S]*<section className="table-shell">/);
+  assert.match(source, /recordPanelMode !== "closed" && \([\s\S]*<aside className="detail-panel record-drawer">/);
+  assert.match(source, /className="drawer-header record-panel-header"/);
+  assert.match(source, /data-testid="record-panel-back"[\s\S]*<ChevronLeft size=\{16\} \/>[\s\S]*返回列表/);
+  assert.doesNotMatch(source, /aria-label="关闭面板"[\s\S]{0,120}setRecordPanelMode\("closed"\)/);
   assert.match(styles, /\.workspace-grid\.has-drawer \{\s*grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(styles, /\.record-drawer \{[\s\S]*order: -1;[\s\S]*position: static;[\s\S]*max-height: none;[\s\S]*overflow: visible;/);
   assert.match(styles, /\.record-drawer \.drawer-header \{\s*position: static;/);
+  assert.match(styles, /\.record-panel-header \{[\s\S]*justify-content: flex-start;/);
   assert.doesNotMatch(styles, /\.workspace-grid\.has-drawer \{[\s\S]{0,120}minmax\(360px, 440px\)/);
   assert.doesNotMatch(styles, /\.record-drawer \{\s*position: sticky/);
 });

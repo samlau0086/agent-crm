@@ -245,6 +245,15 @@ button {
   position: static;
 }
 
+.record-panel-header {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.record-panel-context {
+  min-width: 0;
+}
+
 .drawer-header {
   position: sticky;
   top: -16px;

@@ -1964,6 +1964,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
         {showRecordWorkspace && activeObject && (
           <div className={`workspace-grid ${recordPanelMode !== "closed" ? "has-drawer" : ""}`}>
+            {recordPanelMode === "closed" && (
             <section className="table-shell">
               {activeViews.length > 0 && (
                 <div className="tabs" style={{ padding: "12px 12px 0" }}>
@@ -2092,17 +2093,19 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               </div>
               {filteredRecords.length === 0 && <div className="empty-state">当前对象下还没有记录</div>}
             </section>
+            )}
 
             {recordPanelMode !== "closed" && (
             <aside className="detail-panel record-drawer">
-              <div className="drawer-header">
-                <div>
+              <div className="drawer-header record-panel-header">
+                <button className="secondary-button" data-testid="record-panel-back" type="button" onClick={() => setRecordPanelMode("closed")}>
+                  <ChevronLeft size={16} />
+                  返回列表
+                </button>
+                <div className="record-panel-context">
                   <div className="subtle">当前对象</div>
                   <h2 className="page-title" style={{ fontSize: 18 }}>{activeObject.label}</h2>
                 </div>
-                <button className="icon-button" type="button" aria-label="关闭面板" title="关闭面板" onClick={() => setRecordPanelMode("closed")}>
-                  <XCircle size={18} />
-                </button>
               </div>
 
               {recordPanelMode === "create" && (
