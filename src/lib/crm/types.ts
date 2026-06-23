@@ -141,9 +141,13 @@ export interface EmailConnectionConfig {
   smtpPort?: number;
   smtpSecure?: boolean;
   smtpStartTls?: boolean;
+  syncProtocol?: "imap" | "pop3";
   imapHost?: string;
   imapPort?: number;
   imapSecure?: boolean;
+  pop3Host?: string;
+  pop3Port?: number;
+  pop3Secure?: boolean;
   username?: string;
   password?: string;
   mailbox?: string;

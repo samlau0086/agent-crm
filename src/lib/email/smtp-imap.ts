@@ -19,6 +19,7 @@ export interface InboundEmail {
 export interface MailConnectionTestResult {
   smtp?: "ok" | "skipped";
   imap?: "ok" | "skipped";
+  pop3?: "ok" | "skipped";
   oauth?: "ok" | "skipped";
   oauthAccountEmail?: string;
 }
@@ -43,7 +44,7 @@ export function resolveSmtpTransport(config: EmailConnectionConfig): SmtpTranspo
   };
 }
 
-export async function testMailConnection(config: EmailConnectionConfig, options: { smtp?: boolean; imap?: boolean } = {}): Promise<MailConnectionTestResult> {
+export async function testMailConnection(config: EmailConnectionConfig, options: { smtp?: boolean; sync?: boolean; imap?: boolean } = {}): Promise<MailConnectionTestResult> {
   const result: MailConnectionTestResult = {};
   if (options.smtp !== false) {
     assertSmtpConfig(config);
@@ -62,7 +63,9 @@ export async function testMailConnection(config: EmailConnectionConfig, options:
     result.smtp = "skipped";
   }
 
-  if (options.imap !== false) {
+  const shouldTestSync = options.sync ?? options.imap ?? true;
+  const syncProtocol = resolveSyncProtocol(config);
+  if (shouldTestSync && syncProtocol === "imap") {
     assertImapConfig(config);
     const imap = await ImapClient.connect(config);
     try {
@@ -73,8 +76,23 @@ export async function testMailConnection(config: EmailConnectionConfig, options:
     } finally {
       imap.close();
     }
+    result.pop3 = "skipped";
+  } else if (shouldTestSync && syncProtocol === "pop3") {
+    assertPop3Config(config);
+    const pop3 = await Pop3Client.connect(config);
+    try {
+      await pop3.command(`USER ${config.username ?? ""}`);
+      await pop3.command(`PASS ${config.password ?? ""}`);
+      await pop3.command("STAT");
+      await pop3.command("QUIT").catch(() => undefined);
+      result.pop3 = "ok";
+    } finally {
+      pop3.close();
+    }
+    result.imap = "skipped";
   } else {
     result.imap = "skipped";
+    result.pop3 = "skipped";
   }
   return result;
 }
@@ -123,12 +141,48 @@ export async function fetchRecentImapEmails(config: EmailConnectionConfig, limit
   }
 }
 
+export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
+  return resolveSyncProtocol(config) === "pop3" ? fetchRecentPop3Emails(config, limit) : fetchRecentImapEmails(config, limit);
+}
+
+export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
+  assertPop3Config(config);
+  const client = await Pop3Client.connect(config);
+  try {
+    await client.command(`USER ${config.username ?? ""}`);
+    await client.command(`PASS ${config.password ?? ""}`);
+    const list = await client.command("LIST");
+    const messageNumbers = parsePop3List(list).slice(-limit);
+    const uidlMap = await client.command("UIDL").then(parsePop3Uidl).catch(() => new Map<string, string>());
+    const messages: InboundEmail[] = [];
+    for (const messageNumber of messageNumbers) {
+      const raw = await client.command(`RETR ${messageNumber}`);
+      const parsed = parsePop3Message(raw);
+      if (parsed) {
+        messages.push(withPop3FallbackExternalMessageId(parsed, uidlMap.get(messageNumber) ?? messageNumber));
+      }
+    }
+    await client.command("QUIT").catch(() => undefined);
+    return messages;
+  } finally {
+    client.close();
+  }
+}
+
 export function buildImapFallbackExternalMessageId(mailbox: string, uid: string): string {
   return `imap:${sanitizeImapExternalIdPart(mailbox)}:${sanitizeImapExternalIdPart(uid)}`;
 }
 
 export function withImapFallbackExternalMessageId(message: InboundEmail, mailbox: string, uid: string): InboundEmail {
   return message.externalMessageId ? message : { ...message, externalMessageId: buildImapFallbackExternalMessageId(mailbox, uid) };
+}
+
+export function buildPop3FallbackExternalMessageId(uid: string): string {
+  return `pop3:${sanitizeImapExternalIdPart(uid)}`;
+}
+
+export function withPop3FallbackExternalMessageId(message: InboundEmail, uid: string): InboundEmail {
+  return message.externalMessageId ? message : { ...message, externalMessageId: buildPop3FallbackExternalMessageId(uid) };
 }
 
 class SmtpClient {
@@ -238,6 +292,53 @@ class ImapClient {
 
   close(): void {
     this.socket.destroy();
+  }
+}
+
+class Pop3Client {
+  private readonly socket: net.Socket;
+  private buffer = "";
+
+  private constructor(socket: net.Socket) {
+    this.socket = socket;
+    this.socket.setEncoding("utf8");
+    this.socket.on("data", (chunk) => {
+      this.buffer += chunk;
+    });
+  }
+
+  static async connect(config: EmailConnectionConfig): Promise<Pop3Client> {
+    const port = config.pop3Port ?? (config.pop3Secure === false ? 110 : 995);
+    const socket = await connectSocket(config.pop3Host!, port, config.pop3Secure !== false);
+    const client = new Pop3Client(socket);
+    await client.readResponse(false);
+    return client;
+  }
+
+  async command(command: string): Promise<string> {
+    const isMultiline = /^(LIST|UIDL|RETR)\b/i.test(command);
+    this.socket.write(`${command}\r\n`);
+    return this.readResponse(isMultiline);
+  }
+
+  close(): void {
+    this.socket.destroy();
+  }
+
+  private async readResponse(multiline: boolean): Promise<string> {
+    const response = await readUntil(
+      this.socket,
+      () => (multiline ? /\r?\n\.\r?\n$/.test(this.buffer) : /\r?\n$/.test(this.buffer)),
+      () => this.buffer
+    );
+    this.buffer = "";
+    if (response.startsWith("-ERR")) {
+      throw new Error(`POP3 command failed: ${response.slice(0, 300)}`);
+    }
+    if (!response.startsWith("+OK")) {
+      throw new Error(`POP3 returned an invalid response: ${response.slice(0, 300)}`);
+    }
+    return response;
   }
 }
 
@@ -392,6 +493,34 @@ function parseUidSearch(response: string): string[] {
 function parseFetchedMessage(response: string): InboundEmail | undefined {
   const messageText = response.match(/\{\\?\d+\}\r?\n([\s\S]*?)\r?\n\)/)?.[1] ?? response;
   return parseRawEmailMessage(messageText);
+}
+
+function parsePop3List(response: string): string[] {
+  return stripPop3MultilineResponse(response)
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/)[0])
+    .filter((value) => /^\d+$/.test(value));
+}
+
+function parsePop3Uidl(response: string): Map<string, string> {
+  return new Map(
+    stripPop3MultilineResponse(response)
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/))
+      .filter((parts) => parts.length >= 2 && /^\d+$/.test(parts[0]))
+      .map(([messageNumber, uid]) => [messageNumber, uid])
+  );
+}
+
+function parsePop3Message(response: string): InboundEmail | undefined {
+  return parseRawEmailMessage(stripPop3MultilineResponse(response));
+}
+
+function stripPop3MultilineResponse(response: string): string {
+  return response
+    .replace(/^\+OK[^\r\n]*(?:\r?\n)?/, "")
+    .replace(/\r?\n\.\r?\n?$/, "")
+    .replace(/(^|\r?\n)\.\./g, "$1.");
 }
 
 export function parseRawEmailMessage(messageText: string): InboundEmail | undefined {
@@ -632,4 +761,14 @@ function assertImapConfig(config: EmailConnectionConfig): void {
   if (!config.imapHost || !config.username || !config.password) {
     throw new Error("IMAP host, username, and password are required");
   }
+}
+
+function assertPop3Config(config: EmailConnectionConfig): void {
+  if (!config.pop3Host || !config.username || !config.password) {
+    throw new Error("POP3 host, username, and password are required");
+  }
+}
+
+function resolveSyncProtocol(config: EmailConnectionConfig): "imap" | "pop3" {
+  return config.syncProtocol === "pop3" ? "pop3" : "imap";
 }

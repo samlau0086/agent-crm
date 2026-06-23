@@ -56,7 +56,7 @@ import { createEmailProviderAdapter } from "../src/lib/email/provider.ts";
 import { getEmailProviderCapability, getEmailProviderSetupVisibility, getOAuthEmailProviderCapability, isOAuthEmailProvider, listEmailProviderCapabilities, oauthEmailProviderKeys } from "../src/lib/email/providers.ts";
 import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
-import { buildImapFallbackExternalMessageId, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
+import { buildImapFallbackExternalMessageId, buildPop3FallbackExternalMessageId, fetchRecentPop3Emails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId, withPop3FallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
 import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
 import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
 import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.ts";
@@ -176,6 +176,60 @@ function startFakeSmtpServer() {
       });
     });
   });
+}
+
+function startFakePop3Server(messages) {
+  const server = createServer((socket) => {
+    let commandBuffer = "";
+    socket.setEncoding("utf8");
+    socket.write("+OK fake-pop3.local ready\r\n");
+    socket.on("data", (chunk) => {
+      commandBuffer += chunk;
+      const lines = commandBuffer.split(/\r\n/);
+      commandBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const [command, arg] = line.split(/\s+/, 2);
+        if (!command) continue;
+        if (/^(USER|PASS)$/i.test(command)) {
+          socket.write("+OK\r\n");
+        } else if (/^STAT$/i.test(command)) {
+          const size = messages.reduce((sum, message) => sum + message.raw.length, 0);
+          socket.write(`+OK ${messages.length} ${size}\r\n`);
+        } else if (/^LIST$/i.test(command)) {
+          socket.write(["+OK scan listing", ...messages.map((message, index) => `${index + 1} ${message.raw.length}`), "."].join("\r\n") + "\r\n");
+        } else if (/^UIDL$/i.test(command)) {
+          socket.write(["+OK unique-id listing", ...messages.map((message, index) => `${index + 1} ${message.uid}`), "."].join("\r\n") + "\r\n");
+        } else if (/^RETR$/i.test(command)) {
+          const message = messages[Number(arg) - 1];
+          if (!message) {
+            socket.write("-ERR no such message\r\n");
+          } else {
+            socket.write(`+OK ${message.raw.length} octets\r\n${dotStuffPop3Message(message.raw)}\r\n.\r\n`);
+          }
+        } else if (/^QUIT$/i.test(command)) {
+          socket.write("+OK bye\r\n");
+          socket.end();
+        } else {
+          socket.write("-ERR unsupported\r\n");
+        }
+      }
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      resolve({
+        port: address.port,
+        close: () => new Promise((closeResolve, closeReject) => server.close((error) => (error ? closeReject(error) : closeResolve())))
+      });
+    });
+  });
+}
+
+function dotStuffPop3Message(raw) {
+  return raw.replace(/\r?\n/g, "\r\n").replace(/(^|\r\n)\./g, "$1..");
 }
 
 await run("field definition rejects invalid key", () => {
@@ -1320,13 +1374,19 @@ await run("email send route rejects live unconfigured accounts before queueing",
 
 await run("email workspace exposes sync-all control backed by the sync-all api", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const providerSource = readFileSync("src/lib/email/provider.ts", "utf8");
   assert.match(source, /async function syncAllEmailAccounts\(\)/);
   assert.match(source, /\/api\/email\/sync-all/);
   assert.match(source, /data-testid="email-sync-all"/);
+  assert.match(source, /data-testid="email-account-sync-protocol"/);
+  assert.match(source, /data-testid="email-account-pop3-host"/);
+  assert.match(source, /POP3 \$\{result\.result\.pop3 \?\? "skipped"\}/);
   assert.match(source, /onSyncAllAccounts/);
   assert.match(source, /account\.status === "active" && account\.syncEnabled && account\.connectionConfigured && capability\.supportsSync/);
   assert.match(source, /disabled=\{disabled \|\| !account\.syncEnabled \|\| !account\.connectionConfigured \|\| !capability\.supportsSync \|\| account\.status !== "active"\}/);
   assert.match(source, /account\.status === "active" && account\.sendEnabled && account\.connectionConfigured && getEmailProviderCapability\(account\.provider\)\.supportsSend/);
+  assert.match(providerSource, /fetchRecentMailboxEmails\(config, syncLimit\)/);
+  assert.doesNotMatch(providerSource, /fetchRecentImapEmails\(config, syncLimit\)/);
 });
 
 await run("crm workspace routes modules through stable paths", () => {
@@ -1654,6 +1714,7 @@ await run("email verification dry run describes diagnostics and manual mailbox c
   assert.match(script, /sk-\[redacted\]/);
   assert.match(script, /value\.smtp === "ok" \|\| value\.smtp === "skipped"/);
   assert.match(script, /value\.imap === "ok" \|\| value\.imap === "skipped"/);
+  assert.match(script, /value\.pop3 === "ok" \|\| value\.pop3 === "skipped"/);
   assert.match(script, /value\.oauth === "ok" \|\| value\.oauth === "skipped"/);
   assert.match(script, /oauthAccountEmail\.trim\(\)/);
   assert.doesNotMatch(script, /result:\s*result\.result/);
@@ -8291,6 +8352,20 @@ await run("email send sync and ai schemas validate bounded payloads", () => {
     }).connectionConfig?.smtpStartTls,
     true
   );
+  const pop3Connection = emailAccountUpdateSchema.parse({
+    connectionConfig: {
+      smtpHost: "smtp.example.com",
+      smtpPort: 587,
+      syncProtocol: "pop3",
+      pop3Host: "pop.example.com",
+      pop3Port: 995,
+      pop3Secure: true,
+      username: "sales@example.com",
+      password: "app-password"
+    }
+  }).connectionConfig;
+  assert.equal(pop3Connection?.syncProtocol, "pop3");
+  assert.equal(pop3Connection?.pop3Host, "pop.example.com");
   assert.equal(
     emailSendSchema.parse({
       accountId: "email-account",
@@ -8618,6 +8693,10 @@ await run("email connection config is encrypted and requires a stable secret", (
       imapHost: "imap.example.com",
       imapPort: 993,
       imapSecure: true,
+      syncProtocol: "pop3",
+      pop3Host: "pop.example.com",
+      pop3Port: 995,
+      pop3Secure: true,
       username: "sales@example.com",
       password: "app-password",
       mailbox: "INBOX"
@@ -8628,6 +8707,9 @@ await run("email connection config is encrypted and requires a stable secret", (
   assert.equal(encrypted.includes("app-password"), false);
   const decrypted = decryptEmailConnectionConfig(encrypted, secret);
   assert.equal(decrypted.smtpHost, "smtp.example.com");
+  assert.equal(decrypted.syncProtocol, "pop3");
+  assert.equal(decrypted.pop3Host, "pop.example.com");
+  assert.equal(decrypted.pop3Port, 995);
   assert.equal(decrypted.password, "app-password");
   assert.throws(() => encryptEmailConnectionConfig({ username: "sales@example.com", password: "secret" }, "short"), /at least 16 characters/);
 });
@@ -8743,6 +8825,66 @@ await run("imap sync fallback message ids prevent duplicate imports without mess
 
   const withProviderId = withImapFallbackExternalMessageId({ ...parsed, externalMessageId: "<provider@example.com>" }, "INBOX", "43");
   assert.equal(withProviderId.externalMessageId, "<provider@example.com>");
+});
+
+await run("pop3 sync fallback message ids prevent duplicate imports without message-id headers", () => {
+  const parsed = parseRawEmailMessage(
+    [
+      "From: Buyer <buyer@example.com>",
+      "To: Sales <sales@example.com>",
+      "Subject: POP3 missing message id",
+      "",
+      "This POP3 provider omitted Message-ID."
+    ].join("\r\n")
+  );
+  assert.ok(parsed);
+  assert.equal(buildPop3FallbackExternalMessageId("UID 42/ABC"), "pop3:uid_42_abc");
+  assert.equal(withPop3FallbackExternalMessageId(parsed, "UID 42/ABC").externalMessageId, "pop3:uid_42_abc");
+  assert.equal(withPop3FallbackExternalMessageId({ ...parsed, externalMessageId: "<provider@example.com>" }, "UID 43").externalMessageId, "<provider@example.com>");
+});
+
+await run("pop3 provider fetches recent raw messages through the mailbox adapter", async () => {
+  const rawMessages = [
+    {
+      uid: "pop3-uid-1",
+      raw: [
+        "From: Buyer <buyer@example.com>",
+        "To: Sales <sales@example.com>",
+        "Subject: Older POP3",
+        "",
+        "Older message."
+      ].join("\r\n")
+    },
+    {
+      uid: "pop3-uid-2",
+      raw: [
+        "Message-ID: <pop3-message@example.com>",
+        "From: Buyer <buyer@example.com>",
+        "To: Sales <sales@example.com>",
+        "Subject: Newer POP3",
+        "Date: Sat, 20 Jun 2026 10:30:00 +0000",
+        "",
+        ".Newer message with a leading dot."
+      ].join("\r\n")
+    }
+  ];
+  const pop3 = await startFakePop3Server(rawMessages);
+  try {
+    const messages = await fetchRecentPop3Emails({
+      syncProtocol: "pop3",
+      pop3Host: "127.0.0.1",
+      pop3Port: pop3.port,
+      pop3Secure: false,
+      username: "sales@example.com",
+      password: "password"
+    }, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].externalMessageId, "<pop3-message@example.com>");
+    assert.equal(messages[0].subject, "Newer POP3");
+    assert.equal(messages[0].bodyText, ".Newer message with a leading dot.");
+  } finally {
+    await pop3.close();
+  }
 });
 
 await run("imap raw email parser ignores malformed date headers", () => {

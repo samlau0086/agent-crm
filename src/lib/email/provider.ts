@@ -3,7 +3,7 @@ import type { EmailAccount, EmailAttachment, EmailMessage, RequestContext } from
 import type { PrismaCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { assertEmailDeliveryModeAllowed, getEmailDeliveryMode } from "@/lib/email/delivery-mode";
-import { fetchRecentImapEmails, sendSmtpEmail, testMailConnection, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
+import { fetchRecentMailboxEmails, sendSmtpEmail, testMailConnection, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
 import { assertOAuthConfig, isOAuthProvider } from "@/lib/email/oauth";
 import { fetchRecentOAuthEmails, sendOAuthEmail, testOAuthConnection, type OAuthMailApiOptions } from "@/lib/email/oauth-api";
 import { assertOutboundEmailRecipientPolicy } from "@/lib/email/outbound-policy";
@@ -184,13 +184,13 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
 
     try {
-      const inbound = await fetchRecentImapEmails(config, syncLimit);
+      const inbound = await fetchRecentMailboxEmails(config, syncLimit);
       const importResult = await this.importInboundMessages(context, account, inbound);
       const result = await this.repository.syncEmailAccount(context, accountId);
       await this.repository.markEmailAccountConnectionError(context, accountId, null);
       return { ...result, ...importResult, hasMore: inbound.length >= syncLimit, status: "synced" };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "IMAP sync failed";
+      const message = error instanceof Error ? error.message : "Mailbox sync failed";
       await this.repository.markEmailAccountConnectionError(context, accountId, message);
       throw new Error(message);
     }
@@ -212,7 +212,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         const result = await testOAuthConnection(account.provider, config, this.options.oauth);
         await this.repository.updateEmailAccountConnectionConfig(context, accountId, result.config);
         const updated = await this.repository.markEmailAccountConnectionError(context, accountId, null);
-        return { account: updated, result: { oauth: "ok", smtp: "skipped", imap: "skipped", oauthAccountEmail: result.accountEmail } };
+        return { account: updated, result: { oauth: "ok", smtp: "skipped", imap: "skipped", pop3: "skipped", oauthAccountEmail: result.accountEmail } };
       } catch (error) {
         const message = error instanceof Error ? error.message : "OAuth connection test failed";
         const updated = await this.repository.markEmailAccountConnectionError(context, accountId, message);
@@ -222,7 +222,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     try {
       const result = await testMailConnection(config, {
         smtp: account.sendEnabled,
-        imap: account.syncEnabled
+        sync: account.syncEnabled
       });
       const updated = await this.repository.markEmailAccountConnectionError(context, accountId, null);
       return { account: updated, result };

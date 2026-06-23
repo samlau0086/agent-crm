@@ -261,6 +261,7 @@ interface EmailConnectionVerificationResult {
 interface SafeEmailConnectionTestResult {
   smtp?: "ok" | "skipped";
   imap?: "ok" | "skipped";
+  pop3?: "ok" | "skipped";
   oauth?: "ok" | "skipped";
   oauthAccountEmail?: string;
 }
@@ -338,6 +339,7 @@ function sanitizeConnectionTestResult(result: unknown): SafeEmailConnectionTestR
   return {
     ...(value.smtp === "ok" || value.smtp === "skipped" ? { smtp: value.smtp } : {}),
     ...(value.imap === "ok" || value.imap === "skipped" ? { imap: value.imap } : {}),
+    ...(value.pop3 === "ok" || value.pop3 === "skipped" ? { pop3: value.pop3 } : {}),
     ...(value.oauth === "ok" || value.oauth === "skipped" ? { oauth: value.oauth } : {}),
     ...(typeof value.oauthAccountEmail === "string" && value.oauthAccountEmail.trim() ? { oauthAccountEmail: value.oauthAccountEmail.trim() } : {})
   };
