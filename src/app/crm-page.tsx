@@ -45,7 +45,7 @@ export async function CrmPage({ moduleSegments = [] }: CrmPageProps) {
   const initialObjectKey = route.objectKey;
   const initialRecordList = await repository.queryRecords(context, initialObjectKey, { page: 1, pageSize: 50 });
   const referenceObjectKeys = getReferenceObjectKeys(fields, initialObjectKey);
-  for (const objectKey of ["products", "quotes"]) {
+  for (const objectKey of ["products", "quotes", "currencies"]) {
     if (objects.some((object) => object.key === objectKey)) {
       referenceObjectKeys.add(objectKey);
     }

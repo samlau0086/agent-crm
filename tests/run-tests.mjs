@@ -64,6 +64,7 @@ import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-schedu
 import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.ts";
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
+import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
 import { parseRecordListQuery } from "../src/lib/crm/record-query.ts";
@@ -6156,6 +6157,10 @@ await run("product and quote seed metadata supports company and contact associat
 
   assert.equal(objects.some((object) => object.key === "products" && object.isSystem), true);
   assert.equal(objects.some((object) => object.key === "quotes" && object.isSystem), true);
+  assert.equal(objects.some((object) => object.key === "currencies" && object.isSystem), true);
+  assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "mainImageUrl"), true);
+  assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "unitPriceCurrency" && field.required), true);
+  assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "quoteCurrency" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "companyId" && field.type === "reference" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "contactId" && field.type === "reference" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "paymentTerm" && field.type === "select" && field.required), true);
@@ -6166,12 +6171,21 @@ await run("product and quote seed metadata supports company and contact associat
   const quote = store.getRecord(context, "quotes", "quote-acme-platform");
   assert.equal(quote.data.companyId, "company-acme");
   assert.equal(quote.data.contactId, "contact-lin");
+  assert.equal(quote.data.quoteCurrency, "CNY");
   assert.equal(quote.data.paymentTerm, "net_30");
   assert.equal(quote.data.lineItems[0].productId, "product-ai-sales-standard");
+  assert.equal(quote.data.lineItems[0].imageUrl, "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM");
+  assert.equal(quote.data.lineItems[0].currency, "CNY");
   assert.equal(quote.data.fees[0].name, "实施服务费");
+  assert.equal(quote.data.fees[0].currency, "CNY");
   assert.equal(quote.data.totalAmount, 3499);
 
   const product = store.getRecord(context, "products", "product-ai-sales-standard");
+  assert.equal(product.data.mainImageUrl, "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM");
+  assert.equal(product.data.unitPriceCurrency, "CNY");
+  const currencyDefinitions = getCurrencyDefinitions(store.listRecords(context, "currencies"));
+  assert.equal(currencyDefinitions.some((currency) => currency.code === "CNY" && currency.isBase), true);
+  assert.equal(currencyDefinitions.some((currency) => currency.code === "USD" && currency.rateToBase === 7.2), true);
   const related = findRelatedRecords(product, store.snapshot().records, fields, relations);
   assert.equal(related.some((item) => item.record.id === "quote-acme-platform"), true);
 
@@ -6181,6 +6195,7 @@ await run("product and quote seed metadata supports company and contact associat
       quoteNumber: "Q-2026-002",
       companyId: "company-acme",
       contactId: "contact-lin",
+      quoteCurrency: "USD",
       paymentTerm: "net_60",
       lineItems: [
         {
@@ -6188,15 +6203,17 @@ await run("product and quote seed metadata supports company and contact associat
           productId: "product-ai-sales-standard",
           productName: "AI 销售助手标准版",
           quantity: 2,
-          unitPrice: 2999,
+          unitPrice: 416.53,
+          currency: "USD",
           description: "扩容席位"
         }
       ],
-      fees: [{ id: "fee-shipping", name: "保险费", amount: 120 }],
+      fees: [{ id: "fee-shipping", name: "保险费", amount: 16.67, currency: "USD" }],
       status: "draft"
     }
   });
-  assert.equal(createdQuote.data.totalAmount, 6118);
+  assert.equal(createdQuote.data.quoteCurrency, "USD");
+  assert.equal(createdQuote.data.totalAmount, 849.73);
   assert.throws(
     () =>
       store.createRecord(context, "quotes", {

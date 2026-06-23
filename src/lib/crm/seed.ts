@@ -116,6 +116,18 @@ export const seedData: CrmSnapshot = {
       updatedAt: now
     },
     {
+      id: "obj-currency",
+      workspaceId: defaultWorkspaceId,
+      key: "currencies",
+      label: "货币",
+      pluralLabel: "货币",
+      description: "报价和产品价格使用的币种与汇率",
+      icon: "BadgeDollarSign",
+      isSystem: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
       id: "obj-partner",
       workspaceId: defaultWorkspaceId,
       key: "partners",
@@ -138,17 +150,26 @@ export const seedData: CrmSnapshot = {
     { id: "field-deal-close-date", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "closeDate", label: "预计成交日", type: "date", required: false, unique: false, isSystem: true, position: 2 },
     { id: "field-deal-company", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "companyId", label: "关联公司", type: "reference", required: false, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 3 },
     { id: "field-product-sku", workspaceId: defaultWorkspaceId, objectKey: "products", key: "sku", label: "SKU", type: "text", required: true, unique: true, isSystem: true, position: 1 },
-    { id: "field-product-unit-price", workspaceId: defaultWorkspaceId, objectKey: "products", key: "unitPrice", label: "单价", type: "currency", required: true, unique: false, isSystem: true, position: 2 },
-    { id: "field-product-description", workspaceId: defaultWorkspaceId, objectKey: "products", key: "description", label: "默认描述", type: "textarea", required: false, unique: false, isSystem: true, position: 3 },
-    { id: "field-product-billing-cycle", workspaceId: defaultWorkspaceId, objectKey: "products", key: "billingCycle", label: "计费周期", type: "select", required: false, unique: false, options: [{ label: "一次性", value: "one_time" }, { label: "月付", value: "monthly" }, { label: "年付", value: "annual" }], isSystem: true, position: 4 },
-    { id: "field-product-active", workspaceId: defaultWorkspaceId, objectKey: "products", key: "active", label: "启用", type: "boolean", required: false, unique: false, defaultValue: true, isSystem: true, position: 5 },
+    { id: "field-product-main-image", workspaceId: defaultWorkspaceId, objectKey: "products", key: "mainImageUrl", label: "主图 URL", type: "text", required: false, unique: false, isSystem: true, position: 2 },
+    { id: "field-product-unit-price", workspaceId: defaultWorkspaceId, objectKey: "products", key: "unitPrice", label: "单价", type: "currency", required: true, unique: false, isSystem: true, position: 3 },
+    { id: "field-product-unit-price-currency", workspaceId: defaultWorkspaceId, objectKey: "products", key: "unitPriceCurrency", label: "单价币种", type: "text", required: true, unique: false, defaultValue: "CNY", isSystem: true, position: 4 },
+    { id: "field-product-description", workspaceId: defaultWorkspaceId, objectKey: "products", key: "description", label: "默认描述", type: "textarea", required: false, unique: false, isSystem: true, position: 5 },
+    { id: "field-product-billing-cycle", workspaceId: defaultWorkspaceId, objectKey: "products", key: "billingCycle", label: "计费周期", type: "select", required: false, unique: false, options: [{ label: "一次性", value: "one_time" }, { label: "月付", value: "monthly" }, { label: "年付", value: "annual" }], isSystem: true, position: 6 },
+    { id: "field-product-active", workspaceId: defaultWorkspaceId, objectKey: "products", key: "active", label: "启用", type: "boolean", required: false, unique: false, defaultValue: true, isSystem: true, position: 7 },
     { id: "field-quote-number", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "quoteNumber", label: "报价编号", type: "text", required: true, unique: true, isSystem: true, position: 1 },
     { id: "field-quote-company", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "companyId", label: "关联公司", type: "reference", required: true, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 2 },
     { id: "field-quote-contact", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "contactId", label: "关联联系人", type: "reference", required: true, unique: false, options: [{ label: "联系人", value: "contacts" }], isSystem: true, position: 3 },
-    { id: "field-quote-payment-term", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "paymentTerm", label: "Payment term", type: "select", required: true, unique: false, options: [{ label: "见票即付", value: "due_on_receipt" }, { label: "Net 15", value: "net_15" }, { label: "Net 30", value: "net_30" }, { label: "Net 60", value: "net_60" }], defaultValue: "net_30", isSystem: true, position: 4 },
-    { id: "field-quote-total-amount", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "totalAmount", label: "报价金额", type: "currency", required: true, unique: false, isSystem: true, position: 5 },
-    { id: "field-quote-status", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "status", label: "状态", type: "select", required: true, unique: false, options: [{ label: "草稿", value: "draft" }, { label: "已发送", value: "sent" }, { label: "已接受", value: "accepted" }, { label: "已拒绝", value: "declined" }, { label: "已过期", value: "expired" }], defaultValue: "draft", isSystem: true, position: 6 },
-    { id: "field-quote-valid-until", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "validUntil", label: "有效期至", type: "date", required: false, unique: false, isSystem: true, position: 7 },
+    { id: "field-quote-currency", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "quoteCurrency", label: "报价币种", type: "text", required: true, unique: false, defaultValue: "CNY", isSystem: true, position: 4 },
+    { id: "field-quote-payment-term", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "paymentTerm", label: "Payment term", type: "select", required: true, unique: false, options: [{ label: "见票即付", value: "due_on_receipt" }, { label: "Net 15", value: "net_15" }, { label: "Net 30", value: "net_30" }, { label: "Net 60", value: "net_60" }], defaultValue: "net_30", isSystem: true, position: 5 },
+    { id: "field-quote-total-amount", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "totalAmount", label: "报价金额", type: "currency", required: true, unique: false, isSystem: true, position: 6 },
+    { id: "field-quote-status", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "status", label: "状态", type: "select", required: true, unique: false, options: [{ label: "草稿", value: "draft" }, { label: "已发送", value: "sent" }, { label: "已接受", value: "accepted" }, { label: "已拒绝", value: "declined" }, { label: "已过期", value: "expired" }], defaultValue: "draft", isSystem: true, position: 7 },
+    { id: "field-quote-valid-until", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "validUntil", label: "有效期至", type: "date", required: false, unique: false, isSystem: true, position: 8 },
+    { id: "field-currency-code", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "code", label: "币种代码", type: "text", required: true, unique: true, isSystem: true, position: 1 },
+    { id: "field-currency-label", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "label", label: "名称", type: "text", required: true, unique: false, isSystem: true, position: 2 },
+    { id: "field-currency-symbol", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "symbol", label: "符号", type: "text", required: false, unique: false, isSystem: true, position: 3 },
+    { id: "field-currency-rate", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "rateToBase", label: "对基准汇率", type: "number", required: true, unique: false, defaultValue: 1, isSystem: true, position: 4 },
+    { id: "field-currency-base", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "isBase", label: "基准币种", type: "boolean", required: false, unique: false, defaultValue: false, isSystem: true, position: 5 },
+    { id: "field-currency-active", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "active", label: "启用", type: "boolean", required: false, unique: false, defaultValue: true, isSystem: true, position: 6 },
     { id: "field-partner-tier", workspaceId: defaultWorkspaceId, objectKey: "partners", key: "tier", label: "伙伴等级", type: "select", required: true, unique: false, options: [{ label: "金牌", value: "gold" }, { label: "银牌", value: "silver" }], isSystem: false, position: 1 }
   ],
   relationDefinitions: [
@@ -160,6 +181,36 @@ export const seedData: CrmSnapshot = {
     { id: "rel-partner-companies", workspaceId: defaultWorkspaceId, fromObjectKey: "partners", toObjectKey: "companies", key: "partner_companies", label: "伙伴客户", cardinality: "many-to-many" }
   ],
   records: [
+    {
+      id: "currency-cny",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "currencies",
+      title: "CNY · 人民币",
+      ownerId: adminUserId,
+      data: { code: "CNY", label: "人民币", symbol: "¥", rateToBase: 1, isBase: true, active: true },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "currency-usd",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "currencies",
+      title: "USD · 美元",
+      ownerId: adminUserId,
+      data: { code: "USD", label: "美元", symbol: "$", rateToBase: 7.2, isBase: false, active: true },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "currency-eur",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "currencies",
+      title: "EUR · 欧元",
+      ownerId: adminUserId,
+      data: { code: "EUR", label: "欧元", symbol: "€", rateToBase: 7.8, isBase: false, active: true },
+      createdAt: now,
+      updatedAt: now
+    },
     {
       id: "company-acme",
       workspaceId: defaultWorkspaceId,
@@ -197,7 +248,7 @@ export const seedData: CrmSnapshot = {
       objectKey: "products",
       title: "AI 销售助手标准版",
       ownerId: salesUserId,
-      data: { sku: "SKU-AI-SALES-STD", unitPrice: 2999, description: "年度订阅，包含销售邮件 AI 辅助、CRM 时间线和基础自动化。", billingCycle: "annual", active: true },
+      data: { sku: "SKU-AI-SALES-STD", mainImageUrl: "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM", unitPrice: 2999, unitPriceCurrency: "CNY", description: "年度订阅，包含销售邮件 AI 辅助、CRM 时间线和基础自动化。", billingCycle: "annual", active: true },
       createdAt: now,
       updatedAt: now
     },
@@ -211,6 +262,7 @@ export const seedData: CrmSnapshot = {
         quoteNumber: "Q-2026-001",
         companyId: "company-acme",
         contactId: "contact-lin",
+        quoteCurrency: "CNY",
         paymentTerm: "net_30",
         lineItems: [
           {
@@ -218,12 +270,14 @@ export const seedData: CrmSnapshot = {
             productId: "product-ai-sales-standard",
             productName: "AI 销售助手标准版",
             sku: "SKU-AI-SALES-STD",
+            imageUrl: "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM",
             description: "年度订阅，包含销售邮件 AI 辅助、CRM 时间线和基础自动化。",
             quantity: 1,
-            unitPrice: 2999
+            unitPrice: 2999,
+            currency: "CNY"
           }
         ],
-        fees: [{ id: "fee-implementation", name: "实施服务费", description: "首次部署和基础配置", amount: 500 }],
+        fees: [{ id: "fee-implementation", name: "实施服务费", description: "首次部署和基础配置", amount: 500, currency: "CNY" }],
         totalAmount: 3499,
         status: "draft",
         validUntil: "2026-07-31"
@@ -298,7 +352,8 @@ export const seedData: CrmSnapshot = {
     { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "email", "phone", "companyId"], isDefault: true },
     { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "domain", "industry"], isDefault: true },
     { id: "view-deals-default", workspaceId: defaultWorkspaceId, objectKey: "deals", name: "销售管道", columns: ["title", "amount", "closeDate", "companyId"], sort: { field: "amount", direction: "desc" }, isDefault: true },
-    { id: "view-products-default", workspaceId: defaultWorkspaceId, objectKey: "products", name: "全部产品", columns: ["title", "sku", "unitPrice", "billingCycle", "active"], sort: { field: "title", direction: "asc" }, isDefault: true },
-    { id: "view-quotes-default", workspaceId: defaultWorkspaceId, objectKey: "quotes", name: "全部报价", columns: ["title", "quoteNumber", "companyId", "contactId", "paymentTerm", "totalAmount", "status"], sort: { field: "updatedAt", direction: "desc" }, isDefault: true }
+    { id: "view-products-default", workspaceId: defaultWorkspaceId, objectKey: "products", name: "全部产品", columns: ["title", "mainImageUrl", "sku", "unitPrice", "unitPriceCurrency", "billingCycle", "active"], sort: { field: "title", direction: "asc" }, isDefault: true },
+    { id: "view-quotes-default", workspaceId: defaultWorkspaceId, objectKey: "quotes", name: "全部报价", columns: ["title", "quoteNumber", "companyId", "contactId", "quoteCurrency", "paymentTerm", "totalAmount", "status"], sort: { field: "updatedAt", direction: "desc" }, isDefault: true },
+    { id: "view-currencies-default", workspaceId: defaultWorkspaceId, objectKey: "currencies", name: "全部货币", columns: ["title", "code", "label", "symbol", "rateToBase", "isBase", "active"], sort: { field: "code", direction: "asc" }, isDefault: true }
   ]
 };

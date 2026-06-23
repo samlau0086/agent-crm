@@ -2806,7 +2806,7 @@ export class PrismaCrmRepository {
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
     const existing = await this.listRecordsForValidation(context, objectKey);
-    const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data) : input.data;
+    const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data, await this.listRecordsForValidation(context, "currencies")) : input.data;
     if (objectKey === "quotes") {
       validateQuoteRecordData(data, await this.listRecordsForValidation(context, "products"));
     }
@@ -2849,7 +2849,7 @@ export class PrismaCrmRepository {
     requirePermission(context, "crm.write");
     const current = await this.getRecord(context, objectKey, recordId);
     const mergedData = { ...current.data, ...(patch.data ?? {}) };
-    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData) : mergedData;
+    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData, await this.listRecordsForValidation(context, "currencies")) : mergedData;
     const fields = await this.listFieldDefinitions(context, objectKey);
     if (objectKey === "quotes") {
       validateQuoteRecordData(nextData, await this.listRecordsForValidation(context, "products"));

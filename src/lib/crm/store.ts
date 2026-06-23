@@ -1642,7 +1642,7 @@ export class CrmStore {
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
     const existing = this.listRecordsForValidation(context, objectKey);
-    const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data) : input.data;
+    const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data, this.listRecordsForValidation(context, "currencies")) : input.data;
     if (objectKey === "quotes") {
       validateQuoteRecordData(data, this.listRecordsForValidation(context, "products"));
     }
@@ -1683,7 +1683,7 @@ export class CrmStore {
     }
     const previousStageKey = record.stageKey;
     const mergedData = { ...record.data, ...(patch.data ?? {}) };
-    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData) : mergedData;
+    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData, this.listRecordsForValidation(context, "currencies")) : mergedData;
     const fields = this.listFieldDefinitions(context, objectKey);
     if (objectKey === "quotes") {
       validateQuoteRecordData(nextData, this.listRecordsForValidation(context, "products"));

@@ -4,6 +4,7 @@ import { CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Pl
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { permissionCatalog } from "@/lib/auth/permissions";
+import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmRecord, CsvImportJob, FieldDefinition, ImportJobQueueSummary, ObjectDefinition, Permission, Pipeline, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
@@ -105,6 +106,15 @@ type WebhookDraft = {
   active: boolean;
 };
 
+type CurrencyDraft = {
+  code: string;
+  label: string;
+  symbol: string;
+  rateToBase: string;
+  isBase: boolean;
+  active: boolean;
+};
+
 const availableWebhookEvents: WebhookEvent[] = ["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"];
 
 const fieldTypes: FieldDefinition["type"][] = [
@@ -144,6 +154,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [apiKeyDraft, setApiKeyDraft] = useState<ApiKeyDraft>(emptyApiKeyDraft());
   const [createdApiKeyToken, setCreatedApiKeyToken] = useState<string | null>(null);
   const [webhookDraft, setWebhookDraft] = useState<WebhookDraft>(emptyWebhookDraft());
+  const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
+  const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
   const [createdWebhookSecret, setCreatedWebhookSecret] = useState<string | null>(null);
   const [webhookDeliveries, setWebhookDeliveries] = useState<WebhookDelivery[]>([]);
   const [backupFiles, setBackupFiles] = useState<BackupFile[]>(props.backupFiles);
@@ -165,6 +177,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const selectedRole = props.roles.find((role) => role.id === selectedRoleId);
   const selectedUser = props.users.find((user) => user.id === selectedUserId);
   const selectedTeam = props.teams.find((team) => team.id === selectedTeamId);
+  const currencyRecords = useMemo(() => props.records.filter((record) => record.objectKey === "currencies"), [props.records]);
+  const selectedCurrency = currencyRecords.find((currency) => currency.id === selectedCurrencyId);
   const objectFields = useMemo(
     () => props.fields.filter((field) => field.objectKey === fieldDraft.objectKey).sort((a, b) => a.position - b.position),
     [fieldDraft.objectKey, props.fields]
@@ -231,6 +245,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   useEffect(() => {
     setWebhookDeliveryWebhookId((current) => (props.webhooks.some((webhook) => webhook.id === current) ? current : props.webhooks[0]?.id ?? ""));
   }, [props.webhooks]);
+
+  useEffect(() => {
+    setSelectedCurrencyId((current) => (currencyRecords.some((currency) => currency.id === current) ? current : currencyRecords[0]?.id ?? ""));
+  }, [currencyRecords]);
+
+  useEffect(() => {
+    setCurrencyDraft(selectedCurrency ? currencyDraftFromRecord(selectedCurrency) : emptyCurrencyDraft());
+  }, [selectedCurrency]);
 
   useEffect(() => {
     if (!canManage || !webhookDeliveryWebhookId) {
@@ -397,6 +419,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   function resetWebhookForm() {
     setWebhookDraft(emptyWebhookDraft());
     setCreatedWebhookSecret(null);
+  }
+
+  function resetCurrencyForm() {
+    setSelectedCurrencyId("");
+    setCurrencyDraft(emptyCurrencyDraft());
   }
 
   function runAction(action: () => Promise<void>) {
@@ -744,6 +771,64 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setMessage(`Webhook retry ${retried.status}: ${retried.responseStatus ?? retried.errorMessage ?? "no response"}`);
   }
 
+  async function saveCurrency() {
+    const code = normalizeCurrencyCode(currencyDraft.code);
+    const label = currencyDraft.label.trim();
+    const rateToBase = currencyDraft.isBase ? 1 : Number(currencyDraft.rateToBase);
+    if (!code || !label || !Number.isFinite(rateToBase) || rateToBase <= 0) {
+      throw new Error("币种代码、名称和汇率必须有效");
+    }
+
+    if (currencyDraft.isBase) {
+      await Promise.all(
+        currencyRecords
+          .filter((currency) => currency.id !== selectedCurrency?.id && currency.data.isBase === true)
+          .map((currency) =>
+            fetchJson(`/api/records/currencies/${currency.id}`, {
+              method: "PATCH",
+              body: { data: { ...currency.data, isBase: false, rateToBase: Number(currency.data.rateToBase) || 1 } }
+            })
+          )
+      );
+    }
+
+    const data = {
+      code,
+      label,
+      symbol: currencyDraft.symbol.trim(),
+      rateToBase,
+      isBase: currencyDraft.isBase,
+      active: currencyDraft.active
+    };
+
+    if (selectedCurrency) {
+      await fetchJson(`/api/records/currencies/${selectedCurrency.id}`, {
+        method: "PATCH",
+        body: { title: `${code} · ${label}`, data }
+      });
+      setMessage(`已更新币种 ${code}`);
+      return;
+    }
+
+    await fetchJson("/api/records/currencies", {
+      method: "POST",
+      body: { title: `${code} · ${label}`, data }
+    });
+    setMessage(`已创建币种 ${code}`);
+    resetCurrencyForm();
+  }
+
+  async function deleteCurrency() {
+    if (!selectedCurrency) return;
+    if (selectedCurrency.data.isBase === true) {
+      throw new Error("不能删除基准币种，请先指定其他基准币种");
+    }
+    if (!shouldProceedWithDangerousAction(`确定删除币种“${selectedCurrency.title}”？已有产品或报价引用该币种时会保留原代码。`)) return;
+    await fetchJson(`/api/records/currencies/${selectedCurrency.id}`, { method: "DELETE" });
+    setMessage(`已删除币种 ${selectedCurrency.title}`);
+    resetCurrencyForm();
+  }
+
   async function createBackup() {
     const result = await fetchJson<BackupRunResult>("/api/backups", { method: "POST" });
     const files = await fetchJson<BackupFile[]>("/api/backups", { method: "GET" });
@@ -806,6 +891,19 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       />
 
       <PermissionMatrix roles={props.roles} currentRoleId={props.role.id} />
+
+      <CurrencyAdminPanel
+        currencies={currencyRecords}
+        draft={currencyDraft}
+        selectedCurrencyId={selectedCurrencyId}
+        selectedCurrency={selectedCurrency}
+        isPending={isPending}
+        onSelectCurrency={setSelectedCurrencyId}
+        onDraftChange={(patch) => setCurrencyDraft((current) => ({ ...current, ...patch }))}
+        onNew={resetCurrencyForm}
+        onSave={() => runAction(saveCurrency)}
+        onDelete={() => runAction(deleteCurrency)}
+      />
 
       <ApiKeyAdminPanel
         apiKeys={props.apiKeys}
@@ -1908,6 +2006,122 @@ function UserTeamAdminPanel({
   );
 }
 
+function CurrencyAdminPanel({
+  currencies,
+  draft,
+  selectedCurrencyId,
+  selectedCurrency,
+  isPending,
+  onSelectCurrency,
+  onDraftChange,
+  onNew,
+  onSave,
+  onDelete
+}: {
+  currencies: CrmRecord[];
+  draft: CurrencyDraft;
+  selectedCurrencyId: string;
+  selectedCurrency?: CrmRecord;
+  isPending: boolean;
+  onSelectCurrency: (currencyId: string) => void;
+  onDraftChange: (patch: Partial<CurrencyDraft>) => void;
+  onNew: () => void;
+  onSave: () => void;
+  onDelete: () => void;
+}) {
+  const activeCurrencies = getCurrencyDefinitions(currencies);
+  const baseCurrency = activeCurrencies.find((currency) => currency.isBase);
+
+  return (
+    <section className="settings-panel" data-testid="settings-currencies">
+      <div className="settings-panel-header">
+        <div>
+          <h2 className="page-title">货币与汇率</h2>
+          <div className="subtle">配置可用于产品单价和报价换算的币种；汇率含义为 1 单位该币种等于多少基准币种。</div>
+        </div>
+        <button className="secondary-button" type="button" onClick={onNew} disabled={isPending}>
+          <Plus size={16} />
+          新建币种
+        </button>
+      </div>
+
+      <div className="settings-editor-grid">
+        <div className="settings-list">
+          {currencies.map((currency) => (
+            <button
+              className={`settings-item settings-select ${selectedCurrencyId === currency.id ? "selected" : ""}`}
+              key={currency.id}
+              type="button"
+              onClick={() => onSelectCurrency(currency.id)}
+            >
+              <div className="stage-header">
+                <strong>{String(currency.data.code ?? currency.title)}</strong>
+                <span className={currency.data.active === false ? "danger-badge" : "badge"}>{currency.data.active === false ? "停用" : currency.data.isBase ? "基准" : "启用"}</span>
+              </div>
+              <div className="subtle">{String(currency.data.label ?? currency.title)} · 汇率 {String(currency.data.rateToBase ?? "-")}</div>
+            </button>
+          ))}
+          {currencies.length === 0 ? <div className="empty-state">还没有币种配置</div> : null}
+        </div>
+
+        <div className="settings-editor">
+          <div className="form-grid">
+            <label>
+              <span className="subtle">币种代码</span>
+              <input className="input" data-testid="settings-currency-code" value={draft.code} onChange={(event) => onDraftChange({ code: event.target.value.toUpperCase() })} placeholder="CNY" />
+            </label>
+            <label>
+              <span className="subtle">名称</span>
+              <input className="input" data-testid="settings-currency-label" value={draft.label} onChange={(event) => onDraftChange({ label: event.target.value })} placeholder="人民币" />
+            </label>
+            <label>
+              <span className="subtle">符号</span>
+              <input className="input" data-testid="settings-currency-symbol" value={draft.symbol} onChange={(event) => onDraftChange({ symbol: event.target.value })} placeholder="¥" />
+            </label>
+            <label>
+              <span className="subtle">对基准汇率</span>
+              <input
+                className="input"
+                data-testid="settings-currency-rate"
+                min="0.000001"
+                step="0.000001"
+                type="number"
+                value={draft.isBase ? "1" : draft.rateToBase}
+                onChange={(event) => onDraftChange({ rateToBase: event.target.value })}
+                disabled={draft.isBase}
+              />
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={draft.isBase} onChange={(event) => onDraftChange({ isBase: event.target.checked, rateToBase: event.target.checked ? "1" : draft.rateToBase })} />
+              设为基准币种
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={draft.active} onChange={(event) => onDraftChange({ active: event.target.checked })} />
+              启用
+            </label>
+          </div>
+
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <button className="primary-button" data-testid="settings-save-currency" type="button" onClick={onSave} disabled={isPending || !draft.code.trim() || !draft.label.trim()}>
+              <Save size={16} />
+              {selectedCurrency ? "保存币种" : "创建币种"}
+            </button>
+            {selectedCurrency ? (
+              <button className="danger-button" type="button" onClick={onDelete} disabled={isPending || selectedCurrency.data.isBase === true}>
+                <Trash2 size={16} />
+                删除币种
+              </button>
+            ) : null}
+          </div>
+          <div className="subtle" style={{ marginTop: 10 }}>
+            当前基准币种：{baseCurrency ? `${baseCurrency.label} (${baseCurrency.code})` : "未指定"}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ApiKeyAdminPanel({
   apiKeys,
   users,
@@ -2863,6 +3077,28 @@ function emptyWebhookDraft(): WebhookDraft {
     url: "",
     events: ["webhook.test"],
     active: true
+  };
+}
+
+function emptyCurrencyDraft(): CurrencyDraft {
+  return {
+    code: "",
+    label: "",
+    symbol: "",
+    rateToBase: "1",
+    isBase: false,
+    active: true
+  };
+}
+
+function currencyDraftFromRecord(record: CrmRecord): CurrencyDraft {
+  return {
+    code: normalizeCurrencyCode(record.data.code || record.title),
+    label: typeof record.data.label === "string" ? record.data.label : record.title,
+    symbol: typeof record.data.symbol === "string" ? record.data.symbol : "",
+    rateToBase: String(record.data.rateToBase ?? "1"),
+    isBase: record.data.isBase === true,
+    active: record.data.active !== false
   };
 }
 

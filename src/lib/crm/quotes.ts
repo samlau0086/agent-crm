@@ -1,13 +1,16 @@
 import type { CrmRecord } from "@/lib/crm/types";
+import { convertCurrencyAmount, defaultCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode, roundCurrency } from "@/lib/crm/currencies";
 
 export interface QuoteLineItem {
   id: string;
   productId: string;
   productName: string;
   sku?: string;
+  imageUrl?: string;
   description?: string;
   quantity: number;
   unitPrice: number;
+  currency: string;
 }
 
 export interface QuoteFee {
@@ -15,6 +18,7 @@ export interface QuoteFee {
   name: string;
   description?: string;
   amount: number;
+  currency: string;
 }
 
 export interface QuoteTotals {
@@ -26,20 +30,22 @@ export interface QuoteTotals {
 const MAX_QUOTE_LINE_ITEMS = 100;
 const MAX_QUOTE_FEES = 50;
 
-export function normalizeQuoteRecordData(data: Record<string, unknown>): Record<string, unknown> {
-  const lineItems = normalizeQuoteLineItems(data.lineItems);
-  const fees = normalizeQuoteFees(data.fees);
-  const totals = calculateQuoteTotals(lineItems, fees);
+export function normalizeQuoteRecordData(data: Record<string, unknown>, currencyRecords: CrmRecord[] = []): Record<string, unknown> {
+  const quoteCurrency = normalizeCurrencyCode(data.quoteCurrency) || defaultCurrencyCode;
+  const lineItems = normalizeQuoteLineItems(data.lineItems, quoteCurrency);
+  const fees = normalizeQuoteFees(data.fees, quoteCurrency);
+  const totals = calculateQuoteTotals(lineItems, fees, quoteCurrency, currencyRecords);
 
   return {
     ...data,
+    quoteCurrency,
     lineItems,
     fees,
     totalAmount: totals.totalAmount
   };
 }
 
-export function normalizeQuoteLineItems(value: unknown): QuoteLineItem[] {
+export function normalizeQuoteLineItems(value: unknown, fallbackCurrency = defaultCurrencyCode): QuoteLineItem[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -51,14 +57,16 @@ export function normalizeQuoteLineItems(value: unknown): QuoteLineItem[] {
       productId: normalizeString(record.productId),
       productName: normalizeString(record.productName),
       sku: normalizeOptionalString(record.sku),
+      imageUrl: normalizeOptionalString(record.imageUrl),
       description: normalizeOptionalString(record.description),
       quantity: normalizePositiveNumber(record.quantity, 1),
-      unitPrice: normalizeNonNegativeNumber(record.unitPrice, 0)
+      unitPrice: normalizeNonNegativeNumber(record.unitPrice, 0),
+      currency: normalizeCurrencyCode(record.currency) || fallbackCurrency
     };
   });
 }
 
-export function normalizeQuoteFees(value: unknown): QuoteFee[] {
+export function normalizeQuoteFees(value: unknown, fallbackCurrency = defaultCurrencyCode): QuoteFee[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -69,14 +77,19 @@ export function normalizeQuoteFees(value: unknown): QuoteFee[] {
       id: normalizeString(record.id) || `fee-${index + 1}`,
       name: normalizeString(record.name),
       description: normalizeOptionalString(record.description),
-      amount: normalizeNonNegativeNumber(record.amount, 0)
+      amount: normalizeNonNegativeNumber(record.amount, 0),
+      currency: normalizeCurrencyCode(record.currency) || fallbackCurrency
     };
   });
 }
 
-export function calculateQuoteTotals(lineItems: QuoteLineItem[], fees: QuoteFee[]): QuoteTotals {
-  const lineSubtotal = roundMoney(lineItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0));
-  const feeSubtotal = roundMoney(fees.reduce((sum, fee) => sum + fee.amount, 0));
+export function calculateQuoteTotals(lineItems: QuoteLineItem[], fees: QuoteFee[], quoteCurrency?: string, currencyRecords: CrmRecord[] = []): QuoteTotals {
+  const currencies = currencyRecords.length ? getCurrencyDefinitions(currencyRecords) : [];
+  const targetCurrency = normalizeCurrencyCode(quoteCurrency);
+  const lineSubtotal = roundMoney(
+    lineItems.reduce((sum, item) => sum + item.quantity * amountForTotal(item.unitPrice, item.currency, targetCurrency, currencies), 0)
+  );
+  const feeSubtotal = roundMoney(fees.reduce((sum, fee) => sum + amountForTotal(fee.amount, fee.currency, targetCurrency, currencies), 0));
   return {
     lineSubtotal,
     feeSubtotal,
@@ -90,15 +103,18 @@ export function buildQuoteLineItemFromProduct(product: CrmRecord): QuoteLineItem
     productId: product.id,
     productName: product.title,
     sku: normalizeOptionalString(product.data.sku),
+    imageUrl: normalizeOptionalString(product.data.mainImageUrl),
     description: normalizeOptionalString(product.data.description),
     quantity: 1,
-    unitPrice: normalizeNonNegativeNumber(product.data.unitPrice, 0)
+    unitPrice: normalizeNonNegativeNumber(product.data.unitPrice, 0),
+    currency: normalizeCurrencyCode(product.data.unitPriceCurrency) || defaultCurrencyCode
   };
 }
 
 export function validateQuoteRecordData(data: Record<string, unknown>, products: CrmRecord[]): void {
-  const lineItems = normalizeQuoteLineItems(data.lineItems);
-  const fees = normalizeQuoteFees(data.fees);
+  const quoteCurrency = normalizeCurrencyCode(data.quoteCurrency) || defaultCurrencyCode;
+  const lineItems = normalizeQuoteLineItems(data.lineItems, quoteCurrency);
+  const fees = normalizeQuoteFees(data.fees, quoteCurrency);
   const productsById = new Map(products.map((product) => [product.id, product]));
 
   for (const item of lineItems) {
@@ -126,6 +142,40 @@ export function validateQuoteRecordData(data: Record<string, unknown>, products:
   }
 }
 
+export function convertQuotePricingToCurrency(data: Record<string, unknown>, targetCurrencyCode: string, currencyRecords: CrmRecord[]): Record<string, unknown> {
+  const currencies = getCurrencyDefinitions(currencyRecords);
+  const previousCurrency = normalizeCurrencyCode(data.quoteCurrency) || targetCurrencyCode || defaultCurrencyCode;
+  const nextCurrency = normalizeCurrencyCode(targetCurrencyCode) || previousCurrency;
+  const lineItems = normalizeQuoteLineItems(data.lineItems, previousCurrency).map((item) => ({
+    ...item,
+    unitPrice: convertCurrencyAmount(item.unitPrice, item.currency || previousCurrency, nextCurrency, currencies),
+    currency: nextCurrency
+  }));
+  const fees = normalizeQuoteFees(data.fees, previousCurrency).map((fee) => ({
+    ...fee,
+    amount: convertCurrencyAmount(fee.amount, fee.currency || previousCurrency, nextCurrency, currencies),
+    currency: nextCurrency
+  }));
+  const totals = calculateQuoteTotals(lineItems, fees);
+  return {
+    ...data,
+    quoteCurrency: nextCurrency,
+    lineItems,
+    fees,
+    totalAmount: totals.totalAmount
+  };
+}
+
+export function quoteLineItemFromProductForCurrency(product: CrmRecord, targetCurrencyCode: string, currencyRecords: CrmRecord[]): QuoteLineItem {
+  const lineItem = buildQuoteLineItemFromProduct(product);
+  const targetCurrency = normalizeCurrencyCode(targetCurrencyCode) || lineItem.currency;
+  return {
+    ...lineItem,
+    unitPrice: convertCurrencyAmount(lineItem.unitPrice, lineItem.currency, targetCurrency, getCurrencyDefinitions(currencyRecords)),
+    currency: targetCurrency
+  };
+}
+
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -146,7 +196,15 @@ function normalizeNonNegativeNumber(value: unknown, fallback: number): number {
 }
 
 function roundMoney(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
+  return roundCurrency(value);
+}
+
+function amountForTotal(amount: number, currency: string | undefined, quoteCurrency: string | undefined, currencies: ReturnType<typeof getCurrencyDefinitions>): number {
+  if (!quoteCurrency || currencies.length === 0) {
+    return amount;
+  }
+
+  return convertCurrencyAmount(amount, currency || quoteCurrency, quoteCurrency, currencies);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

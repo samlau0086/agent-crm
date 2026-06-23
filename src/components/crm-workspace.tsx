@@ -42,9 +42,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { SettingsAdmin } from "@/components/settings-admin";
+import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
-import { buildQuoteLineItemFromProduct, calculateQuoteTotals, normalizeQuoteFees, normalizeQuoteLineItems, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
+import { calculateQuoteTotals, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
 import type {
   Activity,
   ApiKey,
@@ -749,6 +750,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     [activities]
   );
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
+  const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
+  const currencies = useMemo(() => getCurrencyDefinitions(currencyRecords), [currencyRecords]);
   const totalPipeline = useMemo(
     () => props.dashboardSummary.totalPipeline,
     [props.dashboardSummary.totalPipeline]
@@ -1110,7 +1113,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       title: createTitle.trim(),
       stageKey: activeObject.key === "deals" ? activePipeline?.stages[0]?.key : undefined,
       ownerId: createOwnerId || undefined,
-      data: parseFormValues(objectFields, createValues, activeObject.key)
+      data: parseFormValues(objectFields, createValues, activeObject.key, currencyRecords)
     });
 
     setMessage(`已创建${activeObject.label}`);
@@ -1130,7 +1133,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       method: "PATCH",
       body: {
         title: editTitle.trim(),
-        data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey),
+        data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
         stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
         ownerId: editOwnerId || undefined
       }
@@ -2130,7 +2133,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           </button>
                         </td>
                         {visibleTableColumns.map((column) => (
-                          <td key={column.key}>{displayTableColumnValue(column, record, records, props.users)}</td>
+                          <td key={column.key}>{displayTableColumnValue(column, record, records, props.users, currencies)}</td>
                         ))}
                         <td>{formatDate(record.updatedAt)}</td>
                       </tr>
@@ -2196,6 +2199,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onRecordsLoaded={mergeLoadedRecords}
                       testIdPrefix="create-quote"
                       values={createValues}
+                      onCurrencyChange={(nextCurrency) => setCreateValues((current) => convertQuoteFormCurrency(current, nextCurrency, currencyRecords))}
                       onChange={setCreateValues}
                     />
                   ) : null}
@@ -2269,6 +2273,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onRecordsLoaded={mergeLoadedRecords}
                           testIdPrefix="edit-quote"
                           values={editValues}
+                          onCurrencyChange={(nextCurrency) => setEditValues((current) => convertQuoteFormCurrency(current, nextCurrency, currencyRecords))}
                           onChange={setEditValues}
                         />
                       ) : null}
@@ -5566,6 +5571,19 @@ function FieldInput({
   onRecordsLoaded?: (records: CrmRecord[]) => void;
   onChange: (value: string) => void;
 }) {
+  if (isCurrencyCodeField(field)) {
+    const currencies = getCurrencyDefinitions(allRecords);
+    return (
+      <SelectSearchInput
+        label={field.label}
+        options={currencies.map((currency) => ({ label: `${currency.label} (${currency.code})`, value: currency.code }))}
+        testId={testId}
+        value={value || getBaseCurrencyCode(currencies)}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (field.type === "textarea") {
     return (
       <label className="wide">
@@ -5923,26 +5941,31 @@ function ReferenceFieldInput({
 function QuotePricingEditor({
   allRecords,
   onChange,
+  onCurrencyChange,
   onRecordsLoaded,
   testIdPrefix,
   values
 }: {
   allRecords: CrmRecord[];
   onChange: (updater: (current: Record<string, string>) => Record<string, string>) => void;
+  onCurrencyChange: (nextCurrency: string) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
   testIdPrefix: string;
   values: Record<string, string>;
 }) {
-  const lineItems = quoteLineItemsFromValues(values);
-  const fees = quoteFeesFromValues(values);
-  const totals = calculateQuoteTotals(lineItems, fees);
+  const currencyRecords = allRecords.filter((record) => record.objectKey === "currencies");
+  const currencies = getCurrencyDefinitions(currencyRecords);
+  const quoteCurrency = normalizeCurrencyCode(values.quoteCurrency) || getBaseCurrencyCode(currencies);
+  const lineItems = quoteLineItemsFromValues(values, quoteCurrency);
+  const fees = quoteFeesFromValues(values, quoteCurrency);
+  const totals = calculateQuoteTotals(lineItems, fees, quoteCurrency, currencyRecords);
 
   function updateLineItems(nextLineItems: QuoteLineItem[]) {
-    onChange((current) => withQuotePricingValues(current, nextLineItems, fees));
+    onChange((current) => withQuotePricingValues(current, nextLineItems, fees, quoteCurrency, currencyRecords));
   }
 
   function updateFees(nextFees: QuoteFee[]) {
-    onChange((current) => withQuotePricingValues(current, lineItems, nextFees));
+    onChange((current) => withQuotePricingValues(current, lineItems, nextFees, quoteCurrency, currencyRecords));
   }
 
   function updateLineItem(index: number, patch: Partial<QuoteLineItem>) {
@@ -5950,7 +5973,7 @@ function QuotePricingEditor({
   }
 
   function selectProduct(index: number, product: CrmRecord) {
-    const productLine = buildQuoteLineItemFromProduct(product);
+    const productLine = quoteLineItemFromProductForCurrency(product, quoteCurrency, currencyRecords);
     updateLineItems(
       lineItems.map((item, itemIndex) =>
         itemIndex === index
@@ -5967,11 +5990,18 @@ function QuotePricingEditor({
           <strong>报价产品与费用</strong>
           <div className="subtle">产品默认读取产品配置，可在本报价中覆盖数量、价格和描述。</div>
         </div>
+        <SelectSearchInput
+          label="报价币种"
+          options={currencies.map((currency) => ({ label: `${currency.label} (${currency.code})`, value: currency.code }))}
+          testId={`${testIdPrefix}-currency`}
+          value={quoteCurrency}
+          onChange={onCurrencyChange}
+        />
         <button
           className="secondary-button"
           data-testid={`${testIdPrefix}-add-line`}
           type="button"
-          onClick={() => updateLineItems([...lineItems, emptyQuoteLineItem()])}
+          onClick={() => updateLineItems([...lineItems, emptyQuoteLineItem(quoteCurrency)])}
         >
           添加产品
         </button>
@@ -5979,10 +6009,12 @@ function QuotePricingEditor({
       <div className="quote-line-list">
         {lineItems.map((item, index) => (
           <div className="quote-line-row" key={item.id}>
+            <ProductThumbnail imageUrl={item.imageUrl} title={item.productName} />
             <QuoteProductSearchDropdown
               allRecords={allRecords}
+              currencies={currencies}
               label="产品"
-              onClear={() => updateLineItem(index, { productId: "", productName: "", sku: undefined })}
+              onClear={() => updateLineItem(index, { productId: "", productName: "", sku: undefined, imageUrl: undefined })}
               onRecordsLoaded={onRecordsLoaded}
               testId={`${testIdPrefix}-line-product-${index}`}
               value={item.productId}
@@ -6001,7 +6033,7 @@ function QuotePricingEditor({
               />
             </label>
             <label>
-              <span className="subtle">单价</span>
+              <span className="subtle">单价 · {item.currency}</span>
               <input
                 className="input"
                 data-testid={`${testIdPrefix}-line-price-${index}`}
@@ -6023,7 +6055,7 @@ function QuotePricingEditor({
             </label>
             <div className="quote-line-total">
               <span className="subtle">小计</span>
-              <strong>{formatCurrency(item.quantity * item.unitPrice)}</strong>
+              <strong>{formatMoneyWithCurrency(item.quantity * item.unitPrice, item.currency, currencies)}</strong>
             </div>
             <button
               className="icon-button"
@@ -6047,7 +6079,7 @@ function QuotePricingEditor({
           className="secondary-button"
           data-testid={`${testIdPrefix}-add-fee`}
           type="button"
-          onClick={() => updateFees([...fees, emptyQuoteFee()])}
+          onClick={() => updateFees([...fees, emptyQuoteFee(quoteCurrency)])}
         >
           添加费用
         </button>
@@ -6061,7 +6093,7 @@ function QuotePricingEditor({
             </label>
             <label>
               <span className="subtle">金额</span>
-              <input className="input" data-testid={`${testIdPrefix}-fee-amount-${index}`} min="0" step="0.01" type="number" value={String(fee.amount)} onChange={(event) => updateFees(fees.map((item, itemIndex) => (itemIndex === index ? { ...item, amount: Number(event.target.value) } : item)))} />
+              <input className="input" data-testid={`${testIdPrefix}-fee-amount-${index}`} min="0" step="0.01" type="number" value={String(fee.amount)} onChange={(event) => updateFees(fees.map((item, itemIndex) => (itemIndex === index ? { ...item, amount: Number(event.target.value), currency: quoteCurrency } : item)))} />
             </label>
             <label className="wide">
               <span className="subtle">说明</span>
@@ -6074,9 +6106,9 @@ function QuotePricingEditor({
         ))}
       </div>
       <div className="quote-total-summary">
-        <span>产品小计 {formatCurrency(totals.lineSubtotal)}</span>
-        <span>其他费用 {formatCurrency(totals.feeSubtotal)}</span>
-        <strong>总计 {formatCurrency(totals.totalAmount)}</strong>
+        <span>产品小计 {formatMoneyWithCurrency(totals.lineSubtotal, quoteCurrency, currencies)}</span>
+        <span>其他费用 {formatMoneyWithCurrency(totals.feeSubtotal, quoteCurrency, currencies)}</span>
+        <strong>总计 {formatMoneyWithCurrency(totals.totalAmount, quoteCurrency, currencies)}</strong>
       </div>
     </section>
   );
@@ -6084,6 +6116,7 @@ function QuotePricingEditor({
 
 function QuoteProductSearchDropdown({
   allRecords,
+  currencies,
   label,
   onClear,
   onRecordsLoaded,
@@ -6092,6 +6125,7 @@ function QuoteProductSearchDropdown({
   onSelect
 }: {
   allRecords: CrmRecord[];
+  currencies: ReturnType<typeof getCurrencyDefinitions>;
   label: string;
   onClear: () => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
@@ -6159,7 +6193,10 @@ function QuoteProductSearchDropdown({
       options={visibleCandidates.map((candidate) => ({
         label: candidate.title,
         value: candidate.id,
-        meta: [candidate.data.sku, candidate.data.unitPrice ? formatCurrency(candidate.data.unitPrice) : ""].filter(Boolean).join(" · ")
+        meta: [
+          candidate.data.sku,
+          candidate.data.unitPrice ? formatMoneyWithCurrency(candidate.data.unitPrice, normalizeCurrencyCode(candidate.data.unitPriceCurrency) || getBaseCurrencyCode(currencies), currencies) : ""
+        ].filter(Boolean).join(" · ")
       }))}
       placeholder="搜索产品"
       search={search}
@@ -6181,9 +6218,18 @@ function QuoteProductSearchDropdown({
   );
 }
 
+function ProductThumbnail({ imageUrl, title }: { imageUrl: unknown; title: string }) {
+  const src = typeof imageUrl === "string" ? imageUrl.trim() : "";
+  return (
+    <div className="product-thumb" aria-label={title ? `${title} 主图` : "产品主图"} style={src ? { backgroundImage: `url("${src.replace(/"/g, "%22")}")` } : undefined}>
+      {src ? null : <Package size={18} />}
+    </div>
+  );
+}
+
 const quoteLineItemsValueKey = "__quoteLineItems";
 const quoteFeesValueKey = "__quoteFees";
-const hiddenQuoteFormFields = new Set(["productId", "totalAmount"]);
+const hiddenQuoteFormFields = new Set(["productId", "quoteCurrency", "totalAmount"]);
 
 function visibleFormFieldsForObject(objectKey: string | undefined, fields: FieldDefinition[]): FieldDefinition[] {
   if (objectKey !== "quotes") {
@@ -6193,39 +6239,63 @@ function visibleFormFieldsForObject(objectKey: string | undefined, fields: Field
   return fields.filter((field) => !hiddenQuoteFormFields.has(field.key));
 }
 
-function quoteLineItemsFromValues(values: Record<string, string>): QuoteLineItem[] {
-  return normalizeQuoteLineItems(parseJsonValue(values[quoteLineItemsValueKey]));
+function quoteLineItemsFromValues(values: Record<string, string>, fallbackCurrency?: string): QuoteLineItem[] {
+  return normalizeQuoteLineItems(parseJsonValue(values[quoteLineItemsValueKey]), fallbackCurrency);
 }
 
-function quoteFeesFromValues(values: Record<string, string>): QuoteFee[] {
-  return normalizeQuoteFees(parseJsonValue(values[quoteFeesValueKey]));
+function quoteFeesFromValues(values: Record<string, string>, fallbackCurrency?: string): QuoteFee[] {
+  return normalizeQuoteFees(parseJsonValue(values[quoteFeesValueKey]), fallbackCurrency);
 }
 
-function withQuotePricingValues(values: Record<string, string>, lineItems: QuoteLineItem[], fees: QuoteFee[]): Record<string, string> {
-  const totals = calculateQuoteTotals(lineItems, fees);
+function withQuotePricingValues(values: Record<string, string>, lineItems: QuoteLineItem[], fees: QuoteFee[], quoteCurrency?: string, currencyRecords: CrmRecord[] = []): Record<string, string> {
+  const currencies = getCurrencyDefinitions(currencyRecords);
+  const nextCurrency = normalizeCurrencyCode(quoteCurrency || values.quoteCurrency) || getBaseCurrencyCode(currencies);
+  const normalizedLineItems = normalizeQuoteLineItems(lineItems, nextCurrency);
+  const normalizedFees = normalizeQuoteFees(fees, nextCurrency);
+  const totals = calculateQuoteTotals(normalizedLineItems, normalizedFees, nextCurrency, currencyRecords);
   return {
     ...values,
-    [quoteLineItemsValueKey]: JSON.stringify(lineItems),
-    [quoteFeesValueKey]: JSON.stringify(fees),
+    quoteCurrency: nextCurrency,
+    [quoteLineItemsValueKey]: JSON.stringify(normalizedLineItems),
+    [quoteFeesValueKey]: JSON.stringify(normalizedFees),
     totalAmount: String(totals.totalAmount)
   };
 }
 
-function emptyQuoteLineItem(): QuoteLineItem {
+function convertQuoteFormCurrency(values: Record<string, string>, nextCurrency: string, currencyRecords: CrmRecord[]): Record<string, string> {
+  const currencies = getCurrencyDefinitions(currencyRecords);
+  const previousCurrency = normalizeCurrencyCode(values.quoteCurrency) || getBaseCurrencyCode(currencies);
+  const targetCurrency = normalizeCurrencyCode(nextCurrency) || previousCurrency;
+  const lineItems = quoteLineItemsFromValues(values, previousCurrency).map((item) => ({
+    ...item,
+    unitPrice: convertCurrencyAmount(item.unitPrice, item.currency || previousCurrency, targetCurrency, currencies),
+    currency: targetCurrency
+  }));
+  const fees = quoteFeesFromValues(values, previousCurrency).map((fee) => ({
+    ...fee,
+    amount: convertCurrencyAmount(fee.amount, fee.currency || previousCurrency, targetCurrency, currencies),
+    currency: targetCurrency
+  }));
+  return withQuotePricingValues(values, lineItems, fees, targetCurrency, currencyRecords);
+}
+
+function emptyQuoteLineItem(currency = "CNY"): QuoteLineItem {
   return {
     id: `line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     productId: "",
     productName: "",
     quantity: 1,
-    unitPrice: 0
+    unitPrice: 0,
+    currency: normalizeCurrencyCode(currency) || "CNY"
   };
 }
 
-function emptyQuoteFee(): QuoteFee {
+function emptyQuoteFee(currency = "CNY"): QuoteFee {
   return {
     id: `fee-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: "",
-    amount: 0
+    amount: 0,
+    currency: normalizeCurrencyCode(currency) || "CNY"
   };
 }
 
@@ -6260,7 +6330,8 @@ function buildRecordValues(fields: FieldDefinition[], record: CrmRecord): Record
   }
 
   if (record.objectKey === "quotes") {
-    return withQuotePricingValues(values, normalizeQuoteLineItems(record.data.lineItems), normalizeQuoteFees(record.data.fees));
+    const quoteCurrency = normalizeCurrencyCode(record.data.quoteCurrency) || "CNY";
+    return withQuotePricingValues(values, normalizeQuoteLineItems(record.data.lineItems, quoteCurrency), normalizeQuoteFees(record.data.fees, quoteCurrency), quoteCurrency);
   }
 
   return values;
@@ -6277,7 +6348,7 @@ function toInputValue(value: unknown): string {
   return String(value);
 }
 
-function parseFormValues(fields: FieldDefinition[], values: Record<string, string>, objectKey?: string): Record<string, unknown> {
+function parseFormValues(fields: FieldDefinition[], values: Record<string, string>, objectKey?: string, currencyRecords: CrmRecord[] = []): Record<string, unknown> {
   const data = fields.reduce<Record<string, unknown>>((accumulator, field) => {
     const raw = values[field.key];
     if (raw === undefined || raw === "") {
@@ -6296,9 +6367,12 @@ function parseFormValues(fields: FieldDefinition[], values: Record<string, strin
   }, {});
 
   if (objectKey === "quotes") {
-    const lineItems = quoteLineItemsFromValues(values);
-    const fees = quoteFeesFromValues(values);
-    const totals = calculateQuoteTotals(lineItems, fees);
+    const currencies = getCurrencyDefinitions(currencyRecords);
+    const quoteCurrency = normalizeCurrencyCode(values.quoteCurrency) || getBaseCurrencyCode(currencies);
+    const lineItems = quoteLineItemsFromValues(values, quoteCurrency);
+    const fees = quoteFeesFromValues(values, quoteCurrency);
+    const totals = calculateQuoteTotals(lineItems, fees, quoteCurrency, currencyRecords);
+    data.quoteCurrency = quoteCurrency;
     data.lineItems = lineItems;
     data.fees = fees;
     data.totalAmount = totals.totalAmount;
@@ -6307,20 +6381,32 @@ function parseFormValues(fields: FieldDefinition[], values: Record<string, strin
   return data;
 }
 
-function displayTableColumnValue(column: TableColumn, record: CrmRecord, records: CrmRecord[], users: User[]): string {
+function displayTableColumnValue(column: TableColumn, record: CrmRecord, records: CrmRecord[], users: User[], currencies: ReturnType<typeof getCurrencyDefinitions>): ReactNode {
   if (column.type === "owner") {
     return ownerLabel(record.ownerId, users);
   }
 
-  return displayValue(column.field, record.data[column.field.key], records, users);
+  if (record.objectKey === "products" && column.field.key === "mainImageUrl") {
+    return <ProductThumbnail imageUrl={record.data.mainImageUrl} title={record.title} />;
+  }
+
+  if (record.objectKey === "products" && column.field.key === "unitPrice") {
+    return formatMoneyWithCurrency(record.data.unitPrice, normalizeCurrencyCode(record.data.unitPriceCurrency) || getBaseCurrencyCode(currencies), currencies);
+  }
+
+  if (record.objectKey === "quotes" && column.field.key === "totalAmount") {
+    return formatMoneyWithCurrency(record.data.totalAmount, normalizeCurrencyCode(record.data.quoteCurrency) || getBaseCurrencyCode(currencies), currencies);
+  }
+
+  return displayValue(column.field, record.data[column.field.key], records, users, currencies);
 }
 
-function displayValue(field: FieldDefinition | undefined, value: unknown, records: CrmRecord[], users: User[]): string {
+function displayValue(field: FieldDefinition | undefined, value: unknown, records: CrmRecord[], users: User[], currencies?: ReturnType<typeof getCurrencyDefinitions>): string {
   if (!field) {
     return String(value ?? "-");
   }
   if (field.type === "currency") {
-    return formatCurrency(value);
+    return currencies ? formatMoneyWithCurrency(value, getBaseCurrencyCode(currencies), currencies) : formatCurrency(value);
   }
   if (field.type === "date" && typeof value === "string") {
     return formatDate(value);
@@ -6339,6 +6425,10 @@ function displayValue(field: FieldDefinition | undefined, value: unknown, record
   }
 
   return String(value ?? "-");
+}
+
+function isCurrencyCodeField(field: FieldDefinition): boolean {
+  return (field.objectKey === "products" && field.key === "unitPriceCurrency") || (field.objectKey === "quotes" && field.key === "quoteCurrency");
 }
 
 function ownerLabel(ownerId: string | undefined, users: User[]): string {

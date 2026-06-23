@@ -444,7 +444,7 @@ button {
 .quote-line-row,
 .quote-fee-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) minmax(90px, 0.5fr) minmax(120px, 0.7fr) minmax(220px, 1.5fr) auto auto;
+  grid-template-columns: 56px minmax(220px, 1.6fr) minmax(90px, 0.5fr) minmax(120px, 0.7fr) minmax(220px, 1.5fr) auto auto;
   gap: 10px;
   align-items: end;
   padding: 10px;
@@ -462,6 +462,21 @@ button {
   gap: 4px;
   min-height: 38px;
   align-content: center;
+}
+
+.product-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background-color: #f8fafc;
+  background-position: center;
+  background-size: cover;
+  color: var(--muted);
+  overflow: hidden;
 }
 
 .quote-total-summary {
