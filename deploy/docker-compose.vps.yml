@@ -58,7 +58,7 @@ services:
   worker:
     image: ${CRM_IMAGE:?Set CRM_IMAGE}
     entrypoint: ["sh", "-lc"]
-    command: "node scripts/validate-env.mjs && node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/job-worker.ts --loop"
+    command: "node scripts/validate-env.mjs && node scripts/wait-for-database.mjs && node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/job-worker.ts --loop"
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       APP_BASE_URL: ${APP_BASE_URL:?Set APP_BASE_URL}
@@ -103,7 +103,7 @@ services:
   email-sync:
     image: ${CRM_IMAGE:?Set CRM_IMAGE}
     entrypoint: ["sh", "-lc"]
-    command: "node scripts/validate-env.mjs && node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-sync.ts --loop"
+    command: "node scripts/validate-env.mjs && node scripts/wait-for-database.mjs && node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-sync.ts --loop"
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       APP_BASE_URL: ${APP_BASE_URL:?Set APP_BASE_URL}

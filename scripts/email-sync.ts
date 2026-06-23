@@ -37,29 +37,42 @@ try {
     process.exit(0);
   }
 
-  await assertDatabaseReachable({ label: "email-sync" });
-  const userResolution = await resolveOperationalUser({
-    userId: userSelection.userId,
-    strict: userSelection.strict,
-    purpose: "email sync scheduling"
-  });
-  const context = userResolution.context;
-
   if (loop) {
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     while (!stopping) {
-      await runSync(context, userResolution);
+      await runSyncCycle();
       if (!stopping) {
         await sleep(intervalMs);
       }
     }
   } else {
+    await assertDatabaseReachable({ label: "email-sync" });
+    const userResolution = await resolveOperationalUser({
+      userId: userSelection.userId,
+      strict: userSelection.strict,
+      purpose: "email sync scheduling"
+    });
+    const context = userResolution.context;
     await runSync(context, userResolution);
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
   process.exit(1);
+}
+
+async function runSyncCycle(): Promise<void> {
+  try {
+    await assertDatabaseReachable({ label: "email-sync" });
+    const userResolution = await resolveOperationalUser({
+      userId: userSelection.userId,
+      strict: userSelection.strict,
+      purpose: "email sync scheduling"
+    });
+    await runSync(userResolution.context, userResolution);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
+  }
 }
 
 async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUserId>>, userResolution: OperationalUserResolution): Promise<void> {

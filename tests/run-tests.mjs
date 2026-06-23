@@ -968,6 +968,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /POSTGRES_PASSWORD/);
   assert.match(workflow, /chown -R 999:999 "\$DEPLOY_PATH\/postgres-data"/);
   assert.match(workflow, /chmod 700 "\$DEPLOY_PATH\/postgres-data"/);
+  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/job-worker\.ts --loop/);
+  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/email-sync\.ts --loop/);
   assert.match(workflow, /EMAIL_CONFIG_SECRET/);
   assert.match(workflow, /Weak email secret/);
   assert.match(workflow, /EMAIL_CONFIG_SECRET EMAIL_OAUTH_STATE_SECRET/);
@@ -1839,6 +1841,8 @@ await run("compose and env example keep email deployment settings aligned", () =
   assert.match(compose, /EMAIL_OAUTH_STATE_SECRET: "\$\{EMAIL_OAUTH_STATE_SECRET:\?Set EMAIL_OAUTH_STATE_SECRET in \.env\}"/);
   assert.match(compose, /email-sync:/);
   assert.match(compose, /scripts\/email-sync\.ts --loop/);
+  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/job-worker\.ts --loop/);
+  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/email-sync\.ts --loop/);
   assert.match(compose, /EMAIL_SYNC_INTERVAL_MS: \$\{EMAIL_SYNC_INTERVAL_MS:-300000\}/);
   assert.match(compose, /EMAIL_SYNC_LIMIT: \$\{EMAIL_SYNC_LIMIT:-25\}/);
   assert.match(envExample, /EMAIL_SYNC_INTERVAL_MS="300000"/);
@@ -1873,6 +1877,7 @@ await run("email sync script dry run describes loop scheduler settings", () => {
   assert.equal(plan.requiredPermission, "crm.admin");
   const syncScript = readFileSync("scripts/email-sync.ts", "utf8");
   assert.match(syncScript, /resolveOperationalUser/);
+  assert.match(syncScript, /runSyncCycle/);
   assert.match(syncScript, /operationalUser:\s*\{/);
   assert.match(syncScript, /fallbackUsed:\s*userResolution\.fallbackUsed/);
 });

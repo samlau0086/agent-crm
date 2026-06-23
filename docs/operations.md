@@ -25,6 +25,8 @@ curl http://127.0.0.1:3000/api/health
 
 健康接口会返回 `database` 和 `jobs` 两组运行态状态。默认 inline 作业执行器只检查数据库；当 `JOB_EXECUTOR=redis` 时，接口会额外执行一次 Redis `PING`，Redis 不可用或缺少 `REDIS_URL` 时返回 HTTP 503。错误信息会脱敏连接串，不暴露密码。
 
+`worker` 和 `email-sync` 是常驻后台服务。它们启动前会等待数据库可用；进入 `--loop` 后如果数据库、Redis 或邮件同步运行用户暂时不可用，会记录错误并在下一轮重试，不应因为一次瞬时错误反复重启容器。若容器仍持续 `Restarting`，优先查看 `docker compose logs --tail=120 worker email-sync` 中的环境校验错误。
+
 部署验收：
 
 ```bash
