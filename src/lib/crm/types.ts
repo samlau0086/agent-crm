@@ -414,6 +414,7 @@ export interface Activity {
   actorId?: string;
   dueAt?: string;
   completedAt?: string;
+  archivedAt?: string;
   createdAt: string;
 }
 

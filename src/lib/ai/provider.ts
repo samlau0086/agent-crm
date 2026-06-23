@@ -169,7 +169,7 @@ class RuleBasedAiProvider implements AiProvider {
   }
 
   async suggestNextActions(input: { record: CrmRecord; activities: Activity[] }): Promise<AiResponse> {
-    const hasOpenTask = input.activities.some((activity) => activity.type === "task" && !activity.completedAt);
+    const hasOpenTask = input.activities.some((activity) => activity.type === "task" && !activity.completedAt && !activity.archivedAt);
     const suggestion = hasOpenTask
       ? "优先完成已有待办，并在完成后记录客户反馈。"
       : "创建一个明确截止时间的跟进任务，并补充下一次沟通目标。";

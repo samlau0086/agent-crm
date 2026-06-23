@@ -190,7 +190,8 @@ export const activityUpdateSchema = z
     title: labelSchema.optional(),
     body: optionalTextSchema,
     dueAt: z.union([z.string().trim().min(1), z.null()]).optional(),
-    completedAt: z.union([z.string().trim().min(1), z.null()]).optional()
+    completedAt: z.union([z.string().trim().min(1), z.null()]).optional(),
+    archivedAt: z.union([z.string().trim().min(1), z.null()]).optional()
   })
   .strict();
 

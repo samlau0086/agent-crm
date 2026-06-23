@@ -19,6 +19,7 @@ import { createSessionToken, hashSessionToken } from "../src/lib/auth/session.ts
 import { describePermission, permissionCatalog } from "../src/lib/auth/permissions.ts";
 import { crmPathForNav, resolveCrmRoute } from "../src/lib/crm/navigation.ts";
 import {
+  activityUpdateSchema,
   csvImportSchema,
   emailAccountCreateSchema,
   emailAccountUpdateSchema,
@@ -896,6 +897,12 @@ await run("deployment verification dry run describes docker health and backup ch
   ]);
 });
 
+await run("activity update schema accepts task archive state", () => {
+  assert.equal(activityUpdateSchema.parse({ archivedAt: "2026-06-23T10:00:00.000Z" }).archivedAt, "2026-06-23T10:00:00.000Z");
+  assert.equal(activityUpdateSchema.parse({ archivedAt: null }).archivedAt, null);
+  assert.throws(() => activityUpdateSchema.parse({ archivedAt: "" }), z.ZodError);
+});
+
 await run("next production build defaults to standard output with guarded artifact checks", () => {
   const config = readFileSync("next.config.mjs", "utf8");
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
@@ -1446,6 +1453,23 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.gmail-topbar-title \{[\s\S]*align-items: center;/);
   assert.match(styles, /\.email-workspace\.mail-view \{\s*padding: 0;/);
   assert.match(styles, /\.deal-pill\.dragging/);
+});
+
+await run("task workspace exposes todo completed archived and delete actions", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const route = readFileSync("src/app/api/activities/[id]/route.ts", "utf8");
+
+  assert.match(source, /useState<"todo" \| "completed" \| "archived">\("todo"\)/);
+  assert.match(source, /data-testid="task-tab-todo"/);
+  assert.match(source, /data-testid="task-tab-completed"/);
+  assert.match(source, /data-testid="task-tab-archived"/);
+  assert.match(source, /body: \{ archivedAt: archived \? new Date\(\)\.toISOString\(\) : null \}/);
+  assert.match(source, /method: "DELETE"/);
+  assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-archive-\$\{activity\.id\}` : undefined\}/);
+  assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-delete-\$\{activity\.id\}` : undefined\}/);
+  assert.match(source, /activity\.completedAt \|\| activity\.archivedAt \|\| !activity\.dueAt/);
+  assert.match(route, /export async function DELETE/);
+  assert.match(route, /deleteActivity\(context, params\.id\)/);
 });
 
 await run("workspace exposes product and quote modules as first-class crm objects", () => {
@@ -6000,6 +6024,30 @@ await run("tasks can be completed and reopened", () => {
 
   const reopened = store.updateActivity(context, task.id, { completedAt: null });
   assert.equal(reopened.completedAt, undefined);
+});
+
+await run("tasks can be archived restored and deleted", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const task = store.createActivity(context, {
+    recordId: "contact-lin",
+    type: "task",
+    title: "Archive test task",
+    body: "Confirm task lifecycle",
+    dueAt: "2026-06-23T09:00:00.000Z"
+  });
+
+  const archived = store.updateActivity(context, task.id, { archivedAt: "2026-06-23T10:00:00.000Z" });
+  assert.equal(archived.archivedAt, "2026-06-23T10:00:00.000Z");
+  assert.equal(store.getDashboardSummary(context).openTasks.some((activity) => activity.id === task.id), false);
+
+  const restored = store.updateActivity(context, task.id, { archivedAt: null });
+  assert.equal(restored.archivedAt, undefined);
+  assert.equal(store.getDashboardSummary(context).openTasks.some((activity) => activity.id === task.id), true);
+
+  store.deleteActivity(context, task.id);
+  assert.throws(() => store.getActivity(context, task.id), /Activity not found/);
+  assert.equal(store.listActivities(context).some((activity) => activity.id === task.id), false);
 });
 
 await run("deals can be closed won or lost with reasons in extension data", () => {

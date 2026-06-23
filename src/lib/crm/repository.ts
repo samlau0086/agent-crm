@@ -543,6 +543,7 @@ function mapActivity(activity: {
   actorId: string | null;
   dueAt: Date | null;
   completedAt: Date | null;
+  archivedAt: Date | null;
   createdAt: Date;
 }): Activity {
   return {
@@ -555,6 +556,7 @@ function mapActivity(activity: {
     actorId: activity.actorId ?? undefined,
     dueAt: activity.dueAt?.toISOString(),
     completedAt: activity.completedAt?.toISOString(),
+    archivedAt: activity.archivedAt?.toISOString(),
     createdAt: activity.createdAt.toISOString()
   };
 }
@@ -2358,7 +2360,8 @@ export class PrismaCrmRepository {
       where: {
         ...activityWhere,
         type: "task",
-        completedAt: null
+        completedAt: null,
+        archivedAt: null
       },
       orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
       take: 50
@@ -2367,7 +2370,8 @@ export class PrismaCrmRepository {
       where: {
         ...activityWhere,
         type: "task",
-        completedAt: null
+        completedAt: null,
+        archivedAt: null
       }
     });
     const recentActivities = await this.db.activity.findMany({
@@ -3095,7 +3099,7 @@ export class PrismaCrmRepository {
   async updateActivity(
     context: RequestContext,
     activityId: string,
-    patch: Partial<Pick<Activity, "title" | "body">> & { dueAt?: string | null; completedAt?: string | null }
+    patch: Partial<Pick<Activity, "title" | "body">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
   ): Promise<Activity> {
     requirePermission(context, "crm.write");
     const existing = await this.db.activity.findFirst({
@@ -3126,7 +3130,8 @@ export class PrismaCrmRepository {
         title: patch.title,
         body: patch.body,
         dueAt: patch.dueAt ? new Date(patch.dueAt) : patch.dueAt === null ? null : undefined,
-        completedAt: patch.completedAt ? new Date(patch.completedAt) : patch.completedAt === null ? null : undefined
+        completedAt: patch.completedAt ? new Date(patch.completedAt) : patch.completedAt === null ? null : undefined,
+        archivedAt: patch.archivedAt ? new Date(patch.archivedAt) : patch.archivedAt === null ? null : undefined
       }
     });
     await this.writeAuditLog(context, "update", "activity", updated.id, {
@@ -3134,6 +3139,37 @@ export class PrismaCrmRepository {
       details: { patch, recordId: updated.recordId, type: updated.type }
     });
     return mapActivity(updated);
+  }
+
+  async deleteActivity(context: RequestContext, activityId: string): Promise<void> {
+    requirePermission(context, "crm.write");
+    const existing = await this.db.activity.findFirst({
+      where: { id: activityId, workspaceId: context.workspaceId }
+    });
+    if (!existing) {
+      throw new Error("Activity not found");
+    }
+    if (existing.recordId) {
+      const record = await this.db.crmRecord.findFirst({
+        where: {
+          id: existing.recordId,
+          workspaceId: context.workspaceId,
+          ...(await this.recordAccessWhere(context))
+        },
+        select: { id: true }
+      });
+      if (!record) {
+        throw new Error("Activity not found");
+      }
+    } else if (!canManageAllRecords(context) && existing.actorId !== context.user.id) {
+      throw new Error("Activity not found");
+    }
+
+    await this.db.activity.delete({ where: { id: activityId } });
+    await this.writeAuditLog(context, "delete", "activity", existing.id, {
+      summary: `Deleted activity ${existing.title}`,
+      details: { recordId: existing.recordId, type: existing.type, title: existing.title }
+    });
   }
 
   async listSavedViews(context: RequestContext, objectKey?: string): Promise<SavedView[]> {

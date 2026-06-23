@@ -689,7 +689,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const openTasks = useMemo(
     () =>
       activities
-        .filter((activity) => activity.type === "task" && !activity.completedAt)
+        .filter((activity) => activity.type === "task" && !activity.completedAt && !activity.archivedAt)
+        .sort((left, right) => new Date(left.dueAt ?? left.createdAt).getTime() - new Date(right.dueAt ?? right.createdAt).getTime()),
+    [activities]
+  );
+  const taskActivities = useMemo(
+    () =>
+      activities
+        .filter((activity) => activity.type === "task")
         .sort((left, right) => new Date(left.dueAt ?? left.createdAt).getTime() - new Date(right.dueAt ?? right.createdAt).getTime()),
     [activities]
   );
@@ -1325,11 +1332,32 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function toggleTaskCompletion(activity: Activity, completed: boolean) {
-    await fetchJson(`/api/activities/${activity.id}`, {
+    const updated = await fetchJson<Activity>(`/api/activities/${activity.id}`, {
       method: "PATCH",
       body: { completedAt: completed ? new Date().toISOString() : null }
     });
+    setActivities((current) => mergeActivities(current, [updated]));
     setMessage(completed ? "任务已完成" : "任务已重开");
+    router.refresh();
+  }
+
+  async function toggleTaskArchive(activity: Activity, archived: boolean) {
+    const updated = await fetchJson<Activity>(`/api/activities/${activity.id}`, {
+      method: "PATCH",
+      body: { archivedAt: archived ? new Date().toISOString() : null }
+    });
+    setActivities((current) => mergeActivities(current, [updated]));
+    setMessage(archived ? "任务已归档" : "任务已移回列表");
+    router.refresh();
+  }
+
+  async function deleteTask(activity: Activity) {
+    if (!shouldProceedWithDangerousAction(`确定删除任务“${activity.title}”？`)) {
+      return;
+    }
+    await fetchJson(`/api/activities/${activity.id}`, { method: "DELETE" });
+    setActivities((current) => current.filter((candidate) => candidate.id !== activity.id));
+    setMessage("任务已删除");
     router.refresh();
   }
 
@@ -2616,7 +2644,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onToggleAppSidebar={toggleAppSidebar}
           />
         )}
-        {activeNav === "tasks" && <TaskView activities={openTasks} users={props.users} onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))} />}
+        {activeNav === "tasks" && (
+          <TaskView
+            activities={taskActivities}
+            users={props.users}
+            onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
+            onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
+            onDelete={(activity) => runAction(() => deleteTask(activity))}
+          />
+        )}
         {activeNav === "activities" && <ActivityTimeline activities={activities} records={records} />}
         {activeNav === "settings" && (
           <SettingsAdmin
@@ -4132,20 +4168,70 @@ function sanitizeTestId(value: string): string {
 function TaskView({
   activities,
   users,
-  onToggle
+  onToggle,
+  onArchive,
+  onDelete
 }: {
   activities: Activity[];
   users: User[];
   onToggle: (activity: Activity, completed: boolean) => void;
+  onArchive: (activity: Activity, archived: boolean) => void;
+  onDelete: (activity: Activity) => void;
 }) {
+  const [status, setStatus] = useState<"todo" | "completed" | "archived">("todo");
+  const todoTasks = activities.filter((activity) => !activity.completedAt && !activity.archivedAt);
+  const completedTasks = activities.filter((activity) => activity.completedAt && !activity.archivedAt);
+  const archivedTasks = activities.filter((activity) => activity.archivedAt);
+  const visibleTasks = status === "todo" ? todoTasks : status === "completed" ? completedTasks : archivedTasks;
+  const emptyMessage = status === "todo" ? "暂无待办任务" : status === "completed" ? "暂无已完成任务" : "暂无归档任务";
+
   return (
     <section className="section">
-      <h2 className="page-title">待办任务</h2>
+      <div className="section-header">
+        <div>
+          <h2 className="page-title">任务</h2>
+          <p className="subtle">按待办、已完成、归档管理销售跟进事项。</p>
+        </div>
+      </div>
+      <div className="toolbar" style={{ marginTop: 12 }}>
+        <button
+          className={status === "todo" ? "primary-button" : "secondary-button"}
+          data-testid="task-tab-todo"
+          type="button"
+          onClick={() => setStatus("todo")}
+        >
+          <Clock3 size={16} />
+          待办
+          <span className="badge">{todoTasks.length}</span>
+        </button>
+        <button
+          className={status === "completed" ? "primary-button" : "secondary-button"}
+          data-testid="task-tab-completed"
+          type="button"
+          onClick={() => setStatus("completed")}
+        >
+          <CheckCircle2 size={16} />
+          已完成
+          <span className="badge">{completedTasks.length}</span>
+        </button>
+        <button
+          className={status === "archived" ? "primary-button" : "secondary-button"}
+          data-testid="task-tab-archived"
+          type="button"
+          onClick={() => setStatus("archived")}
+        >
+          <Archive size={16} />
+          归档
+          <span className="badge">{archivedTasks.length}</span>
+        </button>
+      </div>
       <TaskList
-        activities={activities}
-        emptyMessage="暂无待办任务"
+        activities={visibleTasks}
+        emptyMessage={emptyMessage}
         testIdPrefix="task-view-task"
         users={users}
+        onArchive={onArchive}
+        onDelete={onDelete}
         onToggle={onToggle}
       />
     </section>
@@ -4157,12 +4243,16 @@ function TaskList({
   emptyMessage,
   testIdPrefix,
   users,
+  onArchive,
+  onDelete,
   onToggle
 }: {
   activities: Activity[];
   emptyMessage: string;
   testIdPrefix?: string;
   users: User[];
+  onArchive?: (activity: Activity, archived: boolean) => void;
+  onDelete?: (activity: Activity) => void;
   onToggle: (activity: Activity, completed: boolean) => void;
 }) {
   if (activities.length === 0) {
@@ -4173,11 +4263,13 @@ function TaskList({
     <div className="activity-list" style={{ marginTop: 12 }}>
       {activities.map((activity) => {
         const completed = Boolean(activity.completedAt);
+        const archived = Boolean(activity.archivedAt);
         const overdue = isTaskOverdue(activity);
         return (
           <div
             className="activity-item"
             data-completed={completed ? "true" : "false"}
+            data-archived={archived ? "true" : "false"}
             data-testid={testIdPrefix ? `${testIdPrefix}-${activity.id}` : undefined}
             key={activity.id}
           >
@@ -4185,6 +4277,7 @@ function TaskList({
               <CalendarClock size={15} />
               截止 {formatDate(activity.dueAt)} · {users.find((user) => user.id === activity.actorId)?.name ?? "未分配"}
               {completed && <span className="badge">已完成</span>}
+              {archived && <span className="badge">已归档</span>}
               {!completed && overdue && <span className="badge danger-badge">已逾期</span>}
             </div>
             <strong>{activity.title}</strong>
@@ -4200,6 +4293,29 @@ function TaskList({
                 {completed ? <RotateCcw size={16} /> : <CheckCircle2 size={16} />}
                 {completed ? "重开任务" : "完成任务"}
               </button>
+              {onArchive && (
+                <button
+                  className="secondary-button"
+                  data-archived={archived ? "true" : "false"}
+                  data-testid={testIdPrefix ? `${testIdPrefix}-archive-${activity.id}` : undefined}
+                  type="button"
+                  onClick={() => onArchive(activity, !archived)}
+                >
+                  {archived ? <RotateCcw size={16} /> : <Archive size={16} />}
+                  {archived ? "移回列表" : "归档"}
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  className="secondary-button danger-button"
+                  data-testid={testIdPrefix ? `${testIdPrefix}-delete-${activity.id}` : undefined}
+                  type="button"
+                  onClick={() => onDelete(activity)}
+                >
+                  <Trash2 size={16} />
+                  删除
+                </button>
+              )}
             </div>
           </div>
         );
@@ -5331,7 +5447,7 @@ function ownerLabel(ownerId: string | undefined, users: User[]): string {
 }
 
 function isTaskOverdue(activity: Activity): boolean {
-  if (activity.completedAt || !activity.dueAt) {
+  if (activity.completedAt || activity.archivedAt || !activity.dueAt) {
     return false;
   }
 

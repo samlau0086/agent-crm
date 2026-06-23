@@ -184,12 +184,14 @@ model Activity {
   actorId     String?
   dueAt       DateTime?
   completedAt DateTime?
+  archivedAt  DateTime?
   createdAt   DateTime   @default(now())
   workspace   Workspace  @relation(fields: [workspaceId], references: [id])
   record      CrmRecord? @relation(fields: [recordId], references: [id])
 
   @@index([workspaceId, recordId, createdAt])
   @@index([workspaceId, type, completedAt, dueAt])
+  @@index([workspaceId, type, archivedAt])
   @@index([workspaceId, actorId, createdAt])
 }
 

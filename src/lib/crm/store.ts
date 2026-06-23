@@ -1308,7 +1308,7 @@ export class CrmStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const visibleActivities = this.listActivities(context);
     const openTasks = visibleActivities
-      .filter((activity) => activity.type === "task" && !activity.completedAt)
+      .filter((activity) => activity.type === "task" && !activity.completedAt && !activity.archivedAt)
       .sort((left, right) => (left.dueAt ?? left.createdAt).localeCompare(right.dueAt ?? right.createdAt));
 
     return clone({
@@ -1861,7 +1861,7 @@ export class CrmStore {
   updateActivity(
     context: RequestContext,
     activityId: string,
-    patch: Partial<Pick<Activity, "title" | "body">> & { dueAt?: string | null; completedAt?: string | null }
+    patch: Partial<Pick<Activity, "title" | "body">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
   ): Activity {
     requirePermission(context, "crm.write");
     const activity = this.data.activities.find((candidate) => candidate.id === activityId && candidate.workspaceId === context.workspaceId);
@@ -1889,11 +1889,36 @@ export class CrmStore {
     if (patch.completedAt !== undefined) {
       activity.completedAt = patch.completedAt ?? undefined;
     }
+    if (patch.archivedAt !== undefined) {
+      activity.archivedAt = patch.archivedAt ?? undefined;
+    }
     this.writeAuditLog(context, "update", "activity", activity.id, {
       summary: `Updated activity ${activity.title}`,
       details: { patch, recordId: activity.recordId, type: activity.type }
     });
     return clone(activity);
+  }
+
+  deleteActivity(context: RequestContext, activityId: string): void {
+    requirePermission(context, "crm.write");
+    const index = this.data.activities.findIndex((candidate) => candidate.id === activityId && candidate.workspaceId === context.workspaceId);
+    if (index === -1) {
+      throw new Error("Activity not found");
+    }
+    const activity = this.data.activities[index];
+    if (activity.recordId) {
+      const record = this.data.records.find((candidate) => candidate.id === activity.recordId && candidate.workspaceId === context.workspaceId);
+      if (!record || !this.canAccessRecord(context, record)) {
+        throw new Error("Activity not found");
+      }
+    } else if (!canManageAllRecords(context) && activity.actorId !== context.user.id) {
+      throw new Error("Activity not found");
+    }
+    this.data.activities.splice(index, 1);
+    this.writeAuditLog(context, "delete", "activity", activity.id, {
+      summary: `Deleted activity ${activity.title}`,
+      details: { recordId: activity.recordId, type: activity.type, title: activity.title }
+    });
   }
 
   listSavedViews(context: RequestContext, objectKey?: string): SavedView[] {

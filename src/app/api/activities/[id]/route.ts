@@ -27,3 +27,13 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     return handleApiError(error, request);
   }
 }
+
+export async function DELETE(request: NextRequest, { params }: RouteParams) {
+  try {
+    const context = await getRequestContext(request);
+    await getCrmRepository().deleteActivity(context, params.id);
+    return ok({ deleted: true });
+  } catch (error) {
+    return handleApiError(error, request);
+  }
+}
