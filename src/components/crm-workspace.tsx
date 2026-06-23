@@ -270,6 +270,7 @@ const emailCategoryMeta: Array<{ key: EmailCategoryKey; label: string; icon: Luc
   { key: "social", label: "社交", icon: UserRound, keywords: ["social", "forum", "following", "community", "linkedin", "twitter", "通知", "关注", "社区"] },
   { key: "updates", label: "更新", icon: CalendarClock, keywords: ["update", "notification", "report", "receipt", "invoice", "ticket", "github", "alert", "提醒", "账单", "报告"] }
 ];
+const allEmailAccountsKey = "all";
 
 function isEmailAiFeatureBlockedByDependency(feature: keyof EmailAiSettings["features"], features: EmailAiSettings["features"]): boolean {
   const dependency = emailAiFeatureMeta[feature].dependsOn;
@@ -2911,6 +2912,7 @@ function EmailWorkspace({
   const [mailbox, setMailbox] = useState<EmailMailboxKey>("inbox");
   const [category, setCategory] = useState<EmailCategoryKey>("primary");
   const [mailMode, setMailMode] = useState<EmailMailMode>("list");
+  const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(allEmailAccountsKey);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
@@ -2918,8 +2920,22 @@ function EmailWorkspace({
   const [composeMinimized, setComposeMinimized] = useState(false);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const selectedThreadIdsArray = Array.from(selectedThreadIds);
+  const accountFilteredThreads = useMemo(
+    () => (selectedMailboxAccountId === allEmailAccountsKey ? threads : threads.filter((thread) => thread.accountId === selectedMailboxAccountId)),
+    [selectedMailboxAccountId, threads]
+  );
+  const selectedMailboxAccount = selectedMailboxAccountId === allEmailAccountsKey ? undefined : accounts.find((account) => account.id === selectedMailboxAccountId);
+  const selectedMailboxAccountCanSync =
+    selectedMailboxAccountId === allEmailAccountsKey ||
+    Boolean(
+      selectedMailboxAccount &&
+        selectedMailboxAccount.status === "active" &&
+        selectedMailboxAccount.syncEnabled &&
+        selectedMailboxAccount.connectionConfigured &&
+        getEmailProviderCapability(selectedMailboxAccount.provider).supportsSync
+    );
   const visibleThreads = useMemo(() => {
-    return threads.filter((thread) => {
+    return accountFilteredThreads.filter((thread) => {
       const messages = messagesByThread[thread.id] ?? [];
       const state = threadUiState[thread.id] ?? {};
       const threadCategory = state.category ?? inferEmailThreadCategory(thread, messages);
@@ -2948,12 +2964,12 @@ function EmailWorkspace({
       const matchesCategory = mailbox === "inbox" || mailbox === "all" ? threadCategory === category : true;
       return matchesMailbox && matchesCategory && emailThreadMatchesSearch(thread, messages, searchQuery);
     });
-  }, [category, mailbox, messagesByThread, searchQuery, threadUiState, threads]);
+  }, [accountFilteredThreads, category, mailbox, messagesByThread, searchQuery, threadUiState]);
   const visibleThreadIds = visibleThreads.map((thread) => thread.id);
   const allVisibleThreadsSelected = visibleThreadIds.length > 0 && visibleThreadIds.every((threadId) => selectedThreadIds.has(threadId));
   const mailboxCounts = useMemo(() => {
     const counts = Object.fromEntries(emailMailboxMeta.map((item) => [item.key, 0])) as Record<EmailMailboxKey, number>;
-    for (const thread of threads) {
+    for (const thread of accountFilteredThreads) {
       const messages = messagesByThread[thread.id] ?? [];
       const state = threadUiState[thread.id] ?? {};
       const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
@@ -2971,10 +2987,10 @@ function EmailWorkspace({
       if (!isDeleted) counts.all += 1;
     }
     return counts;
-  }, [messagesByThread, threadUiState, threads]);
+  }, [accountFilteredThreads, messagesByThread, threadUiState]);
   const categoryCounts = useMemo(() => {
     const counts = Object.fromEntries(emailCategoryMeta.map((item) => [item.key, 0])) as Record<EmailCategoryKey, number>;
-    for (const thread of threads) {
+    for (const thread of accountFilteredThreads) {
       const messages = messagesByThread[thread.id] ?? [];
       const state = threadUiState[thread.id] ?? {};
       if (state.deleted || state.archived || (state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now())) {
@@ -2983,7 +2999,17 @@ function EmailWorkspace({
       counts[state.category ?? inferEmailThreadCategory(thread, messages)] += 1;
     }
     return counts;
-  }, [messagesByThread, threadUiState, threads]);
+  }, [accountFilteredThreads, messagesByThread, threadUiState]);
+  const accountThreadCounts = useMemo(() => {
+    const counts = new Map(accounts.map((account) => [account.id, 0]));
+    for (const thread of threads) {
+      const state = threadUiState[thread.id] ?? {};
+      if (!state.deleted) {
+        counts.set(thread.accountId, (counts.get(thread.accountId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [accounts, threadUiState, threads]);
 
   const patchThreadUiState = useCallback((threadIds: string[], patch: Partial<EmailThreadUiState> | ((state: EmailThreadUiState) => EmailThreadUiState)) => {
     setThreadUiState((current) => {
@@ -3005,6 +3031,13 @@ function EmailWorkspace({
   useEffect(() => {
     setThreadUiState((current) => ({ ...current, ...buildEmailThreadUiStateMap(threads) }));
   }, [threads]);
+
+  useEffect(() => {
+    if (selectedMailboxAccountId !== allEmailAccountsKey && !accounts.some((account) => account.id === selectedMailboxAccountId)) {
+      setSelectedMailboxAccountId(allEmailAccountsKey);
+      setSelectedThreadIds(new Set());
+    }
+  }, [accounts, selectedMailboxAccountId]);
 
   useEffect(() => {
     if (!selectedThreadId || !messagesByThread[selectedThreadId]?.length) {
@@ -3030,7 +3063,26 @@ function EmailWorkspace({
     }
   }, [hasEmailDraftContent, view]);
 
+  function selectMailboxAccount(accountId: string) {
+    setSelectedMailboxAccountId(accountId);
+    setMailMode("list");
+    setSelectedThreadIds(new Set());
+  }
+
+  function syncCurrentMailboxAccount() {
+    if (selectedMailboxAccountId === allEmailAccountsKey) {
+      onSyncAllAccounts();
+    } else {
+      onSyncAccount(selectedMailboxAccountId);
+    }
+  }
+
   function openComposePopup() {
+    const selectedAccountCanSend = selectedMailboxAccountId !== allEmailAccountsKey && activeAccounts.some((account) => account.id === selectedMailboxAccountId);
+    const accountId = selectedAccountCanSend ? selectedMailboxAccountId : emailDraft.accountId || activeAccounts[0]?.id || "";
+    if (accountId && accountId !== emailDraft.accountId) {
+      onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId }));
+    }
     setComposeOpen(true);
     setComposeMinimized(false);
     window.setTimeout(() => {
@@ -3488,6 +3540,39 @@ function EmailWorkspace({
             <Send size={16} />
             写邮件
           </button>
+          <div className="gmail-label-block" data-testid="email-mailbox-account-switcher">
+            <div className="gmail-label-title">
+              <span>邮箱账户</span>
+              <small>{accounts.length}</small>
+            </div>
+            <button
+              className={`gmail-folder ${selectedMailboxAccountId === allEmailAccountsKey ? "active" : ""}`}
+              data-testid="email-mailbox-account-all"
+              type="button"
+              onClick={() => selectMailboxAccount(allEmailAccountsKey)}
+            >
+              <Inbox size={16} />
+              <span>全部邮箱</span>
+              <small>{threads.filter((thread) => !(threadUiState[thread.id]?.deleted)).length || ""}</small>
+            </button>
+            {accounts.map((account) => (
+              <button
+                className={`gmail-folder gmail-account-folder ${selectedMailboxAccountId === account.id ? "active" : ""}`}
+                data-testid={`email-mailbox-account-${account.id}`}
+                key={account.id}
+                type="button"
+                onClick={() => selectMailboxAccount(account.id)}
+              >
+                <Mail size={16} />
+                <span>
+                  <strong>{account.name}</strong>
+                  <em>{account.emailAddress}</em>
+                </span>
+                <small>{accountThreadCounts.get(account.id) || ""}</small>
+              </button>
+            ))}
+            {accounts.length === 0 ? <div className="subtle">还没有邮箱账户</div> : null}
+          </div>
           <nav className="gmail-folder-list" aria-label="邮箱">
             {emailMailboxMeta.map((item) => {
               const Icon = item.icon;
@@ -3539,7 +3624,14 @@ function EmailWorkspace({
                   />
                   <span>{selectedThreadIds.size ? `已选择 ${selectedThreadIds.size}` : `${visibleThreads.length} 封`}</span>
                 </label>
-                <button className="icon-button" aria-label="刷新邮件" title="刷新邮件" type="button" onClick={onSyncAllAccounts} disabled={disabled || !canManageEmailSettings}>
+                <button
+                  className="icon-button"
+                  aria-label="刷新邮件"
+                  title={selectedMailboxAccount ? `刷新 ${selectedMailboxAccount.emailAddress}` : "刷新全部邮箱"}
+                  type="button"
+                  onClick={syncCurrentMailboxAccount}
+                  disabled={disabled || !canManageEmailSettings || !selectedMailboxAccountCanSync}
+                >
                   <RefreshCw size={16} />
                 </button>
                 <button className="icon-button" aria-label="归档" title="归档" type="button" onClick={() => performMailboxAction("archive")} disabled={!selectedThreadIds.size}>

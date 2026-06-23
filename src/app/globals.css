@@ -622,6 +622,34 @@ button {
   font-weight: 700;
 }
 
+.gmail-account-folder {
+  min-height: 42px;
+}
+
+.gmail-account-folder span {
+  display: grid;
+  min-width: 0;
+}
+
+.gmail-account-folder strong,
+.gmail-account-folder em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gmail-account-folder strong {
+  font-size: 13px;
+}
+
+.gmail-account-folder em {
+  color: #5f6368;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 500;
+}
+
 .gmail-label-title {
   display: flex;
   align-items: center;

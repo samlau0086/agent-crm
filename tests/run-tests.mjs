@@ -1491,6 +1491,25 @@ await run("email workspace refreshes threads and selected messages after sync", 
   assert.match(source, /async function syncAllEmailAccounts[\s\S]*await refreshEmailThreads\(\{ reloadSelectedMessages: true \}\)[\s\S]*router\.refresh\(\)/);
 });
 
+await run("email workspace supports multiple mailbox account filters", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /const allEmailAccountsKey = "all"/);
+  assert.match(source, /const \[selectedMailboxAccountId, setSelectedMailboxAccountId\] = useState<string>\(allEmailAccountsKey\)/);
+  assert.match(source, /accountFilteredThreads = useMemo/);
+  assert.match(source, /thread\.accountId === selectedMailboxAccountId/);
+  assert.match(source, /data-testid="email-mailbox-account-switcher"/);
+  assert.match(source, /data-testid="email-mailbox-account-all"/);
+  assert.match(source, /data-testid=\{`email-mailbox-account-\$\{account\.id\}`\}/);
+  assert.match(source, /function syncCurrentMailboxAccount\(\)/);
+  assert.match(source, /selectedMailboxAccountId === allEmailAccountsKey[\s\S]*onSyncAllAccounts\(\)/);
+  assert.match(source, /onSyncAccount\(selectedMailboxAccountId\)/);
+  assert.match(source, /selectedAccountCanSend \? selectedMailboxAccountId : emailDraft\.accountId \|\| activeAccounts\[0\]\?\.id \|\| ""/);
+  assert.match(styles, /\.gmail-account-folder span \{/);
+  assert.match(styles, /\.gmail-account-folder strong,/);
+});
+
 await run("email workspace diagnostics display ai automation eligibility policy", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /automationEligibleStatuses\.inbound\.join\("\/"\)/);
