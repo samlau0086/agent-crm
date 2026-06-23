@@ -37,7 +37,7 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
@@ -464,6 +464,7 @@ function withClosedStages(stages: Pipeline["stages"]): Pipeline["stages"] {
 export function CrmWorkspace(props: CrmWorkspaceProps) {
   const router = useRouter();
   const [activeNav, setActiveNav] = useState<NavKey>("dashboard");
+  const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
   const [activeObjectKey, setActiveObjectKey] = useState(props.initialObjectKey);
   const [records, setRecords] = useState<CrmRecord[]>(() => mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
   const [activities, setActivities] = useState<Activity[]>(() =>
@@ -652,7 +653,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         .sort((left, right) => new Date(left.dueAt ?? left.createdAt).getTime() - new Date(right.dueAt ?? right.createdAt).getTime()),
     [activities]
   );
-  const deals = props.dashboardSummary.deals;
+  const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const totalPipeline = useMemo(
     () => props.dashboardSummary.totalPipeline,
     [props.dashboardSummary.totalPipeline]
@@ -960,6 +961,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }, [props.contextUser.id, selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
   function openObject(objectKey: string) {
+    setAppSidebarCollapsed(false);
     setActiveObjectKey(objectKey);
     setActiveNav(coreObjects.has(objectKey) ? (objectKey as NavKey) : "records");
     setQuery("");
@@ -1245,10 +1247,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function moveDealStage(record: CrmRecord, stageKey: string) {
-    await fetchJson(`/api/records/${record.objectKey}/${record.id}`, {
+    const updated = await fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}`, {
       method: "PATCH",
       body: { stageKey }
     });
+    setRecords((current) => mergeRecords(current, [updated]));
     setMessage("交易阶段已更新");
     router.refresh();
   }
@@ -1750,7 +1753,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   return (
     <div
-      className="app-shell"
+      className={`app-shell ${appSidebarCollapsed ? "sidebar-collapsed" : ""}`}
       data-testid="crm-workspace"
       data-active-object={activeObject?.key ?? ""}
       data-create-form-object={createFormObjectKey}
@@ -1775,6 +1778,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 data-testid={`nav-${item.key}`}
                 type="button"
                 onClick={() => {
+                  if (item.key === "email") {
+                    setActiveNav(item.key);
+                    setAppSidebarCollapsed(true);
+                    return;
+                  }
+                  setAppSidebarCollapsed(false);
                   setActiveNav(item.key);
                   if (item.key === "contacts" || item.key === "companies" || item.key === "deals") {
                     openObject(item.key);
@@ -1801,7 +1810,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         </div>
       </aside>
 
-      <main className="main">
+      <main className={`main ${activeNav === "email" ? "email-main" : ""}`}>
+        {activeNav !== "email" ? (
         <div className="topbar">
           <div>
             <h1 className="page-title">{titleFor(activeNav, activeObject?.pluralLabel)}</h1>
@@ -1825,6 +1835,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             ) : null}
           </div>
         </div>
+        ) : null}
 
         {message && <section className="section" style={{ marginBottom: 12, borderColor: "#86efac", background: "#f0fdf4" }}>{message}</section>}
         {error && <section className="section" style={{ marginBottom: 12, borderColor: "#fca5a5", background: "#fef2f2" }}>{error}</section>}
@@ -1839,6 +1850,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             pipelines={props.pipelines}
             deals={deals}
             onOpenObject={openObject}
+            onOpenDeal={openRecord}
+            onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
           />
         )}
 
@@ -2525,6 +2538,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
             onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
+            sidebarCollapsed={appSidebarCollapsed}
+            onToggleAppSidebar={() => setAppSidebarCollapsed((current) => !current)}
           />
         )}
         {activeNav === "tasks" && <TaskView activities={openTasks} users={props.users} onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))} />}
@@ -2562,7 +2577,9 @@ function Dashboard({
   totalPipeline,
   pipelines,
   deals,
-  onOpenObject
+  onOpenObject,
+  onOpenDeal,
+  onMoveDealStage
 }: {
   objects: ObjectDefinition[];
   recordCounts: Record<string, number>;
@@ -2572,8 +2589,34 @@ function Dashboard({
   pipelines: Pipeline[];
   deals: CrmRecord[];
   onOpenObject: (objectKey: string) => void;
+  onOpenDeal: (deal: CrmRecord) => void;
+  onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
 }) {
   const defaultPipeline = pipelines.find((pipeline) => pipeline.objectKey === "deals" && pipeline.isDefault);
+  const [draggedDealId, setDraggedDealId] = useState("");
+
+  function handleDealDragStart(event: DragEvent<HTMLButtonElement>, deal: CrmRecord) {
+    setDraggedDealId(deal.id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", deal.id);
+    event.dataTransfer.setData("application/x-crm-deal-id", deal.id);
+  }
+
+  function handleStageDragOver(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }
+
+  function handleStageDrop(event: DragEvent<HTMLElement>, stageKey: string) {
+    event.preventDefault();
+    const dealId = event.dataTransfer.getData("application/x-crm-deal-id") || event.dataTransfer.getData("text/plain");
+    const deal = deals.find((candidate) => candidate.id === dealId);
+    setDraggedDealId("");
+    if (!deal || deal.stageKey === stageKey) {
+      return;
+    }
+    onMoveDealStage(deal, stageKey);
+  }
 
   return (
     <>
@@ -2596,18 +2639,33 @@ function Dashboard({
             {withClosedStages(defaultPipeline?.stages ?? []).map((stage) => {
               const stageDeals = deals.filter((deal) => deal.stageKey === stage.key);
               return (
-                <div className="pipeline-stage" key={stage.key}>
+                <section
+                  className={`pipeline-stage ${draggedDealId ? "drag-active" : ""}`}
+                  data-testid={`pipeline-stage-${stage.key}`}
+                  key={stage.key}
+                  onDragOver={handleStageDragOver}
+                  onDrop={(event) => handleStageDrop(event, stage.key)}
+                >
                   <div className="stage-header">
                     <span>{stage.label}</span>
                     <span className="badge">{Math.round(stage.probability * 100)}%</span>
                   </div>
                   {stageDeals.map((deal) => (
-                    <div className="deal-pill" key={deal.id}>
+                    <button
+                      className={`deal-pill ${draggedDealId === deal.id ? "dragging" : ""}`}
+                      data-testid={`pipeline-deal-${deal.id}`}
+                      draggable
+                      key={deal.id}
+                      type="button"
+                      onClick={() => onOpenDeal(deal)}
+                      onDragEnd={() => setDraggedDealId("")}
+                      onDragStart={(event) => handleDealDragStart(event, deal)}
+                    >
                       <strong>{deal.title}</strong>
                       <div className="subtle">{formatCurrency(deal.data.amount)}</div>
-                    </div>
+                    </button>
                   ))}
-                </div>
+                </section>
               );
             })}
           </div>
@@ -2671,7 +2729,9 @@ function EmailWorkspace({
   onCreateKnowledgeArticle,
   onUpdateKnowledgeArticle,
   onToggleAiFeature,
-  onUpdateAiSettings
+  onUpdateAiSettings,
+  sidebarCollapsed,
+  onToggleAppSidebar
 }: {
   accounts: EmailAccount[];
   threads: EmailThread[];
@@ -2725,6 +2785,8 @@ function EmailWorkspace({
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
   onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars">>) => void;
+  sidebarCollapsed: boolean;
+  onToggleAppSidebar: () => void;
 }) {
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedMessages = selectedThread ? messagesByThread[selectedThread.id] ?? [] : [];
@@ -3019,6 +3081,9 @@ function EmailWorkspace({
   return (
     <div className="email-workspace">
       <div className="tabs email-tabs" data-testid="email-workspace-tabs">
+        <button className="icon-button" data-testid="email-app-sidebar-toggle" aria-label={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={onToggleAppSidebar}>
+          <Menu size={16} />
+        </button>
         <button className={`tab ${view === "mail" ? "active" : ""}`} data-testid="email-tab-mail" type="button" onClick={() => onViewChange("mail")}>
           收发信
         </button>
@@ -3250,7 +3315,7 @@ function EmailWorkspace({
       {view === "mail" ? (
     <div className="gmail-client">
       <div className="gmail-topbar">
-        <button className="icon-button" aria-label="菜单" type="button">
+        <button className="icon-button" aria-label={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={onToggleAppSidebar}>
           <Menu size={18} />
         </button>
         <div className="gmail-brand">

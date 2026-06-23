@@ -1328,6 +1328,24 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
   assert.match(source, /account\.status === "active" && account\.sendEnabled && account\.connectionConfigured && getEmailProviderCapability\(account\.provider\)\.supportsSend/);
 });
 
+await run("workspace supports deal pipeline drag and email sidebar collapse", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  assert.match(source, /const \[appSidebarCollapsed, setAppSidebarCollapsed\] = useState\(false\)/);
+  assert.match(source, /item\.key === "email"[\s\S]*setAppSidebarCollapsed\(true\)/);
+  assert.match(source, /className=\{`app-shell \$\{appSidebarCollapsed \? "sidebar-collapsed" : ""\}`\}/);
+  assert.match(source, /data-testid="email-app-sidebar-toggle"/);
+  assert.match(source, /activeNav !== "email" \?/);
+  assert.match(source, /function handleDealDragStart/);
+  assert.match(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);
+  assert.match(source, /draggable/);
+  assert.match(source, /data-testid=\{`pipeline-stage-\$\{stage\.key\}`\}/);
+  assert.match(source, /onDrop=\{\(event\) => handleStageDrop\(event, stage\.key\)\}/);
+  assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
+  assert.match(styles, /\.app-shell\.sidebar-collapsed/);
+  assert.match(styles, /\.deal-pill\.dragging/);
+});
+
 await run("email workspace refreshes threads and selected messages after sync", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /async function refreshEmailThreads\(options: \{ reloadSelectedMessages\?: boolean \} = \{\}\)/);

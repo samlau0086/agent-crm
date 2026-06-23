@@ -49,6 +49,14 @@ button {
   min-height: 100vh;
 }
 
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.app-shell.sidebar-collapsed .sidebar {
+  display: none;
+}
+
 .sidebar {
   min-width: 0;
   position: sticky;
@@ -119,6 +127,10 @@ button {
   min-width: 0;
   max-width: 100vw;
   padding: 22px;
+}
+
+.main.email-main {
+  padding-top: 8px;
 }
 
 .topbar {
@@ -281,6 +293,11 @@ button {
   margin-bottom: 12px;
 }
 
+.email-tabs {
+  align-items: center;
+  margin-bottom: 6px;
+}
+
 .tab {
   min-height: 36px;
   padding: 7px 12px;
@@ -410,6 +427,11 @@ button {
   min-height: 132px;
 }
 
+.pipeline-stage.drag-active {
+  border-color: rgba(15, 118, 110, 0.35);
+  background: #f0fdfa;
+}
+
 .stage-header {
   display: flex;
   align-items: center;
@@ -419,13 +441,31 @@ button {
 }
 
 .deal-pill {
+  display: block;
+  width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;
   margin-top: 10px;
   padding: 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
+  color: var(--text);
   background: white;
+  text-align: left;
+  cursor: grab;
+}
+
+.deal-pill:hover {
+  border-color: rgba(15, 118, 110, 0.35);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.deal-pill:active {
+  cursor: grabbing;
+}
+
+.deal-pill.dragging {
+  opacity: 0.55;
 }
 
 .settings-grid {
