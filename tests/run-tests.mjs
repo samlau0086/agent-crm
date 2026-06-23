@@ -1353,6 +1353,8 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.app-shell\.sidebar-collapsed \{\s*grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(styles, /\.main \{[\s\S]*padding: 22px;/);
   assert.doesNotMatch(styles, /\.main\.email-main \{[\s\S]{0,80}padding: 0;/);
+  assert.match(styles, /\.gmail-client \{[\s\S]*grid-template-rows: max-content minmax\(0, 1fr\);/);
+  assert.match(styles, /\.gmail-client \{[\s\S]*align-content: start;/);
   assert.match(styles, /\.gmail-client \{[\s\S]*min-height: calc\(100vh - 44px\);/);
   assert.match(styles, /\.email-workspace\.mail-view \{\s*padding: 0;/);
   assert.match(styles, /\.deal-pill\.dragging/);
