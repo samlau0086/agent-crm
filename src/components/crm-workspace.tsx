@@ -468,6 +468,29 @@ function withClosedStages(stages: Pipeline["stages"]): Pipeline["stages"] {
   ];
 }
 
+function AppSidebarToggleButton({
+  collapsed,
+  onToggle,
+  testId = "app-sidebar-toggle"
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  testId?: string;
+}) {
+  return (
+    <button
+      className="icon-button"
+      data-testid={testId}
+      aria-label={collapsed ? "显示主侧边栏" : "隐藏主侧边栏"}
+      title={collapsed ? "显示主侧边栏" : "隐藏主侧边栏"}
+      type="button"
+      onClick={onToggle}
+    >
+      <Menu size={18} />
+    </button>
+  );
+}
+
 export function CrmWorkspace(props: CrmWorkspaceProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -1854,9 +1877,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         {activeNav !== "email" ? (
         <div className="topbar">
           <div className="topbar-title">
-            <button className="icon-button" data-testid="app-sidebar-toggle" aria-label={appSidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={appSidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={toggleAppSidebar}>
-              <Menu size={18} />
-            </button>
+            <AppSidebarToggleButton collapsed={appSidebarCollapsed} onToggle={toggleAppSidebar} />
             <div>
               <h1 className="page-title">{titleFor(activeNav, activeObject?.pluralLabel)}</h1>
               <div className="subtle">模块化单体、真实 API、真实表单和可配置 CRM 元数据已经接通。</div>
@@ -3127,9 +3148,7 @@ function EmailWorkspace({
     <div className={`email-workspace ${view === "mail" ? "mail-view" : ""}`}>
       {view !== "mail" ? (
       <div className="tabs email-tabs" data-testid="email-workspace-tabs">
-        <button className="icon-button" data-testid="email-app-sidebar-toggle" aria-label={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={onToggleAppSidebar}>
-          <Menu size={16} />
-        </button>
+        <AppSidebarToggleButton collapsed={sidebarCollapsed} onToggle={onToggleAppSidebar} testId="email-app-sidebar-toggle" />
         <button className="tab" data-testid="email-tab-mail" type="button" onClick={() => onViewChange("mail")}>
           收发信
         </button>
@@ -3362,12 +3381,12 @@ function EmailWorkspace({
       {view === "mail" ? (
     <div className="gmail-client">
       <div className="gmail-topbar">
-        <button className="icon-button" data-testid="email-app-sidebar-toggle" aria-label={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={onToggleAppSidebar}>
-          <Menu size={18} />
-        </button>
-        <div className="gmail-brand">
-          <Mail size={24} />
-          <span>Mail</span>
+        <div className="topbar-title gmail-topbar-title">
+          <AppSidebarToggleButton collapsed={sidebarCollapsed} onToggle={onToggleAppSidebar} testId="email-app-sidebar-toggle" />
+          <div className="gmail-brand">
+            <Mail size={24} />
+            <span>Mail</span>
+          </div>
         </div>
         <label className="gmail-search">
           <Search size={18} />

@@ -508,10 +508,14 @@ button {
 
 .gmail-topbar {
   display: grid;
-  grid-template-columns: 40px 128px minmax(220px, 680px) 40px 40px;
+  grid-template-columns: minmax(172px, max-content) minmax(220px, 680px) 40px 40px;
   gap: 10px;
   align-items: center;
-  padding: 6px 10px;
+  padding: 0;
+}
+
+.gmail-topbar-title {
+  align-items: center;
 }
 
 .gmail-brand {
@@ -1582,8 +1586,8 @@ button {
   }
 
   .gmail-topbar {
-    grid-template-columns: 36px minmax(0, 96px) minmax(160px, 1fr) 36px 36px;
-    padding: 4px 0;
+    grid-template-columns: max-content minmax(160px, 1fr) 36px 36px;
+    padding: 0;
   }
 
   .gmail-brand span {

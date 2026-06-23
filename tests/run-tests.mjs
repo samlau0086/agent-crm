@@ -1362,8 +1362,10 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.doesNotMatch(source, /item\.key === "email"[\s\S]{0,160}setAppSidebarCollapsed\(true\)/);
   assert.doesNotMatch(source, /function openObject\(objectKey: string\) \{[\s\S]{0,120}setAppSidebarCollapsed/);
   assert.match(source, /className=\{`app-shell \$\{appSidebarCollapsed \? "sidebar-collapsed" : ""\}`\}/);
-  assert.match(source, /data-testid="app-sidebar-toggle"/);
-  assert.match(source, /data-testid="email-app-sidebar-toggle"/);
+  assert.match(source, /function AppSidebarToggleButton/);
+  assert.match(source, /testId = "app-sidebar-toggle"/);
+  assert.match(source, /testId="email-app-sidebar-toggle"/);
+  assert.match(source, /className="topbar-title gmail-topbar-title"/);
   assert.match(source, /activeNav !== "email" \?/);
   assert.match(source, /view !== "mail" \?/);
   assert.match(source, /className=\{`email-workspace \$\{view === "mail" \? "mail-view" : ""\}`\}/);
@@ -1379,6 +1381,9 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.gmail-client \{[\s\S]*grid-template-rows: max-content minmax\(0, 1fr\);/);
   assert.match(styles, /\.gmail-client \{[\s\S]*align-content: start;/);
   assert.match(styles, /\.gmail-client \{[\s\S]*min-height: calc\(100vh - 44px\);/);
+  assert.match(styles, /\.gmail-topbar \{[\s\S]*grid-template-columns: minmax\(172px, max-content\) minmax\(220px, 680px\) 40px 40px;/);
+  assert.match(styles, /\.gmail-topbar \{[\s\S]*padding: 0;/);
+  assert.match(styles, /\.gmail-topbar-title \{[\s\S]*align-items: center;/);
   assert.match(styles, /\.email-workspace\.mail-view \{\s*padding: 0;/);
   assert.match(styles, /\.deal-pill\.dragging/);
 });
