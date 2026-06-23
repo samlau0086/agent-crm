@@ -1169,7 +1169,14 @@ button {
 .gmail-compose-popup-header .icon-button {
   width: 28px;
   height: 28px;
+  border-color: transparent;
   color: #ffffff;
+  background: transparent;
+}
+
+.gmail-compose-popup-header .icon-button svg {
+  color: #ffffff;
+  stroke: currentColor;
 }
 
 .gmail-compose-popup-header .icon-button:hover {
@@ -1410,18 +1417,23 @@ button {
 
 .email-html-preview {
   margin-top: 8px;
+  width: 100%;
 }
 
-.email-html-preview summary {
+.email-text-fallback {
+  margin-top: 10px;
+}
+
+.email-text-fallback summary {
   cursor: pointer;
   color: var(--blue);
   font-weight: 650;
 }
 
-.email-html-preview iframe {
+.email-html-preview-frame {
+  display: block;
   width: 100%;
-  min-height: 220px;
-  margin-top: 8px;
+  min-height: min(640px, 70vh);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;

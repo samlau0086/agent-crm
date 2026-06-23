@@ -1674,9 +1674,11 @@ await run("email workspace previews html bodies in a sandboxed iframe", () => {
   assert.match(source, /http-equiv="Content-Security-Policy"/);
   assert.match(source, /hasEmailHtmlPreview\(message\)/);
   assert.match(source, /data-testid=\{`email-message-html-\$\{message\.id\}`\}/);
-  assert.match(source, /<iframe sandbox="" srcDoc=\{buildEmailHtmlPreview\(message\.bodyHtml \?\? ""\)\}/);
+  assert.match(source, /hasEmailHtmlPreview\(message\)[\s\S]*<iframe sandbox="" srcDoc=\{buildEmailHtmlPreview\(message\.bodyHtml \?\? ""\)\}[\s\S]*<details className="email-text-fallback">[\s\S]*显示文本邮件/);
+  assert.doesNotMatch(source, /<div className="email-message-body">\{message\.bodyText\}<\/div>\s*\{hasEmailHtmlPreview\(message\)/);
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
-  assert.match(styles, /\.email-html-preview iframe/);
+  assert.match(styles, /\.email-html-preview-frame/);
+  assert.match(styles, /\.gmail-compose-popup-header \.icon-button[\s\S]*background: transparent/);
 });
 
 await run("email diagnostics can recover stale sending messages through retry", () => {
@@ -9051,6 +9053,24 @@ await run("imap raw email parser extracts multipart body and attachments", () =>
   assert.equal(parsed?.attachments?.[0]?.contentType, "text/plain");
   assert.equal(Buffer.from(parsed?.attachments?.[0]?.contentBase64 ?? "", "base64").toString("utf8"), "proposal body");
   assert.equal(parsed?.attachments?.[0]?.size, "proposal body".length);
+});
+
+await run("imap raw email parser decodes quoted printable charset html bodies", () => {
+  const raw = [
+    "Message-ID: <instagram-message@example.com>",
+    "From: Instagram <no-reply@mail.instagram.com>",
+    "To: Info <info@example.com>",
+    "Subject: =?UTF-8?Q?=E7=9C=8B=E7=9C=8B_Instagram_=E4=B8=8A=E7=9A=84=E6=96=B0=E9=B2=9C=E4=BA=8B=E5=90=A7?=",
+    "Content-Type: text/html; charset=utf-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    "<p>=E4=BD=A0=E5=A5=BD Instagram</p>"
+  ].join("\r\n");
+
+  const parsed = parseRawEmailMessage(raw);
+  assert.equal(parsed?.subject, "看看 Instagram 上的新鲜事吧");
+  assert.equal(parsed?.bodyHtml, "<p>你好 Instagram</p>");
+  assert.equal(parsed?.bodyText, "你好 Instagram");
 });
 
 await run("imap sync fallback message ids prevent duplicate imports without message-id headers", () => {

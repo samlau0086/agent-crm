@@ -4167,13 +4167,17 @@ function EmailWorkspace({
                             </button>
                           </div>
                         ) : null}
-                        <div className="email-message-body">{message.bodyText}</div>
                         {hasEmailHtmlPreview(message) ? (
-                          <details className="activity-item" style={{ marginTop: 8 }}>
-                            <summary>HTML 预览</summary>
-                            <iframe sandbox="" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview" title={`HTML preview ${message.id}`} />
-                          </details>
-                        ) : null}
+                          <div className="email-html-preview">
+                            <iframe sandbox="" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
+                            <details className="email-text-fallback">
+                              <summary>显示文本邮件</summary>
+                              <div className="email-message-body">{message.bodyText}</div>
+                            </details>
+                          </div>
+                        ) : (
+                          <div className="email-message-body">{message.bodyText}</div>
+                        )}
                         {message.attachments?.length ? (
                           <div className="toolbar" style={{ marginTop: 8 }}>
                             {message.attachments.map((attachment, index) => {

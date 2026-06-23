@@ -605,7 +605,7 @@ function parseMimeBody(body: string, contentType: ParsedContentType, headers: Re
   }
 
   if (contentType.mimeType === "text/html") {
-    const bodyHtml = decodeMimeText(body, headers["content-transfer-encoding"]);
+    const bodyHtml = decodeMimeText(body, headers["content-transfer-encoding"], contentType.params.charset);
     return {
       bodyText: stripHtml(bodyHtml),
       bodyHtml,
@@ -614,7 +614,7 @@ function parseMimeBody(body: string, contentType: ParsedContentType, headers: Re
   }
 
   return {
-    bodyText: decodeMimeText(body, headers["content-transfer-encoding"]),
+    bodyText: decodeMimeText(body, headers["content-transfer-encoding"], contentType.params.charset),
     attachments: undefined
   };
 }
@@ -632,7 +632,7 @@ function parseMimePart(raw: string): { bodyText?: string; bodyHtml?: string; att
   const fileName = decodeHeader(disposition.params.filename ?? contentType.params.name ?? "");
   const isAttachment = Boolean(fileName) || disposition.value === "attachment" || disposition.value === "inline";
   if (isAttachment) {
-    const content = parseAttachmentContent(body, headers["content-transfer-encoding"]);
+    const content = parseAttachmentContent(body, headers["content-transfer-encoding"], contentType.params.charset);
     return {
       attachments: [
         {
@@ -648,16 +648,16 @@ function parseMimePart(raw: string): { bodyText?: string; bodyHtml?: string; att
   }
 
   if (contentType.mimeType === "text/plain" || !contentType.mimeType) {
-    return { bodyText: decodeMimeText(body, headers["content-transfer-encoding"]) };
+    return { bodyText: decodeMimeText(body, headers["content-transfer-encoding"], contentType.params.charset) };
   }
   if (contentType.mimeType === "text/html") {
-    const bodyHtml = decodeMimeText(body, headers["content-transfer-encoding"]);
+    const bodyHtml = decodeMimeText(body, headers["content-transfer-encoding"], contentType.params.charset);
     return { bodyText: stripHtml(bodyHtml), bodyHtml };
   }
   return {};
 }
 
-function parseAttachmentContent(body: string, transferEncoding: string | undefined): { contentBase64?: string; size: number } {
+function parseAttachmentContent(body: string, transferEncoding: string | undefined, charset?: string): { contentBase64?: string; size: number } {
   if (transferEncoding?.toLowerCase() === "base64") {
     try {
       const contentBase64 = normalizeEmailAttachmentBase64(body);
@@ -666,7 +666,7 @@ function parseAttachmentContent(body: string, transferEncoding: string | undefin
       return { size: 0 };
     }
   }
-  const contentBase64 = Buffer.from(decodeMimeText(body, transferEncoding), "utf8").toString("base64");
+  const contentBase64 = Buffer.from(decodeMimeText(body, transferEncoding, charset), "utf8").toString("base64");
   return { contentBase64, size: Buffer.from(contentBase64, "base64").length };
 }
 
@@ -699,15 +699,43 @@ function parseHeaderWithParams(value: string | undefined): { value: string; para
   return { value: (parts[0] ?? "").toLowerCase(), params };
 }
 
-function decodeMimeText(value: string, transferEncoding?: string): string {
+function decodeMimeText(value: string, transferEncoding?: string, charset?: string): string {
+  const bytes = decodeMimeBytes(value, transferEncoding);
+  return decodeBufferWithCharset(bytes, charset);
+}
+
+function decodeMimeBytes(value: string, transferEncoding?: string): Buffer {
   const encoding = transferEncoding?.toLowerCase();
   if (encoding === "base64") {
-    return Buffer.from(normalizeBase64(value), "base64").toString("utf8");
+    return Buffer.from(normalizeBase64(value), "base64");
   }
   if (encoding === "quoted-printable") {
-    return decodeQuotedPrintable(value);
+    return decodeQuotedPrintableToBuffer(value);
   }
-  return value;
+  return Buffer.from(value, "utf8");
+}
+
+function decodeBufferWithCharset(bytes: Buffer, charset?: string): string {
+  const label = normalizeCharsetLabel(charset);
+  try {
+    return new TextDecoder(label, { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  }
+}
+
+function normalizeCharsetLabel(charset?: string): string {
+  const label = charset?.trim().replace(/^"|"$/g, "").toLowerCase();
+  if (!label) {
+    return "utf-8";
+  }
+  if (label === "gb2312" || label === "gbk" || label === "x-gbk") {
+    return "gb18030";
+  }
+  if (label === "iso-8859-1" || label === "latin1") {
+    return "windows-1252";
+  }
+  return label;
 }
 
 function stripHtml(value: string): string {
@@ -731,14 +759,31 @@ function stripHtml(value: string): string {
 }
 
 function decodeQuotedPrintable(value: string): string {
+  return decodeBufferWithCharset(decodeQuotedPrintableToBuffer(value), "utf-8");
+}
+
+function decodeQuotedPrintableToBuffer(value: string): Buffer {
   const normalized = value.replace(/=\r?\n/g, "");
-  return normalized.replace(/=([0-9a-f]{2})/gi, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+  const bytes: number[] = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    if (char === "=" && /^[0-9a-f]{2}$/i.test(normalized.slice(index + 1, index + 3))) {
+      bytes.push(Number.parseInt(normalized.slice(index + 1, index + 3), 16));
+      index += 2;
+      continue;
+    }
+    bytes.push(...Buffer.from(char, "utf8"));
+  }
+  return Buffer.from(bytes);
 }
 
 function decodeHeader(value: string): string {
-  return value
-    .replace(/=\?utf-8\?b\?([^?]+)\?=/gi, (_match, encoded: string) => Buffer.from(encoded, "base64").toString("utf8"))
-    .replace(/=\?utf-8\?q\?([^?]+)\?=/gi, (_match, encoded: string) => decodeQuotedPrintable(encoded.replace(/_/g, " ")));
+  return value.replace(/=\?([^?]+)\?([bq])\?([^?]+)\?=/gi, (_match, charset: string, encoding: string, encoded: string) => {
+    if (encoding.toLowerCase() === "b") {
+      return decodeBufferWithCharset(Buffer.from(normalizeBase64(encoded), "base64"), charset);
+    }
+    return decodeBufferWithCharset(decodeQuotedPrintableToBuffer(encoded.replace(/_/g, " ")), charset);
+  });
 }
 
 function safeIsoDate(value: string | undefined): string | undefined {
