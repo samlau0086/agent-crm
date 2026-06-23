@@ -1,4 +1,4 @@
-﻿CREATE TABLE "EmailThreadState" (
+CREATE TABLE "EmailThreadState" (
   "id" TEXT NOT NULL,
   "workspaceId" TEXT NOT NULL,
   "threadId" TEXT NOT NULL,
