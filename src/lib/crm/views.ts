@@ -101,6 +101,17 @@ export function findRelatedRecords(
       continue;
     }
 
+    if (
+      selectedRecord.objectKey === "products" &&
+      record.objectKey === "quotes" &&
+      quoteLineItemsReferenceProduct(record, selectedRecord.id)
+    ) {
+      related.set(`${record.id}:lineItems`, {
+        record,
+        label: relationLabel(relations, record.objectKey, selectedRecord.objectKey, "报价产品")
+      });
+    }
+
     for (const field of referenceFields.filter((item) => item.objectKey === record.objectKey)) {
       if (record.data[field.key] !== selectedRecord.id) {
         continue;
@@ -114,6 +125,11 @@ export function findRelatedRecords(
   }
 
   return Array.from(related.values()).sort((left, right) => left.record.title.localeCompare(right.record.title));
+}
+
+function quoteLineItemsReferenceProduct(record: CrmRecord, productId: string): boolean {
+  const lineItems = record.data.lineItems;
+  return Array.isArray(lineItems) && lineItems.some((item) => typeof item === "object" && item !== null && "productId" in item && item.productId === productId);
 }
 
 function relationLabel(

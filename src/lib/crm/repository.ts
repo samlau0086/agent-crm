@@ -73,6 +73,7 @@ import type {
   WebhookDeliveryStatus
 } from "@/lib/crm/types";
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
+import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
 
 type PrismaContext = PrismaClient;
 
@@ -2805,8 +2806,12 @@ export class PrismaCrmRepository {
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
     const existing = await this.listRecordsForValidation(context, objectKey);
-    validateRecordPayload(fields, input.data, existing);
-    await this.assertRecordReferences(context, fields, input.data, true);
+    const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data) : input.data;
+    if (objectKey === "quotes") {
+      validateQuoteRecordData(data, await this.listRecordsForValidation(context, "products"));
+    }
+    validateRecordPayload(fields, data, existing);
+    await this.assertRecordReferences(context, fields, data, true);
 
     const record = await this.db.crmRecord.create({
       data: {
@@ -2815,7 +2820,7 @@ export class PrismaCrmRepository {
         title: input.title,
         stageKey: input.stageKey,
         ownerId: canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id,
-        data: input.data as Prisma.InputJsonValue
+        data: data as Prisma.InputJsonValue
       }
     });
 
@@ -2843,8 +2848,12 @@ export class PrismaCrmRepository {
   ): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     const current = await this.getRecord(context, objectKey, recordId);
-    const nextData = { ...current.data, ...(patch.data ?? {}) };
+    const mergedData = { ...current.data, ...(patch.data ?? {}) };
+    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData) : mergedData;
     const fields = await this.listFieldDefinitions(context, objectKey);
+    if (objectKey === "quotes") {
+      validateQuoteRecordData(nextData, await this.listRecordsForValidation(context, "products"));
+    }
     validateRecordPayload(fields, nextData, await this.listRecordsForValidation(context, objectKey), recordId);
     await this.assertRecordReferences(context, fields, nextData, true);
 

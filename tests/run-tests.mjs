@@ -1496,7 +1496,10 @@ await run("workspace exposes product and quote modules as first-class crm object
   assert.match(source, /key: "quotes", label: "报价", icon: FileText/);
   assert.match(source, /new Set\(\["contacts", "companies", "deals", "products", "quotes"\]\)/);
   assert.match(source, /objectKey === "products"[\s\S]*SKU-AI-SALES-STD/);
-  assert.match(source, /objectKey === "quotes"[\s\S]*companyId,contactId,productId/);
+  assert.match(source, /objectKey === "quotes"[\s\S]*companyId,contactId,paymentTerm,totalAmount/);
+  assert.match(source, /QuotePricingEditor/);
+  assert.match(source, /SearchDropdown/);
+  assert.match(source, /compat-select/);
 });
 
 await run("email workspace refreshes threads and selected messages after sync", () => {
@@ -6155,14 +6158,60 @@ await run("product and quote seed metadata supports company and contact associat
   assert.equal(objects.some((object) => object.key === "quotes" && object.isSystem), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "companyId" && field.type === "reference" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "contactId" && field.type === "reference" && field.required), true);
-  assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "productId" && field.type === "reference"), true);
+  assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "paymentTerm" && field.type === "select" && field.required), true);
+  assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "productId"), false);
   assert.equal(relations.some((relation) => relation.key === "company_quotes" && relation.fromObjectKey === "companies" && relation.toObjectKey === "quotes"), true);
   assert.equal(relations.some((relation) => relation.key === "contact_quotes" && relation.fromObjectKey === "contacts" && relation.toObjectKey === "quotes"), true);
 
   const quote = store.getRecord(context, "quotes", "quote-acme-platform");
   assert.equal(quote.data.companyId, "company-acme");
   assert.equal(quote.data.contactId, "contact-lin");
-  assert.equal(quote.data.productId, "product-ai-sales-standard");
+  assert.equal(quote.data.paymentTerm, "net_30");
+  assert.equal(quote.data.lineItems[0].productId, "product-ai-sales-standard");
+  assert.equal(quote.data.fees[0].name, "实施服务费");
+  assert.equal(quote.data.totalAmount, 3499);
+
+  const product = store.getRecord(context, "products", "product-ai-sales-standard");
+  const related = findRelatedRecords(product, store.snapshot().records, fields, relations);
+  assert.equal(related.some((item) => item.record.id === "quote-acme-platform"), true);
+
+  const createdQuote = store.createRecord(context, "quotes", {
+    title: "Acme 扩容报价",
+    data: {
+      quoteNumber: "Q-2026-002",
+      companyId: "company-acme",
+      contactId: "contact-lin",
+      paymentTerm: "net_60",
+      lineItems: [
+        {
+          id: "line-extra-seats",
+          productId: "product-ai-sales-standard",
+          productName: "AI 销售助手标准版",
+          quantity: 2,
+          unitPrice: 2999,
+          description: "扩容席位"
+        }
+      ],
+      fees: [{ id: "fee-shipping", name: "保险费", amount: 120 }],
+      status: "draft"
+    }
+  });
+  assert.equal(createdQuote.data.totalAmount, 6118);
+  assert.throws(
+    () =>
+      store.createRecord(context, "quotes", {
+        title: "错误报价",
+        data: {
+          quoteNumber: "Q-2026-003",
+          companyId: "company-acme",
+          contactId: "contact-lin",
+          paymentTerm: "net_30",
+          lineItems: [{ id: "line-missing", productId: "missing-product", productName: "Missing", quantity: 1, unitPrice: 10 }],
+          status: "draft"
+        }
+      }),
+    /不存在的产品/
+  );
 });
 
 await run("email accounts messages and thread summaries are workspace scoped", () => {

@@ -44,6 +44,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
+import { buildQuoteLineItemFromProduct, calculateQuoteTotals, normalizeQuoteFees, normalizeQuoteLineItems, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
 import type {
   Activity,
   ApiKey,
@@ -627,6 +628,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         .sort((a, b) => a.position - b.position),
     [activeObject?.key, props.fields]
   );
+  const objectFormFields = useMemo(
+    () => visibleFormFieldsForObject(activeObject?.key, objectFields),
+    [activeObject?.key, objectFields]
+  );
   const objectFieldSignature = useMemo(
     () => objectFields.map((field) => `${field.id}:${field.key}:${field.type}:${field.position}`).join("|"),
     [objectFields]
@@ -696,6 +701,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         .filter((field) => field.objectKey === selectedRecord?.objectKey)
         .sort((a, b) => a.position - b.position),
     [props.fields, selectedRecord?.objectKey]
+  );
+  const selectedFormFields = useMemo(
+    () => visibleFormFieldsForObject(selectedRecord?.objectKey, selectedFields),
+    [selectedFields, selectedRecord?.objectKey]
   );
   const selectedRecordFormResetKey = `${selectedRecord?.objectKey ?? ""}:${selectedRecord?.id ?? ""}`;
   const selectedActivities = useMemo(
@@ -1028,7 +1037,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     previousCreateFormResetKey.current = createFormResetKey;
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
-    setCreateValues(buildInitialValues(objectFields));
+    setCreateValues(buildInitialValues(objectFields, activeObject?.key));
     setCreateFormObjectKey(activeObject?.key ?? "");
     setImportCsv(sampleCsvFor(activeObject?.key ?? "contacts", objectFields));
     setImportPreview(null);
@@ -1100,13 +1109,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       title: createTitle.trim(),
       stageKey: activeObject.key === "deals" ? activePipeline?.stages[0]?.key : undefined,
       ownerId: createOwnerId || undefined,
-      data: parseFormValues(objectFields, createValues)
+      data: parseFormValues(objectFields, createValues, activeObject.key)
     });
 
     setMessage(`已创建${activeObject.label}`);
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
-    setCreateValues(buildInitialValues(objectFields));
+    setCreateValues(buildInitialValues(objectFields, activeObject.key));
     setRecordPanelMode("closed");
     router.refresh();
   }
@@ -1120,7 +1129,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       method: "PATCH",
       body: {
         title: editTitle.trim(),
-        data: parseFormValues(selectedFields, editValues),
+        data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey),
         stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
         ownerId: editOwnerId || undefined
       }
@@ -2168,7 +2177,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     value={createOwnerId}
                     onChange={setCreateOwnerId}
                   />
-                  {objectFields.map((field) => (
+                  {objectFormFields.map((field) => (
                     <FieldInput
                       key={`create-${field.id}`}
                       field={field}
@@ -2180,6 +2189,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onChange={(nextValue) => setCreateValues((current) => ({ ...current, [field.key]: nextValue }))}
                     />
                   ))}
+                  {activeObject.key === "quotes" ? (
+                    <QuotePricingEditor
+                      allRecords={records}
+                      onRecordsLoaded={mergeLoadedRecords}
+                      testIdPrefix="create-quote"
+                      values={createValues}
+                      onChange={setCreateValues}
+                    />
+                  ) : null}
                 </div>
                 <div className="toolbar" style={{ marginTop: 12 }}>
                   <button
@@ -2232,7 +2250,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           </select>
                         </label>
                       )}
-                      {selectedFields.map((field) => (
+                      {selectedFormFields.map((field) => (
                         <FieldInput
                           key={`edit-${field.id}`}
                           field={field}
@@ -2244,6 +2262,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onChange={(nextValue) => setEditValues((current) => ({ ...current, [field.key]: nextValue }))}
                         />
                       ))}
+                      {selectedRecord.objectKey === "quotes" ? (
+                        <QuotePricingEditor
+                          allRecords={records}
+                          onRecordsLoaded={mergeLoadedRecords}
+                          testIdPrefix="edit-quote"
+                          values={editValues}
+                          onChange={setEditValues}
+                        />
+                      ) : null}
                     </div>
                     <div className="toolbar" style={{ marginTop: 12 }}>
                       <button className="primary-button" data-testid="edit-record-save" type="button" onClick={() => runAction(submitUpdateRecord)} disabled={isPending || !editTitle.trim()}>
@@ -5374,17 +5401,13 @@ function FieldInput({
 
   if (field.type === "select") {
     return (
-      <label>
-        <span className="subtle">{field.label}</span>
-        <select className="select" data-testid={testId} value={value} onChange={(event) => onChange(event.target.value)}>
-          <option value="">请选择</option>
-          {(field.options ?? []).map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <SelectSearchInput
+        label={field.label}
+        options={field.options ?? []}
+        testId={testId}
+        value={value}
+        onChange={onChange}
+      />
     );
   }
 
@@ -5466,6 +5489,137 @@ function OwnerSelect({
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function SelectSearchInput({
+  label,
+  options,
+  testId,
+  value,
+  onChange
+}: {
+  label: string;
+  options: Array<{ label: string; value: string }>;
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredOptions = normalizedSearch
+    ? options.filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(normalizedSearch))
+    : options;
+
+  return (
+    <SearchDropdown
+      label={label}
+      options={filteredOptions}
+      search={search}
+      selectedLabel={options.find((option) => option.value === value)?.label ?? ""}
+      testId={testId}
+      value={value}
+      onChange={onChange}
+      onSearchChange={setSearch}
+    />
+  );
+}
+
+function SearchDropdown({
+  disabled,
+  error,
+  label,
+  loading,
+  options,
+  placeholder = "搜索并选择",
+  search,
+  selectedLabel,
+  testId,
+  value,
+  onChange,
+  onSearchChange
+}: {
+  disabled?: boolean;
+  error?: string | null;
+  label: string;
+  loading?: boolean;
+  options: Array<{ label: string; value: string; meta?: string }>;
+  placeholder?: string;
+  search: string;
+  selectedLabel: string;
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+  onSearchChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const visibleValue = open ? search : selectedLabel;
+  const selectedOption = options.find((option) => option.value === value);
+
+  function selectValue(nextValue: string) {
+    onChange(nextValue);
+    onSearchChange("");
+    setOpen(false);
+  }
+
+  return (
+    <label className="search-dropdown-field">
+      <span className="subtle">{label}</span>
+      <input
+        className="input"
+        data-testid={testId ? `${testId}-search` : undefined}
+        disabled={disabled}
+        placeholder={selectedOption?.label || placeholder}
+        value={visibleValue}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onChange={(event) => {
+          onSearchChange(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => {
+          onSearchChange("");
+          setOpen(true);
+        }}
+      />
+      <select
+        aria-hidden="true"
+        className="compat-select"
+        data-testid={testId}
+        disabled={disabled}
+        tabIndex={-1}
+        value={value}
+        onChange={(event) => selectValue(event.target.value)}
+      >
+        <option value="">{loading ? "搜索中..." : "请选择"}</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {open && !disabled ? (
+        <div className="search-dropdown-menu">
+          <button className="search-dropdown-option subtle" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => selectValue("")}>
+            不选择
+          </button>
+          {loading ? <div className="search-dropdown-empty">搜索中...</div> : null}
+          {!loading && options.length === 0 ? <div className="search-dropdown-empty">没有匹配结果</div> : null}
+          {options.map((option) => (
+            <button
+              className={`search-dropdown-option ${option.value === value ? "selected" : ""}`}
+              key={option.value}
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectValue(option.value)}
+            >
+              <span>{option.label}</span>
+              {option.meta ? <span className="subtle">{option.meta}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {error ? <span className="subtle">{error}</span> : null}
     </label>
   );
 }
@@ -5562,40 +5716,364 @@ function ReferenceFieldInput({
     return () => controller.abort();
   }, [candidates, onRecordsLoaded, referencedObjectKey, value]);
 
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleCandidates = normalizedSearch
+    ? candidates.filter((candidate) => `${candidate.title} ${candidate.id}`.toLowerCase().includes(normalizedSearch))
+    : candidates;
+  const selectedRecord = candidates.find((candidate) => candidate.id === value);
+
   return (
-    <label>
-      <span className="subtle">{field.label}</span>
-      <input
-        className="input"
-        data-testid={testId ? `${testId}-search` : undefined}
-        disabled={!referencedObjectKey}
-        placeholder="搜索引用记录"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        style={{ marginBottom: 8 }}
-      />
-      <select className="select" data-testid={testId} disabled={!referencedObjectKey} value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="">{isSearching ? "搜索中..." : "请选择"}</option>
-        {candidates.map((candidate) => (
-          <option key={candidate.id} value={candidate.id}>
-            {candidate.title}
-          </option>
-        ))}
-      </select>
-      {searchError ? <span className="subtle">{searchError}</span> : null}
-    </label>
+    <SearchDropdown
+      disabled={!referencedObjectKey}
+      error={searchError}
+      label={field.label}
+      loading={isSearching}
+      options={visibleCandidates.map((candidate) => ({
+        label: candidate.title,
+        value: candidate.id,
+        meta: candidate.id
+      }))}
+      placeholder="搜索引用记录"
+      search={search}
+      selectedLabel={selectedRecord?.title ?? ""}
+      testId={testId}
+      value={value}
+      onChange={onChange}
+      onSearchChange={setSearch}
+    />
   );
 }
 
-function buildInitialValues(fields: FieldDefinition[]): Record<string, string> {
+function QuotePricingEditor({
+  allRecords,
+  onChange,
+  onRecordsLoaded,
+  testIdPrefix,
+  values
+}: {
+  allRecords: CrmRecord[];
+  onChange: (updater: (current: Record<string, string>) => Record<string, string>) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+  testIdPrefix: string;
+  values: Record<string, string>;
+}) {
+  const lineItems = quoteLineItemsFromValues(values);
+  const fees = quoteFeesFromValues(values);
+  const totals = calculateQuoteTotals(lineItems, fees);
+
+  function updateLineItems(nextLineItems: QuoteLineItem[]) {
+    onChange((current) => withQuotePricingValues(current, nextLineItems, fees));
+  }
+
+  function updateFees(nextFees: QuoteFee[]) {
+    onChange((current) => withQuotePricingValues(current, lineItems, nextFees));
+  }
+
+  function updateLineItem(index: number, patch: Partial<QuoteLineItem>) {
+    updateLineItems(lineItems.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  }
+
+  function selectProduct(index: number, product: CrmRecord) {
+    const productLine = buildQuoteLineItemFromProduct(product);
+    updateLineItems(
+      lineItems.map((item, itemIndex) =>
+        itemIndex === index
+          ? { ...productLine, id: item.id, quantity: item.quantity > 0 ? item.quantity : productLine.quantity }
+          : item
+      )
+    );
+  }
+
+  return (
+    <section className="quote-editor wide" data-testid={`${testIdPrefix}-pricing`}>
+      <div className="toolbar between">
+        <div>
+          <strong>报价产品与费用</strong>
+          <div className="subtle">产品默认读取产品配置，可在本报价中覆盖数量、价格和描述。</div>
+        </div>
+        <button
+          className="secondary-button"
+          data-testid={`${testIdPrefix}-add-line`}
+          type="button"
+          onClick={() => updateLineItems([...lineItems, emptyQuoteLineItem()])}
+        >
+          添加产品
+        </button>
+      </div>
+      <div className="quote-line-list">
+        {lineItems.map((item, index) => (
+          <div className="quote-line-row" key={item.id}>
+            <QuoteProductSearchDropdown
+              allRecords={allRecords}
+              label="产品"
+              onClear={() => updateLineItem(index, { productId: "", productName: "", sku: undefined })}
+              onRecordsLoaded={onRecordsLoaded}
+              testId={`${testIdPrefix}-line-product-${index}`}
+              value={item.productId}
+              onSelect={(product) => selectProduct(index, product)}
+            />
+            <label>
+              <span className="subtle">数量</span>
+              <input
+                className="input"
+                data-testid={`${testIdPrefix}-line-quantity-${index}`}
+                min="0"
+                step="1"
+                type="number"
+                value={String(item.quantity)}
+                onChange={(event) => updateLineItem(index, { quantity: Number(event.target.value) })}
+              />
+            </label>
+            <label>
+              <span className="subtle">单价</span>
+              <input
+                className="input"
+                data-testid={`${testIdPrefix}-line-price-${index}`}
+                min="0"
+                step="0.01"
+                type="number"
+                value={String(item.unitPrice)}
+                onChange={(event) => updateLineItem(index, { unitPrice: Number(event.target.value) })}
+              />
+            </label>
+            <label className="wide">
+              <span className="subtle">描述</span>
+              <textarea
+                className="textarea"
+                data-testid={`${testIdPrefix}-line-description-${index}`}
+                value={item.description ?? ""}
+                onChange={(event) => updateLineItem(index, { description: event.target.value })}
+              />
+            </label>
+            <div className="quote-line-total">
+              <span className="subtle">小计</span>
+              <strong>{formatCurrency(item.quantity * item.unitPrice)}</strong>
+            </div>
+            <button
+              className="icon-button"
+              title="删除产品行"
+              type="button"
+              onClick={() => updateLineItems(lineItems.filter((_, itemIndex) => itemIndex !== index))}
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+        ))}
+        {lineItems.length === 0 ? <div className="empty-state">还没有产品行</div> : null}
+      </div>
+
+      <div className="toolbar between" style={{ marginTop: 16 }}>
+        <div>
+          <strong>其他费用</strong>
+          <div className="subtle">例如运费、保险费、实施费等。</div>
+        </div>
+        <button
+          className="secondary-button"
+          data-testid={`${testIdPrefix}-add-fee`}
+          type="button"
+          onClick={() => updateFees([...fees, emptyQuoteFee()])}
+        >
+          添加费用
+        </button>
+      </div>
+      <div className="quote-fee-list">
+        {fees.map((fee, index) => (
+          <div className="quote-fee-row" key={fee.id}>
+            <label>
+              <span className="subtle">费用名称</span>
+              <input className="input" data-testid={`${testIdPrefix}-fee-name-${index}`} value={fee.name} onChange={(event) => updateFees(fees.map((item, itemIndex) => (itemIndex === index ? { ...item, name: event.target.value } : item)))} />
+            </label>
+            <label>
+              <span className="subtle">金额</span>
+              <input className="input" data-testid={`${testIdPrefix}-fee-amount-${index}`} min="0" step="0.01" type="number" value={String(fee.amount)} onChange={(event) => updateFees(fees.map((item, itemIndex) => (itemIndex === index ? { ...item, amount: Number(event.target.value) } : item)))} />
+            </label>
+            <label className="wide">
+              <span className="subtle">说明</span>
+              <input className="input" data-testid={`${testIdPrefix}-fee-description-${index}`} value={fee.description ?? ""} onChange={(event) => updateFees(fees.map((item, itemIndex) => (itemIndex === index ? { ...item, description: event.target.value } : item)))} />
+            </label>
+            <button className="icon-button" title="删除费用" type="button" onClick={() => updateFees(fees.filter((_, itemIndex) => itemIndex !== index))}>
+              <Trash2 size={16} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="quote-total-summary">
+        <span>产品小计 {formatCurrency(totals.lineSubtotal)}</span>
+        <span>其他费用 {formatCurrency(totals.feeSubtotal)}</span>
+        <strong>总计 {formatCurrency(totals.totalAmount)}</strong>
+      </div>
+    </section>
+  );
+}
+
+function QuoteProductSearchDropdown({
+  allRecords,
+  label,
+  onClear,
+  onRecordsLoaded,
+  testId,
+  value,
+  onSelect
+}: {
+  allRecords: CrmRecord[];
+  label: string;
+  onClear: () => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+  testId: string;
+  value: string;
+  onSelect: (product: CrmRecord) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [remoteCandidates, setRemoteCandidates] = useState<CrmRecord[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const candidates = useMemo(
+    () => mergeRecords(allRecords.filter((record) => record.objectKey === "products"), remoteCandidates.filter((record) => record.objectKey === "products")),
+    [allRecords, remoteCandidates]
+  );
+
+  useEffect(() => {
+    if (search.trim().length < 2) {
+      setIsSearching(false);
+      setSearchError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      setIsSearching(true);
+      fetchJson<RecordListResult>(buildRecordListUrl("products", emptySavedView("products"), search, 1, "/api/records/products", 20), {
+        method: "GET",
+        signal: controller.signal
+      })
+        .then((result) => {
+          setRemoteCandidates((current) => mergeRecords(current, result.records));
+          onRecordsLoaded?.(result.records);
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+          setSearchError(error instanceof Error ? error.message : "产品搜索失败");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setIsSearching(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [onRecordsLoaded, search]);
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleCandidates = normalizedSearch
+    ? candidates.filter((candidate) => `${candidate.title} ${candidate.data.sku ?? ""}`.toLowerCase().includes(normalizedSearch))
+    : candidates;
+  const selectedRecord = candidates.find((candidate) => candidate.id === value);
+
+  return (
+    <SearchDropdown
+      error={searchError}
+      label={label}
+      loading={isSearching}
+      options={visibleCandidates.map((candidate) => ({
+        label: candidate.title,
+        value: candidate.id,
+        meta: [candidate.data.sku, candidate.data.unitPrice ? formatCurrency(candidate.data.unitPrice) : ""].filter(Boolean).join(" · ")
+      }))}
+      placeholder="搜索产品"
+      search={search}
+      selectedLabel={selectedRecord?.title ?? ""}
+      testId={testId}
+      value={value}
+      onChange={(productId) => {
+        if (!productId) {
+          onClear();
+          return;
+        }
+        const product = candidates.find((candidate) => candidate.id === productId);
+        if (product) {
+          onSelect(product);
+        }
+      }}
+      onSearchChange={setSearch}
+    />
+  );
+}
+
+const quoteLineItemsValueKey = "__quoteLineItems";
+const quoteFeesValueKey = "__quoteFees";
+const hiddenQuoteFormFields = new Set(["productId", "totalAmount"]);
+
+function visibleFormFieldsForObject(objectKey: string | undefined, fields: FieldDefinition[]): FieldDefinition[] {
+  if (objectKey !== "quotes") {
+    return fields;
+  }
+
+  return fields.filter((field) => !hiddenQuoteFormFields.has(field.key));
+}
+
+function quoteLineItemsFromValues(values: Record<string, string>): QuoteLineItem[] {
+  return normalizeQuoteLineItems(parseJsonValue(values[quoteLineItemsValueKey]));
+}
+
+function quoteFeesFromValues(values: Record<string, string>): QuoteFee[] {
+  return normalizeQuoteFees(parseJsonValue(values[quoteFeesValueKey]));
+}
+
+function withQuotePricingValues(values: Record<string, string>, lineItems: QuoteLineItem[], fees: QuoteFee[]): Record<string, string> {
+  const totals = calculateQuoteTotals(lineItems, fees);
+  return {
+    ...values,
+    [quoteLineItemsValueKey]: JSON.stringify(lineItems),
+    [quoteFeesValueKey]: JSON.stringify(fees),
+    totalAmount: String(totals.totalAmount)
+  };
+}
+
+function emptyQuoteLineItem(): QuoteLineItem {
+  return {
+    id: `line-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    productId: "",
+    productName: "",
+    quantity: 1,
+    unitPrice: 0
+  };
+}
+
+function emptyQuoteFee(): QuoteFee {
+  return {
+    id: `fee-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: "",
+    amount: 0
+  };
+}
+
+function parseJsonValue(value: string | undefined): unknown {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildInitialValues(fields: FieldDefinition[], objectKey?: string): Record<string, string> {
   return fields.reduce<Record<string, string>>((accumulator, field) => {
-    accumulator[field.key] = "";
+    accumulator[field.key] = toInputValue(field.defaultValue);
     return accumulator;
-  }, {});
+  }, objectKey === "quotes" ? withQuotePricingValues({}, [], []) : {});
 }
 
 function buildRecordValues(fields: FieldDefinition[], record: CrmRecord): Record<string, string> {
-  const values = buildInitialValues(fields);
+  const values = buildInitialValues(fields, record.objectKey);
 
   for (const field of fields) {
     values[field.key] = toInputValue(record.data[field.key]);
@@ -5603,6 +6081,10 @@ function buildRecordValues(fields: FieldDefinition[], record: CrmRecord): Record
 
   if (record.stageKey) {
     values.__stageKey = record.stageKey;
+  }
+
+  if (record.objectKey === "quotes") {
+    return withQuotePricingValues(values, normalizeQuoteLineItems(record.data.lineItems), normalizeQuoteFees(record.data.fees));
   }
 
   return values;
@@ -5619,23 +6101,34 @@ function toInputValue(value: unknown): string {
   return String(value);
 }
 
-function parseFormValues(fields: FieldDefinition[], values: Record<string, string>): Record<string, unknown> {
-  return fields.reduce<Record<string, unknown>>((data, field) => {
+function parseFormValues(fields: FieldDefinition[], values: Record<string, string>, objectKey?: string): Record<string, unknown> {
+  const data = fields.reduce<Record<string, unknown>>((accumulator, field) => {
     const raw = values[field.key];
     if (raw === undefined || raw === "") {
-      return data;
+      return accumulator;
     }
 
     if (field.type === "number" || field.type === "currency") {
-      data[field.key] = Number(raw);
+      accumulator[field.key] = Number(raw);
     } else if (field.type === "boolean") {
-      data[field.key] = raw === "true";
+      accumulator[field.key] = raw === "true";
     } else {
-      data[field.key] = raw;
+      accumulator[field.key] = raw;
     }
 
-    return data;
+    return accumulator;
   }, {});
+
+  if (objectKey === "quotes") {
+    const lineItems = quoteLineItemsFromValues(values);
+    const fees = quoteFeesFromValues(values);
+    const totals = calculateQuoteTotals(lineItems, fees);
+    data.lineItems = lineItems;
+    data.fees = fees;
+    data.totalAmount = totals.totalAmount;
+  }
+
+  return data;
 }
 
 function displayTableColumnValue(column: TableColumn, record: CrmRecord, records: CrmRecord[], users: User[]): string {
@@ -5712,7 +6205,7 @@ function sampleCsvFor(objectKey: string, fields: FieldDefinition[]): string {
     return "title,sku,unitPrice,billingCycle,active\nAI 销售助手标准版,SKU-AI-SALES-STD,2999,annual,true";
   }
   if (objectKey === "quotes") {
-    return "title,quoteNumber,companyId,contactId,productId,totalAmount,status,validUntil\nAcme 年度订阅报价,Q-2026-001,company-acme,contact-lin,product-ai-sales-standard,2999,draft,2026-07-31";
+    return "title,quoteNumber,companyId,contactId,paymentTerm,totalAmount,status,validUntil\nAcme 年度订阅报价,Q-2026-001,company-acme,contact-lin,net_30,3499,draft,2026-07-31";
   }
   if (objectKey === "contacts") {
     return "title,email,phone\n王敏,wang@example.com,+86 139 0000 0000";

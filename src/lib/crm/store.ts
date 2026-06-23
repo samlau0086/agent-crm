@@ -61,6 +61,7 @@ import type {
 } from "@/lib/crm/types";
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
 import { compareRecords, matchesRecordSearch, matchesSavedView } from "@/lib/crm/views";
+import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
 
 type GlobalStore = typeof globalThis & { __crmStore?: CrmStore };
 type StoredCsvImportJob = CsvImportJob & { sourcePayload?: CsvImportJobSourcePayload };
@@ -1641,8 +1642,12 @@ export class CrmStore {
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
     const existing = this.listRecordsForValidation(context, objectKey);
-    validateRecordPayload(fields, input.data, existing);
-    this.assertRecordReferences(context, fields, input.data, true);
+    const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data) : input.data;
+    if (objectKey === "quotes") {
+      validateQuoteRecordData(data, this.listRecordsForValidation(context, "products"));
+    }
+    validateRecordPayload(fields, data, existing);
+    this.assertRecordReferences(context, fields, data, true);
 
     const record: CrmRecord = {
       id: createId("record"),
@@ -1651,7 +1656,7 @@ export class CrmStore {
       title: input.title,
       stageKey: input.stageKey,
       ownerId: canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id,
-      data: input.data,
+      data,
       createdAt: stamp(),
       updatedAt: stamp()
     };
@@ -1677,8 +1682,12 @@ export class CrmStore {
       throw new Error("记录不存在");
     }
     const previousStageKey = record.stageKey;
-    const nextData = { ...record.data, ...(patch.data ?? {}) };
+    const mergedData = { ...record.data, ...(patch.data ?? {}) };
+    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData) : mergedData;
     const fields = this.listFieldDefinitions(context, objectKey);
+    if (objectKey === "quotes") {
+      validateQuoteRecordData(nextData, this.listRecordsForValidation(context, "products"));
+    }
     validateRecordPayload(fields, nextData, this.listRecordsForValidation(context, objectKey), recordId);
     this.assertRecordReferences(context, fields, nextData, true);
     Object.assign(record, { ...patch, ownerId: canManageAllRecords(context) ? patch.ownerId ?? record.ownerId : record.ownerId }, { data: nextData, updatedAt: stamp() });

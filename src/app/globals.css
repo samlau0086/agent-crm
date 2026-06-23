@@ -371,6 +371,109 @@ button {
   resize: vertical;
 }
 
+.compat-select {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.search-dropdown-field {
+  position: relative;
+}
+
+.search-dropdown-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.search-dropdown-option {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-dropdown-option:hover,
+.search-dropdown-option.selected {
+  background: #eff6ff;
+}
+
+.search-dropdown-empty {
+  padding: 10px;
+  color: var(--muted);
+}
+
+.quote-editor {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.quote-line-list,
+.quote-fee-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.quote-line-row,
+.quote-fee-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) minmax(90px, 0.5fr) minmax(120px, 0.7fr) minmax(220px, 1.5fr) auto auto;
+  gap: 10px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.quote-fee-row {
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, 0.6fr) minmax(240px, 1.6fr) auto;
+}
+
+.quote-line-total {
+  display: grid;
+  gap: 4px;
+  min-height: 38px;
+  align-content: center;
+}
+
+.quote-total-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
 .record-table {
   min-width: 680px;
   width: 100%;
