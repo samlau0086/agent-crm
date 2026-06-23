@@ -617,6 +617,118 @@ button {
   align-items: start;
 }
 
+.email-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.8fr) minmax(520px, 1.4fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.email-settings-side {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.email-settings-main,
+.email-account-list-panel {
+  min-width: 0;
+}
+
+.email-setup-stepper {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.email-setup-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 58px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.email-setup-step strong,
+.email-setup-step small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.email-setup-step strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.email-setup-step small {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.email-setup-step.active {
+  border-color: rgba(15, 118, 110, 0.38);
+  background: #ecfdf5;
+}
+
+.email-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.email-setup-step.active .email-step-index {
+  background: var(--accent);
+  color: white;
+}
+
+.email-setup-card {
+  margin-top: 14px;
+}
+
+.email-setup-actions,
+.email-setup-nav,
+.email-account-actions {
+  margin-top: 12px;
+}
+
+.email-test-status {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.email-test-status.success {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: #ecfdf5;
+  color: var(--accent-strong);
+}
+
+.email-test-status.failed {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: #fef2f2;
+  color: var(--danger);
+}
+
 .gmail-client {
   display: grid;
   grid-template-rows: max-content minmax(0, 1fr);
@@ -1725,12 +1837,17 @@ button {
   .workspace-grid,
   .workspace-grid.has-drawer,
   .email-grid,
+  .email-settings-layout,
   .email-client,
   .gmail-layout,
   .gmail-layout.detail-mode,
   .settings-grid,
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .email-setup-stepper {
+    grid-template-columns: 1fr 1fr;
   }
 
   .gmail-topbar {

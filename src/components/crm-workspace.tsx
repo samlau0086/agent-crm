@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import {
   Activity as ActivityIcon,
@@ -121,6 +121,7 @@ interface CrmWorkspaceProps {
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
+type EmailSettingsStep = "identity" | "inbound" | "outbound" | "review";
 type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "drafts" | "archived" | "trash" | "all";
 type EmailCategoryKey = "primary" | "promotions" | "social" | "updates";
 type EmailMailMode = "list" | "detail";
@@ -2689,7 +2690,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onStartOAuth={() => runAction(startEmailOAuth)}
             onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
             onSyncAllAccounts={() => runAction(syncAllEmailAccounts)}
-            onTestConnection={(accountId) => runAction(() => testEmailConnection(accountId))}
+            onTestConnection={testEmailConnection}
             onEditAccount={(account) => setEmailAccountDraft(createEmailAccountEditDraft(account))}
             onUpdateAccount={(accountId, patch) => runAction(() => updateEmailAccount(accountId, patch))}
             onUpdateAccountFromDraft={() => runAction(updateEmailAccountFromDraft)}
@@ -2944,7 +2945,7 @@ function EmailWorkspace({
   onStartOAuth: () => void;
   onSyncAccount: (accountId: string) => void;
   onSyncAllAccounts: () => void;
-  onTestConnection: (accountId: string) => void;
+  onTestConnection: (accountId: string) => Promise<void>;
   onEditAccount: (account: EmailAccount) => void;
   onUpdateAccount: (accountId: string, patch: EmailAccountUpdatePatch) => void;
   onUpdateAccountFromDraft: () => void;
@@ -2985,6 +2986,8 @@ function EmailWorkspace({
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
+  const [emailSettingsStep, setEmailSettingsStep] = useState<EmailSettingsStep>("identity");
+  const [accountConnectionTests, setAccountConnectionTests] = useState<Record<string, { status: "testing" | "success" | "failed"; message: string; testedAt?: string }>>({});
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const updateOutboundServiceDraft = (serviceId: string, patch: Partial<EmailAccountDraftOutboundService>) => {
     onAccountDraftChange({
@@ -3335,6 +3338,442 @@ function EmailWorkspace({
     return "email-ai-source";
   }
 
+  const emailSettingsSteps: Array<{ key: EmailSettingsStep; label: string; description: string }> = [
+    { key: "identity", label: "基础信息", description: "账户身份与 Provider" },
+    { key: "inbound", label: "收件配置", description: "IMAP、POP3 或 OAuth" },
+    { key: "outbound", label: "发件服务", description: "SMTP、Resend 与默认服务" },
+    { key: "review", label: "检查启用", description: "保存、测试与同步" }
+  ];
+  const currentEmailSettingsStepIndex = Math.max(0, emailSettingsSteps.findIndex((step) => step.key === emailSettingsStep));
+
+  async function runAccountConnectionTest(account: EmailAccount) {
+    if (!account.connectionConfigured) {
+      setAccountConnectionTests((current) => ({
+        ...current,
+        [account.id]: { status: "failed", message: "需要先保存连接配置" }
+      }));
+      return;
+    }
+    setAccountConnectionTests((current) => ({
+      ...current,
+      [account.id]: { status: "testing", message: "正在测试连接" }
+    }));
+    try {
+      await onTestConnection(account.id);
+      setAccountConnectionTests((current) => ({
+        ...current,
+        [account.id]: { status: "success", message: "连接测试通过", testedAt: new Date().toISOString() }
+      }));
+    } catch (error) {
+      setAccountConnectionTests((current) => ({
+        ...current,
+        [account.id]: { status: "failed", message: error instanceof Error ? error.message : "连接测试失败", testedAt: new Date().toISOString() }
+      }));
+    }
+  }
+
+  function renderEmailAccountFormActions() {
+    return (
+      <div className="toolbar email-setup-actions">
+        {accountDraft.editingAccountId ? (
+          <>
+            <button className="primary-button" data-testid="email-account-update" type="button" onClick={onUpdateAccountFromDraft} disabled={disabled || !accountDraft.name.trim() || !accountDraft.emailAddress.trim()}>
+              <Save size={16} />
+              保存账户
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                onResetAccountDraft();
+                setEmailSettingsStep("identity");
+              }}
+              disabled={disabled}
+            >
+              取消编辑
+            </button>
+          </>
+        ) : (
+          <button className="primary-button" data-testid="email-account-create" type="button" onClick={onCreateAccount} disabled={disabled || !accountDraft.name.trim() || !accountDraft.emailAddress.trim()}>
+            <Save size={16} />
+            创建账户
+          </button>
+        )}
+        <button className="secondary-button" data-testid="email-oauth-start" type="button" onClick={onStartOAuth} disabled={disabled || Boolean(accountDraft.editingAccountId) || !accountDraft.emailAddress.trim() || !selectedProviderSetupVisibility.canStartOAuth}>
+          <Mail size={16} />
+          OAuth 授权
+        </button>
+      </div>
+    );
+  }
+
+  function renderEmailIdentityStep() {
+    return (
+      <div className="form-grid">
+        <label>
+          <span className="subtle">名称</span>
+          <input className="input" data-testid="email-account-name" value={accountDraft.name} onChange={(event) => onAccountDraftChange({ ...accountDraft, name: event.target.value })} />
+        </label>
+        <label>
+          <span className="subtle">邮箱</span>
+          <input className="input" data-testid="email-account-address" value={accountDraft.emailAddress} onChange={(event) => onAccountDraftChange({ ...accountDraft, emailAddress: event.target.value })} />
+        </label>
+        <label>
+          <span className="subtle">Provider</span>
+          <select className="select" value={accountDraft.provider} onChange={(event) => updateEmailAccountProvider(event.target.value as EmailAccount["provider"])}>
+            {listEmailProviderCapabilities().map((provider) => (
+              <option key={provider.key} value={provider.key}>
+                {provider.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="settings-item wide">
+          <strong>{selectedProviderCapability.label}</strong>
+          <div className="subtle">{selectedProviderCapability.description}</div>
+          <div className="toolbar" style={{ marginTop: 8 }}>
+            <span className={selectedProviderCapability.supportsSend ? "badge" : "danger-badge"}>发送 {selectedProviderCapability.supportsSend ? "已支持" : "需要 adapter"}</span>
+            <span className={selectedProviderCapability.supportsSync ? "badge" : "danger-badge"}>同步 {selectedProviderCapability.supportsSync ? "已支持" : "需要 adapter"}</span>
+            <span className="badge">{selectedProviderCapability.connectionKind}</span>
+          </div>
+        </div>
+        <label className="settings-toggle">
+          <input type="checkbox" checked={accountDraft.sendEnabled && selectedProviderCapability.supportsSend} onChange={(event) => onAccountDraftChange({ ...accountDraft, sendEnabled: event.target.checked && selectedProviderCapability.supportsSend })} disabled={!selectedProviderCapability.supportsSend} />
+          允许发送
+        </label>
+        <label className="settings-toggle">
+          <input type="checkbox" checked={accountDraft.syncEnabled && selectedProviderCapability.supportsSync} onChange={(event) => onAccountDraftChange({ ...accountDraft, syncEnabled: event.target.checked && selectedProviderCapability.supportsSync })} disabled={!selectedProviderCapability.supportsSync} />
+          允许同步
+        </label>
+      </div>
+    );
+  }
+
+  function renderEmailInboundStep() {
+    return (
+      <div className="form-grid">
+        {selectedProviderSetupVisibility.showSmtpImapFields ? (
+          <>
+            <div className="settings-item wide">
+              <strong>收件配置</strong>
+              <div className="subtle">IMAP/POP3 的用户名和密码只用于收件同步，可以与发件服务凭据不同。</div>
+            </div>
+            <label>
+              <span className="subtle">收信协议</span>
+              <select
+                className="select"
+                data-testid="email-account-sync-protocol"
+                value={accountDraft.syncProtocol}
+                onChange={(event) => onAccountDraftChange({ ...accountDraft, syncProtocol: event.target.value as "imap" | "pop3" })}
+              >
+                <option value="imap">IMAP</option>
+                <option value="pop3">POP3</option>
+              </select>
+            </label>
+            {accountDraft.syncProtocol === "imap" ? (
+              <>
+                <label>
+                  <span className="subtle">IMAP Host</span>
+                  <input className="input" data-testid="email-account-imap-host" value={accountDraft.imapHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapHost: event.target.value })} />
+                </label>
+                <label>
+                  <span className="subtle">IMAP Port</span>
+                  <input className="input" type="number" value={accountDraft.imapPort} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapPort: event.target.value })} />
+                </label>
+                <label className="settings-toggle">
+                  <input type="checkbox" checked={accountDraft.imapSecure} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapSecure: event.target.checked })} />
+                  IMAP TLS
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  <span className="subtle">POP3 Host</span>
+                  <input className="input" data-testid="email-account-pop3-host" value={accountDraft.pop3Host} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Host: event.target.value })} />
+                </label>
+                <label>
+                  <span className="subtle">POP3 Port</span>
+                  <input className="input" type="number" value={accountDraft.pop3Port} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Port: event.target.value })} />
+                </label>
+                <label className="settings-toggle">
+                  <input type="checkbox" checked={accountDraft.pop3Secure} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Secure: event.target.checked })} />
+                  POP3 TLS
+                </label>
+              </>
+            )}
+            <label>
+              <span className="subtle">收件用户名</span>
+              <input className="input" data-testid="email-account-inbound-username" value={accountDraft.username} onChange={(event) => onAccountDraftChange({ ...accountDraft, username: event.target.value })} />
+            </label>
+            <label>
+              <span className="subtle">收件密码/应用密码</span>
+              <input className="input" data-testid="email-account-inbound-password" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} />
+            </label>
+            {accountDraft.syncProtocol === "imap" ? (
+              <label>
+                <span className="subtle">邮箱文件夹</span>
+                <input className="input" value={accountDraft.mailbox} onChange={(event) => onAccountDraftChange({ ...accountDraft, mailbox: event.target.value })} />
+              </label>
+            ) : null}
+          </>
+        ) : null}
+        {selectedProviderSetupVisibility.showOAuthFields ? (
+          <>
+            <div className="settings-item wide">
+              <strong>OAuth 连接</strong>
+              <div className="subtle">OAuth token 仅保存在连接配置中，API 响应不会回传密钥。</div>
+            </div>
+            <label>
+              <span className="subtle">OAuth Access Token</span>
+              <input className="input" type="password" value={accountDraft.oauthAccessToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthAccessToken: event.target.value })} />
+            </label>
+            <label>
+              <span className="subtle">OAuth Refresh Token</span>
+              <input className="input" type="password" value={accountDraft.oauthRefreshToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthRefreshToken: event.target.value })} />
+            </label>
+            <label>
+              <span className="subtle">OAuth Expires At</span>
+              <input className="input" type="datetime-local" value={accountDraft.oauthExpiresAt} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthExpiresAt: event.target.value })} />
+            </label>
+            <label>
+              <span className="subtle">OAuth Scope</span>
+              <input className="input" value={accountDraft.oauthScope} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthScope: event.target.value })} />
+            </label>
+          </>
+        ) : null}
+        {!selectedProviderSetupVisibility.showSmtpImapFields && !selectedProviderSetupVisibility.showOAuthFields ? (
+          <div className="empty-state wide">当前 Provider 不需要在这里配置收件连接。</div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderEmailOutboundStep() {
+    return (
+      <div className="form-grid">
+        {selectedProviderSetupVisibility.showSmtpImapFields ? (
+          <>
+            <div className="settings-item wide">
+              <strong>发件服务</strong>
+              <div className="subtle">发件服务与收件箱独立配置。一个收件箱可以映射多条 SMTP、Resend 等不同发件服务。</div>
+            </div>
+            <label>
+              <span className="subtle">默认发件服务</span>
+              <select
+                className="select"
+                data-testid="email-account-outbound-type"
+                value={accountDraft.defaultOutboundServiceId}
+                onChange={(event) => onAccountDraftChange({ ...accountDraft, defaultOutboundServiceId: event.target.value })}
+              >
+                {accountDraft.outboundServices.map((service) => (
+                  <option key={service.id} value={service.id}>
+                    {service.name || service.type.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="toolbar">
+              <button type="button" className="secondary-button" onClick={() => addOutboundServiceDraft("smtp")}>添加 SMTP</button>
+              <button type="button" className="secondary-button" onClick={() => addOutboundServiceDraft("resend")}>添加 Resend</button>
+            </div>
+            {accountDraft.outboundServices.map((service, index) => (
+              <div className="settings-item wide" key={service.id}>
+                <div className="toolbar between">
+                  <strong>{service.type === "smtp" ? "SMTP 发件服务" : "Resend 发件服务"}</strong>
+                  <button type="button" className="icon-button" title="删除发件服务" onClick={() => removeOutboundServiceDraft(service.id)} disabled={accountDraft.outboundServices.length <= 1}>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+                <div className="form-grid" style={{ marginTop: 10 }}>
+                  <label>
+                    <span className="subtle">服务名称</span>
+                    <input className="input" value={service.name} onChange={(event) => updateOutboundServiceDraft(service.id, { name: event.target.value })} />
+                  </label>
+                  <label>
+                    <span className="subtle">类型</span>
+                    <select className="select" value={service.type} onChange={(event) => updateOutboundServiceDraft(service.id, { type: event.target.value as "smtp" | "resend" })}>
+                      <option value="smtp">SMTP</option>
+                      <option value="resend">Resend</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span className="subtle">发件 From</span>
+                    <input className="input" data-testid={index === 0 ? "email-account-outbound-from" : `email-account-outbound-from-${service.id}`} value={service.fromEmail} onChange={(event) => updateOutboundServiceDraft(service.id, { fromEmail: event.target.value })} placeholder={accountDraft.emailAddress || "sales@example.com"} />
+                  </label>
+                  <label className="settings-toggle">
+                    <input type="checkbox" checked={service.enabled} onChange={(event) => updateOutboundServiceDraft(service.id, { enabled: event.target.checked })} />
+                    启用
+                  </label>
+                  {service.type === "smtp" ? (
+                    <>
+                      <label>
+                        <span className="subtle">SMTP Host</span>
+                        <input className="input" data-testid={index === 0 ? "email-account-smtp-host" : `email-account-smtp-host-${service.id}`} value={service.smtpHost} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpHost: event.target.value })} />
+                      </label>
+                      <label>
+                        <span className="subtle">SMTP Port</span>
+                        <input className="input" type="number" value={service.smtpPort} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpPort: event.target.value })} />
+                      </label>
+                      <label className="settings-toggle">
+                        <input type="checkbox" checked={service.smtpSecure} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpSecure: event.target.checked, smtpStartTls: event.target.checked ? false : service.smtpStartTls })} />
+                        SMTP TLS
+                      </label>
+                      <label className="settings-toggle">
+                        <input type="checkbox" checked={service.smtpStartTls} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpStartTls: event.target.checked, smtpSecure: event.target.checked ? false : service.smtpSecure })} />
+                        SMTP STARTTLS
+                      </label>
+                      <label>
+                        <span className="subtle">SMTP 用户名</span>
+                        <input className="input" data-testid={index === 0 ? "email-account-smtp-username" : `email-account-smtp-username-${service.id}`} value={service.username} onChange={(event) => updateOutboundServiceDraft(service.id, { username: event.target.value })} />
+                      </label>
+                      <label>
+                        <span className="subtle">SMTP 密码/API Key</span>
+                        <input className="input" data-testid={index === 0 ? "email-account-smtp-password" : `email-account-smtp-password-${service.id}`} type="password" value={service.password} onChange={(event) => updateOutboundServiceDraft(service.id, { password: event.target.value })} />
+                      </label>
+                    </>
+                  ) : (
+                    <label className="wide">
+                      <span className="subtle">Resend API Key</span>
+                      <input className="input" data-testid={index === 0 ? "email-account-resend-api-key" : `email-account-resend-api-key-${service.id}`} type="password" value={service.resendApiKey} onChange={(event) => updateOutboundServiceDraft(service.id, { resendApiKey: event.target.value })} />
+                    </label>
+                  )}
+                </div>
+              </div>
+            ))}
+          </>
+        ) : (
+          <div className="empty-state wide">当前 Provider 使用自身 adapter 发送，不需要配置独立发件服务。</div>
+        )}
+      </div>
+    );
+  }
+
+  function renderEmailReviewStep() {
+    return (
+      <div className="settings-list">
+        <div className="settings-item">
+          <strong>{accountDraft.name || "未命名邮箱账户"}</strong>
+          <div className="subtle">{accountDraft.emailAddress || "未填写邮箱"} · {selectedProviderCapability.label}</div>
+          <div className="toolbar" style={{ marginTop: 8 }}>
+            <span className={accountDraft.sendEnabled ? "badge" : "danger-badge"}>发送 {accountDraft.sendEnabled ? "on" : "off"}</span>
+            <span className={accountDraft.syncEnabled ? "badge" : "danger-badge"}>同步 {accountDraft.syncEnabled ? "on" : "off"}</span>
+            <span className="badge">发件服务 {accountDraft.outboundServices.filter((service) => service.enabled).length}</span>
+            <span className="badge">收件 {accountDraft.syncProtocol.toUpperCase()}</span>
+          </div>
+        </div>
+        {renderEmailAccountFormActions()}
+        {canManageEmailSettings ? (
+          <button
+            className="secondary-button"
+            data-testid="email-sync-all"
+            type="button"
+            onClick={onSyncAllAccounts}
+            disabled={
+              disabled ||
+              !accounts.some((account) => {
+                const capability = getEmailProviderCapability(account.provider);
+                return account.status === "active" && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
+              })
+            }
+          >
+            <RefreshCw size={16} />
+            同步全部
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderEmailSettingsStepContent() {
+    if (emailSettingsStep === "identity") {
+      return renderEmailIdentityStep();
+    }
+    if (emailSettingsStep === "inbound") {
+      return renderEmailInboundStep();
+    }
+    if (emailSettingsStep === "outbound") {
+      return renderEmailOutboundStep();
+    }
+    return renderEmailReviewStep();
+  }
+
+  function renderEmailAccountList() {
+    return (
+      <section className="section email-account-list-panel">
+        <div className="settings-panel-header">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>已配置邮箱</h2>
+            <div className="subtle">{accounts.length} 个邮箱账户</div>
+          </div>
+        </div>
+        <div className="settings-list">
+          {accounts.map((account) => {
+            const capability = getEmailProviderCapability(account.provider);
+            const testState = accountConnectionTests[account.id];
+            const isTesting = testState?.status === "testing";
+            return (
+              <div className="settings-item" key={account.id}>
+                <strong>{account.name}</strong>
+                <div className="subtle">{account.emailAddress} · {account.provider} · {account.status}</div>
+                <div className="toolbar" style={{ marginTop: 8 }}>
+                  <span className={account.sendEnabled && capability.supportsSend ? "badge" : "danger-badge"}>发送 {account.sendEnabled && capability.supportsSend ? "on" : "off"}</span>
+                  <span className={account.syncEnabled && capability.supportsSync ? "badge" : "danger-badge"}>同步 {account.syncEnabled && capability.supportsSync ? "on" : "off"}</span>
+                  <span className={account.connectionConfigured ? "badge" : "danger-badge"}>连接 {account.connectionConfigured ? "已配置" : "未配置"}</span>
+                </div>
+                {canManageEmailSettings ? (
+                  <div className="toolbar email-account-actions">
+                    <button className="secondary-button" type="button" onClick={() => runAccountConnectionTest(account)} disabled={disabled || isTesting}>
+                      <RefreshCw size={16} />
+                      {isTesting ? "测试中" : "测试连接"}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      data-testid={`email-account-edit-${account.id}`}
+                      type="button"
+                      onClick={() => {
+                        onEditAccount(account);
+                        setEmailSettingsStep("identity");
+                      }}
+                      disabled={disabled}
+                    >
+                      编辑连接
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => onUpdateAccount(account.id, { sendEnabled: !account.sendEnabled })} disabled={disabled || !capability.supportsSend}>
+                      {account.sendEnabled ? "关闭发送" : "开启发送"}
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => onUpdateAccount(account.id, { syncEnabled: !account.syncEnabled })} disabled={disabled || !capability.supportsSync}>
+                      {account.syncEnabled ? "关闭同步" : "开启同步"}
+                    </button>
+                    <button
+                      className={account.status === "disabled" ? "secondary-button" : "danger-button"}
+                      type="button"
+                      onClick={() =>
+                        onUpdateAccount(
+                          account.id,
+                          account.status === "disabled" ? { status: "active" } : { status: "disabled", syncEnabled: false, sendEnabled: false }
+                        )
+                      }
+                      disabled={disabled}
+                    >
+                      {account.status === "disabled" ? "启用" : "停用"}
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || account.status !== "active"}>
+                      <RefreshCw size={16} />
+                      同步
+                    </button>
+                  </div>
+                ) : null}
+                {testState ? <div className={`email-test-status ${testState.status}`}>{testState.message}</div> : null}
+                {canManageEmailSettings && account.lastConnectionError ? <div className="subtle">连接错误：{account.lastConnectionError}</div> : null}
+              </div>
+            );
+          })}
+          {accounts.length === 0 ? <div className="empty-state">还没有邮箱账户</div> : null}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div className={`email-workspace ${view === "mail" ? "mail-view" : ""}`}>
       {view !== "mail" ? (
@@ -3355,326 +3794,63 @@ function EmailWorkspace({
       ) : null}
 
       {view === "settings" ? (
-    <div className="email-grid">
-      <section className="section">
-        <div className="settings-panel-header">
-          <div>
-            <h2 className="page-title" style={{ fontSize: 18 }}>邮箱账户</h2>
-            <div className="subtle">Provider 通过 adapter 扩展，当前 UI 走统一发送/同步 API。</div>
+        <div className="email-settings-layout">
+          <div className="email-settings-side">
+            {renderEmailAccountList()}
+            {canManageEmailSettings ? <EmailDiagnosticsPanel diagnostics={diagnostics} connectionTestRun={connectionTestRun} disabled={disabled} onRefresh={onRefreshDiagnostics} onTestAll={onTestAllConnections} onRetryMessage={onRetryMessage} /> : null}
           </div>
-        </div>
-        {canManageEmailSettings ? (
-          <>
-        <div className="form-grid">
-          <label>
-            <span className="subtle">名称</span>
-            <input className="input" data-testid="email-account-name" value={accountDraft.name} onChange={(event) => onAccountDraftChange({ ...accountDraft, name: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">邮箱</span>
-            <input className="input" data-testid="email-account-address" value={accountDraft.emailAddress} onChange={(event) => onAccountDraftChange({ ...accountDraft, emailAddress: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">Provider</span>
-            <select className="select" value={accountDraft.provider} onChange={(event) => updateEmailAccountProvider(event.target.value as EmailAccount["provider"])}>
-              {listEmailProviderCapabilities().map((provider) => (
-                <option key={provider.key} value={provider.key}>
-                  {provider.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="settings-item wide">
-            <strong>{selectedProviderCapability.label}</strong>
-            <div className="subtle">{selectedProviderCapability.description}</div>
-            <div className="toolbar" style={{ marginTop: 8 }}>
-              <span className={selectedProviderCapability.supportsSend ? "badge" : "danger-badge"}>发送 {selectedProviderCapability.supportsSend ? "已支持" : "需要 adapter"}</span>
-              <span className={selectedProviderCapability.supportsSync ? "badge" : "danger-badge"}>同步 {selectedProviderCapability.supportsSync ? "已支持" : "需要 adapter"}</span>
-              <span className={selectedProviderCapability.supportsOAuth ? "badge" : "badge"}>{selectedProviderCapability.connectionKind}</span>
-            </div>
-          </div>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={accountDraft.sendEnabled && selectedProviderCapability.supportsSend} onChange={(event) => onAccountDraftChange({ ...accountDraft, sendEnabled: event.target.checked && selectedProviderCapability.supportsSend })} disabled={!selectedProviderCapability.supportsSend} />
-            允许发送
-          </label>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={accountDraft.syncEnabled && selectedProviderCapability.supportsSync} onChange={(event) => onAccountDraftChange({ ...accountDraft, syncEnabled: event.target.checked && selectedProviderCapability.supportsSync })} disabled={!selectedProviderCapability.supportsSync} />
-            允许同步
-          </label>
-          {selectedProviderSetupVisibility.showSmtpImapFields ? (
-            <>
-          <div className="settings-item wide">
-            <strong>发件服务</strong>
-            <div className="subtle">发件服务与收件箱独立配置。一个收件箱可以映射多条 SMTP、Resend 等不同发件服务，当前默认使用下方选择的服务。</div>
-          </div>
-          <label>
-            <span className="subtle">默认发件服务</span>
-            <select
-              className="select"
-              data-testid="email-account-outbound-type"
-              value={accountDraft.defaultOutboundServiceId}
-              onChange={(event) => onAccountDraftChange({ ...accountDraft, defaultOutboundServiceId: event.target.value })}
-            >
-              {accountDraft.outboundServices.map((service) => (
-                <option key={service.id} value={service.id}>
-                  {service.name || service.type.toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="toolbar">
-            <button type="button" className="secondary-button" onClick={() => addOutboundServiceDraft("smtp")}>添加 SMTP</button>
-            <button type="button" className="secondary-button" onClick={() => addOutboundServiceDraft("resend")}>添加 Resend</button>
-          </div>
-          {accountDraft.outboundServices.map((service, index) => (
-            <div className="settings-item wide" key={service.id}>
-              <div className="toolbar between">
-                <strong>{service.type === "smtp" ? "SMTP 发件服务" : "Resend 发件服务"}</strong>
-                <button type="button" className="icon-button" title="删除发件服务" onClick={() => removeOutboundServiceDraft(service.id)} disabled={accountDraft.outboundServices.length <= 1}>
-                  <Trash2 size={16} />
-                </button>
-              </div>
-              <div className="form-grid" style={{ marginTop: 10 }}>
-                <label>
-                  <span className="subtle">服务名称</span>
-                  <input className="input" value={service.name} onChange={(event) => updateOutboundServiceDraft(service.id, { name: event.target.value })} />
-                </label>
-                <label>
-                  <span className="subtle">类型</span>
-                  <select className="select" value={service.type} onChange={(event) => updateOutboundServiceDraft(service.id, { type: event.target.value as "smtp" | "resend" })}>
-                    <option value="smtp">SMTP</option>
-                    <option value="resend">Resend</option>
-                  </select>
-                </label>
-                <label>
-                  <span className="subtle">发件 From</span>
-                  <input className="input" data-testid={index === 0 ? "email-account-outbound-from" : `email-account-outbound-from-${service.id}`} value={service.fromEmail} onChange={(event) => updateOutboundServiceDraft(service.id, { fromEmail: event.target.value })} placeholder={accountDraft.emailAddress || "sales@example.com"} />
-                </label>
-                <label className="settings-toggle">
-                  <input type="checkbox" checked={service.enabled} onChange={(event) => updateOutboundServiceDraft(service.id, { enabled: event.target.checked })} />
-                  启用
-                </label>
-                {service.type === "smtp" ? (
-                  <>
-                    <label>
-                      <span className="subtle">SMTP Host</span>
-                      <input className="input" data-testid={index === 0 ? "email-account-smtp-host" : `email-account-smtp-host-${service.id}`} value={service.smtpHost} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpHost: event.target.value })} />
-                    </label>
-                    <label>
-                      <span className="subtle">SMTP Port</span>
-                      <input className="input" type="number" value={service.smtpPort} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpPort: event.target.value })} />
-                    </label>
-                    <label className="settings-toggle">
-                      <input type="checkbox" checked={service.smtpSecure} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpSecure: event.target.checked, smtpStartTls: event.target.checked ? false : service.smtpStartTls })} />
-                      SMTP TLS
-                    </label>
-                    <label className="settings-toggle">
-                      <input type="checkbox" checked={service.smtpStartTls} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpStartTls: event.target.checked, smtpSecure: event.target.checked ? false : service.smtpSecure })} />
-                      SMTP STARTTLS
-                    </label>
-                    <label>
-                      <span className="subtle">SMTP 用户名</span>
-                      <input className="input" data-testid={index === 0 ? "email-account-smtp-username" : `email-account-smtp-username-${service.id}`} value={service.username} onChange={(event) => updateOutboundServiceDraft(service.id, { username: event.target.value })} />
-                    </label>
-                    <label>
-                      <span className="subtle">SMTP 密码/API Key</span>
-                      <input className="input" data-testid={index === 0 ? "email-account-smtp-password" : `email-account-smtp-password-${service.id}`} type="password" value={service.password} onChange={(event) => updateOutboundServiceDraft(service.id, { password: event.target.value })} />
-                    </label>
-                  </>
-                ) : (
-                  <label className="wide">
-                    <span className="subtle">Resend API Key</span>
-                    <input className="input" data-testid={index === 0 ? "email-account-resend-api-key" : `email-account-resend-api-key-${service.id}`} type="password" value={service.resendApiKey} onChange={(event) => updateOutboundServiceDraft(service.id, { resendApiKey: event.target.value })} />
-                  </label>
-                )}
+          <section className="section email-settings-main">
+            <div className="settings-panel-header">
+              <div>
+                <h2 className="page-title" style={{ fontSize: 18 }}>{accountDraft.editingAccountId ? "编辑邮箱账户" : "新增邮箱账户"}</h2>
+                <div className="subtle">Provider 通过 adapter 扩展，收件、发件和 AI 连接保持独立配置。</div>
               </div>
             </div>
-          ))}
-          <div className="settings-item wide">
-            <strong>收件配置</strong>
-            <div className="subtle">IMAP/POP3 的用户名和密码只用于收件同步，可以与发件服务凭据不同。</div>
-          </div>
-          <label>
-            <span className="subtle">收信协议</span>
-            <select
-              className="select"
-              data-testid="email-account-sync-protocol"
-              value={accountDraft.syncProtocol}
-              onChange={(event) => onAccountDraftChange({ ...accountDraft, syncProtocol: event.target.value as "imap" | "pop3" })}
-            >
-              <option value="imap">IMAP</option>
-              <option value="pop3">POP3</option>
-            </select>
-          </label>
-          {accountDraft.syncProtocol === "imap" ? (
-            <>
-          <label>
-            <span className="subtle">IMAP Host</span>
-            <input className="input" data-testid="email-account-imap-host" value={accountDraft.imapHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapHost: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">IMAP Port</span>
-            <input className="input" type="number" value={accountDraft.imapPort} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapPort: event.target.value })} />
-          </label>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={accountDraft.imapSecure} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapSecure: event.target.checked })} />
-            IMAP TLS
-          </label>
-            </>
-          ) : (
-            <>
-          <label>
-            <span className="subtle">POP3 Host</span>
-            <input className="input" data-testid="email-account-pop3-host" value={accountDraft.pop3Host} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Host: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">POP3 Port</span>
-            <input className="input" type="number" value={accountDraft.pop3Port} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Port: event.target.value })} />
-          </label>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={accountDraft.pop3Secure} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Secure: event.target.checked })} />
-            POP3 TLS
-          </label>
-            </>
-          )}
-          <label>
-            <span className="subtle">收件用户名</span>
-            <input className="input" data-testid="email-account-inbound-username" value={accountDraft.username} onChange={(event) => onAccountDraftChange({ ...accountDraft, username: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">收件密码/应用密码</span>
-            <input className="input" data-testid="email-account-inbound-password" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} />
-          </label>
-          {accountDraft.syncProtocol === "imap" ? (
-            <label>
-              <span className="subtle">邮箱文件夹</span>
-              <input className="input" value={accountDraft.mailbox} onChange={(event) => onAccountDraftChange({ ...accountDraft, mailbox: event.target.value })} />
-            </label>
-          ) : null}
-            </>
-          ) : null}
-          {selectedProviderSetupVisibility.showOAuthFields ? (
-            <>
-          <label>
-            <span className="subtle">OAuth Access Token</span>
-            <input className="input" type="password" value={accountDraft.oauthAccessToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthAccessToken: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">OAuth Refresh Token</span>
-            <input className="input" type="password" value={accountDraft.oauthRefreshToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthRefreshToken: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">OAuth Expires At</span>
-            <input className="input" type="datetime-local" value={accountDraft.oauthExpiresAt} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthExpiresAt: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">OAuth Scope</span>
-            <input className="input" value={accountDraft.oauthScope} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthScope: event.target.value })} />
-          </label>
-            </>
-          ) : null}
+            {canManageEmailSettings ? (
+              <>
+                <div className="email-setup-stepper" data-testid="email-setup-stepper">
+                  {emailSettingsSteps.map((step, index) => (
+                    <button
+                      className={`email-setup-step ${emailSettingsStep === step.key ? "active" : ""}`}
+                      key={step.key}
+                      type="button"
+                      onClick={() => setEmailSettingsStep(step.key)}
+                    >
+                      <span className="email-step-index">{index + 1}</span>
+                      <span>
+                        <strong>{step.label}</strong>
+                        <small>{step.description}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="email-setup-card">
+                  {renderEmailSettingsStepContent()}
+                </div>
+                <div className="toolbar between email-setup-nav">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => setEmailSettingsStep(emailSettingsSteps[Math.max(0, currentEmailSettingsStepIndex - 1)].key)}
+                    disabled={currentEmailSettingsStepIndex === 0}
+                  >
+                    上一步
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => setEmailSettingsStep(emailSettingsSteps[Math.min(emailSettingsSteps.length - 1, currentEmailSettingsStepIndex + 1)].key)}
+                    disabled={currentEmailSettingsStepIndex >= emailSettingsSteps.length - 1}
+                  >
+                    下一步
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="empty-state">当前账号没有邮箱设置权限</div>
+            )}
+          </section>
         </div>
-        {accountDraft.editingAccountId ? (
-          <div className="toolbar" style={{ marginTop: 12 }}>
-            <button className="primary-button" data-testid="email-account-update" type="button" onClick={onUpdateAccountFromDraft} disabled={disabled || !accountDraft.name.trim() || !accountDraft.emailAddress.trim()}>
-              <Save size={16} />
-              保存账户
-            </button>
-            <button className="secondary-button" type="button" onClick={onResetAccountDraft} disabled={disabled}>
-              取消编辑
-            </button>
-          </div>
-        ) : null}
-        <button className="primary-button" data-testid="email-account-create" type="button" style={{ marginTop: 12 }} onClick={onCreateAccount} disabled={disabled || Boolean(accountDraft.editingAccountId) || !accountDraft.name.trim() || !accountDraft.emailAddress.trim()}>
-          <Save size={16} />
-          创建账户
-        </button>
-
-        <button className="secondary-button" data-testid="email-oauth-start" type="button" style={{ marginTop: 8 }} onClick={onStartOAuth} disabled={disabled || Boolean(accountDraft.editingAccountId) || !accountDraft.emailAddress.trim() || !selectedProviderSetupVisibility.canStartOAuth}>
-          <Mail size={16} />
-          OAuth 授权
-        </button>
-
-          </>
-        ) : null}
-
-        {canManageEmailSettings ? (
-          <div className="toolbar" style={{ marginTop: 12 }}>
-            <button
-              className="secondary-button"
-              data-testid="email-sync-all"
-              type="button"
-              onClick={onSyncAllAccounts}
-              disabled={
-                disabled ||
-                !accounts.some((account) => {
-                  const capability = getEmailProviderCapability(account.provider);
-                  return account.status === "active" && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
-                })
-              }
-            >
-              <RefreshCw size={16} />
-              同步全部
-            </button>
-          </div>
-        ) : null}
-
-        <div className="settings-list" style={{ marginTop: 16 }}>
-          {accounts.map((account) => {
-            const capability = getEmailProviderCapability(account.provider);
-            return (
-            <div className="settings-item" key={account.id}>
-              <strong>{account.name}</strong>
-              <div className="subtle">{account.emailAddress} · {account.provider} · {account.status}</div>
-              <div className="toolbar" style={{ marginTop: 8 }}>
-                <span className={account.sendEnabled && capability.supportsSend ? "badge" : "danger-badge"}>发送 {account.sendEnabled && capability.supportsSend ? "on" : "off"}</span>
-                <span className={account.syncEnabled && capability.supportsSync ? "badge" : "danger-badge"}>同步 {account.syncEnabled && capability.supportsSync ? "on" : "off"}</span>
-                <span className={account.connectionConfigured ? "badge" : "danger-badge"}>连接 {account.connectionConfigured ? "已配置" : "未配置"}</span>
-                {canManageEmailSettings ? (
-                  <>
-                <button className="secondary-button" type="button" onClick={() => onTestConnection(account.id)} disabled={disabled || !account.connectionConfigured}>
-                  <RefreshCw size={16} />
-                  测试连接
-                </button>
-                <button className="secondary-button" data-testid={`email-account-edit-${account.id}`} type="button" onClick={() => onEditAccount(account)} disabled={disabled}>
-                  编辑连接
-                </button>
-                <button className="secondary-button" type="button" onClick={() => onUpdateAccount(account.id, { sendEnabled: !account.sendEnabled })} disabled={disabled || !capability.supportsSend}>
-                  {account.sendEnabled ? "关闭发送" : "开启发送"}
-                </button>
-                <button className="secondary-button" type="button" onClick={() => onUpdateAccount(account.id, { syncEnabled: !account.syncEnabled })} disabled={disabled || !capability.supportsSync}>
-                  {account.syncEnabled ? "关闭同步" : "开启同步"}
-                </button>
-                <button
-                  className={account.status === "disabled" ? "secondary-button" : "danger-button"}
-                  type="button"
-                  onClick={() =>
-                    onUpdateAccount(
-                      account.id,
-                      account.status === "disabled" ? { status: "active" } : { status: "disabled", syncEnabled: false, sendEnabled: false }
-                    )
-                  }
-                  disabled={disabled}
-                >
-                  {account.status === "disabled" ? "启用" : "停用"}
-                </button>
-                <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || account.status !== "active"}>
-                  <RefreshCw size={16} />
-                  同步
-                </button>
-                  </>
-                ) : null}
-              </div>
-              {canManageEmailSettings && account.lastConnectionError ? <div className="subtle">连接错误：{account.lastConnectionError}</div> : null}
-            </div>
-            );
-          })}
-          {accounts.length === 0 ? <div className="empty-state">还没有邮箱账户</div> : null}
-        </div>
-      </section>
-
-      {canManageEmailSettings ? <EmailDiagnosticsPanel diagnostics={diagnostics} connectionTestRun={connectionTestRun} disabled={disabled} onRefresh={onRefreshDiagnostics} onTestAll={onTestAllConnections} onRetryMessage={onRetryMessage} /> : null}
-    </div>
       ) : null}
 
       {view === "mail" ? (
