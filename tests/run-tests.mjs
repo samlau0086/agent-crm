@@ -1455,6 +1455,18 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.deal-pill\.dragging/);
 });
 
+await run("record create and detail panels render full width in the main content flow", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /recordPanelMode !== "closed"[\s\S]*<aside className="detail-panel record-drawer">/);
+  assert.match(styles, /\.workspace-grid\.has-drawer \{\s*grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(styles, /\.record-drawer \{[\s\S]*order: -1;[\s\S]*position: static;[\s\S]*max-height: none;[\s\S]*overflow: visible;/);
+  assert.match(styles, /\.record-drawer \.drawer-header \{\s*position: static;/);
+  assert.doesNotMatch(styles, /\.workspace-grid\.has-drawer \{[\s\S]{0,120}minmax\(360px, 440px\)/);
+  assert.doesNotMatch(styles, /\.record-drawer \{\s*position: sticky/);
+});
+
 await run("task workspace exposes todo completed archived and delete actions", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const route = readFileSync("src/app/api/activities/[id]/route.ts", "utf8");

@@ -208,7 +208,7 @@ button {
 }
 
 .workspace-grid.has-drawer {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 
@@ -235,10 +235,14 @@ button {
 }
 
 .record-drawer {
-  position: sticky;
-  top: 22px;
-  max-height: calc(100vh - 44px);
-  overflow: auto;
+  order: -1;
+  position: static;
+  max-height: none;
+  overflow: visible;
+}
+
+.record-drawer .drawer-header {
+  position: static;
 }
 
 .drawer-header {
