@@ -92,6 +92,30 @@ export const seedData: CrmSnapshot = {
       updatedAt: now
     },
     {
+      id: "obj-product",
+      workspaceId: defaultWorkspaceId,
+      key: "products",
+      label: "产品",
+      pluralLabel: "产品",
+      description: "可报价的产品、订阅和服务",
+      icon: "Package",
+      isSystem: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "obj-quote",
+      workspaceId: defaultWorkspaceId,
+      key: "quotes",
+      label: "报价",
+      pluralLabel: "报价",
+      description: "关联联系人和公司的销售报价",
+      icon: "FileText",
+      isSystem: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
       id: "obj-partner",
       workspaceId: defaultWorkspaceId,
       key: "partners",
@@ -113,11 +137,25 @@ export const seedData: CrmSnapshot = {
     { id: "field-deal-amount", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "amount", label: "金额", type: "currency", required: true, unique: false, isSystem: true, position: 1 },
     { id: "field-deal-close-date", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "closeDate", label: "预计成交日", type: "date", required: false, unique: false, isSystem: true, position: 2 },
     { id: "field-deal-company", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "companyId", label: "关联公司", type: "reference", required: false, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 3 },
+    { id: "field-product-sku", workspaceId: defaultWorkspaceId, objectKey: "products", key: "sku", label: "SKU", type: "text", required: true, unique: true, isSystem: true, position: 1 },
+    { id: "field-product-unit-price", workspaceId: defaultWorkspaceId, objectKey: "products", key: "unitPrice", label: "单价", type: "currency", required: true, unique: false, isSystem: true, position: 2 },
+    { id: "field-product-billing-cycle", workspaceId: defaultWorkspaceId, objectKey: "products", key: "billingCycle", label: "计费周期", type: "select", required: false, unique: false, options: [{ label: "一次性", value: "one_time" }, { label: "月付", value: "monthly" }, { label: "年付", value: "annual" }], isSystem: true, position: 3 },
+    { id: "field-product-active", workspaceId: defaultWorkspaceId, objectKey: "products", key: "active", label: "启用", type: "boolean", required: false, unique: false, defaultValue: true, isSystem: true, position: 4 },
+    { id: "field-quote-number", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "quoteNumber", label: "报价编号", type: "text", required: true, unique: true, isSystem: true, position: 1 },
+    { id: "field-quote-company", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "companyId", label: "关联公司", type: "reference", required: true, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 2 },
+    { id: "field-quote-contact", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "contactId", label: "关联联系人", type: "reference", required: true, unique: false, options: [{ label: "联系人", value: "contacts" }], isSystem: true, position: 3 },
+    { id: "field-quote-product", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "productId", label: "产品", type: "reference", required: false, unique: false, options: [{ label: "产品", value: "products" }], isSystem: true, position: 4 },
+    { id: "field-quote-total-amount", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "totalAmount", label: "报价金额", type: "currency", required: true, unique: false, isSystem: true, position: 5 },
+    { id: "field-quote-status", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "status", label: "状态", type: "select", required: true, unique: false, options: [{ label: "草稿", value: "draft" }, { label: "已发送", value: "sent" }, { label: "已接受", value: "accepted" }, { label: "已拒绝", value: "declined" }, { label: "已过期", value: "expired" }], defaultValue: "draft", isSystem: true, position: 6 },
+    { id: "field-quote-valid-until", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "validUntil", label: "有效期至", type: "date", required: false, unique: false, isSystem: true, position: 7 },
     { id: "field-partner-tier", workspaceId: defaultWorkspaceId, objectKey: "partners", key: "tier", label: "伙伴等级", type: "select", required: true, unique: false, options: [{ label: "金牌", value: "gold" }, { label: "银牌", value: "silver" }], isSystem: false, position: 1 }
   ],
   relationDefinitions: [
     { id: "rel-company-contacts", workspaceId: defaultWorkspaceId, fromObjectKey: "companies", toObjectKey: "contacts", key: "company_contacts", label: "公司联系人", cardinality: "one-to-many" },
     { id: "rel-company-deals", workspaceId: defaultWorkspaceId, fromObjectKey: "companies", toObjectKey: "deals", key: "company_deals", label: "公司交易", cardinality: "one-to-many" },
+    { id: "rel-company-quotes", workspaceId: defaultWorkspaceId, fromObjectKey: "companies", toObjectKey: "quotes", key: "company_quotes", label: "公司报价", cardinality: "one-to-many" },
+    { id: "rel-contact-quotes", workspaceId: defaultWorkspaceId, fromObjectKey: "contacts", toObjectKey: "quotes", key: "contact_quotes", label: "联系人报价", cardinality: "one-to-many" },
+    { id: "rel-product-quotes", workspaceId: defaultWorkspaceId, fromObjectKey: "products", toObjectKey: "quotes", key: "product_quotes", label: "产品报价", cardinality: "one-to-many" },
     { id: "rel-partner-companies", workspaceId: defaultWorkspaceId, fromObjectKey: "partners", toObjectKey: "companies", key: "partner_companies", label: "伙伴客户", cardinality: "many-to-many" }
   ],
   records: [
@@ -149,6 +187,26 @@ export const seedData: CrmSnapshot = {
       stageKey: "proposal",
       ownerId: salesUserId,
       data: { amount: 280000, closeDate: "2026-07-31", companyId: "company-acme" },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "product-ai-sales-standard",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "products",
+      title: "AI 销售助手标准版",
+      ownerId: salesUserId,
+      data: { sku: "SKU-AI-SALES-STD", unitPrice: 2999, billingCycle: "annual", active: true },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "quote-acme-platform",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "quotes",
+      title: "Acme 年度订阅报价",
+      ownerId: salesUserId,
+      data: { quoteNumber: "Q-2026-001", companyId: "company-acme", contactId: "contact-lin", productId: "product-ai-sales-standard", totalAmount: 2999, status: "draft", validUntil: "2026-07-31" },
       createdAt: now,
       updatedAt: now
     }
@@ -218,6 +276,8 @@ export const seedData: CrmSnapshot = {
   savedViews: [
     { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "email", "phone", "companyId"], isDefault: true },
     { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "domain", "industry"], isDefault: true },
-    { id: "view-deals-default", workspaceId: defaultWorkspaceId, objectKey: "deals", name: "销售管道", columns: ["title", "amount", "closeDate", "companyId"], sort: { field: "amount", direction: "desc" }, isDefault: true }
+    { id: "view-deals-default", workspaceId: defaultWorkspaceId, objectKey: "deals", name: "销售管道", columns: ["title", "amount", "closeDate", "companyId"], sort: { field: "amount", direction: "desc" }, isDefault: true },
+    { id: "view-products-default", workspaceId: defaultWorkspaceId, objectKey: "products", name: "全部产品", columns: ["title", "sku", "unitPrice", "billingCycle", "active"], sort: { field: "title", direction: "asc" }, isDefault: true },
+    { id: "view-quotes-default", workspaceId: defaultWorkspaceId, objectKey: "quotes", name: "全部报价", columns: ["title", "quoteNumber", "companyId", "contactId", "totalAmount", "status"], sort: { field: "updatedAt", direction: "desc" }, isDefault: true }
   ]
 };

@@ -22,6 +22,8 @@ import {
   Menu,
   Minus,
   MoreVertical,
+  Package,
+  FileText,
   RefreshCw,
   RotateCcw,
   Save,
@@ -113,7 +115,7 @@ interface CrmWorkspaceProps {
   importJobQueueSummary?: ImportJobQueueSummary;
 }
 
-type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
+type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
 type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "drafts" | "archived" | "trash" | "all";
@@ -228,13 +230,15 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
   { key: "contacts", label: "联系人", icon: UserRound },
   { key: "companies", label: "公司", icon: Building2 },
   { key: "deals", label: "交易", icon: BadgeDollarSign },
+  { key: "products", label: "产品", icon: Package },
+  { key: "quotes", label: "报价", icon: FileText },
   { key: "objects", label: "对象", icon: LayoutList },
   { key: "tasks", label: "任务", icon: CheckCircle2 },
   { key: "activities", label: "活动", icon: ActivityIcon },
   { key: "settings", label: "设置", icon: Settings }
 ];
 
-const coreObjects = new Set(["contacts", "companies", "deals"]);
+const coreObjects = new Set(["contacts", "companies", "deals", "products", "quotes"]);
 const emailAiFeatureMeta: Record<keyof EmailAiSettings["features"], { label: string; description: string; dependsOn?: keyof EmailAiSettings["features"] }> = {
   draft: { label: "AI 写邮件", description: "基于客户背景、沟通历史和知识库生成邮件草稿" },
   translate: { label: "AI 翻译", description: "手动翻译邮件内容" },
@@ -1749,7 +1753,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
-  const showRecordWorkspace = activeNav === "contacts" || activeNav === "companies" || activeNav === "deals" || activeNav === "records";
+  const showRecordWorkspace = coreObjects.has(activeNav) || activeNav === "records";
 
   return (
     <div
@@ -1785,7 +1789,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   }
                   setAppSidebarCollapsed(false);
                   setActiveNav(item.key);
-                  if (item.key === "contacts" || item.key === "companies" || item.key === "deals") {
+                  if (coreObjects.has(item.key)) {
                     openObject(item.key);
                   }
                 }}
@@ -5250,6 +5254,12 @@ function sampleCsvFor(objectKey: string, fields: FieldDefinition[]): string {
   if (objectKey === "deals") {
     return "title,amount,closeDate,companyId\n平台升级项目,120000,2026-08-15,company-acme";
   }
+  if (objectKey === "products") {
+    return "title,sku,unitPrice,billingCycle,active\nAI 销售助手标准版,SKU-AI-SALES-STD,2999,annual,true";
+  }
+  if (objectKey === "quotes") {
+    return "title,quoteNumber,companyId,contactId,productId,totalAmount,status,validUntil\nAcme 年度订阅报价,Q-2026-001,company-acme,contact-lin,product-ai-sales-standard,2999,draft,2026-07-31";
+  }
   if (objectKey === "contacts") {
     return "title,email,phone\n王敏,wang@example.com,+86 139 0000 0000";
   }
@@ -5721,7 +5731,7 @@ async function fetchJson<T = unknown>(
 }
 
 function titleFor(activeNav: NavKey, activeObjectLabel?: string): string {
-  if (activeNav === "contacts" || activeNav === "companies" || activeNav === "deals" || activeNav === "records") {
+  if (coreObjects.has(activeNav) || activeNav === "records") {
     return activeObjectLabel ?? "";
   }
 

@@ -48,6 +48,8 @@ const OBJECT_SYNONYMS: Record<string, string[]> = {
   contacts: ["contact", "contacts", "person", "people", "\u8054\u7cfb\u4eba", "\u5ba2\u6237", "\u7ebf\u7d22"],
   companies: ["company", "companies", "account", "accounts", "\u516c\u53f8", "\u5ba2\u6237\u516c\u53f8"],
   deals: ["deal", "deals", "opportunity", "opportunities", "\u4ea4\u6613", "\u673a\u4f1a", "\u9500\u552e\u673a\u4f1a"],
+  products: ["product", "products", "sku", "catalog", "\u4ea7\u54c1", "\u4ea7\u54c1\u76ee\u5f55"],
+  quotes: ["quote", "quotes", "quotation", "proposal", "\u62a5\u4ef7", "\u62a5\u4ef7\u5355", "\u65b9\u6848\u62a5\u4ef7"],
   tasks: ["task", "tasks", "\u4efb\u52a1", "\u5f85\u529e"],
   activities: ["activity", "activities", "\u6d3b\u52a8", "\u8ddf\u8fdb"]
 };

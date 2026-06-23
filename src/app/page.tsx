@@ -32,6 +32,11 @@ export default async function Home() {
   const initialObjectKey = "contacts";
   const initialRecordList = await repository.queryRecords(context, initialObjectKey, { page: 1, pageSize: 50 });
   const referenceObjectKeys = getReferenceObjectKeys(fields, initialObjectKey);
+  for (const objectKey of ["products", "quotes"]) {
+    if (objects.some((object) => object.key === objectKey)) {
+      referenceObjectKeys.add(objectKey);
+    }
+  }
   const referenceRecordLists = await Promise.all(
     [...referenceObjectKeys].map((objectKey) => repository.queryRecords(context, objectKey, { page: 1, pageSize: 50 }))
   );

@@ -1346,6 +1346,15 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.deal-pill\.dragging/);
 });
 
+await run("workspace exposes product and quote modules as first-class crm objects", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /key: "products", label: "产品", icon: Package/);
+  assert.match(source, /key: "quotes", label: "报价", icon: FileText/);
+  assert.match(source, /new Set\(\["contacts", "companies", "deals", "products", "quotes"\]\)/);
+  assert.match(source, /case "products":[\s\S]*SKU-AI-SALES-STD/);
+  assert.match(source, /case "quotes":[\s\S]*companyId,contactId,productId/);
+});
+
 await run("email workspace refreshes threads and selected messages after sync", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /async function refreshEmailThreads\(options: \{ reloadSelectedMessages\?: boolean \} = \{\}\)/);
@@ -5924,6 +5933,28 @@ await run("related records resolve through reference fields", () => {
 
   assert.equal(related.some((item) => item.record.id === "contact-lin"), true);
   assert.equal(related.some((item) => item.record.id === "deal-platform"), true);
+  assert.equal(related.some((item) => item.record.id === "quote-acme-platform"), true);
+});
+
+await run("product and quote seed metadata supports company and contact associations", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const objects = store.snapshot().objectDefinitions;
+  const fields = store.listFieldDefinitions(context);
+  const relations = store.listRelationDefinitions(context);
+
+  assert.equal(objects.some((object) => object.key === "products" && object.isSystem), true);
+  assert.equal(objects.some((object) => object.key === "quotes" && object.isSystem), true);
+  assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "companyId" && field.type === "reference" && field.required), true);
+  assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "contactId" && field.type === "reference" && field.required), true);
+  assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "productId" && field.type === "reference"), true);
+  assert.equal(relations.some((relation) => relation.key === "company_quotes" && relation.fromObjectKey === "companies" && relation.toObjectKey === "quotes"), true);
+  assert.equal(relations.some((relation) => relation.key === "contact_quotes" && relation.fromObjectKey === "contacts" && relation.toObjectKey === "quotes"), true);
+
+  const quote = store.getRecord(context, "quotes", "quote-acme-platform");
+  assert.equal(quote.data.companyId, "company-acme");
+  assert.equal(quote.data.contactId, "contact-lin");
+  assert.equal(quote.data.productId, "product-ai-sales-standard");
 });
 
 await run("email accounts messages and thread summaries are workspace scoped", () => {
