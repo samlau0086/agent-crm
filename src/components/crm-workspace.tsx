@@ -18,7 +18,9 @@ import {
   LayoutList,
   Mail,
   MailOpen,
+  Maximize2,
   Menu,
+  Minus,
   MoreVertical,
   RefreshCw,
   RotateCcw,
@@ -2740,6 +2742,9 @@ function EmailWorkspace({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeMinimized, setComposeMinimized] = useState(false);
+  const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const selectedThreadIdsArray = Array.from(selectedThreadIds);
   const visibleThreads = useMemo(() => {
     return threads.filter((thread) => {
@@ -2845,6 +2850,31 @@ function EmailWorkspace({
       }
     }
   }, [detailThreadId, messagesByThread, patchThreadUiState, persistThreadState, selectedThreadId, threadUiState]);
+
+  useEffect(() => {
+    if (view === "mail" && hasEmailDraftContent) {
+      setComposeOpen(true);
+      setComposeMinimized(false);
+    }
+  }, [hasEmailDraftContent, view]);
+
+  function openComposePopup() {
+    setComposeOpen(true);
+    setComposeMinimized(false);
+    window.setTimeout(() => {
+      document.querySelector<HTMLInputElement>("[data-testid='email-compose-to']")?.focus();
+    }, 0);
+  }
+
+  function closeComposePopup() {
+    setComposeOpen(false);
+    setComposeMinimized(false);
+  }
+
+  function sendEmailFromPopup() {
+    onSend();
+    closeComposePopup();
+  }
 
   function performMailboxAction(action: "archive" | "delete" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
     if (!threadIds.length) {
@@ -3242,7 +3272,7 @@ function EmailWorkspace({
 
       <div className={`gmail-layout ${mailMode === "detail" ? "detail-mode" : ""}`}>
         <aside className="gmail-sidebar">
-          <button className="primary-button gmail-compose-button" type="button" onClick={() => document.querySelector<HTMLInputElement>("[data-testid='email-compose-to']")?.focus()}>
+          <button className="primary-button gmail-compose-button" type="button" onClick={openComposePopup}>
             <Send size={16} />
             写邮件
           </button>
@@ -3517,7 +3547,16 @@ function EmailWorkspace({
                           </div>
                         ) : null}
                         <div className="toolbar" style={{ marginTop: 8 }}>
-                          <button className="secondary-button" data-testid={`email-message-reply-${message.id}`} type="button" onClick={() => onReplyToMessage(message)} disabled={disabled}>
+                          <button
+                            className="secondary-button"
+                            data-testid={`email-message-reply-${message.id}`}
+                            type="button"
+                            onClick={() => {
+                              onReplyToMessage(message);
+                              openComposePopup();
+                            }}
+                            disabled={disabled}
+                          >
                             <Send size={14} />
                             回复
                           </button>
@@ -3542,8 +3581,21 @@ function EmailWorkspace({
           )}
         </main>
 
-        <aside className="gmail-compose-pane">
-          <section className="email-compose-pane">
+        {composeOpen ? (
+          <section className={`gmail-compose-popup ${composeMinimized ? "minimized" : ""}`} data-testid="email-compose-popup" aria-label="写邮件">
+            <div className="gmail-compose-popup-header">
+              <strong>{emailDraft.subject.trim() || "新邮件"}</strong>
+              <div className="toolbar">
+                <button className="icon-button" aria-label={composeMinimized ? "展开写信窗口" : "最小化写信窗口"} type="button" onClick={() => setComposeMinimized((current) => !current)}>
+                  {composeMinimized ? <Maximize2 size={15} /> : <Minus size={15} />}
+                </button>
+                <button className="icon-button" aria-label="关闭写信窗口" type="button" onClick={closeComposePopup}>
+                  <XCircle size={15} />
+                </button>
+              </div>
+            </div>
+            {composeMinimized ? null : (
+              <div className="gmail-compose-popup-body">
             <div className="email-pane-header compact">
               <h2 className="page-title" style={{ fontSize: 16 }}>撰写邮件</h2>
               <button className="secondary-button" data-testid="email-open-ai" type="button" onClick={() => onViewChange("ai")}>
@@ -3645,13 +3697,15 @@ function EmailWorkspace({
               </div>
             ) : null}
             <div className="toolbar" style={{ marginTop: 12 }}>
-              <button className="primary-button" data-testid="email-send" type="button" onClick={onSend} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !emailDraft.bodyText.trim()}>
+              <button className="primary-button" data-testid="email-send" type="button" onClick={sendEmailFromPopup} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !emailDraft.bodyText.trim()}>
                 <Send size={16} />
                 发送
               </button>
             </div>
+              </div>
+            )}
           </section>
-        </aside>
+        ) : null}
       </div>
     </div>
       ) : null}

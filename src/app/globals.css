@@ -493,13 +493,13 @@ button {
 
 .gmail-layout {
   display: grid;
-  grid-template-columns: 232px minmax(480px, 1fr) minmax(320px, 380px);
+  grid-template-columns: 232px minmax(480px, 1fr);
   gap: 12px;
   align-items: start;
 }
 
 .gmail-layout.detail-mode {
-  grid-template-columns: 232px minmax(540px, 1fr) minmax(320px, 380px);
+  grid-template-columns: 232px minmax(540px, 1fr);
 }
 
 .gmail-sidebar {
@@ -783,14 +783,67 @@ button {
   background: #ffffff;
 }
 
-.gmail-compose-pane {
-  position: sticky;
-  top: 10px;
-  min-width: 0;
+.gmail-compose-popup {
+  position: fixed;
+  right: 24px;
+  bottom: 0;
+  z-index: 60;
+  display: grid;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 88px));
+  overflow: hidden;
+  border: 1px solid #dadce0;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgba(60, 64, 67, 0.28);
 }
 
-.gmail-compose-pane .email-compose-pane {
-  box-shadow: var(--shadow);
+.gmail-compose-popup.minimized {
+  width: min(320px, calc(100vw - 32px));
+  max-height: 48px;
+}
+
+.gmail-compose-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 10px 0 14px;
+  background: #202124;
+  color: #ffffff;
+}
+
+.gmail-compose-popup-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gmail-compose-popup-header .toolbar {
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+
+.gmail-compose-popup-header .icon-button {
+  width: 28px;
+  height: 28px;
+  color: #ffffff;
+}
+
+.gmail-compose-popup-header .icon-button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.gmail-compose-popup-body {
+  min-width: 0;
+  max-height: calc(min(720px, 100vh - 88px) - 40px);
+  overflow: auto;
+  padding: 12px;
 }
 
 .email-client {
@@ -1433,11 +1486,6 @@ button {
     grid-template-columns: 204px minmax(420px, 1fr);
   }
 
-  .gmail-compose-pane {
-    position: static;
-    grid-column: 2;
-  }
-
   .gmail-thread-row {
     grid-template-columns: 28px 28px 28px minmax(0, 1fr) auto 116px;
   }
@@ -1484,17 +1532,23 @@ button {
     display: none;
   }
 
-  .gmail-sidebar,
-  .gmail-compose-pane {
+  .gmail-sidebar {
     position: static;
-  }
-
-  .gmail-compose-pane {
-    grid-column: auto;
   }
 
   .gmail-folder-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .gmail-compose-popup {
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: min(680px, calc(100vh - 72px));
+  }
+
+  .gmail-compose-popup.minimized {
+    width: auto;
   }
 
   .gmail-folder {
