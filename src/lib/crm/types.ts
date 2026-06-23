@@ -137,6 +137,9 @@ export interface EmailAccount {
 }
 
 export interface EmailConnectionConfig {
+  inbound?: EmailInboundConnectionConfig;
+  outboundServices?: EmailOutboundServiceConfig[];
+  defaultOutboundServiceId?: string;
   smtpHost?: string;
   smtpPort?: number;
   smtpSecure?: boolean;
@@ -157,6 +160,40 @@ export interface EmailConnectionConfig {
   tokenType?: string;
   expiresAt?: string;
   scope?: string;
+}
+
+export interface EmailInboundConnectionConfig {
+  syncProtocol?: "imap" | "pop3";
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  pop3Host?: string;
+  pop3Port?: number;
+  pop3Secure?: boolean;
+  username?: string;
+  password?: string;
+  mailbox?: string;
+  oauthProvider?: "gmail" | "outlook" | "custom";
+  accessToken?: string;
+  refreshToken?: string;
+  tokenType?: string;
+  expiresAt?: string;
+  scope?: string;
+}
+
+export interface EmailOutboundServiceConfig {
+  id: string;
+  name: string;
+  type: "smtp" | "resend";
+  enabled?: boolean;
+  fromEmail?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpStartTls?: boolean;
+  username?: string;
+  password?: string;
+  resendApiKey?: string;
 }
 
 export interface EmailThread {

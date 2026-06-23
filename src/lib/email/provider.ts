@@ -4,6 +4,8 @@ import type { PrismaCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { assertEmailDeliveryModeAllowed, getEmailDeliveryMode } from "@/lib/email/delivery-mode";
 import { fetchRecentMailboxEmails, sendSmtpEmail, testMailConnection, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
+import { getDefaultOutboundService, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
+import { sendResendEmail } from "@/lib/email/resend";
 import { assertOAuthConfig, isOAuthProvider } from "@/lib/email/oauth";
 import { fetchRecentOAuthEmails, sendOAuthEmail, testOAuthConnection, type OAuthMailApiOptions } from "@/lib/email/oauth-api";
 import { assertOutboundEmailRecipientPolicy } from "@/lib/email/outbound-policy";
@@ -259,8 +261,20 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       if (!config) {
         throw new Error("Email account connection is not configured");
       }
+      const outboundService = getDefaultOutboundService(config);
+      if (outboundService?.type === "resend") {
+        try {
+          const result = await sendResendEmail(outboundService, input, account.emailAddress);
+          await this.repository.markEmailAccountConnectionError(context, input.accountId, null);
+          return result;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Resend send failed";
+          await this.repository.markEmailAccountConnectionError(context, input.accountId, message);
+          throw new Error(message);
+        }
+      }
       try {
-        const result = await sendSmtpEmail(config, input, account.emailAddress);
+        const result = await sendSmtpEmail(getOutboundSmtpConnectionConfig(config, outboundService), input, outboundService?.fromEmail ?? account.emailAddress);
         await this.repository.markEmailAccountConnectionError(context, input.accountId, null);
         return result;
       } catch (error) {

@@ -46,7 +46,7 @@ import {
 import { defaultWorkspaceId, seedData } from "../src/lib/crm/seed.ts";
 import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
-import { decryptEmailConnectionConfig, encryptEmailConnectionConfig } from "../src/lib/email/connection-config.ts";
+import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, getDefaultOutboundService, getInboundConnectionConfig, normalizeEmailConnectionConfig } from "../src/lib/email/connection-config.ts";
 import { testEmailAccountConnections } from "../src/lib/email/connection-tests.ts";
 import { buildEmailAccountDiagnostics, buildEmailAiContextPolicyDiagnostics, buildEmailAiProviderFallbackDiagnostics, buildEmailAutoSummaryPolicyDiagnostics, buildEmailSendClaimDiagnostics, buildEmailSyncSchedulerDiagnostics, checkEmailSubsystemDiagnostics, checkEmailSubsystemDiagnosticsForContext } from "../src/lib/email/diagnostics.ts";
 import { downloadOAuthAttachment, fetchRecentOAuthEmails, sendOAuthEmail } from "../src/lib/email/oauth-api.ts";
@@ -54,6 +54,7 @@ import { assertOAuthConfig, buildOAuthAuthorizationUrl, createEmailOAuthState, e
 import { buildOAuthEmailConnectedRedirectUrl, buildOAuthEmailErrorRedirectUrl, connectOAuthEmailAccount } from "../src/lib/email/oauth-account.ts";
 import { MAX_OUTBOUND_EMAIL_RECIPIENTS, validateOutboundEmailRecipientPolicy } from "../src/lib/email/outbound-policy.ts";
 import { createEmailProviderAdapter } from "../src/lib/email/provider.ts";
+import { sendResendEmail } from "../src/lib/email/resend.ts";
 import { getEmailProviderCapability, getEmailProviderSetupVisibility, getOAuthEmailProviderCapability, isOAuthEmailProvider, listEmailProviderCapabilities, oauthEmailProviderKeys } from "../src/lib/email/providers.ts";
 import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
@@ -1525,6 +1526,26 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.match(source, /selectedAccountCanSend \? selectedMailboxAccountId : emailDraft\.accountId \|\| activeAccounts\[0\]\?\.id \|\| ""/);
   assert.match(styles, /\.gmail-account-folder span \{/);
   assert.match(styles, /\.gmail-account-folder strong,/);
+});
+
+await run("email account settings separate inbound credentials from outbound services", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const schema = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
+
+  assert.match(source, /defaultOutboundServiceId: string/);
+  assert.match(source, /outboundServices: EmailAccountDraftOutboundService\[\]/);
+  assert.match(source, /data-testid="email-account-outbound-type"/);
+  assert.match(source, /email-account-smtp-username/);
+  assert.match(source, /data-testid="email-account-inbound-username"/);
+  assert.match(source, /email-account-resend-api-key/);
+  assert.match(source, /addOutboundServiceDraft\("smtp"\)/);
+  assert.match(source, /addOutboundServiceDraft\("resend"\)/);
+  assert.match(source, /SMTP 发件服务/);
+  assert.match(source, /Resend 发件服务/);
+  assert.match(source, /outboundServices/);
+  assert.match(source, /defaultOutboundServiceId: draft\.defaultOutboundServiceId/);
+  assert.match(schema, /inbound: emailInboundConnectionConfigSchema\.optional\(\)/);
+  assert.match(schema, /outboundServices: z\.array\(emailOutboundServiceConfigSchema\)\.max\(10\)\.optional\(\)/);
 });
 
 await run("email workspace diagnostics display ai automation eligibility policy", () => {
@@ -8798,6 +8819,49 @@ await run("email connection config is encrypted and requires a stable secret", (
   assert.throws(() => encryptEmailConnectionConfig({ username: "sales@example.com", password: "secret" }, "short"), /at least 16 characters/);
 });
 
+await run("email connection config separates inbound mailbox and outbound services", () => {
+  const normalized = normalizeEmailConnectionConfig({
+    inbound: {
+      syncProtocol: "pop3",
+      pop3Host: "pop.example.com",
+      username: "inbound-user",
+      password: "inbound-password"
+    },
+    outboundServices: [
+      {
+        id: "resend",
+        name: "Resend",
+        type: "resend",
+        fromEmail: "sales@example.com",
+        resendApiKey: "re_test_key"
+      },
+      {
+        id: "smtp",
+        name: "SMTP",
+        type: "smtp",
+        smtpHost: "smtp.example.com",
+        username: "smtp-user",
+        password: "smtp-password"
+      }
+    ],
+    defaultOutboundServiceId: "resend"
+  });
+
+  assert.equal(getInboundConnectionConfig(normalized).username, "inbound-user");
+  assert.equal(getDefaultOutboundService(normalized)?.type, "resend");
+  assert.equal(getDefaultOutboundService(normalized)?.resendApiKey, "re_test_key");
+
+  const legacy = normalizeEmailConnectionConfig({
+    smtpHost: "smtp.legacy.example",
+    imapHost: "imap.legacy.example",
+    username: "legacy-user",
+    password: "legacy-password"
+  });
+  assert.equal(getInboundConnectionConfig(legacy).imapHost, "imap.legacy.example");
+  assert.equal(getDefaultOutboundService(legacy)?.type, "smtp");
+  assert.equal(getDefaultOutboundService(legacy)?.username, "legacy-user");
+});
+
 await run("smtp transport resolves direct tls starttls and plaintext ports", () => {
   assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpSecure: true }), { port: 465, secure: true, startTls: false });
   assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpSecure: false }), { port: 25, secure: false, startTls: false });
@@ -8844,6 +8908,39 @@ await run("smtp provider encodes non-ascii message headers", async () => {
     assert.match(raw, /Message-ID: <smtp-non-ascii-message@ai-agent-crm\.local>/);
   } finally {
     await smtp.close();
+  }
+});
+
+await run("resend outbound service sends with api key and mapped from address", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, init });
+    return new Response(JSON.stringify({ id: "resend-message-id" }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const result = await sendResendEmail(
+      {
+        id: "resend",
+        name: "Resend",
+        type: "resend",
+        fromEmail: "sales@example.com",
+        resendApiKey: "re_test_key"
+      },
+      {
+        accountId: "email-account",
+        to: ["buyer@example.com"],
+        subject: "Resend quote",
+        bodyText: "Hello from Resend"
+      },
+      "fallback@example.com"
+    );
+    assert.equal(result.externalMessageId, "resend-message-id");
+    assert.equal(requests[0]?.url, "https://api.resend.com/emails");
+    assert.equal(requests[0]?.init?.headers?.authorization, "Bearer re_test_key");
+    assert.equal(JSON.parse(requests[0]?.init?.body).from, "sales@example.com");
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

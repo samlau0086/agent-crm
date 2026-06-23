@@ -1,7 +1,8 @@
 import net from "node:net";
 import tls from "node:tls";
-import type { EmailAttachment, EmailConnectionConfig } from "@/lib/crm/types";
+import type { EmailAttachment, EmailConnectionConfig, EmailOutboundServiceConfig } from "@/lib/crm/types";
 import { MAX_EMAIL_ATTACHMENT_BYTES, normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
+import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import type { EmailSendInput } from "@/lib/email/provider";
 
 export interface InboundEmail {
@@ -20,6 +21,7 @@ export interface MailConnectionTestResult {
   smtp?: "ok" | "skipped";
   imap?: "ok" | "skipped";
   pop3?: "ok" | "skipped";
+  resend?: "ok" | "skipped";
   oauth?: "ok" | "skipped";
   oauthAccountEmail?: string;
 }
@@ -34,7 +36,7 @@ export interface SmtpTransportOptions {
   startTls: boolean;
 }
 
-export function resolveSmtpTransport(config: EmailConnectionConfig): SmtpTransportOptions {
+export function resolveSmtpTransport(config: EmailConnectionConfig | EmailOutboundServiceConfig): SmtpTransportOptions {
   const startTls = config.smtpStartTls === true;
   const secure = !startTls && config.smtpSecure !== false;
   return {
@@ -47,30 +49,43 @@ export function resolveSmtpTransport(config: EmailConnectionConfig): SmtpTranspo
 export async function testMailConnection(config: EmailConnectionConfig, options: { smtp?: boolean; sync?: boolean; imap?: boolean } = {}): Promise<MailConnectionTestResult> {
   const result: MailConnectionTestResult = {};
   if (options.smtp !== false) {
-    assertSmtpConfig(config);
-    const smtp = await SmtpClient.connect(config);
-    try {
-      await prepareSmtpSession(smtp, config);
-      if (config.username && config.password) {
-        await smtp.command(`AUTH PLAIN ${Buffer.from(`\0${config.username}\0${config.password}`).toString("base64")}`, 235);
+    const outboundService = getDefaultOutboundService(config);
+    if (outboundService?.type === "resend") {
+      if (!outboundService.resendApiKey) {
+        throw new Error("Resend outbound service requires an API key");
       }
-      await smtp.command("QUIT", 221).catch(() => undefined);
-      result.smtp = "ok";
-    } finally {
-      smtp.close();
+      result.smtp = "skipped";
+      result.resend = "ok";
+    } else {
+      const smtpConfig = getOutboundSmtpConnectionConfig(config, outboundService);
+      assertSmtpConfig(smtpConfig);
+      const smtp = await SmtpClient.connect(smtpConfig);
+      try {
+        await prepareSmtpSession(smtp, smtpConfig);
+        if (smtpConfig.username && smtpConfig.password) {
+          await smtp.command(`AUTH PLAIN ${Buffer.from(`\0${smtpConfig.username}\0${smtpConfig.password}`).toString("base64")}`, 235);
+        }
+        await smtp.command("QUIT", 221).catch(() => undefined);
+        result.smtp = "ok";
+        result.resend = "skipped";
+      } finally {
+        smtp.close();
+      }
     }
   } else {
     result.smtp = "skipped";
+    result.resend = "skipped";
   }
 
   const shouldTestSync = options.sync ?? options.imap ?? true;
-  const syncProtocol = resolveSyncProtocol(config);
+  const inboundConfig = getInboundConnectionConfig(config);
+  const syncProtocol = resolveSyncProtocol(inboundConfig);
   if (shouldTestSync && syncProtocol === "imap") {
-    assertImapConfig(config);
-    const imap = await ImapClient.connect(config);
+    assertImapConfig(inboundConfig);
+    const imap = await ImapClient.connect(inboundConfig);
     try {
-      await imap.command(`LOGIN "${escapeImap(config.username ?? "")}" "${escapeImap(config.password ?? "")}"`);
-      await imap.command(`SELECT "${escapeImap(config.mailbox ?? "INBOX")}"`);
+      await imap.command(`LOGIN "${escapeImap(inboundConfig.username ?? "")}" "${escapeImap(inboundConfig.password ?? "")}"`);
+      await imap.command(`SELECT "${escapeImap(inboundConfig.mailbox ?? "INBOX")}"`);
       await imap.command("LOGOUT").catch(() => undefined);
       result.imap = "ok";
     } finally {
@@ -78,11 +93,11 @@ export async function testMailConnection(config: EmailConnectionConfig, options:
     }
     result.pop3 = "skipped";
   } else if (shouldTestSync && syncProtocol === "pop3") {
-    assertPop3Config(config);
-    const pop3 = await Pop3Client.connect(config);
+    assertPop3Config(inboundConfig);
+    const pop3 = await Pop3Client.connect(inboundConfig);
     try {
-      await pop3.command(`USER ${config.username ?? ""}`);
-      await pop3.command(`PASS ${config.password ?? ""}`);
+      await pop3.command(`USER ${inboundConfig.username ?? ""}`);
+      await pop3.command(`PASS ${inboundConfig.password ?? ""}`);
       await pop3.command("STAT");
       await pop3.command("QUIT").catch(() => undefined);
       result.pop3 = "ok";
@@ -142,7 +157,8 @@ export async function fetchRecentImapEmails(config: EmailConnectionConfig, limit
 }
 
 export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
-  return resolveSyncProtocol(config) === "pop3" ? fetchRecentPop3Emails(config, limit) : fetchRecentImapEmails(config, limit);
+  const inboundConfig = getInboundConnectionConfig(config);
+  return resolveSyncProtocol(inboundConfig) === "pop3" ? fetchRecentPop3Emails(inboundConfig, limit) : fetchRecentImapEmails(inboundConfig, limit);
 }
 
 export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {

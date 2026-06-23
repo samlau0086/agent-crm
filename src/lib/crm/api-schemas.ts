@@ -292,8 +292,47 @@ const outboundEmailAttachmentsSchema = z
   )
   .max(10)
   .optional();
+const emailInboundConnectionConfigSchema = z
+  .object({
+    syncProtocol: z.enum(["imap", "pop3"]).optional(),
+    imapHost: z.string().trim().min(1).optional(),
+    imapPort: z.number().int().min(1).max(65535).optional(),
+    imapSecure: z.boolean().optional(),
+    pop3Host: z.string().trim().min(1).optional(),
+    pop3Port: z.number().int().min(1).max(65535).optional(),
+    pop3Secure: z.boolean().optional(),
+    username: z.string().trim().min(1).optional(),
+    password: z.string().min(1).optional(),
+    mailbox: z.string().trim().min(1).optional(),
+    oauthProvider: z.enum(["gmail", "outlook", "custom"]).optional(),
+    accessToken: z.string().trim().min(1).optional(),
+    refreshToken: z.string().trim().min(1).optional(),
+    tokenType: z.string().trim().min(1).optional(),
+    expiresAt: z.string().datetime().optional(),
+    scope: z.string().trim().min(1).optional()
+  })
+  .strict();
+const emailOutboundServiceConfigSchema = z
+  .object({
+    id: z.string().trim().min(1).max(80),
+    name: z.string().trim().min(1).max(120),
+    type: z.enum(["smtp", "resend"]),
+    enabled: z.boolean().optional(),
+    fromEmail: emailAddressSchema.optional(),
+    smtpHost: z.string().trim().min(1).optional(),
+    smtpPort: z.number().int().min(1).max(65535).optional(),
+    smtpSecure: z.boolean().optional(),
+    smtpStartTls: z.boolean().optional(),
+    username: z.string().trim().min(1).optional(),
+    password: z.string().min(1).optional(),
+    resendApiKey: z.string().trim().min(1).optional()
+  })
+  .strict();
 const emailConnectionConfigSchema = z
   .object({
+    inbound: emailInboundConnectionConfigSchema.optional(),
+    outboundServices: z.array(emailOutboundServiceConfigSchema).max(10).optional(),
+    defaultOutboundServiceId: z.string().trim().min(1).max(80).optional(),
     smtpHost: z.string().trim().min(1).optional(),
     smtpPort: z.number().int().min(1).max(65535).optional(),
     smtpSecure: z.boolean().optional(),

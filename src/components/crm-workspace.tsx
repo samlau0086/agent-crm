@@ -160,7 +160,7 @@ type EmailConnectionTestRun = {
     account: EmailAccount;
     ok: boolean;
     skipped: boolean;
-    result?: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string };
+    result?: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string };
     reason?: string;
     error?: string;
   }>;
@@ -184,10 +184,8 @@ type EmailAccountDraft = {
   provider: EmailAccount["provider"];
   syncEnabled: boolean;
   sendEnabled: boolean;
-  smtpHost: string;
-  smtpPort: string;
-  smtpSecure: boolean;
-  smtpStartTls: boolean;
+  defaultOutboundServiceId: string;
+  outboundServices: EmailAccountDraftOutboundService[];
   syncProtocol: "imap" | "pop3";
   imapHost: string;
   imapPort: string;
@@ -202,6 +200,20 @@ type EmailAccountDraft = {
   oauthRefreshToken: string;
   oauthExpiresAt: string;
   oauthScope: string;
+};
+type EmailAccountDraftOutboundService = {
+  id: string;
+  name: string;
+  type: "smtp" | "resend";
+  enabled: boolean;
+  fromEmail: string;
+  smtpHost: string;
+  smtpPort: string;
+  smtpSecure: boolean;
+  smtpStartTls: boolean;
+  username: string;
+  password: string;
+  resendApiKey: string;
 };
 type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "status" | "syncEnabled" | "sendEnabled">> & {
   connectionConfig?: EmailConnectionConfig;
@@ -408,6 +420,30 @@ const navigationItems: typeof navItems = navItems.some((item) => item.key === "e
   ? navItems
   : [...navItems.slice(0, -1), { key: "email", label: "邮件", icon: Mail }, navItems[navItems.length - 1]];
 const sidebarCollapsedStorageKey = "ai-agent-crm:sidebar-collapsed";
+let emailOutboundServiceDraftCounter = 0;
+
+function createEmailOutboundServiceDraft(
+  type: EmailAccountDraftOutboundService["type"],
+  overrides: Partial<EmailAccountDraftOutboundService> = {}
+): EmailAccountDraftOutboundService {
+  const id = overrides.id ?? `${type}-${Date.now()}-${emailOutboundServiceDraftCounter++}`;
+
+  return {
+    name: type === "smtp" ? "SMTP" : "Resend",
+    type,
+    enabled: true,
+    fromEmail: "",
+    smtpHost: "",
+    smtpPort: type === "smtp" ? "465" : "",
+    smtpSecure: type === "smtp",
+    smtpStartTls: false,
+    username: "",
+    password: "",
+    resendApiKey: "",
+    ...overrides,
+    id
+  };
+}
 
 function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}): EmailAccountDraft {
   return {
@@ -416,10 +452,11 @@ function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}
     provider: "smtp_imap",
     syncEnabled: true,
     sendEnabled: true,
-    smtpHost: "",
-    smtpPort: "465",
-    smtpSecure: true,
-    smtpStartTls: false,
+    defaultOutboundServiceId: "smtp",
+    outboundServices: [
+      createEmailOutboundServiceDraft("smtp", { id: "smtp" }),
+      createEmailOutboundServiceDraft("resend", { id: "resend", enabled: false })
+    ],
     syncProtocol: "imap",
     imapHost: "",
     imapPort: "993",
@@ -1431,12 +1468,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function testEmailConnection(accountId: string) {
-    const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
+    const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
       method: "POST",
       body: { accountId }
     });
     setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
-    setMessage(`邮箱连接测试完成：SMTP ${result.result.smtp ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，POP3 ${result.result.pop3 ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
+    setMessage(`邮箱连接测试完成：SMTP ${result.result.smtp ?? "skipped"}，Resend ${result.result.resend ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，POP3 ${result.result.pop3 ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
   }
 
   async function testAllEmailConnections() {
@@ -2922,6 +2959,29 @@ function EmailWorkspace({
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
+  const updateOutboundServiceDraft = (serviceId: string, patch: Partial<EmailAccountDraftOutboundService>) => {
+    onAccountDraftChange({
+      ...accountDraft,
+      outboundServices: accountDraft.outboundServices.map((service) => (service.id === serviceId ? { ...service, ...patch } : service))
+    });
+  };
+  const addOutboundServiceDraft = (type: EmailAccountDraftOutboundService["type"]) => {
+    const service = createEmailOutboundServiceDraft(type, { name: `${type === "smtp" ? "SMTP" : "Resend"} ${accountDraft.outboundServices.length + 1}` });
+    onAccountDraftChange({
+      ...accountDraft,
+      defaultOutboundServiceId: accountDraft.defaultOutboundServiceId || service.id,
+      outboundServices: [...accountDraft.outboundServices, service]
+    });
+  };
+  const removeOutboundServiceDraft = (serviceId: string) => {
+    const outboundServices = accountDraft.outboundServices.filter((service) => service.id !== serviceId);
+    onAccountDraftChange({
+      ...accountDraft,
+      defaultOutboundServiceId:
+        accountDraft.defaultOutboundServiceId === serviceId ? outboundServices[0]?.id ?? "" : accountDraft.defaultOutboundServiceId,
+      outboundServices
+    });
+  };
   const selectedThreadIdsArray = Array.from(selectedThreadIds);
   const accountFilteredThreads = useMemo(
     () => (selectedMailboxAccountId === allEmailAccountsKey ? threads : threads.filter((thread) => thread.accountId === selectedMailboxAccountId)),
@@ -3161,10 +3221,11 @@ function EmailWorkspace({
       ...(capability.connectionKind === "smtp_imap"
         ? {}
         : {
-            smtpHost: "",
-            smtpPort: "465",
-            smtpSecure: true,
-            smtpStartTls: false,
+            outboundServices: [
+              createEmailOutboundServiceDraft("smtp", { id: "smtp" }),
+              createEmailOutboundServiceDraft("resend", { id: "resend", enabled: false })
+            ],
+            defaultOutboundServiceId: "smtp",
             syncProtocol: "imap",
             imapHost: "",
             imapPort: "993",
@@ -3315,22 +3376,97 @@ function EmailWorkspace({
           </label>
           {selectedProviderSetupVisibility.showSmtpImapFields ? (
             <>
+          <div className="settings-item wide">
+            <strong>发件服务</strong>
+            <div className="subtle">发件服务与收件箱独立配置。一个收件箱可以映射多条 SMTP、Resend 等不同发件服务，当前默认使用下方选择的服务。</div>
+          </div>
           <label>
-            <span className="subtle">SMTP Host</span>
-            <input className="input" data-testid="email-account-smtp-host" value={accountDraft.smtpHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpHost: event.target.value })} />
+            <span className="subtle">默认发件服务</span>
+            <select
+              className="select"
+              data-testid="email-account-outbound-type"
+              value={accountDraft.defaultOutboundServiceId}
+              onChange={(event) => onAccountDraftChange({ ...accountDraft, defaultOutboundServiceId: event.target.value })}
+            >
+              {accountDraft.outboundServices.map((service) => (
+                <option key={service.id} value={service.id}>
+                  {service.name || service.type.toUpperCase()}
+                </option>
+              ))}
+            </select>
           </label>
-          <label>
-            <span className="subtle">SMTP Port</span>
-            <input className="input" type="number" value={accountDraft.smtpPort} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpPort: event.target.value })} />
-          </label>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={accountDraft.smtpSecure} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpSecure: event.target.checked, smtpStartTls: event.target.checked ? false : accountDraft.smtpStartTls })} />
-            SMTP TLS
-          </label>
-          <label className="settings-toggle">
-            <input type="checkbox" checked={accountDraft.smtpStartTls} onChange={(event) => onAccountDraftChange({ ...accountDraft, smtpStartTls: event.target.checked, smtpSecure: event.target.checked ? false : accountDraft.smtpSecure })} />
-            SMTP STARTTLS
-          </label>
+          <div className="toolbar">
+            <button type="button" className="secondary-button" onClick={() => addOutboundServiceDraft("smtp")}>添加 SMTP</button>
+            <button type="button" className="secondary-button" onClick={() => addOutboundServiceDraft("resend")}>添加 Resend</button>
+          </div>
+          {accountDraft.outboundServices.map((service, index) => (
+            <div className="settings-item wide" key={service.id}>
+              <div className="toolbar between">
+                <strong>{service.type === "smtp" ? "SMTP 发件服务" : "Resend 发件服务"}</strong>
+                <button type="button" className="icon-button" title="删除发件服务" onClick={() => removeOutboundServiceDraft(service.id)} disabled={accountDraft.outboundServices.length <= 1}>
+                  <Trash2 size={16} />
+                </button>
+              </div>
+              <div className="form-grid" style={{ marginTop: 10 }}>
+                <label>
+                  <span className="subtle">服务名称</span>
+                  <input className="input" value={service.name} onChange={(event) => updateOutboundServiceDraft(service.id, { name: event.target.value })} />
+                </label>
+                <label>
+                  <span className="subtle">类型</span>
+                  <select className="select" value={service.type} onChange={(event) => updateOutboundServiceDraft(service.id, { type: event.target.value as "smtp" | "resend" })}>
+                    <option value="smtp">SMTP</option>
+                    <option value="resend">Resend</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="subtle">发件 From</span>
+                  <input className="input" data-testid={index === 0 ? "email-account-outbound-from" : `email-account-outbound-from-${service.id}`} value={service.fromEmail} onChange={(event) => updateOutboundServiceDraft(service.id, { fromEmail: event.target.value })} placeholder={accountDraft.emailAddress || "sales@example.com"} />
+                </label>
+                <label className="settings-toggle">
+                  <input type="checkbox" checked={service.enabled} onChange={(event) => updateOutboundServiceDraft(service.id, { enabled: event.target.checked })} />
+                  启用
+                </label>
+                {service.type === "smtp" ? (
+                  <>
+                    <label>
+                      <span className="subtle">SMTP Host</span>
+                      <input className="input" data-testid={index === 0 ? "email-account-smtp-host" : `email-account-smtp-host-${service.id}`} value={service.smtpHost} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpHost: event.target.value })} />
+                    </label>
+                    <label>
+                      <span className="subtle">SMTP Port</span>
+                      <input className="input" type="number" value={service.smtpPort} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpPort: event.target.value })} />
+                    </label>
+                    <label className="settings-toggle">
+                      <input type="checkbox" checked={service.smtpSecure} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpSecure: event.target.checked, smtpStartTls: event.target.checked ? false : service.smtpStartTls })} />
+                      SMTP TLS
+                    </label>
+                    <label className="settings-toggle">
+                      <input type="checkbox" checked={service.smtpStartTls} onChange={(event) => updateOutboundServiceDraft(service.id, { smtpStartTls: event.target.checked, smtpSecure: event.target.checked ? false : service.smtpSecure })} />
+                      SMTP STARTTLS
+                    </label>
+                    <label>
+                      <span className="subtle">SMTP 用户名</span>
+                      <input className="input" data-testid={index === 0 ? "email-account-smtp-username" : `email-account-smtp-username-${service.id}`} value={service.username} onChange={(event) => updateOutboundServiceDraft(service.id, { username: event.target.value })} />
+                    </label>
+                    <label>
+                      <span className="subtle">SMTP 密码/API Key</span>
+                      <input className="input" data-testid={index === 0 ? "email-account-smtp-password" : `email-account-smtp-password-${service.id}`} type="password" value={service.password} onChange={(event) => updateOutboundServiceDraft(service.id, { password: event.target.value })} />
+                    </label>
+                  </>
+                ) : (
+                  <label className="wide">
+                    <span className="subtle">Resend API Key</span>
+                    <input className="input" data-testid={index === 0 ? "email-account-resend-api-key" : `email-account-resend-api-key-${service.id}`} type="password" value={service.resendApiKey} onChange={(event) => updateOutboundServiceDraft(service.id, { resendApiKey: event.target.value })} />
+                  </label>
+                )}
+              </div>
+            </div>
+          ))}
+          <div className="settings-item wide">
+            <strong>收件配置</strong>
+            <div className="subtle">IMAP/POP3 的用户名和密码只用于收件同步，可以与发件服务凭据不同。</div>
+          </div>
           <label>
             <span className="subtle">收信协议</span>
             <select
@@ -3375,12 +3511,12 @@ function EmailWorkspace({
             </>
           )}
           <label>
-            <span className="subtle">用户名</span>
-            <input className="input" value={accountDraft.username} onChange={(event) => onAccountDraftChange({ ...accountDraft, username: event.target.value })} />
+            <span className="subtle">收件用户名</span>
+            <input className="input" data-testid="email-account-inbound-username" value={accountDraft.username} onChange={(event) => onAccountDraftChange({ ...accountDraft, username: event.target.value })} />
           </label>
           <label>
-            <span className="subtle">密码/应用密码</span>
-            <input className="input" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} />
+            <span className="subtle">收件密码/应用密码</span>
+            <input className="input" data-testid="email-account-inbound-password" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} />
           </label>
           {accountDraft.syncProtocol === "imap" ? (
             <label>
@@ -5934,6 +6070,7 @@ function formatEmailConnectionTestResult(entry: EmailConnectionTestRun["results"
   }
   const channels = [
     entry.result?.smtp ? `SMTP ${entry.result.smtp}` : undefined,
+    entry.result?.resend ? `Resend ${entry.result.resend}` : undefined,
     entry.result?.imap ? `IMAP ${entry.result.imap}` : undefined,
     entry.result?.pop3 ? `POP3 ${entry.result.pop3}` : undefined,
     entry.result?.oauth ? `OAuth ${entry.result.oauth}` : undefined,
@@ -6003,30 +6140,58 @@ function readFileAsBase64(file: File): Promise<string> {
 
 function buildEmailConnectionConfig(draft: EmailAccountDraft) {
   const oauthProvider = isOAuthEmailProvider(draft.provider) ? draft.provider : undefined;
-  const hasAnyConfig = [draft.smtpHost, draft.imapHost, draft.pop3Host, draft.username, draft.password, draft.oauthAccessToken, draft.oauthRefreshToken].some((value) => value.trim());
+  const hasAnyConfig = [
+    ...draft.outboundServices.flatMap((service) => [
+      service.fromEmail,
+      service.smtpHost,
+      service.username,
+      service.password,
+      service.resendApiKey
+    ]),
+    draft.imapHost,
+    draft.pop3Host,
+    draft.username,
+    draft.password,
+    draft.oauthAccessToken,
+    draft.oauthRefreshToken
+  ].some((value) => value.trim());
   if (!hasAnyConfig) {
     return undefined;
   }
+  const outboundServices = draft.outboundServices.map((service) => ({
+    id: service.id,
+    name: service.name.trim() || (service.type === "smtp" ? "SMTP" : "Resend"),
+    type: service.type,
+    enabled: draft.sendEnabled && service.enabled,
+    fromEmail: service.fromEmail.trim() || draft.emailAddress.trim() || undefined,
+    smtpHost: service.type === "smtp" ? service.smtpHost.trim() || undefined : undefined,
+    smtpPort: service.type === "smtp" && service.smtpPort ? Number(service.smtpPort) : undefined,
+    smtpSecure: service.type === "smtp" ? service.smtpSecure : undefined,
+    smtpStartTls: service.type === "smtp" ? service.smtpStartTls : undefined,
+    username: service.type === "smtp" ? service.username.trim() || undefined : undefined,
+    password: service.type === "smtp" ? service.password || undefined : undefined,
+    resendApiKey: service.type === "resend" ? service.resendApiKey.trim() || undefined : undefined
+  }));
   return {
-    smtpHost: draft.smtpHost.trim() || undefined,
-    smtpPort: draft.smtpPort ? Number(draft.smtpPort) : undefined,
-    smtpSecure: draft.smtpSecure,
-    smtpStartTls: draft.smtpStartTls,
-    syncProtocol: draft.syncProtocol,
-    imapHost: draft.imapHost.trim() || undefined,
-    imapPort: draft.imapPort ? Number(draft.imapPort) : undefined,
-    imapSecure: draft.imapSecure,
-    pop3Host: draft.pop3Host.trim() || undefined,
-    pop3Port: draft.pop3Port ? Number(draft.pop3Port) : undefined,
-    pop3Secure: draft.pop3Secure,
-    username: draft.username.trim() || undefined,
-    password: draft.password || undefined,
-    mailbox: draft.mailbox.trim() || "INBOX",
-    oauthProvider,
-    accessToken: draft.oauthAccessToken.trim() || undefined,
-    refreshToken: draft.oauthRefreshToken.trim() || undefined,
-    expiresAt: draft.oauthExpiresAt ? new Date(draft.oauthExpiresAt).toISOString() : undefined,
-    scope: draft.oauthScope.trim() || undefined
+    inbound: {
+      syncProtocol: draft.syncProtocol,
+      imapHost: draft.imapHost.trim() || undefined,
+      imapPort: draft.imapPort ? Number(draft.imapPort) : undefined,
+      imapSecure: draft.imapSecure,
+      pop3Host: draft.pop3Host.trim() || undefined,
+      pop3Port: draft.pop3Port ? Number(draft.pop3Port) : undefined,
+      pop3Secure: draft.pop3Secure,
+      username: draft.username.trim() || undefined,
+      password: draft.password || undefined,
+      mailbox: draft.mailbox.trim() || "INBOX",
+      oauthProvider,
+      accessToken: draft.oauthAccessToken.trim() || undefined,
+      refreshToken: draft.oauthRefreshToken.trim() || undefined,
+      expiresAt: draft.oauthExpiresAt ? new Date(draft.oauthExpiresAt).toISOString() : undefined,
+      scope: draft.oauthScope.trim() || undefined
+    },
+    outboundServices,
+    defaultOutboundServiceId: draft.defaultOutboundServiceId || outboundServices[0]?.id
   };
 }
 
