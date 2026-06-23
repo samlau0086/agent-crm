@@ -40,9 +40,10 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
+import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
 import type {
   Activity,
   ApiKey,
@@ -92,6 +93,7 @@ interface CrmWorkspaceProps {
   objects: ObjectDefinition[];
   fields: FieldDefinition[];
   records: CrmRecord[];
+  initialNavKey: NavKey;
   initialObjectKey: string;
   initialRecordList: RecordListResult;
   dashboardSummary: DashboardSummary;
@@ -468,7 +470,8 @@ function withClosedStages(stages: Pipeline["stages"]): Pipeline["stages"] {
 
 export function CrmWorkspace(props: CrmWorkspaceProps) {
   const router = useRouter();
-  const [activeNav, setActiveNav] = useState<NavKey>("dashboard");
+  const pathname = usePathname();
+  const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
   const [activeObjectKey, setActiveObjectKey] = useState(props.initialObjectKey);
   const [records, setRecords] = useState<CrmRecord[]>(() => mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
@@ -543,6 +546,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const previousViewDraftResetKey = useRef("");
   const previousEditFormResetKey = useRef("");
 
+  const routeObjectKeys = useMemo(() => props.objects.map((object) => object.key), [props.objects]);
   const activeObject = useMemo(
     () => props.objects.find((object) => object.key === activeObjectKey) ?? props.objects[0],
     [activeObjectKey, props.objects]
@@ -743,8 +747,24 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     nextUrl.searchParams.delete("emailAccountId");
     nextUrl.searchParams.delete("emailAccountCreated");
     nextUrl.searchParams.delete("emailOAuthError");
+    nextUrl.pathname = crmPathForNav("email");
     window.history.replaceState(window.history.state, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
   }, []);
+
+  useEffect(() => {
+    const route = resolveCrmRoute(pathname.split("/").filter(Boolean), routeObjectKeys);
+    if (!route) {
+      return;
+    }
+
+    const nextNav = route.navKey as NavKey;
+    setActiveNav(nextNav);
+    if (nextNav === "records" || coreObjects.has(nextNav)) {
+      setActiveObjectKey(route.objectKey);
+      setRecordPanelMode("closed");
+      setShowListSettings(false);
+    }
+  }, [pathname, routeObjectKeys]);
 
   useEffect(() => {
     setRecords(mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
@@ -969,9 +989,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setActivityDueAt("");
   }, [props.contextUser.id, selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
+  function navigateToWorkspace(navKey: NavKey, objectKey?: string) {
+    const nextPath = crmPathForNav(navKey, objectKey);
+    setActiveNav(navKey);
+    if (pathname !== nextPath) {
+      router.push(nextPath);
+    }
+  }
+
   function openObject(objectKey: string) {
+    const nextNav = coreObjects.has(objectKey) ? (objectKey as NavKey) : "records";
     setActiveObjectKey(objectKey);
-    setActiveNav(coreObjects.has(objectKey) ? (objectKey as NavKey) : "records");
+    navigateToWorkspace(nextNav, objectKey);
     setQuery("");
     setRecordPanelMode("closed");
     setShowListSettings(false);
@@ -1409,7 +1438,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     setEmailDetailThreadId(threadId);
     setEmailWorkspaceView("mail");
-    setActiveNav("email");
+    navigateToWorkspace("email");
   }
 
   function composeEmailForRecord(record: CrmRecord, emailAddress: string) {
@@ -1432,7 +1461,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       })
     );
     setEmailWorkspaceView("mail");
-    setActiveNav("email");
+    navigateToWorkspace("email");
   }
 
   function selectEmailThread(threadId: string) {
@@ -1658,13 +1687,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       const threadEntry = Object.entries(emailMessagesByThread).find(([, messages]) => messages.some((message) => message.id === source.messageId));
       if (threadEntry) {
         selectEmailThread(threadEntry[0]);
-        setActiveNav("email");
+        navigateToWorkspace("email");
         return;
       }
       const message = await fetchJson<EmailMessage>(`/api/email/messages/${source.messageId}`, { method: "GET" });
       await loadEmailMessages(message.threadId);
       selectEmailThread(message.threadId);
-      setActiveNav("email");
+      navigateToWorkspace("email");
       return;
     }
 
@@ -1682,7 +1711,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           return;
         }
       }
-      setActiveNav("activities");
+      navigateToWorkspace("activities");
       setMessage(`已定位活动来源：${source.label}`);
       return;
     }
@@ -1694,7 +1723,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         article = fetchedArticle;
         setKnowledgeArticles((current) => [fetchedArticle, ...current.filter((candidate) => candidate.id !== fetchedArticle.id)]);
       }
-      setActiveNav("email");
+      navigateToWorkspace("email");
       setMessage(article ? `知识库来源：${article.title}` : `知识库来源：${source.label}`);
       return;
     }
@@ -1794,10 +1823,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 data-testid={`nav-${item.key}`}
                 type="button"
                 onClick={() => {
-                  setActiveNav(item.key);
                   if (coreObjects.has(item.key)) {
                     openObject(item.key);
+                    return;
                   }
+                  navigateToWorkspace(item.key);
                 }}
               >
                 <Icon size={18} />

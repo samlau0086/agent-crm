@@ -17,6 +17,7 @@ import { clearFailedLogin, isLoginRateLimited, recordFailedLogin, resetLoginRate
 import { createPasswordSetupToken, hashPasswordSetupToken, normalizePasswordSetupPurpose } from "../src/lib/auth/password-setup.ts";
 import { createSessionToken, hashSessionToken } from "../src/lib/auth/session.ts";
 import { describePermission, permissionCatalog } from "../src/lib/auth/permissions.ts";
+import { crmPathForNav, resolveCrmRoute } from "../src/lib/crm/navigation.ts";
 import {
   csvImportSchema,
   emailAccountCreateSchema,
@@ -1326,6 +1327,28 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
   assert.match(source, /account\.status === "active" && account\.syncEnabled && account\.connectionConfigured && capability\.supportsSync/);
   assert.match(source, /disabled=\{disabled \|\| !account\.syncEnabled \|\| !account\.connectionConfigured \|\| !capability\.supportsSync \|\| account\.status !== "active"\}/);
   assert.match(source, /account\.status === "active" && account\.sendEnabled && account\.connectionConfigured && getEmailProviderCapability\(account\.provider\)\.supportsSend/);
+});
+
+await run("crm workspace routes modules through stable paths", () => {
+  assert.deepEqual(resolveCrmRoute([], ["contacts", "companies"]), { navKey: "dashboard", objectKey: "contacts", path: "/" });
+  assert.deepEqual(resolveCrmRoute(["companies"], ["contacts", "companies"]), { navKey: "companies", objectKey: "companies", path: "/companies" });
+  assert.deepEqual(resolveCrmRoute(["email"], ["contacts", "companies"]), { navKey: "email", objectKey: "contacts", path: "/email" });
+  assert.deepEqual(resolveCrmRoute(["records", "partners"], ["contacts", "partners"]), { navKey: "records", objectKey: "partners", path: "/records/partners" });
+  assert.equal(resolveCrmRoute(["unknown"], ["contacts"]), null);
+  assert.equal(crmPathForNav("settings"), "/settings");
+  assert.equal(crmPathForNav("records", "partners"), "/records/partners");
+
+  const rootPage = readFileSync("src/app/page.tsx", "utf8");
+  const modulePage = readFileSync("src/app/[...module]/page.tsx", "utf8");
+  const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(rootPage, /return <CrmPage \/>/);
+  assert.match(modulePage, /<CrmPage moduleSegments=\{params\.module \?\? \[\]\} \/>/);
+  assert.match(workspace, /initialNavKey: NavKey/);
+  assert.match(workspace, /useState<NavKey>\(props\.initialNavKey\)/);
+  assert.match(workspace, /usePathname\(\)/);
+  assert.match(workspace, /resolveCrmRoute\(pathname\.split\("\/"\)\.filter\(Boolean\), routeObjectKeys\)/);
+  assert.match(workspace, /router\.push\(nextPath\)/);
+  assert.doesNotMatch(workspace, /useState<NavKey>\("dashboard"\)/);
 });
 
 await run("workspace supports deal pipeline drag and email sidebar collapse", () => {
