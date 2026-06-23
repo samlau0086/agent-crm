@@ -67,7 +67,23 @@ After rendering `vps.env`, GitHub Actions also runs `NODE_ENV=production node sc
 
 By default the VPS Compose stack starts a dedicated `pgvector/pgvector:pg16` container named `postgres`, stores data under `/opt/ai-agent-crm/postgres-data`, and keeps the database private to the Compose network. This avoids cross-container ownership drift and leaves the database ready for future vector search features.
 
-The workflow keeps `/opt/ai-agent-crm` writable by the SSH deployment user, but sets `/opt/ai-agent-crm/postgres-data` to UID/GID `999:999` with mode `700` before every deploy because the `pgvector/pgvector:pg16` Postgres process owns that data directory inside the container. If the Postgres logs show `global/pg_filenode.map: Permission denied` or `postmaster.pid: Permission denied`, repair the existing directory with `sudo chown -R 999:999 /opt/ai-agent-crm/postgres-data && sudo chmod 700 /opt/ai-agent-crm/postgres-data`, then rerun the deployment.
+The workflow keeps `/opt/ai-agent-crm` writable by the SSH deployment user, but sets `/opt/ai-agent-crm/postgres-data` and `/opt/ai-agent-crm/redis-data` to UID/GID `999:999` with mode `700` before every deploy because the managed Postgres and Redis containers own those data directories internally.
+
+If the Postgres logs show `global/pg_filenode.map: Permission denied` or `postmaster.pid: Permission denied`, repair the existing directory with:
+
+```bash
+sudo chown -R 999:999 /opt/ai-agent-crm/postgres-data
+sudo chmod 700 /opt/ai-agent-crm/postgres-data
+```
+
+If Redis health or the app health check reports `MISCONF Redis is configured to save RDB snapshots` and the Redis logs show `Failed opening the temp RDB file ... Permission denied`, repair the Redis directory with:
+
+```bash
+sudo chown -R 999:999 /opt/ai-agent-crm/redis-data
+sudo chmod 700 /opt/ai-agent-crm/redis-data
+```
+
+Then rerun the deployment.
 
 If you intentionally keep an external Postgres container mapped as `5433:5432` on the VPS host, set `POSTGRES_HOST=host.docker.internal` and `POSTGRES_PORT=5433`. The VPS compose file keeps `host.docker.internal:host-gateway` so Linux containers can reach a host-published external database.
 

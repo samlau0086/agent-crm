@@ -143,16 +143,22 @@ function rankObjectKeys(question: string, definitions: ObjectDefinition[], field
       object.pluralLabel,
       ...(OBJECT_SYNONYMS[object.key] ?? [])
     ].map(normalizeText);
-    if (terms.some((term) => term && normalizeText(question).includes(term))) {
+    const explicitMatch = terms.some((term) => term && normalizeText(question).includes(term));
+    if (explicitMatch) {
       score += 10;
     }
     if (hasAmountIntent(question) && fields.some((field) => field.objectKey === object.key && isNumericField(field))) {
       score += 6;
     }
-    return { key: object.key, score, index };
+    return { key: object.key, score, explicitMatch, index };
   });
 
   const sorted = scored.sort((left, right) => right.score - left.score || left.index - right.index);
+  const explicitTargeted = sorted.filter((item) => item.explicitMatch);
+  if (explicitTargeted.length > 0) {
+    return explicitTargeted.map((item) => item.key);
+  }
+
   const targeted = sorted.filter((item) => item.score > 0);
   return (targeted.length > 0 ? targeted : sorted).map((item) => item.key);
 }

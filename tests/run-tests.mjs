@@ -1351,8 +1351,8 @@ await run("workspace exposes product and quote modules as first-class crm object
   assert.match(source, /key: "products", label: "产品", icon: Package/);
   assert.match(source, /key: "quotes", label: "报价", icon: FileText/);
   assert.match(source, /new Set\(\["contacts", "companies", "deals", "products", "quotes"\]\)/);
-  assert.match(source, /case "products":[\s\S]*SKU-AI-SALES-STD/);
-  assert.match(source, /case "quotes":[\s\S]*companyId,contactId,productId/);
+  assert.match(source, /objectKey === "products"[\s\S]*SKU-AI-SALES-STD/);
+  assert.match(source, /objectKey === "quotes"[\s\S]*companyId,contactId,productId/);
 });
 
 await run("email workspace refreshes threads and selected messages after sync", () => {
