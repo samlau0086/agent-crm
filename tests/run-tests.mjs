@@ -950,6 +950,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   const docs = readFileSync("docs/vps-github-actions-deploy.md", "utf8");
   const readme = readFileSync("README.md", "utf8");
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+  const workerEntrypoint = readFileSync("scripts/docker-worker-entrypoint.sh", "utf8");
+  const emailSyncEntrypoint = readFileSync("scripts/docker-email-sync-entrypoint.sh", "utf8");
 
   assert.match(workflow, /name: Deploy VPS/);
   assert.match(workflow, /branches:\s*\n\s*- main/);
@@ -968,8 +970,12 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /POSTGRES_PASSWORD/);
   assert.match(workflow, /chown -R 999:999 "\$DEPLOY_PATH\/postgres-data"/);
   assert.match(workflow, /chmod 700 "\$DEPLOY_PATH\/postgres-data"/);
-  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/job-worker\.ts --loop/);
-  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/email-sync\.ts --loop/);
+  assert.match(compose, /entrypoint: \["sh", "scripts\/docker-worker-entrypoint\.sh"\]/);
+  assert.match(compose, /entrypoint: \["sh", "scripts\/docker-email-sync-entrypoint\.sh"\]/);
+  assert.match(workerEntrypoint, /scripts\/wait-for-database\.mjs/);
+  assert.match(workerEntrypoint, /exec node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/job-worker\.ts --loop/);
+  assert.match(emailSyncEntrypoint, /scripts\/wait-for-database\.mjs/);
+  assert.match(emailSyncEntrypoint, /exec node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/email-sync\.ts --loop/);
   assert.match(workflow, /EMAIL_CONFIG_SECRET/);
   assert.match(workflow, /Weak email secret/);
   assert.match(workflow, /EMAIL_CONFIG_SECRET EMAIL_OAUTH_STATE_SECRET/);
@@ -1840,9 +1846,8 @@ await run("compose and env example keep email deployment settings aligned", () =
   assert.match(compose, /EMAIL_CONFIG_SECRET: "\$\{EMAIL_CONFIG_SECRET:\?Set EMAIL_CONFIG_SECRET in \.env\}"/);
   assert.match(compose, /EMAIL_OAUTH_STATE_SECRET: "\$\{EMAIL_OAUTH_STATE_SECRET:\?Set EMAIL_OAUTH_STATE_SECRET in \.env\}"/);
   assert.match(compose, /email-sync:/);
-  assert.match(compose, /scripts\/email-sync\.ts --loop/);
-  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/job-worker\.ts --loop/);
-  assert.match(compose, /scripts\/wait-for-database\.mjs && node --experimental-strip-types --import \.\/scripts\/register-alias\.mjs scripts\/email-sync\.ts --loop/);
+  assert.match(compose, /entrypoint: \["sh", "scripts\/docker-worker-entrypoint\.sh"\]/);
+  assert.match(compose, /entrypoint: \["sh", "scripts\/docker-email-sync-entrypoint\.sh"\]/);
   assert.match(compose, /EMAIL_SYNC_INTERVAL_MS: \$\{EMAIL_SYNC_INTERVAL_MS:-300000\}/);
   assert.match(compose, /EMAIL_SYNC_LIMIT: \$\{EMAIL_SYNC_LIMIT:-25\}/);
   assert.match(envExample, /EMAIL_SYNC_INTERVAL_MS="300000"/);

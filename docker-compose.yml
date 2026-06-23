@@ -55,8 +55,7 @@ services:
   worker:
     build:
       context: .
-    entrypoint: ["sh", "-lc"]
-    command: "node scripts/validate-env.mjs && node scripts/wait-for-database.mjs && node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/job-worker.ts --loop"
+    entrypoint: ["sh", "scripts/docker-worker-entrypoint.sh"]
     environment:
       DATABASE_URL: postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public
       APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1:3000}
@@ -97,8 +96,7 @@ services:
   email-sync:
     build:
       context: .
-    entrypoint: ["sh", "-lc"]
-    command: "node scripts/validate-env.mjs && node scripts/wait-for-database.mjs && node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-sync.ts --loop"
+    entrypoint: ["sh", "scripts/docker-email-sync-entrypoint.sh"]
     environment:
       DATABASE_URL: postgresql://crm:crm@postgres:5432/ai_agent_crm?schema=public
       APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1:3000}
