@@ -1332,8 +1332,14 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(source, /const \[appSidebarCollapsed, setAppSidebarCollapsed\] = useState\(false\)/);
-  assert.match(source, /item\.key === "email"[\s\S]*setAppSidebarCollapsed\(true\)/);
+  assert.match(source, /const sidebarCollapsedStorageKey = "ai-agent-crm:sidebar-collapsed"/);
+  assert.match(source, /window\.localStorage\.getItem\(sidebarCollapsedStorageKey\)/);
+  assert.match(source, /function toggleAppSidebar\(\)/);
+  assert.match(source, /window\.localStorage\.setItem\(sidebarCollapsedStorageKey, String\(next\)\)/);
+  assert.doesNotMatch(source, /item\.key === "email"[\s\S]{0,160}setAppSidebarCollapsed\(true\)/);
+  assert.doesNotMatch(source, /function openObject\(objectKey: string\) \{[\s\S]{0,120}setAppSidebarCollapsed/);
   assert.match(source, /className=\{`app-shell \$\{appSidebarCollapsed \? "sidebar-collapsed" : ""\}`\}/);
+  assert.match(source, /data-testid="app-sidebar-toggle"/);
   assert.match(source, /data-testid="email-app-sidebar-toggle"/);
   assert.match(source, /activeNav !== "email" \?/);
   assert.match(source, /view !== "mail" \?/);

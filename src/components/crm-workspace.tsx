@@ -400,6 +400,7 @@ function buildEmailThreadUiStateMap(threads: EmailThread[]): Record<string, Emai
 const navigationItems: typeof navItems = navItems.some((item) => item.key === "email")
   ? navItems
   : [...navItems.slice(0, -1), { key: "email", label: "邮件", icon: Mail }, navItems[navItems.length - 1]];
+const sidebarCollapsedStorageKey = "ai-agent-crm:sidebar-collapsed";
 
 function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}): EmailAccountDraft {
   return {
@@ -719,6 +720,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   );
 
   useEffect(() => {
+    const storedSidebarCollapsed = window.localStorage.getItem(sidebarCollapsedStorageKey);
+    if (storedSidebarCollapsed === "true" || storedSidebarCollapsed === "false") {
+      setAppSidebarCollapsed(storedSidebarCollapsed === "true");
+    }
     setIsHydrated(true);
   }, []);
 
@@ -965,7 +970,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }, [props.contextUser.id, selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
   function openObject(objectKey: string) {
-    setAppSidebarCollapsed(false);
     setActiveObjectKey(objectKey);
     setActiveNav(coreObjects.has(objectKey) ? (objectKey as NavKey) : "records");
     setQuery("");
@@ -1753,6 +1757,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
+  function toggleAppSidebar() {
+    setAppSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem(sidebarCollapsedStorageKey, String(next));
+      return next;
+    });
+  }
+
   const showRecordWorkspace = coreObjects.has(activeNav) || activeNav === "records";
 
   return (
@@ -1782,12 +1794,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 data-testid={`nav-${item.key}`}
                 type="button"
                 onClick={() => {
-                  if (item.key === "email") {
-                    setActiveNav(item.key);
-                    setAppSidebarCollapsed(true);
-                    return;
-                  }
-                  setAppSidebarCollapsed(false);
                   setActiveNav(item.key);
                   if (coreObjects.has(item.key)) {
                     openObject(item.key);
@@ -1817,9 +1823,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       <main className={`main ${activeNav === "email" ? "email-main" : ""}`}>
         {activeNav !== "email" ? (
         <div className="topbar">
-          <div>
-            <h1 className="page-title">{titleFor(activeNav, activeObject?.pluralLabel)}</h1>
-            <div className="subtle">模块化单体、真实 API、真实表单和可配置 CRM 元数据已经接通。</div>
+          <div className="topbar-title">
+            <button className="icon-button" data-testid="app-sidebar-toggle" aria-label={appSidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={appSidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={toggleAppSidebar}>
+              <Menu size={18} />
+            </button>
+            <div>
+              <h1 className="page-title">{titleFor(activeNav, activeObject?.pluralLabel)}</h1>
+              <div className="subtle">模块化单体、真实 API、真实表单和可配置 CRM 元数据已经接通。</div>
+            </div>
           </div>
           <div className="toolbar">
             <button className="secondary-button" type="button" onClick={() => router.refresh()}>
@@ -2543,7 +2554,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
             onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
             sidebarCollapsed={appSidebarCollapsed}
-            onToggleAppSidebar={() => setAppSidebarCollapsed((current) => !current)}
+            onToggleAppSidebar={toggleAppSidebar}
           />
         )}
         {activeNav === "tasks" && <TaskView activities={openTasks} users={props.users} onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))} />}
@@ -3321,7 +3332,7 @@ function EmailWorkspace({
       {view === "mail" ? (
     <div className="gmail-client">
       <div className="gmail-topbar">
-        <button className="icon-button" aria-label={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={onToggleAppSidebar}>
+        <button className="icon-button" data-testid="email-app-sidebar-toggle" aria-label={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={onToggleAppSidebar}>
           <Menu size={18} />
         </button>
         <div className="gmail-brand">
