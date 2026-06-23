@@ -1336,13 +1336,17 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /className=\{`app-shell \$\{appSidebarCollapsed \? "sidebar-collapsed" : ""\}`\}/);
   assert.match(source, /data-testid="email-app-sidebar-toggle"/);
   assert.match(source, /activeNav !== "email" \?/);
+  assert.match(source, /view !== "mail" \?/);
+  assert.match(source, /className=\{`email-workspace \$\{view === "mail" \? "mail-view" : ""\}`\}/);
   assert.match(source, /function handleDealDragStart/);
   assert.match(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);
   assert.match(source, /draggable/);
   assert.match(source, /data-testid=\{`pipeline-stage-\$\{stage\.key\}`\}/);
   assert.match(source, /onDrop=\{\(event\) => handleStageDrop\(event, stage\.key\)\}/);
   assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
-  assert.match(styles, /\.app-shell\.sidebar-collapsed/);
+  assert.match(styles, /\.app-shell\.sidebar-collapsed \{\s*grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(styles, /\.main\.email-main \{\s*padding: 0;/);
+  assert.match(styles, /\.email-workspace\.mail-view \{\s*padding: 0;/);
   assert.match(styles, /\.deal-pill\.dragging/);
 });
 

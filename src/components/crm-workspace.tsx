@@ -3083,12 +3083,13 @@ function EmailWorkspace({
   }
 
   return (
-    <div className="email-workspace">
+    <div className={`email-workspace ${view === "mail" ? "mail-view" : ""}`}>
+      {view !== "mail" ? (
       <div className="tabs email-tabs" data-testid="email-workspace-tabs">
         <button className="icon-button" data-testid="email-app-sidebar-toggle" aria-label={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} title={sidebarCollapsed ? "显示主侧边栏" : "隐藏主侧边栏"} type="button" onClick={onToggleAppSidebar}>
           <Menu size={16} />
         </button>
-        <button className={`tab ${view === "mail" ? "active" : ""}`} data-testid="email-tab-mail" type="button" onClick={() => onViewChange("mail")}>
+        <button className="tab" data-testid="email-tab-mail" type="button" onClick={() => onViewChange("mail")}>
           收发信
         </button>
         {canManageEmailSettings ? (
@@ -3100,6 +3101,7 @@ function EmailWorkspace({
           AI 与知识库
         </button>
       </div>
+      ) : null}
 
       {view === "settings" ? (
     <div className="email-grid">
