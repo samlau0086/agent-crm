@@ -30,6 +30,7 @@ import {
   emailSendSchema,
   emailSyncAllSchema,
   emailSyncSchema,
+  emailThreadStateUpdateSchema,
   emailThreadUpdateSchema,
   importPresetCreateSchema,
   knowledgeArticleCreateSchema,
@@ -5954,6 +5955,63 @@ await run("email thread compact summaries do not duplicate the newly recorded me
   const subjectOccurrences = thread.summary?.match(/Single summary entry/g)?.length ?? 0;
 
   assert.equal(subjectOccurrences, 1);
+});
+
+await run("email thread user state persists per user", () => {
+  assert.equal(emailThreadStateUpdateSchema.safeParse({ archived: true, starred: true, read: true, category: "updates", labels: ["CRM", "AI"], snoozedUntil: "2026-06-24T00:00:00.000Z" }).success, true);
+  assert.equal(emailThreadStateUpdateSchema.safeParse({ category: "bad" }).success, false);
+
+  const snapshot = structuredClone(seedData);
+  snapshot.users.push({
+    id: "user-email-state-peer",
+    workspaceId: defaultWorkspaceId,
+    email: "email-state-peer@example.com",
+    name: "Email State Peer",
+    roleId: "role-admin",
+    active: true
+  });
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+  const peerContext = store.getContext("user-email-state-peer");
+  const account = store.createEmailAccount(adminContext, {
+    name: "State Inbox",
+    emailAddress: "state@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+  const message = store.recordEmailMessage(adminContext, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["state@example.com"],
+    subject: "Persistent mailbox state",
+    bodyText: "Remember my mailbox actions.",
+    recordId: "contact-lin"
+  });
+
+  const updated = store.updateEmailThreadState(adminContext, message.threadId, {
+    archived: true,
+    starred: true,
+    important: true,
+    read: true,
+    category: "updates",
+    labels: ["CRM", "CRM", "AI"],
+    snoozedUntil: "2026-06-24T00:00:00.000Z"
+  });
+
+  assert.equal(updated.archived, true);
+  assert.equal(updated.starred, true);
+  assert.equal(updated.important, true);
+  assert.equal(updated.read, true);
+  assert.equal(updated.category, "updates");
+  assert.deepEqual(updated.labels, ["CRM", "AI"]);
+  assert.equal(updated.snoozedUntil, "2026-06-24T00:00:00.000Z");
+  assert.equal(store.getEmailThread(adminContext, message.threadId).archived, true);
+  assert.equal(store.listEmailThreads(adminContext).find((thread) => thread.id === message.threadId)?.starred, true);
+  assert.equal(store.getEmailThread(peerContext, message.threadId).archived, false);
+  assert.equal(store.getEmailThread(peerContext, message.threadId).starred, false);
 });
 
 await run("email threads respect record visibility and unlinked ownership", () => {

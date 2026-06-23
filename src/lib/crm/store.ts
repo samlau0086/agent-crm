@@ -38,6 +38,7 @@ import type {
   EmailConnectionConfig,
   EmailMessage,
   EmailThread,
+  EmailThreadState,
   FieldDefinition,
   ImportPreset,
   ImportJobQueueSummary,
@@ -616,13 +617,14 @@ export class CrmStore {
     return clone(
       (this.data.emailThreads ?? [])
         .filter((thread) => thread.workspaceId === context.workspaceId && (!recordId || thread.recordId === recordId) && this.canAccessEmailThread(context, thread))
+        .map((thread) => this.mergeEmailThreadState(context, thread))
         .sort((left, right) => (right.lastMessageAt ?? right.updatedAt).localeCompare(left.lastMessageAt ?? left.updatedAt))
     );
   }
 
   getEmailThread(context: RequestContext, threadId: string): EmailThread {
     requirePermission(context, "crm.read");
-    return clone(this.assertEmailThread(context, threadId));
+    return clone(this.mergeEmailThreadState(context, this.assertEmailThread(context, threadId)));
   }
 
   updateEmailThread(context: RequestContext, threadId: string, input: { recordId?: string | null }): EmailThread {
@@ -637,7 +639,49 @@ export class CrmStore {
       summary: `Updated email thread link ${thread.subject}`,
       details: { threadId: thread.id, previousRecordId, recordId: thread.recordId }
     });
-    return clone(thread);
+    return clone(this.mergeEmailThreadState(context, thread));
+  }
+
+  updateEmailThreadState(
+    context: RequestContext,
+    threadId: string,
+    input: Partial<Pick<EmailThreadState, "archived" | "deleted" | "important" | "labels" | "read" | "starred">> & {
+      category?: EmailThreadState["category"] | "" | null;
+      snoozedUntil?: string | null;
+    }
+  ): EmailThread {
+    requirePermission(context, "crm.read");
+    const thread = this.assertEmailThread(context, threadId);
+    const states = (this.data.emailThreadStates ??= []);
+    let state = states.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.threadId === thread.id && candidate.userId === context.user.id);
+    const now = stamp();
+    if (!state) {
+      state = {
+        id: createId("email_thread_state"),
+        workspaceId: context.workspaceId,
+        threadId: thread.id,
+        userId: context.user.id,
+        archived: false,
+        deleted: false,
+        important: false,
+        labels: [],
+        read: false,
+        starred: false,
+        createdAt: now,
+        updatedAt: now
+      };
+      states.push(state);
+    }
+    if (typeof input.archived === "boolean") state.archived = input.archived;
+    if (Object.prototype.hasOwnProperty.call(input, "category")) state.category = input.category ? normalizeEmailThreadCategory(input.category) : undefined;
+    if (typeof input.deleted === "boolean") state.deleted = input.deleted;
+    if (typeof input.important === "boolean") state.important = input.important;
+    if (Array.isArray(input.labels)) state.labels = normalizeEmailThreadLabels(input.labels);
+    if (typeof input.read === "boolean") state.read = input.read;
+    if (Object.prototype.hasOwnProperty.call(input, "snoozedUntil")) state.snoozedUntil = input.snoozedUntil || undefined;
+    if (typeof input.starred === "boolean") state.starred = input.starred;
+    state.updatedAt = now;
+    return clone(this.mergeEmailThreadState(context, thread));
   }
 
   listEmailMessages(context: RequestContext, threadId: string): EmailMessage[] {
@@ -2776,6 +2820,23 @@ export class CrmStore {
     return thread;
   }
 
+  private mergeEmailThreadState(context: RequestContext, thread: EmailThread): EmailThread {
+    const state = (this.data.emailThreadStates ?? []).find(
+      (candidate) => candidate.workspaceId === context.workspaceId && candidate.threadId === thread.id && candidate.userId === context.user.id
+    );
+    return {
+      ...thread,
+      archived: state?.archived ?? false,
+      category: normalizeEmailThreadCategory(state?.category),
+      deleted: state?.deleted ?? false,
+      important: state?.important ?? false,
+      labels: normalizeEmailThreadLabels(state?.labels),
+      read: state?.read ?? false,
+      snoozedUntil: state?.snoozedUntil,
+      starred: state?.starred ?? false
+    };
+  }
+
   private canAccessEmailThread(context: RequestContext, thread: EmailThread): boolean {
     if (canManageAllRecords(context)) {
       return true;
@@ -3092,6 +3153,25 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
     })
     .filter((source): source is NonNullable<EmailThread["aiAnalysisSources"]>[number] => Boolean(source))
     .slice(0, 20);
+}
+
+function normalizeEmailThreadCategory(value: unknown): EmailThread["category"] {
+  return value === "primary" || value === "promotions" || value === "social" || value === "updates" ? value : undefined;
+}
+
+function normalizeEmailThreadLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      value
+        .filter((label): label is string => typeof label === "string")
+        .map((label) => label.trim())
+        .filter(Boolean)
+        .map((label) => label.slice(0, 40))
+    )
+  ).slice(0, 20);
 }
 
 function assertEmailOutboundAiPurpose(

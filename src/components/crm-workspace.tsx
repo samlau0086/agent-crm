@@ -374,6 +374,23 @@ function emailThreadMatchesSearch(thread: EmailThread, messages: EmailMessage[],
     .includes(normalizedQuery);
 }
 
+function emailThreadUiStateFromThread(thread: EmailThread): EmailThreadUiState {
+  return {
+    archived: thread.archived,
+    category: thread.category,
+    deleted: thread.deleted,
+    important: thread.important,
+    labels: thread.labels,
+    read: thread.read,
+    snoozedUntil: thread.snoozedUntil,
+    starred: thread.starred
+  };
+}
+
+function buildEmailThreadUiStateMap(threads: EmailThread[]): Record<string, EmailThreadUiState> {
+  return Object.fromEntries(threads.map((thread) => [thread.id, emailThreadUiStateFromThread(thread)]));
+}
+
 const navigationItems: typeof navItems = navItems.some((item) => item.key === "email")
   ? navItems
   : [...navItems.slice(0, -1), { key: "email", label: "邮件", icon: Mail }, navItems[navItems.length - 1]];
@@ -1432,6 +1449,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setMessage(thread.recordId ? "邮件线程已关联到客户记录" : "邮件线程已取消关联记录");
   }
 
+  async function updateEmailThreadState(threadId: string, patch: Partial<EmailThreadUiState>): Promise<EmailThread> {
+    const thread = await fetchJson<EmailThread>(`/api/email/threads/${threadId}/state`, {
+      method: "PATCH",
+      body: patch
+    });
+    setEmailThreads((current) => [thread, ...current.filter((candidate) => candidate.id !== thread.id)]);
+    return thread;
+  }
+
   async function sendEmail() {
     const message = await fetchJson<EmailMessage>("/api/email/send", {
       method: "POST",
@@ -2473,6 +2499,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               }
             }}
             onUpdateThread={(threadId, recordId) => runAction(() => updateEmailThread(threadId, recordId))}
+            onUpdateThreadState={(threadId, patch) => updateEmailThreadState(threadId, patch)}
             onCreateAccount={() => runAction(createEmailAccount)}
             onStartOAuth={() => runAction(startEmailOAuth)}
             onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
@@ -2619,6 +2646,7 @@ function EmailWorkspace({
   onViewChange,
   onSelectThread,
   onUpdateThread,
+  onUpdateThreadState,
   onCreateAccount,
   onStartOAuth,
   onSyncAccount,
@@ -2671,6 +2699,7 @@ function EmailWorkspace({
   onViewChange: (view: EmailWorkspaceView) => void;
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
+  onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
   onCreateAccount: () => void;
   onStartOAuth: () => void;
   onSyncAccount: (accountId: string) => void;
@@ -2710,7 +2739,7 @@ function EmailWorkspace({
   const [mailMode, setMailMode] = useState<EmailMailMode>("list");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
-  const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>({});
+  const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const selectedThreadIdsArray = Array.from(selectedThreadIds);
   const visibleThreads = useMemo(() => {
     return threads.filter((thread) => {
@@ -2779,6 +2808,27 @@ function EmailWorkspace({
     return counts;
   }, [messagesByThread, threadUiState, threads]);
 
+  const patchThreadUiState = useCallback((threadIds: string[], patch: Partial<EmailThreadUiState> | ((state: EmailThreadUiState) => EmailThreadUiState)) => {
+    setThreadUiState((current) => {
+      const next = { ...current };
+      for (const threadId of threadIds) {
+        const existing = next[threadId] ?? {};
+        next[threadId] = typeof patch === "function" ? patch(existing) : { ...existing, ...patch };
+      }
+      return next;
+    });
+  }, []);
+
+  const persistThreadState = useCallback((threadId: string, patch: Partial<EmailThreadUiState>) => {
+    void onUpdateThreadState(threadId, patch).then((thread) => {
+      setThreadUiState((current) => ({ ...current, [thread.id]: emailThreadUiStateFromThread(thread) }));
+    });
+  }, [onUpdateThreadState]);
+
+  useEffect(() => {
+    setThreadUiState((current) => ({ ...current, ...buildEmailThreadUiStateMap(threads) }));
+  }, [threads]);
+
   useEffect(() => {
     if (!selectedThreadId || !messagesByThread[selectedThreadId]?.length) {
       return;
@@ -2789,37 +2839,35 @@ function EmailWorkspace({
   useEffect(() => {
     if (detailThreadId && detailThreadId === selectedThreadId && messagesByThread[detailThreadId]?.length) {
       setMailMode("detail");
-    }
-  }, [detailThreadId, messagesByThread, selectedThreadId]);
-
-  function patchThreadUiState(threadIds: string[], patch: Partial<EmailThreadUiState> | ((state: EmailThreadUiState) => EmailThreadUiState)) {
-    setThreadUiState((current) => {
-      const next = { ...current };
-      for (const threadId of threadIds) {
-        const existing = next[threadId] ?? {};
-        next[threadId] = typeof patch === "function" ? patch(existing) : { ...existing, ...patch };
+      if (!threadUiState[detailThreadId]?.read) {
+        patchThreadUiState([detailThreadId], { read: true });
+        persistThreadState(detailThreadId, { read: true });
       }
-      return next;
-    });
-  }
+    }
+  }, [detailThreadId, messagesByThread, patchThreadUiState, persistThreadState, selectedThreadId, threadUiState]);
 
   function performMailboxAction(action: "archive" | "delete" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
     if (!threadIds.length) {
       return;
     }
+    let patchByThreadId = new Map<string, Partial<EmailThreadUiState>>();
     if (action === "archive") {
-      patchThreadUiState(threadIds, { archived: true, deleted: false });
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { archived: true, deleted: false }]));
     } else if (action === "delete") {
-      patchThreadUiState(threadIds, { deleted: true, archived: false });
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { deleted: true, archived: false }]));
     } else if (action === "read") {
-      patchThreadUiState(threadIds, { read: true });
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { read: true }]));
     } else if (action === "unread") {
-      patchThreadUiState(threadIds, { read: false });
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { read: false }]));
     } else if (action === "snooze") {
       const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      patchThreadUiState(threadIds, { snoozedUntil: tomorrow, archived: false, deleted: false });
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { snoozedUntil: tomorrow, archived: false, deleted: false }]));
     } else {
-      patchThreadUiState(threadIds, (state) => ({ ...state, important: !state.important }));
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { important: !(threadUiState[threadId]?.important ?? false) }]));
+    }
+    for (const [threadId, patch] of patchByThreadId) {
+      patchThreadUiState([threadId], patch);
+      persistThreadState(threadId, patch);
     }
     setSelectedThreadIds(new Set());
     if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "snooze")) {
@@ -2842,6 +2890,7 @@ function EmailWorkspace({
   function openThreadDetail(threadId: string) {
     setMailMode("detail");
     patchThreadUiState([threadId], { read: true });
+    persistThreadState(threadId, { read: true });
     onSelectThread(threadId);
   }
 
@@ -3299,10 +3348,28 @@ function EmailWorkspace({
                         type="checkbox"
                         onChange={(event) => toggleThreadSelection(thread.id, event.target.checked)}
                       />
-                      <button className={`gmail-icon-toggle ${state.starred ? "active" : ""}`} aria-label="星标" type="button" onClick={() => patchThreadUiState([thread.id], (current) => ({ ...current, starred: !current.starred }))}>
+                      <button
+                        className={`gmail-icon-toggle ${state.starred ? "active" : ""}`}
+                        aria-label="星标"
+                        type="button"
+                        onClick={() => {
+                          const starred = !state.starred;
+                          patchThreadUiState([thread.id], { starred });
+                          persistThreadState(thread.id, { starred });
+                        }}
+                      >
                         <Star size={15} />
                       </button>
-                      <button className={`gmail-icon-toggle ${state.important ? "active" : ""}`} aria-label="重要" type="button" onClick={() => patchThreadUiState([thread.id], (current) => ({ ...current, important: !current.important }))}>
+                      <button
+                        className={`gmail-icon-toggle ${state.important ? "active" : ""}`}
+                        aria-label="重要"
+                        type="button"
+                        onClick={() => {
+                          const important = !state.important;
+                          patchThreadUiState([thread.id], { important });
+                          persistThreadState(thread.id, { important });
+                        }}
+                      >
                         <Tag size={15} />
                       </button>
                       <button className="gmail-thread-open" data-testid={`email-thread-row-${thread.id}`} type="button" onClick={() => openThreadDetail(thread.id)}>

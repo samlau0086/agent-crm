@@ -32,6 +32,7 @@ model Workspace {
   webhookDeliveries   WebhookDelivery[]
   emailAccounts       EmailAccount[]
   emailThreads        EmailThread[]
+  emailThreadStates   EmailThreadState[]
   emailMessages       EmailMessage[]
   knowledgeArticles   KnowledgeArticle[]
   emailAiSettings     EmailAiSettings?
@@ -56,6 +57,7 @@ model User {
   passwordSetupTokens PasswordSetupToken[]
   apiKeys             ApiKey[]
   webhooksCreated     WebhookEndpoint[]
+  emailThreadStates   EmailThreadState[]
 
   @@unique([workspaceId, email])
   @@index([workspaceId, teamId])
@@ -406,10 +408,39 @@ model EmailThread {
   workspace         Workspace      @relation(fields: [workspaceId], references: [id])
   account           EmailAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
   messages          EmailMessage[]
+  states            EmailThreadState[]
 
   @@index([workspaceId, accountId, updatedAt])
   @@index([workspaceId, recordId, updatedAt])
   @@index([workspaceId, lastMessageAt])
+}
+
+model EmailThreadState {
+  id             String      @id @default(cuid())
+  workspaceId    String
+  threadId       String
+  userId         String
+  archived       Boolean     @default(false)
+  category       String?
+  deleted        Boolean     @default(false)
+  important      Boolean     @default(false)
+  labels         String[]    @default([])
+  read           Boolean     @default(false)
+  snoozedUntil   DateTime?
+  starred        Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  workspace      Workspace   @relation(fields: [workspaceId], references: [id])
+  thread         EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, threadId, userId])
+  @@index([workspaceId, userId, archived])
+  @@index([workspaceId, userId, deleted])
+  @@index([workspaceId, userId, starred])
+  @@index([workspaceId, userId, important])
+  @@index([workspaceId, userId, snoozedUntil])
+  @@index([workspaceId, userId, category])
 }
 
 model EmailMessage {

@@ -455,6 +455,21 @@ export const emailThreadUpdateSchema = z
   })
   .strict();
 
+const emailThreadCategorySchema = z.enum(["primary", "promotions", "social", "updates"]);
+
+export const emailThreadStateUpdateSchema = z
+  .object({
+    archived: z.boolean().optional(),
+    category: z.union([emailThreadCategorySchema, z.literal(""), z.null()]).optional(),
+    deleted: z.boolean().optional(),
+    important: z.boolean().optional(),
+    labels: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+    read: z.boolean().optional(),
+    snoozedUntil: z.union([z.string().datetime(), z.literal(""), z.null()]).optional(),
+    starred: z.boolean().optional()
+  })
+  .strict();
+
 export const emailMessageTranslateSchema = z
   .object({
     targetLocale: z.string().trim().min(2).max(20).optional()

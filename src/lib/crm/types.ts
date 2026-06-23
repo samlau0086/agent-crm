@@ -168,6 +168,31 @@ export interface EmailThread {
   aiAnalysisSources?: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
   aiAnalysisUpdatedAt?: string;
   lastMessageAt?: string;
+  archived?: boolean;
+  category?: "primary" | "promotions" | "social" | "updates";
+  deleted?: boolean;
+  important?: boolean;
+  labels?: string[];
+  read?: boolean;
+  snoozedUntil?: string;
+  starred?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmailThreadState {
+  id: string;
+  workspaceId: string;
+  threadId: string;
+  userId: string;
+  archived: boolean;
+  category?: "primary" | "promotions" | "social" | "updates";
+  deleted: boolean;
+  important: boolean;
+  labels: string[];
+  read: boolean;
+  snoozedUntil?: string;
+  starred: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -540,6 +565,7 @@ export interface CrmSnapshot {
   webhookDeliveries: WebhookDelivery[];
   emailAccounts: EmailAccount[];
   emailThreads: EmailThread[];
+  emailThreadStates: EmailThreadState[];
   emailMessages: EmailMessage[];
   knowledgeArticles: KnowledgeArticle[];
   emailAiSettings: EmailAiSettings[];

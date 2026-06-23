@@ -49,6 +49,7 @@ import type {
   EmailAiSettings,
   EmailConnectionConfig,
   EmailMessage,
+  EmailThreadState,
   EmailThread,
   FieldDefinition,
   ImportPreset,
@@ -267,7 +268,16 @@ function mapEmailThread(thread: {
   lastMessageAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-}): EmailThread {
+}, state?: {
+  archived: boolean;
+  category: string | null;
+  deleted: boolean;
+  important: boolean;
+  labels: string[];
+  read: boolean;
+  snoozedUntil: Date | null;
+  starred: boolean;
+} | null): EmailThread {
   return {
     id: thread.id,
     workspaceId: thread.workspaceId,
@@ -281,6 +291,14 @@ function mapEmailThread(thread: {
     aiAnalysisSources: normalizeEmailAiSources(thread.aiAnalysisSources),
     aiAnalysisUpdatedAt: thread.aiAnalysisUpdatedAt?.toISOString(),
     lastMessageAt: thread.lastMessageAt?.toISOString(),
+    archived: state?.archived ?? false,
+    category: normalizeEmailThreadCategory(state?.category),
+    deleted: state?.deleted ?? false,
+    important: state?.important ?? false,
+    labels: normalizeEmailThreadLabels(state?.labels),
+    read: state?.read ?? false,
+    snoozedUntil: state?.snoozedUntil?.toISOString(),
+    starred: state?.starred ?? false,
     createdAt: thread.createdAt.toISOString(),
     updatedAt: thread.updatedAt.toISOString()
   };
@@ -698,6 +716,25 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
     })
     .filter((source): source is NonNullable<EmailThread["aiAnalysisSources"]>[number] => Boolean(source))
     .slice(0, 20);
+}
+
+function normalizeEmailThreadCategory(value: unknown): EmailThread["category"] {
+  return value === "primary" || value === "promotions" || value === "social" || value === "updates" ? value : undefined;
+}
+
+function normalizeEmailThreadLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      value
+        .filter((label): label is string => typeof label === "string")
+        .map((label) => label.trim())
+        .filter(Boolean)
+        .map((label) => label.slice(0, 40))
+    )
+  ).slice(0, 20);
 }
 
 function assertEmailOutboundAiPurpose(
@@ -1212,12 +1249,52 @@ export class PrismaCrmRepository {
       },
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }]
     });
-    return threads.map(mapEmailThread);
+    const states = await this.db.emailThreadState.findMany({
+      where: { workspaceId: context.workspaceId, userId: context.user.id, threadId: { in: threads.map((thread) => thread.id) } }
+    });
+    const stateByThreadId = new Map(states.map((state) => [state.threadId, state]));
+    return threads.map((thread) => mapEmailThread(thread, stateByThreadId.get(thread.id)));
   }
 
   async getEmailThread(context: RequestContext, threadId: string): Promise<EmailThread> {
     requirePermission(context, "crm.read");
     return this.assertEmailThread(context, threadId);
+  }
+
+  async updateEmailThreadState(
+    context: RequestContext,
+    threadId: string,
+    input: Partial<Pick<EmailThreadState, "archived" | "deleted" | "important" | "labels" | "read" | "starred">> & {
+      category?: EmailThreadState["category"] | "" | null;
+      snoozedUntil?: string | null;
+    }
+  ): Promise<EmailThread> {
+    requirePermission(context, "crm.read");
+    const thread = await this.assertEmailThread(context, threadId);
+    const data: Prisma.EmailThreadStateUncheckedCreateInput & Prisma.EmailThreadStateUncheckedUpdateInput = {
+      workspaceId: context.workspaceId,
+      threadId: thread.id,
+      userId: context.user.id
+    };
+    if (typeof input.archived === "boolean") data.archived = input.archived;
+    if (Object.prototype.hasOwnProperty.call(input, "category")) data.category = input.category ? normalizeEmailThreadCategory(input.category) ?? null : null;
+    if (typeof input.deleted === "boolean") data.deleted = input.deleted;
+    if (typeof input.important === "boolean") data.important = input.important;
+    if (Array.isArray(input.labels)) data.labels = normalizeEmailThreadLabels(input.labels);
+    if (typeof input.read === "boolean") data.read = input.read;
+    if (Object.prototype.hasOwnProperty.call(input, "snoozedUntil")) {
+      data.snoozedUntil = input.snoozedUntil ? new Date(input.snoozedUntil) : null;
+    }
+    if (typeof input.starred === "boolean") data.starred = input.starred;
+    const state = await this.db.emailThreadState.upsert({
+      where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: thread.id, userId: context.user.id } },
+      create: data,
+      update: data
+    });
+    return mapEmailThread(
+      await this.db.emailThread.findUniqueOrThrow({ where: { id: thread.id } }),
+      state
+    );
   }
 
   async updateEmailThread(context: RequestContext, threadId: string, input: { recordId?: string | null }): Promise<EmailThread> {
@@ -1236,7 +1313,10 @@ export class PrismaCrmRepository {
       summary: `Updated email thread link ${thread.subject}`,
       details: { threadId: thread.id, previousRecordId, recordId: updated.recordId ?? undefined }
     });
-    return mapEmailThread(updated);
+    const state = await this.db.emailThreadState.findUnique({
+      where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: updated.id, userId: context.user.id } }
+    });
+    return mapEmailThread(updated, state);
   }
 
   async listEmailMessages(context: RequestContext, threadId: string): Promise<EmailMessage[]> {
@@ -1263,7 +1343,10 @@ export class PrismaCrmRepository {
       summary: `Updated email thread summary ${thread.subject}`,
       details: { threadId: thread.id, summaryLength: updated.summary?.length ?? 0 }
     });
-    return mapEmailThread(updated);
+    const state = await this.db.emailThreadState.findUnique({
+      where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: updated.id, userId: context.user.id } }
+    });
+    return mapEmailThread(updated, state);
   }
 
   async updateEmailThreadAnalysis(context: RequestContext, threadId: string, analysis: string, sources: EmailThread["aiAnalysisSources"] = []): Promise<EmailThread> {
@@ -1282,7 +1365,10 @@ export class PrismaCrmRepository {
       summary: `Updated email thread analysis ${thread.subject}`,
       details: { threadId: thread.id, analysisLength: updated.aiAnalysis?.length ?? 0, sourceCount: aiAnalysisSources.length }
     });
-    return mapEmailThread(updated);
+    const state = await this.db.emailThreadState.findUnique({
+      where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: updated.id, userId: context.user.id } }
+    });
+    return mapEmailThread(updated, state);
   }
 
   async recordEmailMessage(
@@ -4267,7 +4353,10 @@ export class PrismaCrmRepository {
         throw new Error("Email thread not found");
       }
     }
-    return mapEmailThread(thread);
+    const state = await this.db.emailThreadState.findUnique({
+      where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: thread.id, userId: context.user.id } }
+    });
+    return mapEmailThread(thread, state);
   }
 
   private async emailThreadAccessWhere(context: RequestContext): Promise<Prisma.EmailThreadWhereInput> {
@@ -4317,7 +4406,7 @@ export class PrismaCrmRepository {
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       take: 50
     });
-    const match = threads.map(mapEmailThread).find((thread) => {
+    const match = threads.map((thread) => mapEmailThread(thread)).find((thread) => {
       if (normalizeEmailSubject(thread.subject) !== normalizedSubject) {
         return false;
       }
