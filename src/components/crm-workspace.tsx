@@ -4504,7 +4504,7 @@ function EmailWorkspace({
                           >
                             {formatEmailContactLabel(selectedThreadDisplayRecord, selectedThreadSenderEmail)}
                           </button>
-                          {selectedThread.recordId ? (
+                          {selectedThread.recordId || (selectedThreadDisplayRecord.objectKey === "contacts" && selectedThreadSenderEmail) ? (
                             <button
                               className="secondary-button"
                               data-testid="email-thread-unlink-record"

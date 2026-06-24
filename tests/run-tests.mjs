@@ -1524,6 +1524,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /contactMethods: methods[\s\S]*email: nextEmail[\s\S]*await updateEmailThread\(threadId, ""\)/);
   assert.match(source, /onUnlinkContactEmailFromThread=\{\(threadId, contactId, emailAddress\) => runAction\(\(\) => unlinkContactEmailFromThread\(threadId, contactId, emailAddress\)\)\}/);
   assert.match(source, /const unlinkEmailThreadContact = \(threadId: string, contact: CrmRecord, emailAddress: string\)/);
+  assert.match(source, /selectedThread\.recordId \|\| \(selectedThreadDisplayRecord\.objectKey === "contacts" && selectedThreadSenderEmail\)/);
   assert.match(source, /onClick=\{\(\) => unlinkEmailThreadContact\(selectedThread\.id, selectedThreadDisplayRecord, selectedThreadSenderEmail\)\}/);
   assert.match(source, /function EmailContactSearchDropdown/);
   assert.match(source, /<SearchDropdown[\s\S]*testId="email-thread-existing-contact"/);
