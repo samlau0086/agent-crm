@@ -1534,6 +1534,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
+  position: relative;
 }
 
 .email-recipient-input:focus-within {
@@ -1579,6 +1580,45 @@ button {
   border: 0;
   background: transparent;
   color: var(--muted);
+}
+
+.email-recipient-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 8px;
+  z-index: 40;
+  width: min(360px, calc(100% - 16px));
+  max-height: 230px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.email-recipient-suggestions button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.email-recipient-suggestions button.active,
+.email-recipient-suggestions button:hover {
+  background: #e8f0fe;
+}
+
+.email-recipient-suggestions span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .email-compose-editor-shell {

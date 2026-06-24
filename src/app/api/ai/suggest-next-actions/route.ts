@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     const repository = getCrmRepository();
     const record = await repository.getRecord(context, body.objectKey, body.recordId);
     const activities = await repository.listActivities(context, body.recordId);
-    return ok(await createAiProvider().suggestNextActions({ record, activities }));
+    return ok(await createAiProvider({ config: await repository.getEmailAiProviderConfig(context) }).suggestNextActions({ record, activities }));
   } catch (error) {
     return handleApiError(error, request);
   }

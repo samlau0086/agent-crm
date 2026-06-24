@@ -364,6 +364,13 @@ export const seedData: CrmSnapshot = {
           maxOutputChars: 4000
         }
       ],
+      providerConfig: {
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        timeoutMs: 10000,
+        hasApiKey: Boolean(process.env.AI_API_KEY)
+      },
       defaultLocale: "zh-CN",
       requireSourceLinks: true,
       maxHistoryMessages: 8,

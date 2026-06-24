@@ -12,7 +12,8 @@ export async function POST(request: NextRequest) {
     const body = await parseJson(request, emailAiGenerateSchema);
     const repository = getCrmRepository();
     const assistantContext = await repository.buildEmailAssistantContext(context, body);
-    const result = await generateEmailAiOutput({ context: assistantContext, userPrompt: body.userPrompt, sourceText: body.sourceText });
+    const providerConfig = await repository.getEmailAiProviderConfig(context);
+    const result = await generateEmailAiOutput({ context: assistantContext, userPrompt: body.userPrompt, sourceText: body.sourceText }, { config: providerConfig });
     await repository.recordEmailAiGeneration(context, {
       purpose: body.purpose,
       enabled: result.enabled,

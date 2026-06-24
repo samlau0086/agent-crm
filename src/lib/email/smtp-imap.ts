@@ -47,10 +47,17 @@ export function resolveSmtpTransport(config: EmailConnectionConfig | EmailOutbou
   };
 }
 
-export async function testMailConnection(config: EmailConnectionConfig, options: { smtp?: boolean; sync?: boolean; imap?: boolean } = {}): Promise<MailConnectionTestResult> {
+export async function testMailConnection(config: EmailConnectionConfig, options: { smtp?: boolean; sync?: boolean; imap?: boolean; outboundServiceId?: string } = {}): Promise<MailConnectionTestResult> {
   const result: MailConnectionTestResult = {};
   if (options.smtp !== false) {
-    const outboundService = getDefaultOutboundService(config);
+    const normalized = config.outboundServices?.length ? config : undefined;
+    const outboundService =
+      options.outboundServiceId && normalized?.outboundServices
+        ? normalized.outboundServices.find((service) => service.id === options.outboundServiceId)
+        : getDefaultOutboundService(config);
+    if (options.outboundServiceId && !outboundService) {
+      throw new Error("Outbound service not found");
+    }
     if (outboundService?.type === "resend") {
       if (!outboundService.resendApiKey) {
         throw new Error("Resend outbound service requires an API key");

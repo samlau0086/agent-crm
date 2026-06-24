@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     const record = await repository.getRecord(context, body.objectKey, body.recordId);
     const fields = await repository.listFieldDefinitions(context, body.objectKey);
     const activities = await repository.listActivities(context, body.recordId);
-    return ok(await createAiProvider().summarizeRecord({ record, fields, activities }));
+    return ok(await createAiProvider({ config: await repository.getEmailAiProviderConfig(context) }).summarizeRecord({ record, fields, activities }));
   } catch (error) {
     return handleApiError(error, request);
   }

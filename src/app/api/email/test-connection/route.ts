@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
     const body = await parseJson(request, emailConnectionTestSchema);
     const repository = getCrmRepository();
     const adapter = createEmailProviderAdapter(repository);
-    return ok(await adapter.testConnection(context, body.accountId));
+    return ok(await adapter.testConnection(context, body.accountId, { scope: body.scope, outboundServiceId: body.outboundServiceId }));
   } catch (error) {
     return handleApiError(error, request);
   }

@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     );
     const records = recordPages.flatMap((page) => page.records);
     const fields = allFields.filter((field) => plan.objectKeys.includes(field.objectKey));
-    return ok(await createAiProvider().query({ question: body.question, records, fields }));
+    return ok(await createAiProvider({ config: await repository.getEmailAiProviderConfig(context) }).query({ question: body.question, records, fields }));
   } catch (error) {
     return handleApiError(error, request);
   }

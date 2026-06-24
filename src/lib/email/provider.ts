@@ -48,11 +48,16 @@ export interface EmailConnectionTestSummary {
   result: MailConnectionTestResult;
 }
 
+export interface EmailConnectionTestOptions {
+  scope?: "all" | "inbound" | "outbound";
+  outboundServiceId?: string;
+}
+
 export interface EmailProviderAdapter {
   send(context: RequestContext, input: EmailSendInput): Promise<EmailMessage>;
   sendQueued(context: RequestContext, messageId: string): Promise<EmailMessage>;
   sync(context: RequestContext, accountId: string, limit?: number): Promise<EmailSyncResult>;
-  testConnection(context: RequestContext, accountId: string): Promise<EmailConnectionTestSummary>;
+  testConnection(context: RequestContext, accountId: string, options?: EmailConnectionTestOptions): Promise<EmailConnectionTestSummary>;
 }
 
 export interface EmailProviderAdapterOptions {
@@ -198,7 +203,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
   }
 
-  async testConnection(context: RequestContext, accountId: string): Promise<EmailConnectionTestSummary> {
+  async testConnection(context: RequestContext, accountId: string, options: EmailConnectionTestOptions = {}): Promise<EmailConnectionTestSummary> {
     requirePermission(context, "crm.admin");
     const account = await this.repository.getEmailAccount(context, accountId);
     const capability = getEmailProviderCapability(account.provider);
@@ -223,8 +228,9 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
     try {
       const result = await testMailConnection(config, {
-        smtp: account.sendEnabled,
-        sync: account.syncEnabled
+        smtp: options.scope === "inbound" ? false : account.sendEnabled,
+        sync: options.scope === "outbound" ? false : account.syncEnabled,
+        outboundServiceId: options.outboundServiceId
       });
       const updated = await this.repository.markEmailAccountConnectionError(context, accountId, null);
       return { account: updated, result };

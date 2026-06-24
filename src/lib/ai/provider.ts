@@ -1,4 +1,6 @@
 import type { Activity, CrmRecord, FieldDefinition } from "@/lib/crm/types";
+import { normalizeAiProviderConfig } from "@/lib/ai/provider-config";
+import type { AiProviderConfig } from "@/lib/crm/types";
 
 export interface AiSource {
   label: string;
@@ -18,24 +20,12 @@ export interface AiProvider {
   query(input: { question: string; records: CrmRecord[]; fields: FieldDefinition[] }): Promise<AiResponse>;
 }
 
-interface AiProviderConfig {
-  provider: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  timeoutMs: number;
-}
-
 type AiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
-const DEFAULT_AI_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_AI_MODEL = "gpt-4.1-mini";
-const DEFAULT_AI_TIMEOUT_MS = 10000;
 
 export function createAiProvider(options?: { config?: Partial<AiProviderConfig>; fetchImpl?: AiFetch }): AiProvider {
   const config = readAiProviderConfig(options?.config);
   const fallback = new RuleBasedAiProvider();
-  if (config.provider !== "openai-compatible" || !config.apiKey) {
+  if (!config.apiKey) {
     return fallback;
   }
 
@@ -194,17 +184,7 @@ class RuleBasedAiProvider implements AiProvider {
 }
 
 function readAiProviderConfig(overrides?: Partial<AiProviderConfig>): AiProviderConfig {
-  return {
-    provider: overrides?.provider ?? process.env.AI_PROVIDER ?? "openai-compatible",
-    baseUrl: overrides?.baseUrl ?? process.env.AI_BASE_URL ?? DEFAULT_AI_BASE_URL,
-    apiKey: overrides?.apiKey ?? process.env.AI_API_KEY ?? "",
-    model: overrides?.model ?? process.env.AI_MODEL ?? DEFAULT_AI_MODEL,
-    timeoutMs: normalizeTimeout(overrides?.timeoutMs ?? Number(process.env.AI_TIMEOUT_MS))
-  };
-}
-
-function normalizeTimeout(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Math.min(value, 60000) : DEFAULT_AI_TIMEOUT_MS;
+  return normalizeAiProviderConfig(overrides);
 }
 
 function toRecordContext(record: CrmRecord, fields: FieldDefinition[]) {

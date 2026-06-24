@@ -180,6 +180,7 @@ type EmailConnectionTestRun = {
     error?: string;
   }>;
 };
+type EmailConnectionTestScope = "all" | "inbound" | "outbound";
 type EmailSyncAllRun = {
   scheduledCount: number;
   skippedCount: number;
@@ -2106,13 +2107,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
-  async function testEmailConnection(accountId: string) {
+  async function testEmailConnection(accountId: string, options: { scope?: EmailConnectionTestScope; outboundServiceId?: string } = {}) {
     const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
       method: "POST",
-      body: { accountId }
+      body: { accountId, ...options }
     });
     setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
-    setMessage(`邮箱连接测试完成：SMTP ${result.result.smtp ?? "skipped"}，Resend ${result.result.resend ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，POP3 ${result.result.pop3 ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
+    const scopeLabel = options.scope === "inbound" ? "收件连接" : options.scope === "outbound" ? "发件服务" : "邮箱连接";
+    setMessage(`${scopeLabel}测试完成：SMTP ${result.result.smtp ?? "skipped"}，Resend ${result.result.resend ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，POP3 ${result.result.pop3 ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
   }
 
   async function testAllEmailConnections() {
@@ -2623,7 +2625,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function updateEmailAiSettingsPatch(
-    patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">> & {
+    patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents" | "providerConfig">> & {
       features?: Partial<EmailAiSettings["features"]>;
     }
   ) {
@@ -4093,7 +4095,7 @@ function EmailWorkspace({
   onStartOAuth: () => void;
   onSyncAccount: (accountId: string) => void;
   onSyncAllAccounts: () => void;
-  onTestConnection: (accountId: string) => Promise<void>;
+  onTestConnection: (accountId: string, options?: { scope?: EmailConnectionTestScope; outboundServiceId?: string }) => Promise<void>;
   onEditAccount: (account: EmailAccount) => void;
   onUpdateAccount: (accountId: string, patch: EmailAccountUpdatePatch) => void;
   onUpdateAccountFromDraft: () => void;
@@ -4113,7 +4115,7 @@ function EmailWorkspace({
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
-  onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">>) => void;
+  onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents" | "providerConfig">>) => void;
   onShowToast: (toast: ToastState) => void;
   onShowSuccess: (message: string) => void;
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
@@ -4146,6 +4148,7 @@ function EmailWorkspace({
       : selectedThreadContact;
   const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
   const selectedProviderSetupVisibility = getEmailProviderSetupVisibility(accountDraft.provider);
+  const editingEmailAccount = accountDraft.editingAccountId ? accounts.find((account) => account.id === accountDraft.editingAccountId) : undefined;
   const selectedEmailAiPurposeEnabled = isEmailAiPurposeEnabled(aiSettings.features, aiPurpose);
   const enabledEmailAiAutomationCount = [aiSettings.features.auto_translate, aiSettings.features.auto_context_analysis, aiSettings.features.auto_summarize].filter(Boolean).length;
   const activeKnowledgeArticleCount = knowledgeArticles.filter((article) => article.active).length;
@@ -4165,6 +4168,7 @@ function EmailWorkspace({
   const [existingContactId, setExistingContactId] = useState("");
   const [existingContactPickerOpen, setExistingContactPickerOpen] = useState(false);
   const [composeAiPrompt, setComposeAiPrompt] = useState("");
+  const [aiProviderApiKeyDraft, setAiProviderApiKeyDraft] = useState("");
   const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
@@ -4180,6 +4184,14 @@ function EmailWorkspace({
   const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
     onUpdateAiSettings({
       agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
+    });
+  };
+  const updateAiProviderConfig = (patch: Partial<EmailAiSettings["providerConfig"]>) => {
+    onUpdateAiSettings({
+      providerConfig: {
+        ...aiSettings.providerConfig,
+        ...patch
+      }
     });
   };
   const linkEmailThreadRecord = (threadId: string, recordId: string) => {
@@ -4775,30 +4787,35 @@ function EmailWorkspace({
   ];
   const currentEmailSettingsStepIndex = Math.max(0, emailSettingsSteps.findIndex((step) => step.key === emailSettingsStep));
 
-  async function runAccountConnectionTest(account: EmailAccount) {
+  async function runAccountConnectionTest(account: EmailAccount, options: { scope?: EmailConnectionTestScope; outboundServiceId?: string } = {}) {
+    const stateKey = emailConnectionTestStateKey(account.id, options);
     if (!account.connectionConfigured) {
       setAccountConnectionTests((current) => ({
         ...current,
-        [account.id]: { status: "failed", message: "需要先保存连接配置" }
+        [stateKey]: { status: "failed", message: "需要先保存连接配置" }
       }));
       return;
     }
     setAccountConnectionTests((current) => ({
       ...current,
-      [account.id]: { status: "testing", message: "正在测试连接" }
+      [stateKey]: { status: "testing", message: "正在测试连接" }
     }));
     try {
-      await onTestConnection(account.id);
+      await onTestConnection(account.id, options);
       setAccountConnectionTests((current) => ({
         ...current,
-        [account.id]: { status: "success", message: "连接测试通过", testedAt: new Date().toISOString() }
+        [stateKey]: { status: "success", message: "连接测试通过", testedAt: new Date().toISOString() }
       }));
     } catch (error) {
       setAccountConnectionTests((current) => ({
         ...current,
-        [account.id]: { status: "failed", message: error instanceof Error ? error.message : "连接测试失败", testedAt: new Date().toISOString() }
+        [stateKey]: { status: "failed", message: error instanceof Error ? error.message : "连接测试失败", testedAt: new Date().toISOString() }
       }));
     }
+  }
+
+  function emailConnectionTestStateKey(accountId: string, options: { scope?: EmailConnectionTestScope; outboundServiceId?: string } = {}) {
+    return [accountId, options.scope ?? "all", options.outboundServiceId ?? ""].join(":");
   }
 
   function renderEmailAccountFormActions() {
@@ -4884,8 +4901,24 @@ function EmailWorkspace({
         {selectedProviderSetupVisibility.showSmtpImapFields ? (
           <>
             <div className="settings-item wide">
-              <strong>收件配置</strong>
-              <div className="subtle">IMAP/POP3 的用户名和密码只用于收件同步，可以与发件服务凭据不同。</div>
+              <div className="toolbar between">
+                <div>
+                  <strong>收件配置</strong>
+                  <div className="subtle">IMAP/POP3 的用户名和密码只用于收件同步，可以与发件服务凭据不同。</div>
+                </div>
+                {editingEmailAccount ? (
+                  <button
+                    className="secondary-button"
+                    data-testid="email-test-inbound"
+                    type="button"
+                    onClick={() => runAccountConnectionTest(editingEmailAccount, { scope: "inbound" })}
+                    disabled={disabled || accountConnectionTests[emailConnectionTestStateKey(editingEmailAccount.id, { scope: "inbound" })]?.status === "testing"}
+                  >
+                    <RefreshCw className={accountConnectionTests[emailConnectionTestStateKey(editingEmailAccount.id, { scope: "inbound" })]?.status === "testing" ? "spin-icon" : undefined} size={16} />
+                    测试收件
+                  </button>
+                ) : null}
+              </div>
             </div>
             <label>
               <span className="subtle">收信协议</span>
@@ -5009,9 +5042,23 @@ function EmailWorkspace({
               <div className="settings-item wide" key={service.id}>
                 <div className="toolbar between">
                   <strong>{service.type === "smtp" ? "SMTP 发件服务" : "Resend 发件服务"}</strong>
-                  <button type="button" className="icon-button" title="删除发件服务" onClick={() => removeOutboundServiceDraft(service.id)} disabled={accountDraft.outboundServices.length <= 1}>
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="toolbar">
+                    {editingEmailAccount ? (
+                      <button
+                        className="secondary-button"
+                        data-testid={`email-test-outbound-${service.id}`}
+                        type="button"
+                        onClick={() => runAccountConnectionTest(editingEmailAccount, { scope: "outbound", outboundServiceId: service.id })}
+                        disabled={disabled || accountConnectionTests[emailConnectionTestStateKey(editingEmailAccount.id, { scope: "outbound", outboundServiceId: service.id })]?.status === "testing"}
+                      >
+                        <RefreshCw className={accountConnectionTests[emailConnectionTestStateKey(editingEmailAccount.id, { scope: "outbound", outboundServiceId: service.id })]?.status === "testing" ? "spin-icon" : undefined} size={16} />
+                        测试发件
+                      </button>
+                    ) : null}
+                    <button type="button" className="icon-button" title="删除发件服务" onClick={() => removeOutboundServiceDraft(service.id)} disabled={accountDraft.outboundServices.length <= 1}>
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
                 <div className="form-grid" style={{ marginTop: 10 }}>
                   <label>
@@ -5138,7 +5185,7 @@ function EmailWorkspace({
         <div className="settings-list">
           {accounts.map((account) => {
             const capability = getEmailProviderCapability(account.provider);
-            const testState = accountConnectionTests[account.id];
+            const testState = accountConnectionTests[emailConnectionTestStateKey(account.id)];
             const isTesting = testState?.status === "testing";
             return (
               <div className="settings-item" key={account.id}>
@@ -5820,10 +5867,6 @@ function EmailWorkspace({
               <div className="gmail-compose-popup-body">
                 <div className="email-pane-header compact">
                   <h2 className="page-title" style={{ fontSize: 16 }}>撰写邮件</h2>
-                  <button className="secondary-button" data-testid="email-open-ai" type="button" onClick={() => onViewChange("ai")}>
-                    <Settings size={16} />
-                    AI 设置
-                  </button>
                 </div>
                 <div className="email-compose-grid">
                   <label>
@@ -6119,6 +6162,60 @@ function EmailWorkspace({
           ) : null}
           {canManageAiSettings ? (
             <>
+          <div className="settings-item" data-testid="email-ai-provider-panel" style={{ marginTop: 12 }}>
+            <div className="stage-header">
+              <strong>AI Provider</strong>
+              <span className={aiSettings.providerConfig.hasApiKey ? "badge" : "danger-badge"}>{aiSettings.providerConfig.hasApiKey ? "API Key 已保存" : "未配置 API Key"}</span>
+            </div>
+            <div className="subtle">支持 OpenAI、Gemini、OpenRouter 和 OpenAI-compatible 自定义服务；API Key 不会回传到前端，留空保存时会保留已保存密钥。</div>
+            <div className="form-grid" style={{ marginTop: 10 }}>
+              <label>
+                <span className="subtle">Provider</span>
+                <select
+                  className="select"
+                  data-testid="email-ai-provider"
+                  value={aiSettings.providerConfig.provider}
+                  onChange={(event) => updateAiProviderConfig(defaultAiProviderConfigForUi(event.target.value as EmailAiSettings["providerConfig"]["provider"], aiSettings.providerConfig))}
+                >
+                  <option value="openai">OpenAI</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="custom">Custom Provider</option>
+                </select>
+              </label>
+              <label>
+                <span className="subtle">Base URL</span>
+                <input className="input" data-testid="email-ai-provider-base-url" value={aiSettings.providerConfig.baseUrl} onChange={(event) => updateAiProviderConfig({ baseUrl: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">模型</span>
+                <input className="input" data-testid="email-ai-provider-model" value={aiSettings.providerConfig.model} onChange={(event) => updateAiProviderConfig({ model: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">API Key</span>
+                <input className="input" data-testid="email-ai-provider-api-key" type="password" value={aiProviderApiKeyDraft} onChange={(event) => setAiProviderApiKeyDraft(event.target.value)} placeholder={aiSettings.providerConfig.hasApiKey ? "留空保留已保存 API Key" : "输入 API Key"} />
+              </label>
+              <div className="toolbar" style={{ alignSelf: "end" }}>
+                <button
+                  className="secondary-button"
+                  data-testid="email-ai-provider-api-key-save"
+                  type="button"
+                  onClick={() => {
+                    updateAiProviderConfig({ apiKey: aiProviderApiKeyDraft });
+                    setAiProviderApiKeyDraft("");
+                  }}
+                  disabled={!aiProviderApiKeyDraft.trim()}
+                >
+                  <Save size={16} />
+                  保存 API Key
+                </button>
+              </div>
+              <label>
+                <span className="subtle">超时 ms</span>
+                <input className="input" data-testid="email-ai-provider-timeout" max={60000} min={1000} step={1000} type="number" value={aiSettings.providerConfig.timeoutMs} onChange={(event) => updateAiProviderConfig({ timeoutMs: numberInputValue(event.target.value, aiSettings.providerConfig.timeoutMs) })} />
+              </label>
+            </div>
+          </div>
           <div className="view-column-grid">
             {Object.entries(aiSettings.features).map(([feature, enabled]) => {
               const featureKey = feature as keyof EmailAiSettings["features"];
@@ -9283,7 +9380,23 @@ function EmailRecipientInput({
   onChange: (value: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const recipients = splitEmailList(value);
+  const suggestions = useMemo(() => {
+    const query = draft.trim().toLowerCase();
+    if (!query) {
+      return [];
+    }
+    const existing = new Set(recipients.map((recipient) => recipient.toLowerCase()));
+    return Array.from(contactByEmail.entries())
+      .map(([email, contact]) => ({ email, contact }))
+      .filter(({ email, contact }) => !existing.has(email) && (`${contact.title} ${email}`.toLowerCase().includes(query)))
+      .slice(0, 8);
+  }, [contactByEmail, draft, recipients]);
+
+  useEffect(() => {
+    setActiveSuggestionIndex(0);
+  }, [draft]);
 
   function commitRecipients(rawValue: string) {
     const nextRecipients = splitEmailList(rawValue);
@@ -9305,6 +9418,15 @@ function EmailRecipientInput({
 
   function removeRecipient(recipient: string) {
     onChange(recipients.filter((candidate) => candidate.toLowerCase() !== recipient.toLowerCase()).join(", "));
+  }
+
+  function commitSuggestion(index = activeSuggestionIndex) {
+    const suggestion = suggestions[index];
+    if (!suggestion) {
+      return false;
+    }
+    commitRecipients(suggestion.email);
+    return true;
   }
 
   return (
@@ -9336,6 +9458,20 @@ function EmailRecipientInput({
             setDraft(nextValue);
           }}
           onKeyDown={(event) => {
+            if (event.key === "ArrowDown" && suggestions.length) {
+              event.preventDefault();
+              setActiveSuggestionIndex((current) => Math.min(suggestions.length - 1, current + 1));
+              return;
+            }
+            if (event.key === "ArrowUp" && suggestions.length) {
+              event.preventDefault();
+              setActiveSuggestionIndex((current) => Math.max(0, current - 1));
+              return;
+            }
+            if ((event.key === "Tab" || event.key === "Enter") && suggestions.length && commitSuggestion()) {
+              event.preventDefault();
+              return;
+            }
             if (event.key === "Enter" || event.key === "Tab") {
               if (draft.trim()) {
                 event.preventDefault();
@@ -9348,6 +9484,26 @@ function EmailRecipientInput({
             }
           }}
         />
+        {suggestions.length ? (
+          <div className="email-recipient-suggestions" role="listbox">
+            {suggestions.map((suggestion, index) => (
+              <button
+                className={index === activeSuggestionIndex ? "active" : ""}
+                key={suggestion.email}
+                role="option"
+                type="button"
+                aria-selected={index === activeSuggestionIndex}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  commitRecipients(suggestion.email);
+                }}
+              >
+                <strong>{suggestion.contact.title}</strong>
+                <span>{suggestion.email}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
     </label>
   );
@@ -9384,6 +9540,26 @@ function formatEmailAiGenerationMode(mode: NonNullable<EmailAiGenerateResult["ge
     return "已关闭";
   }
   return "本地";
+}
+
+function defaultAiProviderConfigForUi(
+  provider: EmailAiSettings["providerConfig"]["provider"],
+  current: EmailAiSettings["providerConfig"]
+): EmailAiSettings["providerConfig"] {
+  const defaults: Record<EmailAiSettings["providerConfig"]["provider"], Pick<EmailAiSettings["providerConfig"], "baseUrl" | "model">> = {
+    openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
+    gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-1.5-flash" },
+    openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4.1-mini" },
+    custom: { baseUrl: current.baseUrl || "https://api.openai.com/v1", model: current.model || "gpt-4.1-mini" },
+    "openai-compatible": { baseUrl: current.baseUrl || "https://api.openai.com/v1", model: current.model || "gpt-4.1-mini" }
+  };
+  return {
+    ...current,
+    provider,
+    baseUrl: defaults[provider].baseUrl,
+    model: defaults[provider].model,
+    apiKey: ""
+  };
 }
 
 function formatEmailConnectionTestResult(entry: EmailConnectionTestRun["results"][number]): string {

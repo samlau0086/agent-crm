@@ -11,6 +11,7 @@ import { buildEmailAssistantContext, canRunEmailClassification, createDefaultEma
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { getEmailProviderCapability } from "@/lib/email/providers";
+import { mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
 import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
 import type {
@@ -35,6 +36,7 @@ import type {
   EmailAttachment,
   EmailAiGenerationAuditInput,
   EmailAiSettings,
+  AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
   EmailThread,
@@ -1077,7 +1079,7 @@ export class CrmStore {
 
   getEmailAiSettings(context: RequestContext): EmailAiSettings {
     requirePermission(context, "crm.read");
-    return clone(this.ensureEmailAiSettings(context.workspaceId));
+    return publicEmailAiSettings(this.ensureEmailAiSettings(context.workspaceId));
   }
 
   updateEmailAiSettings(context: RequestContext, patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt">>): EmailAiSettings {
@@ -1091,6 +1093,11 @@ export class CrmStore {
     } else {
       settings.agents = normalizeAiAgentSettings(settings.agents);
     }
+    if (patch.providerConfig !== undefined) {
+      settings.providerConfig = mergeAiProviderConfigSecrets(normalizeAiProviderConfig(settings.providerConfig), patch.providerConfig);
+    } else {
+      settings.providerConfig = normalizeAiProviderConfig(settings.providerConfig);
+    }
     if (patch.defaultLocale !== undefined) settings.defaultLocale = normalizeRequiredText(patch.defaultLocale, "Default locale");
     if (patch.requireSourceLinks !== undefined) settings.requireSourceLinks = patch.requireSourceLinks;
     if (patch.maxHistoryMessages !== undefined) settings.maxHistoryMessages = normalizeIntegerLimit(patch.maxHistoryMessages, 1, 20);
@@ -1099,9 +1106,14 @@ export class CrmStore {
     settings.updatedAt = stamp();
     this.writeAuditLog(context, "update", "email_ai_settings", context.workspaceId, {
       summary: "Updated email AI settings",
-      details: { features: settings.features }
+      details: { features: settings.features, provider: settings.providerConfig.provider }
     });
-    return clone(settings);
+    return publicEmailAiSettings(settings);
+  }
+
+  getEmailAiProviderConfig(context: RequestContext): AiProviderConfig {
+    requirePermission(context, "ai.use");
+    return normalizeAiProviderConfig(this.ensureEmailAiSettings(context.workspaceId).providerConfig);
   }
 
   buildEmailAssistantContext(
@@ -2873,6 +2885,7 @@ export class CrmStore {
     if (settings) {
       settings.agents = normalizeAiAgentSettings(settings.agents);
       settings.features = normalizeEmailAiFeatures(settings.features);
+      settings.providerConfig = normalizeAiProviderConfig(settings.providerConfig);
       return settings;
     }
     const created = createDefaultEmailAiSettings(workspaceId, stamp());
@@ -3601,4 +3614,11 @@ function normalizeEmailAccountToggles(provider: EmailAccount["provider"], toggle
 function normalizeEmailAiProviderError(value: string | undefined): string | undefined {
   const normalized = value?.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
   return normalized ? normalized.slice(0, 500) : undefined;
+}
+
+function publicEmailAiSettings(settings: EmailAiSettings): EmailAiSettings {
+  return {
+    ...clone(settings),
+    providerConfig: publicAiProviderConfig(settings.providerConfig)
+  };
 }

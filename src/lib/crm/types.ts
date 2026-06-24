@@ -119,6 +119,7 @@ export type EmailDirection = "inbound" | "outbound";
 export type EmailMessageStatus = "received" | "draft" | "queued" | "sending" | "sent" | "failed";
 export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize";
 export type EmailAiFeature = "draft" | "translate" | "auto_translate" | "context_analysis" | "auto_context_analysis" | "auto_summarize";
+export type AiProviderType = "openai" | "gemini" | "openrouter" | "custom" | "openai-compatible";
 
 export interface EmailAccount {
   id: string;
@@ -314,12 +315,22 @@ export interface EmailAiSettings {
   workspaceId: string;
   features: Record<EmailAiFeature, boolean>;
   agents: AiAgentSetting[];
+  providerConfig: AiProviderConfig;
   defaultLocale: string;
   requireSourceLinks: boolean;
   maxHistoryMessages: number;
   maxKnowledgeArticles: number;
   maxContextChars: number;
   updatedAt: string;
+}
+
+export interface AiProviderConfig {
+  provider: AiProviderType;
+  baseUrl: string;
+  apiKey?: string;
+  hasApiKey?: boolean;
+  model: string;
+  timeoutMs: number;
 }
 
 export interface AiAgentSetting {

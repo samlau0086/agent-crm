@@ -1683,6 +1683,10 @@ await run("email account settings separate inbound credentials from outbound ser
   assert.match(source, /email-account-smtp-username/);
   assert.match(source, /data-testid="email-account-inbound-username"/);
   assert.match(source, /email-account-resend-api-key/);
+  assert.match(source, /data-testid="email-test-inbound"/);
+  assert.match(source, /data-testid=\{`email-test-outbound-\$\{service\.id\}`\}/);
+  assert.match(source, /runAccountConnectionTest\(editingEmailAccount, \{ scope: "inbound" \}\)/);
+  assert.match(source, /runAccountConnectionTest\(editingEmailAccount, \{ scope: "outbound", outboundServiceId: service\.id \}\)/);
   assert.match(source, /addOutboundServiceDraft\("smtp"\)/);
   assert.match(source, /addOutboundServiceDraft\("resend"\)/);
   assert.match(source, /SMTP 发件服务/);
@@ -1691,6 +1695,8 @@ await run("email account settings separate inbound credentials from outbound ser
   assert.match(source, /defaultOutboundServiceId: draft\.defaultOutboundServiceId/);
   assert.match(schema, /inbound: emailInboundConnectionConfigSchema\.optional\(\)/);
   assert.match(schema, /outboundServices: z\.array\(emailOutboundServiceConfigSchema\)\.max\(10\)\.optional\(\)/);
+  assert.match(schema, /scope: z\.enum\(\["all", "inbound", "outbound"\]\)\.optional\(\)/);
+  assert.match(schema, /outboundServiceId: z\.string\(\)\.trim\(\)\.min\(1\)\.max\(120\)\.optional\(\)/);
 });
 
 await run("email workspace diagnostics display ai automation eligibility policy", () => {
@@ -1809,7 +1815,11 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /data-testid="email-compose-ai-prompt-generate"/);
   assert.match(source, /data-testid="email-compose-ai-generate"/);
   assert.match(source, /function EmailRecipientInput/);
+  assert.match(source, /email-recipient-suggestions/);
+  assert.match(source, /event\.key === "ArrowDown"/);
+  assert.match(source, /event\.key === "Tab" \|\| event\.key === "Enter"/);
   assert.match(source, /contactByEmail=\{contactByEmail\}/);
+  assert.doesNotMatch(source, /data-testid="email-open-ai"/);
   assert.match(source, /data-testid="email-compose-signature"/);
   assert.match(source, /data-testid="email-signature-preview"/);
   assert.match(source, /contentEditable[\s\S]*data-testid="email-compose-body"/);
@@ -1820,6 +1830,7 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(styles, /\.email-rich-editor/);
   assert.match(styles, /\.email-recipient-input/);
   assert.match(styles, /\.email-recipient-token/);
+  assert.match(styles, /\.email-recipient-suggestions/);
   assert.match(styles, /\.email-attachment-dropzone/);
 });
 
@@ -1948,7 +1959,8 @@ await run("email ai execution routes use controlled context executors and audit"
   const translateSource = readFileSync("src/app/api/email/messages/[id]/translate/route.ts", "utf8");
 
   assert.match(generateSource, /repository\.buildEmailAssistantContext\(context,\s*body\)/);
-  assert.match(generateSource, /generateEmailAiOutput\(\{\s*context:\s*assistantContext,\s*userPrompt:\s*body\.userPrompt,\s*sourceText:\s*body\.sourceText\s*\}\)/);
+  assert.match(generateSource, /const providerConfig = await repository\.getEmailAiProviderConfig\(context\)/);
+  assert.match(generateSource, /generateEmailAiOutput\(\{\s*context:\s*assistantContext,\s*userPrompt:\s*body\.userPrompt,\s*sourceText:\s*body\.sourceText\s*\},\s*\{\s*config:\s*providerConfig\s*\}\)/);
   assert.match(generateSource, /repository\.recordEmailAiGeneration\(context,\s*\{/);
   assert.match(generateSource, /generationMode:\s*result\.generationMode/);
   assert.match(generateSource, /providerError:\s*result\.providerError/);
@@ -8503,6 +8515,43 @@ await run("email ai settings expose configurable backend agents", () => {
   assert.match(source, /data-testid=\{`email-ai-agent-model-\$\{agent\.key\}`\}/);
   assert.match(source, /data-testid=\{`email-ai-agent-md-\$\{agent\.key\}`\}/);
   assert.match(aiGeneration, /model: options\?\.config\?\.model \?\? context\.agentModel/);
+});
+
+await run("email ai settings expose encrypted provider profiles", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const updated = store.updateEmailAiSettings(context, {
+    providerConfig: {
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "secret-openrouter-key",
+      model: "openai/gpt-4.1-mini",
+      timeoutMs: 12000
+    }
+  });
+  assert.equal(updated.providerConfig.provider, "openrouter");
+  assert.equal(updated.providerConfig.hasApiKey, true);
+  assert.equal(updated.providerConfig.apiKey, undefined);
+  assert.equal(store.getEmailAiProviderConfig(context).apiKey, "secret-openrouter-key");
+
+  const schema = readFileSync("prisma/schema.prisma", "utf8");
+  const migration = readFileSync("prisma/migrations/20260624093000_add_ai_provider_config/migration.sql", "utf8");
+  const apiSchema = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+  const providerConfig = readFileSync("src/lib/ai/provider-config.ts", "utf8");
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const emailGenerateRoute = readFileSync("src/app/api/email/ai-generate/route.ts", "utf8");
+  assert.match(schema, /encryptedProviderConfig String\?/);
+  assert.match(migration, /ADD COLUMN "encryptedProviderConfig" TEXT/);
+  assert.match(apiSchema, /providerConfig: z/);
+  assert.match(apiSchema, /z\.enum\(\["openai", "gemini", "openrouter", "custom", "openai-compatible"\]\)/);
+  assert.match(repository, /encryptAiProviderConfig\(providerConfig\)/);
+  assert.match(repository, /getEmailAiProviderConfig\(context: RequestContext\)/);
+  assert.match(providerConfig, /openrouter: \{ baseUrl: "https:\/\/openrouter\.ai\/api\/v1"/);
+  assert.match(providerConfig, /gemini: \{ baseUrl: "https:\/\/generativelanguage\.googleapis\.com\/v1beta\/openai"/);
+  assert.match(source, /data-testid="email-ai-provider-panel"/);
+  assert.match(source, /data-testid="email-ai-provider-api-key-save"/);
+  assert.match(emailGenerateRoute, /getEmailAiProviderConfig\(context\)/);
 });
 
 await run("email ai settings require admin to modify global toggles", () => {

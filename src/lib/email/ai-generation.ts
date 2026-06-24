@@ -1,4 +1,6 @@
 import type { EmailAssistantContext, EmailAssistantPurpose } from "@/lib/email/assistant";
+import { normalizeAiProviderConfig } from "@/lib/ai/provider-config";
+import type { AiProviderConfig } from "@/lib/crm/types";
 
 export interface EmailAiGenerateInput {
   context: EmailAssistantContext;
@@ -28,24 +30,13 @@ export interface EmailAiGenerateResult {
   };
 }
 
-interface EmailAiProviderConfig {
-  provider: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  timeoutMs: number;
-}
-
 type AiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-const DEFAULT_AI_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_AI_MODEL = "gpt-4.1-mini";
-const DEFAULT_AI_TIMEOUT_MS = 10000;
 export const MAX_EMAIL_MODEL_PROMPT_CHARS = 24000;
 export const MAX_EMAIL_AI_OUTPUT_CHARS = 12000;
 export const MAX_EMAIL_AI_SUBJECT_CHARS = 200;
 
-export async function generateEmailAiOutput(input: EmailAiGenerateInput, options?: { config?: Partial<EmailAiProviderConfig>; fetchImpl?: AiFetch }): Promise<EmailAiGenerateResult> {
+export async function generateEmailAiOutput(input: EmailAiGenerateInput, options?: { config?: Partial<AiProviderConfig>; fetchImpl?: AiFetch }): Promise<EmailAiGenerateResult> {
   const { context } = input;
   if (!context.enabled) {
     return {
@@ -63,7 +54,7 @@ export async function generateEmailAiOutput(input: EmailAiGenerateInput, options
 
   const local = buildEmailAiResult(input, buildLocalOutput(input));
   const config = readEmailAiProviderConfig({ ...options?.config, model: options?.config?.model ?? context.agentModel });
-  if (config.provider !== "openai-compatible" || !config.apiKey) {
+  if (!config.apiKey) {
     return { ...local, generationMode: "local" };
   }
 
@@ -111,7 +102,7 @@ function buildEmailAiBudget(input: EmailAiGenerateInput, outputTruncated: boolea
   };
 }
 
-async function completeEmailAi(input: EmailAiGenerateInput, config: EmailAiProviderConfig, fetchImpl: AiFetch): Promise<EmailAiGeneratedContent> {
+async function completeEmailAi(input: EmailAiGenerateInput, config: AiProviderConfig, fetchImpl: AiFetch): Promise<EmailAiGeneratedContent> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   try {
@@ -174,18 +165,8 @@ export function buildEmailModelPrompt(input: EmailAiGenerateInput): string {
   return truncate(blocks.join("\n\n"), budget);
 }
 
-function readEmailAiProviderConfig(overrides?: Partial<EmailAiProviderConfig>): EmailAiProviderConfig {
-  return {
-    provider: overrides?.provider ?? process.env.AI_PROVIDER ?? "openai-compatible",
-    baseUrl: overrides?.baseUrl ?? process.env.AI_BASE_URL ?? DEFAULT_AI_BASE_URL,
-    apiKey: overrides?.apiKey ?? process.env.AI_API_KEY ?? "",
-    model: overrides?.model ?? process.env.AI_MODEL ?? DEFAULT_AI_MODEL,
-    timeoutMs: normalizeTimeout(overrides?.timeoutMs ?? Number(process.env.AI_TIMEOUT_MS))
-  };
-}
-
-function normalizeTimeout(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Math.min(value, 60000) : DEFAULT_AI_TIMEOUT_MS;
+function readEmailAiProviderConfig(overrides?: Partial<AiProviderConfig>): AiProviderConfig {
+  return normalizeAiProviderConfig(overrides);
 }
 
 function normalizeProviderError(error: unknown): string {

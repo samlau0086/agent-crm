@@ -17,6 +17,7 @@ import { ApiError } from "@/lib/api-error";
 import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
+import { decryptAiProviderConfig, encryptAiProviderConfig, mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
   canRunEmailClassification,
@@ -49,6 +50,7 @@ import type {
   EmailAttachment,
   EmailAiGenerationAuditInput,
   EmailAiSettings,
+  AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
   EmailThreadState,
@@ -463,6 +465,7 @@ function mapEmailAiSettings(settings: {
   workspaceId: string;
   features: Prisma.JsonValue;
   agents?: Prisma.JsonValue;
+  encryptedProviderConfig?: string | null;
   defaultLocale: string;
   requireSourceLinks: boolean;
   maxHistoryMessages: number;
@@ -474,6 +477,7 @@ function mapEmailAiSettings(settings: {
     workspaceId: settings.workspaceId,
     features: normalizeEmailAiFeatures(settings.features as Partial<EmailAiSettings["features"]>),
     agents: normalizeAiAgentSettings(settings.agents),
+    providerConfig: publicAiProviderConfig(readAiProviderConfigFromEncrypted(settings.encryptedProviderConfig)),
     defaultLocale: settings.defaultLocale,
     requireSourceLinks: settings.requireSourceLinks,
     maxHistoryMessages: settings.maxHistoryMessages,
@@ -481,6 +485,17 @@ function mapEmailAiSettings(settings: {
     maxContextChars: settings.maxContextChars,
     updatedAt: settings.updatedAt.toISOString()
   };
+}
+
+function readAiProviderConfigFromEncrypted(value?: string | null): AiProviderConfig {
+  if (!value) {
+    return normalizeAiProviderConfig(undefined);
+  }
+  try {
+    return decryptAiProviderConfig(value);
+  } catch {
+    return normalizeAiProviderConfig(undefined);
+  }
 }
 
 function mapRole(role: { id: string; workspaceId: string; name: string; permissions: string[] }): Role {
@@ -2041,17 +2056,21 @@ export class PrismaCrmRepository {
     patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt" | "features" | "agents">> & {
       features?: Partial<EmailAiSettings["features"]>;
       agents?: unknown;
+      providerConfig?: Partial<AiProviderConfig>;
     }
   ): Promise<EmailAiSettings> {
     requirePermission(context, "ai.admin");
     const current = await this.ensureEmailAiSettings(context.workspaceId);
     const features = normalizeEmailAiFeatures({ ...current.features, ...(patch.features ?? {}) });
     const agents = patch.agents !== undefined ? normalizeAiAgentSettings(patch.agents) : normalizeAiAgentSettings(current.agents);
+    const currentProviderConfig = await this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+    const providerConfig = patch.providerConfig !== undefined ? mergeAiProviderConfigSecrets(currentProviderConfig, patch.providerConfig) : undefined;
     const updated = await this.db.emailAiSettings.update({
       where: { workspaceId: context.workspaceId },
       data: {
         features: features as Prisma.InputJsonValue,
         agents: agents as unknown as Prisma.InputJsonValue,
+        ...(providerConfig ? { encryptedProviderConfig: encryptAiProviderConfig(providerConfig) } : {}),
         defaultLocale: patch.defaultLocale?.trim() || current.defaultLocale,
         requireSourceLinks: patch.requireSourceLinks ?? current.requireSourceLinks,
         maxHistoryMessages: normalizeIntegerLimit(patch.maxHistoryMessages ?? current.maxHistoryMessages, 1, 20),
@@ -2061,9 +2080,14 @@ export class PrismaCrmRepository {
     });
     await this.writeAuditLog(context, "update", "email_ai_settings", context.workspaceId, {
       summary: "Updated email AI settings",
-      details: { features: updated.features, defaultLocale: updated.defaultLocale, agentCount: agents.length }
+      details: { features: updated.features, defaultLocale: updated.defaultLocale, agentCount: agents.length, provider: providerConfig?.provider ?? current.providerConfig.provider }
     });
     return mapEmailAiSettings(updated);
+  }
+
+  async getEmailAiProviderConfig(context: RequestContext): Promise<AiProviderConfig> {
+    requirePermission(context, "ai.use");
+    return this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
   }
 
   async buildEmailAssistantContext(
@@ -4481,6 +4505,7 @@ export class PrismaCrmRepository {
         workspaceId,
         features: defaults.features as Prisma.InputJsonValue,
         agents: defaults.agents as unknown as Prisma.InputJsonValue,
+        encryptedProviderConfig: null,
         defaultLocale: defaults.defaultLocale,
         requireSourceLinks: defaults.requireSourceLinks,
         maxHistoryMessages: defaults.maxHistoryMessages,
@@ -4489,6 +4514,11 @@ export class PrismaCrmRepository {
       }
     });
     return mapEmailAiSettings(created);
+  }
+
+  private async getEmailAiProviderConfigForWorkspace(workspaceId: string): Promise<AiProviderConfig> {
+    const settings = await this.db.emailAiSettings.findUnique({ where: { workspaceId } });
+    return readAiProviderConfigFromEncrypted(settings?.encryptedProviderConfig);
   }
 
   private async assertEmailAccount(context: RequestContext, accountId: string): Promise<EmailAccount> {

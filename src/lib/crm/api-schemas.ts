@@ -522,7 +522,10 @@ export const emailMessageTranslateSchema = z
   })
   .strict();
 
-export const emailConnectionTestSchema = emailSyncSchema;
+export const emailConnectionTestSchema = emailSyncSchema.extend({
+  scope: z.enum(["all", "inbound", "outbound"]).optional(),
+  outboundServiceId: z.string().trim().min(1).max(120).optional()
+});
 
 export const emailOAuthStartSchema = z
   .object({
@@ -537,6 +540,16 @@ export const emailOAuthStartSchema = z
 export const emailAiSettingsUpdateSchema = z
   .object({
     features: z.record(emailAiFeatureSchema, z.boolean()).optional(),
+    providerConfig: z
+      .object({
+        provider: z.enum(["openai", "gemini", "openrouter", "custom", "openai-compatible"]),
+        baseUrl: z.string().trim().url().max(500),
+        apiKey: z.string().trim().max(500).optional(),
+        model: z.string().trim().min(1).max(120),
+        timeoutMs: z.number().int().min(1000).max(60000)
+      })
+      .strict()
+      .optional(),
     agents: z
       .array(
         z

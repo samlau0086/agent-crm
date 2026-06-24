@@ -337,6 +337,13 @@ export function createDefaultEmailAiSettings(workspaceId: string, now: string): 
       auto_summarize: true
     },
     agents: createDefaultAiAgentSettings(),
+    providerConfig: {
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4.1-mini",
+      timeoutMs: 10000,
+      hasApiKey: Boolean(process.env.AI_API_KEY)
+    },
     defaultLocale: "zh-CN",
     requireSourceLinks: true,
     maxHistoryMessages: 8,
