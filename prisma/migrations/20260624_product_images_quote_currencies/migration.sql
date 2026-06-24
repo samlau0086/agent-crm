@@ -121,7 +121,12 @@ SET "data" = jsonb_set(
               true
             )
           )
-          FROM jsonb_array_elements(COALESCE("CrmRecord"."data"->'lineItems', '[]'::jsonb)) line_item(value)
+          FROM jsonb_array_elements(
+            CASE
+              WHEN jsonb_typeof("CrmRecord"."data"->'lineItems') = 'array' THEN "CrmRecord"."data"->'lineItems'
+              ELSE '[]'::jsonb
+            END
+          ) line_item(value)
           LEFT JOIN "CrmRecord" product
             ON product."workspaceId" = "CrmRecord"."workspaceId"
            AND product."objectKey" = 'products'
@@ -135,7 +140,12 @@ SET "data" = jsonb_set(
     COALESCE(
       (
         SELECT jsonb_agg(jsonb_set(fee.value, '{currency}', COALESCE(fee.value->'currency', COALESCE("CrmRecord"."data"->'quoteCurrency', '"CNY"'::jsonb)), true))
-        FROM jsonb_array_elements(COALESCE("CrmRecord"."data"->'fees', '[]'::jsonb)) fee(value)
+        FROM jsonb_array_elements(
+          CASE
+            WHEN jsonb_typeof("CrmRecord"."data"->'fees') = 'array' THEN "CrmRecord"."data"->'fees'
+            ELSE '[]'::jsonb
+          END
+        ) fee(value)
       ),
       '[]'::jsonb
     ),

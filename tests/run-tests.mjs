@@ -1218,6 +1218,14 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(readme, /email:verify:report/);
 });
 
+await run("product quote currency migration handles malformed quote json arrays", () => {
+  const migration = readFileSync("prisma/migrations/20260624_product_images_quote_currencies/migration.sql", "utf8");
+  assert.match(migration, /jsonb_typeof\("CrmRecord"\."data"->'lineItems'\) = 'array'/);
+  assert.match(migration, /jsonb_typeof\("CrmRecord"\."data"->'fees'\) = 'array'/);
+  assert.doesNotMatch(migration, /jsonb_array_elements\(COALESCE\("CrmRecord"\."data"->'lineItems'/);
+  assert.doesNotMatch(migration, /jsonb_array_elements\(COALESCE\("CrmRecord"\."data"->'fees'/);
+});
+
 await run("service health payload exposes email readiness summary", async () => {
   const email = await checkEmailSubsystemDiagnostics({
     env: {
