@@ -1061,9 +1061,50 @@ button {
 
 .gmail-thread-labels {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   justify-content: flex-end;
   min-width: 0;
+}
+
+.email-label-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: #ccfbf1;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.email-label-pill button {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.record-email-thread-card {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+
+.record-email-thread-markers {
+  margin-top: 2px;
+}
+
+.secondary-button.active,
+.gmail-folder.active {
+  border-color: #93c5fd;
+  background: #dbeafe;
 }
 
 .gmail-thread-date {
@@ -1137,8 +1178,9 @@ button {
 }
 
 .gmail-compose-popup.minimized {
-  width: min(320px, calc(100vw - 32px));
+  width: min(420px, calc(100vw - 32px));
   max-height: 48px;
+  cursor: pointer;
 }
 
 .gmail-compose-popup-header {
@@ -1154,6 +1196,7 @@ button {
 
 .gmail-compose-popup-header strong {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1162,6 +1205,7 @@ button {
 }
 
 .gmail-compose-popup-header .toolbar {
+  flex: 0 0 auto;
   flex-wrap: nowrap;
   gap: 2px;
 }
@@ -1445,8 +1489,159 @@ button {
   gap: 10px;
 }
 
-.email-compose-body {
-  min-height: 150px;
+.email-compose-ai-bar {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.email-compose-editor-shell {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.email-compose-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.email-rich-editor {
+  min-height: 180px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  color: var(--text);
+  outline: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.email-rich-editor:empty::before {
+  color: var(--muted);
+  content: "输入邮件正文...";
+}
+
+.email-rich-editor img {
+  max-width: 100%;
+  height: auto;
+}
+
+.email-signature-preview,
+.email-original-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  white-space: pre-wrap;
+}
+
+.email-original-preview summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-weight: 650;
+}
+
+.email-signature-preview iframe {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.email-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.modal-panel {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.28);
+}
+
+.email-attachment-modal {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.email-attachment-dropzone {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 180px;
+  border: 1px dashed #94a3b8;
+  border-radius: 8px;
+  background: #f8fafc;
+  text-align: center;
+}
+
+.email-attachment-dropzone.active {
+  border-color: var(--accent);
+  background: #ecfeff;
+}
+
+.email-upload-list {
+  display: grid;
+  gap: 10px;
+}
+
+.email-upload-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.email-upload-row > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.email-upload-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.email-upload-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 160ms ease;
 }
 
 .email-html-preview {

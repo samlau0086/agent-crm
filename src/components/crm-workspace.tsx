@@ -4,6 +4,7 @@ import {
   Activity as ActivityIcon,
   Archive,
   BadgeDollarSign,
+  Bold,
   Bot,
   Building2,
   CalendarClock,
@@ -14,8 +15,12 @@ import {
   Download,
   Filter,
   Inbox,
+  Image as ImageIcon,
+  Italic,
   LayoutDashboard,
   LayoutList,
+  Link,
+  List,
   Mail,
   MailOpen,
   Maximize2,
@@ -23,6 +28,7 @@ import {
   Minus,
   MoreVertical,
   Package,
+  Paperclip,
   FileText,
   RefreshCw,
   RotateCcw,
@@ -34,6 +40,7 @@ import {
   Tag,
   Trash2,
   Trophy,
+  Underline,
   Upload,
   UserPlus,
   UserRound,
@@ -227,6 +234,20 @@ type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress
 type EmailComposeDraft = EmailComposeReplyDraft & {
   clientRequestId: string;
 };
+type EmailSignatureOption = {
+  id: string;
+  label: string;
+  bodyText: string;
+  bodyHtml: string;
+};
+type EmailAttachmentUploadItem = {
+  id: string;
+  fileName: string;
+  size: number;
+  progress: number;
+  status: "queued" | "reading" | "complete" | "error";
+  error?: string;
+};
 type KnowledgeArticleDraft = {
   editingArticleId?: string;
   title: string;
@@ -288,6 +309,8 @@ const emailCategoryMeta: Array<{ key: EmailCategoryKey; label: string; icon: Luc
   { key: "updates", label: "更新", icon: CalendarClock, keywords: ["update", "notification", "report", "receipt", "invoice", "ticket", "github", "alert", "提醒", "账单", "报告"] }
 ];
 const allEmailAccountsKey = "all";
+const noEmailSignatureId = "none";
+const inlineImageContentIdPrefix = "inline-image-";
 
 function isEmailAiFeatureBlockedByDependency(feature: keyof EmailAiSettings["features"], features: EmailAiSettings["features"]): boolean {
   const dependency = emailAiFeatureMeta[feature].dependsOn;
@@ -332,6 +355,7 @@ function buildEmailHtmlPreview(bodyHtml: string): string {
   return [
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
+    '<base target="_blank">',
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: cid:; style-src \'unsafe-inline\'; font-src data:;">',
     "<style>html,body{margin:0;padding:12px;background:#fff;color:#111827;font:14px/1.5 Arial,sans-serif;overflow-wrap:anywhere;}table{max-width:100%;}img{max-width:100%;height:auto;}</style>",
     "</head><body>",
@@ -342,6 +366,190 @@ function buildEmailHtmlPreview(bodyHtml: string): string {
 
 function hasEmailHtmlPreview(message: EmailMessage): boolean {
   return Boolean(message.bodyHtml?.trim());
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function emailTextToHtml(value: string): string {
+  const paragraphs = value
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`);
+  return paragraphs.length ? paragraphs.join("") : "";
+}
+
+function stripHtmlToText(value: string): string {
+  if (!value.trim()) {
+    return "";
+  }
+  if (typeof document !== "undefined") {
+    const template = document.createElement("template");
+    template.innerHTML = sanitizeComposeHtml(value);
+    return (template.content.textContent ?? "").replace(/\u00a0/g, " ").trim();
+  }
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .trim();
+}
+
+function sanitizeComposeHtml(value: string): string {
+  if (!value.trim() || typeof document === "undefined") {
+    return value
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/\son[a-z]+\s*=\s*["'][^"']*["']/gi, "")
+      .replace(/\s(href|src)\s*=\s*["']javascript:[^"']*["']/gi, "");
+  }
+  const template = document.createElement("template");
+  template.innerHTML = value;
+  template.content.querySelectorAll("script,style,iframe,object,embed").forEach((node) => node.remove());
+  template.content.querySelectorAll<HTMLElement>("*").forEach((element) => {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase();
+      const attributeValue = attribute.value.trim().toLowerCase();
+      if (name.startsWith("on") || ((name === "href" || name === "src") && attributeValue.startsWith("javascript:"))) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  });
+  return template.innerHTML.trim();
+}
+
+function getEmailSignatureOptions(accounts: EmailAccount[], selectedAccountId: string): EmailSignatureOption[] {
+  const account = accounts.find((candidate) => candidate.id === selectedAccountId) ?? accounts[0];
+  const sender = account?.emailAddress || "Sales team";
+  return [
+    { id: noEmailSignatureId, label: "不使用签名", bodyText: "", bodyHtml: "" },
+    {
+      id: "default",
+      label: "默认签名",
+      bodyText: `Best regards,\n${sender}`,
+      bodyHtml: `<p>Best regards,<br>${escapeHtml(sender)}</p>`
+    },
+    {
+      id: "cn-sales",
+      label: "中文商务签名",
+      bodyText: `谢谢，\n${sender}`,
+      bodyHtml: `<p>谢谢，<br>${escapeHtml(sender)}</p>`
+    }
+  ];
+}
+
+function getSelectedEmailSignature(draft: EmailComposeDraft, accounts: EmailAccount[]): EmailSignatureOption {
+  const options = getEmailSignatureOptions(accounts, draft.accountId);
+  return options.find((signature) => signature.id === (draft.signatureId || noEmailSignatureId)) ?? options[0];
+}
+
+function getDraftBodyHtml(draft: EmailComposeDraft): string {
+  return sanitizeComposeHtml(draft.bodyHtml?.trim() ? draft.bodyHtml : emailTextToHtml(draft.bodyText));
+}
+
+function getDraftBodyText(draft: EmailComposeDraft): string {
+  return draft.bodyText.trim() || stripHtmlToText(draft.bodyHtml ?? "");
+}
+
+function hasEmailDraftBody(draft: EmailComposeDraft): boolean {
+  return Boolean(getDraftBodyText(draft) || getDraftBodyHtml(draft).replace(/<[^>]+>/g, "").trim() || /<img\b/i.test(getDraftBodyHtml(draft)));
+}
+
+function buildReplyOriginalHtml(draft: EmailComposeDraft): string {
+  const originalHtml = draft.replyOriginalBodyHtml?.trim() ? sanitizeComposeHtml(draft.replyOriginalBodyHtml) : emailTextToHtml(draft.replyOriginalBodyText ?? "");
+  if (!originalHtml) {
+    return "";
+  }
+  const sentAt = draft.replyOriginalSentAt ? formatDate(draft.replyOriginalSentAt) : "";
+  const from = draft.replyOriginalFrom || "原发件人";
+  return `<p class="crm-email-reply-meta">On ${escapeHtml(sentAt)}, ${escapeHtml(from)} wrote:</p><blockquote class="crm-email-quote">${originalHtml}</blockquote>`;
+}
+
+function buildReplyOriginalText(draft: EmailComposeDraft): string {
+  const originalText = (draft.replyOriginalBodyText?.trim() || stripHtmlToText(draft.replyOriginalBodyHtml ?? "")).trim();
+  if (!originalText) {
+    return "";
+  }
+  const sentAt = draft.replyOriginalSentAt ? formatDate(draft.replyOriginalSentAt) : "";
+  const from = draft.replyOriginalFrom || "原发件人";
+  return [`On ${sentAt}, ${from} wrote:`, ...originalText.split("\n").map((line) => `> ${line}`)].join("\n");
+}
+
+function prepareEmailDraftForSend(draft: EmailComposeDraft, accounts: EmailAccount[]): EmailComposeDraft {
+  const signature = getSelectedEmailSignature(draft, accounts);
+  const bodyHtml = getDraftBodyHtml(draft);
+  const bodyText = getDraftBodyText(draft);
+  const inlineImageResult = extractInlineImageAttachments(bodyHtml);
+  const signatureHtml = signature.bodyHtml.trim();
+  const signatureText = signature.bodyText.trim();
+  const originalHtml = buildReplyOriginalHtml(draft);
+  const originalText = buildReplyOriginalText(draft);
+  const htmlParts = [inlineImageResult.bodyHtml, signatureHtml, originalHtml].filter(Boolean);
+  const textParts = [bodyText, signatureText, originalText].filter(Boolean);
+  const attachments = [...(draft.attachments ?? []), ...inlineImageResult.attachments];
+  return {
+    ...draft,
+    bodyHtml: htmlParts.length ? htmlParts.join("<br>") : undefined,
+    bodyText: textParts.length ? textParts.join("\n\n") : inlineImageResult.attachments.length ? "(HTML email)" : bodyText,
+    attachments
+  };
+}
+
+function extractInlineImageAttachments(bodyHtml: string): { bodyHtml: string; attachments: EmailAttachment[] } {
+  if (!bodyHtml.trim() || typeof document === "undefined") {
+    return { bodyHtml, attachments: [] };
+  }
+  const template = document.createElement("template");
+  template.innerHTML = bodyHtml;
+  const attachments: EmailAttachment[] = [];
+  template.content.querySelectorAll<HTMLImageElement>("img[data-content-base64]").forEach((image, index) => {
+    const contentBase64 = image.dataset.contentBase64;
+    if (!contentBase64) {
+      return;
+    }
+    const contentId = image.dataset.contentId || `${inlineImageContentIdPrefix}${Date.now()}-${index}`;
+    const fileName = image.dataset.fileName || `inline-image-${index + 1}.png`;
+    const contentType = image.dataset.contentType || "image/png";
+    const size = Number(image.dataset.size || "0");
+    attachments.push({ fileName, contentType, size, contentBase64, contentId, disposition: "inline" });
+    image.setAttribute("src", `cid:${contentId}`);
+    image.removeAttribute("data-content-base64");
+    image.removeAttribute("data-content-id");
+    image.removeAttribute("data-file-name");
+    image.removeAttribute("data-content-type");
+    image.removeAttribute("data-size");
+  });
+  return { bodyHtml: template.innerHTML.trim(), attachments };
+}
+
+function buildDraftAiSourceText(draft: EmailComposeDraft, thread?: EmailThread, messages: EmailMessage[] = []): string {
+  const latestMessages = messages.slice(-5);
+  return [
+    getDraftBodyText(draft) ? `Current draft:\n${getDraftBodyText(draft)}` : "",
+    thread?.summary ? `Thread summary:\n${repairEmailMojibake(thread.summary)}` : "",
+    thread?.aiAnalysis ? `Context analysis:\n${formatEmailAnalysisForDisplay(thread.aiAnalysis)}` : "",
+    latestMessages.length
+      ? `Recent email history:\n${latestMessages
+          .map((message) => `${message.direction} ${message.status} ${message.subject} from ${message.from} to ${message.to.join(", ")}:\n${repairEmailMojibake(message.bodyText).slice(0, 1600)}`)
+          .join("\n\n")}`
+      : "",
+    draft.replyOriginalBodyText || draft.replyOriginalBodyHtml
+      ? `Original email to quote on reply:\n${repairEmailMojibake(draft.replyOriginalBodyText || stripHtmlToText(draft.replyOriginalBodyHtml ?? "")).slice(0, 1600)}`
+      : ""
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function formatEmailAnalysisForDisplay(analysis: string): string {
@@ -424,6 +632,14 @@ function buildEmailThreadLabels(thread: EmailThread, messages: EmailMessage[] = 
     labels.add("发送失败");
   }
   return Array.from(labels);
+}
+
+function getEmailThreadDisplayLabels(thread: EmailThread, state: EmailThreadUiState = {}, messages: EmailMessage[] = []): string[] {
+  return Array.from(new Set([...(state.labels ?? thread.labels ?? []), ...buildEmailThreadLabels(thread, messages)]));
+}
+
+function getEmailCategoryLabel(categoryKey: EmailCategoryKey): string {
+  return emailCategoryMeta.find((item) => item.key === categoryKey)?.label ?? categoryKey;
 }
 
 function emailThreadTimeValue(thread: EmailThread): string {
@@ -615,6 +831,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [query, setQuery] = useState("");
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
+  const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -656,6 +873,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     bcc: "",
     subject: "",
     bodyText: "",
+    bodyHtml: "",
+    signatureId: "",
     attachments: [],
     aiAssisted: false
   });
@@ -792,6 +1011,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const selectedRecordEmailThreads = useMemo(
     () => (selectedRecord ? getEmailThreadsForRecord(selectedRecord, records, emailThreads) : []),
     [emailThreads, records, selectedRecord]
+  );
+  const selectedRecordVisibleEmailThreads = useMemo(
+    () =>
+      recordEmailActivityFilter
+        ? selectedRecordEmailThreads.filter((thread) => thread.participantEmails.some((emailAddress) => emailAddress.toLowerCase() === recordEmailActivityFilter.toLowerCase()))
+        : selectedRecordEmailThreads,
+    [recordEmailActivityFilter, selectedRecordEmailThreads]
   );
   const selectedCompanyContacts = useMemo(
     () => (selectedRecord?.objectKey === "companies" ? getCompanyContactRecords(selectedRecord, records) : []),
@@ -990,6 +1216,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setImportPresets(props.importPresets);
   }, [props.importPresets]);
+
+  useEffect(() => {
+    setRecordEmailActivityFilter("");
+  }, [selectedRecord?.id]);
 
   useEffect(() => {
     setEmailAccounts(props.emailAccounts);
@@ -1954,6 +2184,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function sendEmail() {
+    const preparedDraft = prepareEmailDraftForSend(emailDraft, emailAccounts);
     const message = await fetchJson<EmailMessage>("/api/email/send", {
       method: "POST",
       body: {
@@ -1964,9 +2195,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         cc: splitEmailList(emailDraft.cc),
         bcc: splitEmailList(emailDraft.bcc),
         subject: emailDraft.subject,
-        bodyText: emailDraft.bodyText,
+        bodyText: preparedDraft.bodyText,
+        bodyHtml: preparedDraft.bodyHtml,
         clientRequestId: emailDraft.clientRequestId,
-        attachments: emailDraft.attachments?.length ? emailDraft.attachments : undefined,
+        attachments: preparedDraft.attachments?.length ? preparedDraft.attachments : undefined,
         aiAssisted: emailDraft.aiAssisted || undefined,
         aiPurpose: emailDraft.aiAssisted ? emailDraft.aiPurpose : undefined,
         aiSourceMessageId: emailDraft.aiAssisted ? emailDraft.aiSourceMessageId : undefined,
@@ -1976,7 +2208,27 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     setEmailMessagesByThread((current) => ({ ...current, [message.threadId]: upsertEmailMessage(current[message.threadId] ?? [], message) }));
     selectEmailThread(message.threadId);
-    setEmailDraft((current) => ({ ...current, clientRequestId: createEmailClientRequestId(), to: "", cc: "", bcc: "", subject: "", bodyText: "", attachments: [], aiAssisted: false, aiPurpose: undefined, aiSourceMessageId: undefined, aiSources: undefined, aiGeneratedAt: undefined }));
+    setEmailDraft((current) => ({
+      ...current,
+      clientRequestId: createEmailClientRequestId(),
+      to: "",
+      cc: "",
+      bcc: "",
+      subject: "",
+      bodyText: "",
+      bodyHtml: "",
+      signatureId: "",
+      replyOriginalBodyText: undefined,
+      replyOriginalBodyHtml: undefined,
+      replyOriginalFrom: undefined,
+      replyOriginalSentAt: undefined,
+      attachments: [],
+      aiAssisted: false,
+      aiPurpose: undefined,
+      aiSourceMessageId: undefined,
+      aiSources: undefined,
+      aiGeneratedAt: undefined
+    }));
     setMessage(formatEmailSendResultMessage(message));
     router.refresh();
   }
@@ -2042,6 +2294,40 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }));
     } else if (result.enabled && emailAiPurpose === "translate") {
       setMessage("翻译未应用到正文：需要配置可用 AI provider。");
+    }
+  }
+
+  async function generateEmailAiForDraft(prompt: string) {
+    const selectedSourceMessageId = selectedEmailThreadId
+      ? emailMessagesByThread[selectedEmailThreadId]?.at(-1)?.id
+      : undefined;
+    const selectedThread = selectedEmailThreadId ? emailThreads.find((thread) => thread.id === selectedEmailThreadId) : undefined;
+    const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
+      method: "POST",
+      body: {
+        purpose: "draft",
+        threadId: selectedEmailThreadId || undefined,
+        recordId: emailDraft.recordId || selectedRecord?.id,
+        sourceMessageId: selectedSourceMessageId,
+        userPrompt: prompt || undefined,
+        sourceText: buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : [])
+      }
+    });
+    setEmailAiPurpose("draft");
+    setEmailAiPrompt(prompt);
+    setEmailAiResult(result);
+    if (result.enabled) {
+      setEmailDraft((current) => ({
+        ...current,
+        subject: !current.subject.trim() ? result.suggestedSubject ?? current.subject : current.subject,
+        bodyText: result.text,
+        bodyHtml: emailTextToHtml(result.text),
+        aiAssisted: true,
+        aiPurpose: "draft",
+        aiSourceMessageId: result.sourceMessageId,
+        aiSources: result.sources,
+        aiGeneratedAt: new Date().toISOString()
+      }));
     }
   }
 
@@ -2747,41 +3033,74 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         </div>
                         {selectedRecordEmailAddresses.length > 0 ? (
                           <div className="toolbar" style={{ marginBottom: 10 }}>
+                            <button
+                              className={`secondary-button ${recordEmailActivityFilter ? "" : "active"}`}
+                              data-testid={`record-email-filter-all-${selectedRecord.id}`}
+                              type="button"
+                              onClick={() => setRecordEmailActivityFilter("")}
+                            >
+                              <MailOpen size={16} />
+                              全部邮箱
+                            </button>
                             {selectedRecordEmailAddresses.map((emailAddress) => (
                               <button
-                                className="secondary-button"
-                                data-testid={`record-email-compose-${selectedRecord.id}-${sanitizeTestId(emailAddress)}`}
+                                className={`secondary-button ${recordEmailActivityFilter.toLowerCase() === emailAddress.toLowerCase() ? "active" : ""}`}
+                                data-testid={`record-email-filter-${selectedRecord.id}-${sanitizeTestId(emailAddress)}`}
                                 key={emailAddress}
                                 type="button"
-                                onClick={() => composeEmailForRecord(selectedRecord, emailAddress)}
+                                onClick={() => setRecordEmailActivityFilter(emailAddress)}
                               >
                                 <Mail size={16} />
                                 {emailAddress}
                               </button>
                             ))}
+                            <button
+                              className="secondary-button"
+                              data-testid={`record-email-compose-${selectedRecord.id}`}
+                              type="button"
+                              onClick={() => composeEmailForRecord(selectedRecord, recordEmailActivityFilter || (selectedRecordEmailAddresses[0] ?? ""))}
+                              disabled={!recordEmailActivityFilter && selectedRecordEmailAddresses.length === 0}
+                            >
+                              <Send size={16} />
+                              写邮件
+                            </button>
                           </div>
                         ) : null}
-                        {selectedRecordEmailThreads.length > 0 ? (
+                        {selectedRecordVisibleEmailThreads.length > 0 ? (
                           <div className="settings-list">
-                            {selectedRecordEmailThreads.map((thread) => (
-                              <button
-                                className="settings-item record-title"
-                                data-testid={`record-email-thread-${thread.id}`}
-                                key={thread.id}
-                                type="button"
-                                onClick={() => runAction(() => openEmailThread(thread.id))}
-                              >
-                                <strong>{thread.subject}</strong>
-                                <div className="subtle">
-                                  {thread.participantEmails.join(", ")}
-                                  {thread.lastMessageAt ? ` · ${formatDate(thread.lastMessageAt)}` : ""}
-                                </div>
-                                {thread.summary ? <div>{thread.summary}</div> : null}
-                              </button>
-                            ))}
+                            {selectedRecordVisibleEmailThreads.map((thread) => {
+                              const threadState = emailThreadUiStateFromThread(thread);
+                              const threadMessages = emailMessagesByThread[thread.id] ?? [];
+                              const threadCategory = threadState.category ?? inferEmailThreadCategory(thread, threadMessages);
+                              const threadLabels = getEmailThreadDisplayLabels(thread, threadState, threadMessages);
+                              return (
+                                <button
+                                  className="settings-item record-title record-email-thread-card"
+                                  data-testid={`record-email-thread-${thread.id}`}
+                                  key={thread.id}
+                                  type="button"
+                                  onClick={() => runAction(() => openEmailThread(thread.id))}
+                                >
+                                  <strong>{thread.subject}</strong>
+                                  <div className="subtle">
+                                    {thread.participantEmails.join(", ")}
+                                    {thread.lastMessageAt ? ` · ${formatDate(thread.lastMessageAt)}` : ""}
+                                  </div>
+                                  <div className="toolbar record-email-thread-markers">
+                                    <span className="badge">类别：{getEmailCategoryLabel(threadCategory)}</span>
+                                    {threadState.starred ? <span className="badge">星标</span> : null}
+                                    {threadState.important ? <span className="badge">重要</span> : null}
+                                    {threadLabels.map((label) => (
+                                      <span className="badge" key={label}>{label}</span>
+                                    ))}
+                                  </div>
+                                  {thread.summary ? <div>{thread.summary}</div> : null}
+                                </button>
+                              );
+                            })}
                           </div>
                         ) : (
-                          <div className="empty-state">暂无关联邮件线程</div>
+                          <div className="empty-state">{recordEmailActivityFilter ? "当前邮箱没有关联邮件线程" : "暂无关联邮件线程"}</div>
                         )}
                       </section>
                     )}
@@ -3150,6 +3469,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onRetryMessage={(messageId) => runAction(() => retryEmailMessage(messageId))}
             onGenerateAiForMessage={(message, purpose) => runAction(() => generateEmailAiForMessage(message, purpose))}
             onGenerateAi={() => runAction(generateEmailAi)}
+            onGenerateAiForDraft={(prompt) => runAction(() => generateEmailAiForDraft(prompt))}
             onOpenAiSource={(source) => runAction(() => openEmailAiSource(source))}
             onSummarizeThread={() => runAction(summarizeEmailThread)}
             onAnalyzeThread={() => runAction(analyzeEmailThread)}
@@ -3356,6 +3676,7 @@ function EmailWorkspace({
   onRetryMessage,
   onGenerateAiForMessage,
   onGenerateAi,
+  onGenerateAiForDraft,
   onOpenAiSource,
   onSummarizeThread,
   onAnalyzeThread,
@@ -3417,6 +3738,7 @@ function EmailWorkspace({
   onRetryMessage: (messageId: string) => void;
   onGenerateAiForMessage: (message: EmailMessage, purpose: "translate" | "context_analysis") => void;
   onGenerateAi: () => void;
+  onGenerateAiForDraft: (prompt: string) => void;
   onOpenAiSource: (source: EmailAiSource) => void;
   onSummarizeThread: () => void;
   onAnalyzeThread: () => void;
@@ -3454,6 +3776,7 @@ function EmailWorkspace({
   const [mailMode, setMailMode] = useState<EmailMailMode>("list");
   const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(allEmailAccountsKey);
   const [searchQuery, setSearchQuery] = useState("");
+  const [labelFilter, setLabelFilter] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
@@ -3463,7 +3786,17 @@ function EmailWorkspace({
   const [accountConnectionTests, setAccountConnectionTests] = useState<Record<string, { status: "testing" | "success" | "failed"; message: string; testedAt?: string }>>({});
   const [existingContactId, setExistingContactId] = useState("");
   const [existingContactPickerOpen, setExistingContactPickerOpen] = useState(false);
-  const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
+  const [composeAiPrompt, setComposeAiPrompt] = useState("");
+  const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
+  const [attachmentDragActive, setAttachmentDragActive] = useState(false);
+  const [attachmentUploads, setAttachmentUploads] = useState<EmailAttachmentUploadItem[]>([]);
+  const composeEditorRef = useRef<HTMLDivElement>(null);
+  const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
+  const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || hasEmailDraftBody(emailDraft) || emailDraft.attachments?.length || emailDraft.aiAssisted);
+  const signatureOptions = useMemo(() => getEmailSignatureOptions(accounts, emailDraft.accountId), [accounts, emailDraft.accountId]);
+  const selectedSignature = signatureOptions.find((signature) => signature.id === (emailDraft.signatureId || noEmailSignatureId)) ?? signatureOptions[0];
+  const draftEditorHtml = getDraftBodyHtml(emailDraft);
   const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
     onUpdateAiSettings({
       agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
@@ -3545,6 +3878,7 @@ function EmailWorkspace({
       const messages = messagesByThread[thread.id] ?? [];
       const state = threadUiState[thread.id] ?? {};
       const threadCategory = state.category ?? inferEmailThreadCategory(thread, messages);
+      const displayLabels = getEmailThreadDisplayLabels(thread, state, messages).map((label) => label.toLowerCase());
       const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
       const isDeleted = Boolean(state.deleted);
       const isArchived = Boolean(state.archived);
@@ -3568,9 +3902,10 @@ function EmailWorkspace({
                         ? !isDeleted
                         : !isDeleted && !isArchived && !isSnoozed;
       const matchesCategory = mailbox === "inbox" || mailbox === "all" ? threadCategory === category : true;
-      return matchesMailbox && matchesCategory && emailThreadMatchesSearch(thread, messages, searchQuery);
+      const matchesLabel = labelFilter ? displayLabels.includes(labelFilter.toLowerCase()) : true;
+      return matchesMailbox && matchesCategory && matchesLabel && emailThreadMatchesSearch(thread, messages, searchQuery);
     });
-  }, [accountFilteredThreads, category, mailbox, messagesByThread, searchQuery, threadUiState]);
+  }, [accountFilteredThreads, category, labelFilter, mailbox, messagesByThread, searchQuery, threadUiState]);
   const visibleThreadIds = visibleThreads.map((thread) => thread.id);
   const allVisibleThreadsSelected = visibleThreadIds.length > 0 && visibleThreadIds.every((threadId) => selectedThreadIds.has(threadId));
   const mailboxCounts = useMemo(() => {
@@ -3616,6 +3951,13 @@ function EmailWorkspace({
     }
     return counts;
   }, [accounts, threadUiState, threads]);
+  const allEmailLabels = useMemo(() => {
+    const labels = new Set<string>();
+    for (const thread of accountFilteredThreads) {
+      getEmailThreadDisplayLabels(thread, threadUiState[thread.id] ?? {}, messagesByThread[thread.id] ?? []).forEach((label) => labels.add(label));
+    }
+    return Array.from(labels).sort((left, right) => left.localeCompare(right));
+  }, [accountFilteredThreads, messagesByThread, threadUiState]);
 
   const patchThreadUiState = useCallback((threadIds: string[], patch: Partial<EmailThreadUiState> | ((state: EmailThreadUiState) => EmailThreadUiState)) => {
     setThreadUiState((current) => {
@@ -3633,6 +3975,47 @@ function EmailWorkspace({
       setThreadUiState((current) => ({ ...current, [thread.id]: emailThreadUiStateFromThread(thread) }));
     });
   }, [onUpdateThreadState]);
+
+  function updateThreadLabels(threadId: string, labels: string[]) {
+    const normalizedLabels = Array.from(new Set(labels.map((label) => label.trim()).filter(Boolean))).slice(0, 20);
+    patchThreadUiState([threadId], { labels: normalizedLabels });
+    persistThreadState(threadId, { labels: normalizedLabels });
+  }
+
+  function promptAddEmailLabel(threadIds: string[]) {
+    const uniqueThreadIds = Array.from(new Set(threadIds.filter(Boolean)));
+    if (!uniqueThreadIds.length) {
+      window.alert("请先选择邮件线程。");
+      return;
+    }
+    const label = window.prompt("输入邮件标签");
+    const normalizedLabel = label?.trim();
+    if (!normalizedLabel) {
+      return;
+    }
+    for (const threadId of uniqueThreadIds) {
+      const thread = threads.find((candidate) => candidate.id === threadId);
+      if (!thread) {
+        continue;
+      }
+      const state = threadUiState[threadId] ?? {};
+      const storedLabels = state.labels ?? thread.labels ?? [];
+      updateThreadLabels(threadId, [...storedLabels, normalizedLabel]);
+    }
+    setLabelFilter(normalizedLabel);
+  }
+
+  function removeEmailLabel(threadId: string, label: string) {
+    const thread = threads.find((candidate) => candidate.id === threadId);
+    if (!thread) {
+      return;
+    }
+    const state = threadUiState[threadId] ?? {};
+    updateThreadLabels(threadId, (state.labels ?? thread.labels ?? []).filter((candidate) => candidate !== label));
+    if (labelFilter === label) {
+      setLabelFilter("");
+    }
+  }
 
   useEffect(() => {
     setThreadUiState((current) => ({ ...current, ...buildEmailThreadUiStateMap(threads) }));
@@ -3694,9 +4077,20 @@ function EmailWorkspace({
     }
   }, [hasEmailDraftContent, view]);
 
+  useEffect(() => {
+    const editor = composeEditorRef.current;
+    if (!editor || !composeOpen || composeMinimized || document.activeElement === editor) {
+      return;
+    }
+    if (editor.innerHTML !== draftEditorHtml) {
+      editor.innerHTML = draftEditorHtml;
+    }
+  }, [composeMinimized, composeOpen, draftEditorHtml]);
+
   function selectMailboxAccount(accountId: string) {
     setSelectedMailboxAccountId(accountId);
     setMailMode("list");
+    setLabelFilter("");
     setSelectedThreadIds(new Set());
   }
 
@@ -3729,6 +4123,56 @@ function EmailWorkspace({
   function sendEmailFromPopup() {
     onSend();
     closeComposePopup();
+  }
+
+  function updateComposeBodyFromEditor() {
+    const editor = composeEditorRef.current;
+    const bodyHtml = sanitizeComposeHtml(editor?.innerHTML ?? "");
+    onEmailDraftChange(
+      clearEmailDraftAiProvenance({
+        ...emailDraft,
+        bodyHtml,
+        bodyText: stripHtmlToText(bodyHtml)
+      })
+    );
+  }
+
+  function runComposeEditorCommand(command: "bold" | "italic" | "underline" | "insertUnorderedList" | "createLink") {
+    composeEditorRef.current?.focus();
+    if (command === "createLink") {
+      const url = window.prompt("输入链接 URL");
+      if (!url) {
+        return;
+      }
+      document.execCommand(command, false, url);
+    } else {
+      document.execCommand(command, false);
+    }
+    updateComposeBodyFromEditor();
+  }
+
+  async function insertComposeInlineImage(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      window.alert("只能插入图片文件。");
+      return;
+    }
+    if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
+      window.alert(`图片不能超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}。`);
+      return;
+    }
+    const contentBase64 = await readFileAsBase64(file);
+    const contentId = `${inlineImageContentIdPrefix}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const src = `data:${file.type || "image/png"};base64,${contentBase64}`;
+    composeEditorRef.current?.focus();
+    document.execCommand(
+      "insertHTML",
+      false,
+      `<img src="${src}" data-content-id="${escapeHtml(contentId)}" data-file-name="${escapeHtml(file.name)}" data-content-type="${escapeHtml(file.type || "image/png")}" data-size="${file.size}" data-content-base64="${contentBase64}" alt="${escapeHtml(file.name)}">`
+    );
+    updateComposeBodyFromEditor();
   }
 
   function performMailboxAction(action: "archive" | "unarchive" | "delete" | "restore" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
@@ -3820,7 +4264,7 @@ function EmailWorkspace({
     });
   }
 
-  async function addEmailAttachmentFiles(files: FileList | null) {
+  async function addEmailAttachmentFiles(files: FileList | File[] | null) {
     const selectedFiles = Array.from(files ?? []);
     if (!selectedFiles.length) {
       return;
@@ -3830,11 +4274,31 @@ function EmailWorkspace({
       window.alert("邮件附件最多 10 个文件。");
       return;
     }
-    try {
-      const attachments = await Promise.all(selectedFiles.map(readEmailAttachmentFile));
+    const uploadItems = selectedFiles.map((file) => ({
+      id: `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      fileName: file.name,
+      size: file.size,
+      progress: 0,
+      status: "queued" as const
+    }));
+    setAttachmentUploads((current) => [...current, ...uploadItems]);
+    const attachments: EmailAttachment[] = [];
+    for (const [index, file] of selectedFiles.entries()) {
+      const uploadItem = uploadItems[index];
+      try {
+        setAttachmentUploads((current) => current.map((item) => (item.id === uploadItem.id ? { ...item, status: "reading", progress: 8 } : item)));
+        const attachment = await readEmailAttachmentFile(file, (progress) => {
+          setAttachmentUploads((current) => current.map((item) => (item.id === uploadItem.id ? { ...item, status: "reading", progress } : item)));
+        });
+        attachments.push(attachment);
+        setAttachmentUploads((current) => current.map((item) => (item.id === uploadItem.id ? { ...item, status: "complete", progress: 100 } : item)));
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "无法读取邮件附件。";
+        setAttachmentUploads((current) => current.map((item) => (item.id === uploadItem.id ? { ...item, status: "error", error: errorMessage } : item)));
+      }
+    }
+    if (attachments.length) {
       onEmailDraftChange({ ...emailDraft, attachments: [...existing, ...attachments] });
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "无法读取邮件附件。");
     }
   }
 
@@ -3843,6 +4307,16 @@ function EmailWorkspace({
       ...emailDraft,
       attachments: (emailDraft.attachments ?? []).filter((_, candidateIndex) => candidateIndex !== index)
     });
+  }
+
+  function handleAttachmentDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setAttachmentDragActive(false);
+    void addEmailAttachmentFiles(Array.from(event.dataTransfer.files));
+  }
+
+  function generateComposeDraftWithAi() {
+    onGenerateAiForDraft(composeAiPrompt.trim());
   }
 
   function renderEmailAiSources(sources?: EmailAiSource[]) {
@@ -4472,16 +4946,23 @@ function EmailWorkspace({
           <div className="gmail-label-block">
             <div className="gmail-label-title">
               <span>标签</span>
-              <button className="icon-button" aria-label="新增标签" type="button">
+              <button
+                className="icon-button"
+                aria-label="新增标签"
+                data-testid="email-add-label"
+                type="button"
+                onClick={() => promptAddEmailLabel(selectedThreadIdsArray.length ? selectedThreadIdsArray : selectedThread ? [selectedThread.id] : [])}
+              >
                 <Tag size={14} />
               </button>
             </div>
-            {["CRM", "AI", "附件", "发送失败"].map((label) => (
-              <button className="gmail-folder" key={label} type="button" onClick={() => { setSearchQuery(label); setMailMode("list"); }}>
+            {allEmailLabels.map((label) => (
+              <button className={`gmail-folder ${labelFilter === label ? "active" : ""}`} data-testid={`email-label-filter-${sanitizeTestId(label)}`} key={label} type="button" onClick={() => { setLabelFilter(labelFilter === label ? "" : label); setMailMode("list"); }}>
                 <Tag size={15} />
                 <span>{label}</span>
               </button>
             ))}
+            {allEmailLabels.length === 0 ? <div className="subtle">还没有标签</div> : null}
           </div>
           <div className="gmail-account-list">
             <div className="gmail-label-title">发件账户</div>
@@ -4545,6 +5026,9 @@ function EmailWorkspace({
                 <button className="icon-button" aria-label="标记未读" title="标记未读" type="button" onClick={() => performMailboxAction("unread")} disabled={!selectedThreadIds.size}>
                   <Mail size={16} />
                 </button>
+                <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => promptAddEmailLabel(selectedThreadIdsArray)} disabled={!selectedThreadIds.size}>
+                  <Tag size={16} />
+                </button>
                 <button className="icon-button" aria-label="更多" type="button">
                   <MoreVertical size={16} />
                 </button>
@@ -4567,7 +5051,7 @@ function EmailWorkspace({
                 {visibleThreads.map((thread) => {
                   const messages = messagesByThread[thread.id] ?? [];
                   const state = threadUiState[thread.id] ?? {};
-                  const labels = state.labels ?? buildEmailThreadLabels(thread, messages);
+                  const labels = getEmailThreadDisplayLabels(thread, state, messages);
                   const snippet = messages.at(-1)?.bodyText || thread.summary || thread.aiAnalysis || "";
                   const isRead = state.read ?? false;
                   return (
@@ -4673,6 +5157,9 @@ function EmailWorkspace({
                 <button className="icon-button" aria-label="重要" title="重要" type="button" onClick={() => selectedThread && performMailboxAction("important", [selectedThread.id])} disabled={!selectedThread}>
                   <Tag size={16} />
                 </button>
+                <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => selectedThread && promptAddEmailLabel([selectedThread.id])} disabled={!selectedThread}>
+                  <Tag size={16} />
+                </button>
                 <button className="icon-button" aria-label="更多" type="button">
                   <MoreVertical size={16} />
                 </button>
@@ -4682,7 +5169,19 @@ function EmailWorkspace({
                   <div className="gmail-detail-header">
                     <h2>{selectedThread.subject}</h2>
                     <div className="toolbar">
-                      {(threadUiState[selectedThread.id]?.labels ?? buildEmailThreadLabels(selectedThread, selectedMessages)).map((label) => <span className="badge" key={label}>{label}</span>)}
+                      <span className="badge">类别：{getEmailCategoryLabel((threadUiState[selectedThread.id]?.category ?? inferEmailThreadCategory(selectedThread, selectedMessages)) as EmailCategoryKey)}</span>
+                      {threadUiState[selectedThread.id]?.starred ? <span className="badge">星标</span> : null}
+                      {threadUiState[selectedThread.id]?.important ? <span className="badge">重要</span> : null}
+                      {getEmailThreadDisplayLabels(selectedThread, threadUiState[selectedThread.id] ?? {}, selectedMessages).map((label) => (
+                        <span className="email-label-pill" key={label}>
+                          {label}
+                          {(threadUiState[selectedThread.id]?.labels ?? selectedThread.labels ?? []).includes(label) ? (
+                            <button aria-label={`移除标签 ${label}`} type="button" onClick={() => removeEmailLabel(selectedThread.id, label)}>
+                              <XCircle size={12} />
+                            </button>
+                          ) : null}
+                        </span>
+                      ))}
                       {selectedThread?.summaryUpdatedAt ? <span className="subtle">Summary {formatDate(selectedThread.summaryUpdatedAt)}</span> : null}
                       {selectedThread?.aiAnalysisUpdatedAt ? <span className="subtle">Analysis {formatDate(selectedThread.aiAnalysisUpdatedAt)}</span> : null}
                     </div>
@@ -4805,7 +5304,7 @@ function EmailWorkspace({
                         ) : null}
                         {hasEmailHtmlPreview(message) ? (
                           <div className="email-html-preview">
-                            <iframe sandbox="" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
+                            <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
                             <details className="email-text-fallback">
                               <summary>显示文本邮件</summary>
                               <div className="email-message-body">{repairEmailMojibake(message.bodyText)}</div>
@@ -4873,91 +5372,152 @@ function EmailWorkspace({
         </main>
 
         {composeOpen ? (
-          <section className={`gmail-compose-popup ${composeMinimized ? "minimized" : ""}`} data-testid="email-compose-popup" aria-label="写邮件">
-            <div className="gmail-compose-popup-header">
+          <section
+            className={`gmail-compose-popup ${composeMinimized ? "minimized" : ""}`}
+            data-testid="email-compose-popup"
+            aria-label="写邮件"
+          >
+            <div
+              className="gmail-compose-popup-header"
+              role={composeMinimized ? "button" : undefined}
+              tabIndex={composeMinimized ? 0 : undefined}
+              onClick={composeMinimized ? () => setComposeMinimized(false) : undefined}
+              onKeyDown={
+                composeMinimized
+                  ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setComposeMinimized(false);
+                }
+              }
+                  : undefined
+              }
+            >
               <strong>{emailDraft.subject.trim() || "新邮件"}</strong>
               <div className="toolbar">
-                <button className="icon-button" aria-label={composeMinimized ? "展开写信窗口" : "最小化写信窗口"} type="button" onClick={() => setComposeMinimized((current) => !current)}>
+                <button className="icon-button" aria-label={composeMinimized ? "展开写信窗口" : "最小化写信窗口"} type="button" onClick={(event) => { event.stopPropagation(); setComposeMinimized((current) => !current); }}>
                   {composeMinimized ? <Maximize2 size={15} /> : <Minus size={15} />}
                 </button>
-                <button className="icon-button" aria-label="关闭写信窗口" type="button" onClick={closeComposePopup}>
+                <button className="icon-button" aria-label="关闭写信窗口" type="button" onClick={(event) => { event.stopPropagation(); closeComposePopup(); }}>
                   <XCircle size={15} />
                 </button>
               </div>
             </div>
             {composeMinimized ? null : (
               <div className="gmail-compose-popup-body">
-            <div className="email-pane-header compact">
-              <h2 className="page-title" style={{ fontSize: 16 }}>撰写邮件</h2>
-              <button className="secondary-button" data-testid="email-open-ai" type="button" onClick={() => onViewChange("ai")}>
-                <Bot size={16} />
-                AI 辅助
-              </button>
-            </div>
-            <div className="email-compose-grid">
-              <label>
-                <span className="subtle">发件账户</span>
-                <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId: event.target.value }))}>
-                  <option value="">选择账户</option>
-                  {activeAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>{account.emailAddress}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="subtle">关联记录</span>
-                <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: event.target.value }))}>
-                  <option value="">不关联</option>
-                  {records.slice(0, 100).map((record) => (
-                    <option key={record.id} value={record.id}>{record.title}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="subtle">收件人</span>
-                <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: event.target.value }))} placeholder="buyer@example.com" />
-              </label>
-              <label>
-                <span className="subtle">CC</span>
-                <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: event.target.value }))} placeholder="manager@example.com" />
-              </label>
-              <label>
-                <span className="subtle">BCC</span>
-                <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: event.target.value }))} placeholder="archive@example.com" />
-              </label>
-              <label>
-                <span className="subtle">主题</span>
-                <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
-              </label>
-              <label>
-                <span className="subtle">正文</span>
-                <textarea className="textarea email-compose-body" data-testid="email-compose-body" value={emailDraft.bodyText} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bodyText: event.target.value }))} />
-              </label>
-              <label>
-                <span className="subtle">附件</span>
-                <input
-                  className="input"
-                  data-testid="email-compose-attachments"
-                  multiple
-                  type="file"
-                  onChange={(event) => {
-                    void addEmailAttachmentFiles(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
-            {emailDraft.attachments?.length ? (
-              <div className="toolbar" style={{ marginTop: 10 }}>
-                {emailDraft.attachments.map((attachment, index) => (
-                  <button className="secondary-button" key={`${attachment.fileName}-${index}`} type="button" onClick={() => removeEmailAttachment(index)}>
-                    <Upload size={14} />
-                    {attachment.fileName} · {formatBytes(attachment.size)}
-                    <XCircle size={14} />
+                <div className="email-pane-header compact">
+                  <h2 className="page-title" style={{ fontSize: 16 }}>撰写邮件</h2>
+                  <button className="secondary-button" data-testid="email-open-ai" type="button" onClick={() => onViewChange("ai")}>
+                    <Settings size={16} />
+                    AI 设置
                   </button>
-                ))}
-              </div>
-            ) : null}
+                </div>
+                <div className="email-compose-grid">
+                  <label>
+                    <span className="subtle">发件账户</span>
+                    <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId: event.target.value }))}>
+                      <option value="">选择账户</option>
+                      {activeAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>{account.emailAddress}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span className="subtle">关联记录</span>
+                    <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: event.target.value }))}>
+                      <option value="">不关联</option>
+                      {records.slice(0, 100).map((record) => (
+                        <option key={record.id} value={record.id}>{record.title}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span className="subtle">收件人</span>
+                    <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: event.target.value }))} placeholder="buyer@example.com" />
+                  </label>
+                  <label>
+                    <span className="subtle">CC</span>
+                    <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: event.target.value }))} placeholder="manager@example.com" />
+                  </label>
+                  <label>
+                    <span className="subtle">BCC</span>
+                    <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: event.target.value }))} placeholder="archive@example.com" />
+                  </label>
+                  <label>
+                    <span className="subtle">主题</span>
+                    <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
+                  </label>
+                  <label>
+                    <span className="subtle">签名</span>
+                    <select className="select" data-testid="email-compose-signature" value={emailDraft.signatureId || noEmailSignatureId} onChange={(event) => onEmailDraftChange({ ...emailDraft, signatureId: event.target.value })}>
+                      {signatureOptions.map((signature) => (
+                        <option key={signature.id} value={signature.id}>{signature.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="email-compose-ai-bar">
+                  <Bot size={16} />
+                  <input className="input" data-testid="email-compose-ai-prompt" value={composeAiPrompt} onChange={(event) => setComposeAiPrompt(event.target.value)} placeholder="告诉 AI 这封邮件要表达什么，例如：礼貌跟进报价并约下周会议" />
+                  <button className="secondary-button" data-testid="email-compose-ai-generate" type="button" onClick={generateComposeDraftWithAi} disabled={disabled || !aiSettings.features.draft}>
+                    一键生成
+                  </button>
+                </div>
+                <div className="email-compose-editor-shell">
+                  <div className="email-compose-toolbar" aria-label="正文格式工具栏">
+                    <button className="icon-button" aria-label="加粗" type="button" onClick={() => runComposeEditorCommand("bold")}><Bold size={15} /></button>
+                    <button className="icon-button" aria-label="斜体" type="button" onClick={() => runComposeEditorCommand("italic")}><Italic size={15} /></button>
+                    <button className="icon-button" aria-label="下划线" type="button" onClick={() => runComposeEditorCommand("underline")}><Underline size={15} /></button>
+                    <button className="icon-button" aria-label="列表" type="button" onClick={() => runComposeEditorCommand("insertUnorderedList")}><List size={15} /></button>
+                    <button className="icon-button" aria-label="链接" type="button" onClick={() => runComposeEditorCommand("createLink")}><Link size={15} /></button>
+                    <button className="icon-button" aria-label="插入图片" type="button" onClick={() => composeInlineImageInputRef.current?.click()}><ImageIcon size={15} /></button>
+                    <button className="icon-button" aria-label="添加附件" type="button" onClick={() => setAttachmentModalOpen(true)}><Paperclip size={15} /></button>
+                    <input
+                      ref={composeInlineImageInputRef}
+                      data-testid="email-compose-inline-image"
+                      hidden
+                      accept="image/*"
+                      type="file"
+                      onChange={(event) => {
+                        void insertComposeInlineImage(event.target.files?.[0]);
+                        event.target.value = "";
+                      }}
+                    />
+                  </div>
+                  <div
+                    ref={composeEditorRef}
+                    className="email-rich-editor"
+                    contentEditable
+                    data-testid="email-compose-body"
+                    onInput={updateComposeBodyFromEditor}
+                    role="textbox"
+                    aria-multiline="true"
+                    suppressContentEditableWarning
+                  />
+                </div>
+                {selectedSignature.id !== noEmailSignatureId ? (
+                  <div className="email-signature-preview" data-testid="email-signature-preview">
+                    <span className="subtle">签名预览，发送时追加</span>
+                    <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(selectedSignature.bodyHtml)} title="签名预览" />
+                  </div>
+                ) : null}
+                {emailDraft.replyOriginalBodyText || emailDraft.replyOriginalBodyHtml ? (
+                  <details className="email-original-preview" data-testid="email-compose-original-preview">
+                    <summary>发送回复时将追加原邮件内容</summary>
+                    <div>{repairEmailMojibake(emailDraft.replyOriginalBodyText || stripHtmlToText(emailDraft.replyOriginalBodyHtml ?? "")).slice(0, 1200)}</div>
+                  </details>
+                ) : null}
+                {emailDraft.attachments?.length ? (
+                  <div className="email-attachment-list" data-testid="email-compose-attachment-list">
+                    {emailDraft.attachments.map((attachment, index) => (
+                      <button className="secondary-button" key={`${attachment.fileName}-${index}`} type="button" onClick={() => removeEmailAttachment(index)}>
+                        <Paperclip size={14} />
+                        {attachment.fileName} · {formatBytes(attachment.size)}
+                        <XCircle size={14} />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
             {emailDraft.aiAssisted ? (
               <div className="toolbar" style={{ marginTop: 12 }}>
                 <span className="badge">
@@ -4988,7 +5548,7 @@ function EmailWorkspace({
               </div>
             ) : null}
             <div className="toolbar" style={{ marginTop: 12 }}>
-              <button className="primary-button" data-testid="email-send" type="button" onClick={sendEmailFromPopup} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !emailDraft.bodyText.trim()}>
+              <button className="primary-button" data-testid="email-send" type="button" onClick={sendEmailFromPopup} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !hasEmailDraftBody(emailDraft)}>
                 <Send size={16} />
                 发送
               </button>
@@ -4996,6 +5556,78 @@ function EmailWorkspace({
               </div>
             )}
           </section>
+        ) : null}
+
+        {attachmentModalOpen ? (
+          <div className="modal-backdrop" data-testid="email-attachment-modal" role="dialog" aria-modal="true" aria-label="添加邮件附件">
+            <div className="modal-panel email-attachment-modal">
+              <div className="email-pane-header compact">
+                <div>
+                  <h2 className="page-title" style={{ fontSize: 18 }}>添加附件</h2>
+                  <p className="subtle">支持拖拽、多文件上传和读取进度，单封邮件最多 10 个附件。</p>
+                </div>
+                <button className="icon-button" aria-label="关闭附件窗口" type="button" onClick={() => setAttachmentModalOpen(false)}>
+                  <XCircle size={16} />
+                </button>
+              </div>
+              <div
+                className={`email-attachment-dropzone ${attachmentDragActive ? "active" : ""}`}
+                data-testid="email-attachment-dropzone"
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setAttachmentDragActive(true);
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={() => setAttachmentDragActive(false)}
+                onDrop={handleAttachmentDrop}
+              >
+                <Upload size={24} />
+                <strong>拖拽文件到这里</strong>
+                <span className="subtle">或选择本地文件</span>
+                <button className="secondary-button" type="button" onClick={() => composeAttachmentInputRef.current?.click()}>
+                  <Paperclip size={14} />
+                  选择文件
+                </button>
+                <input
+                  ref={composeAttachmentInputRef}
+                  data-testid="email-compose-attachments"
+                  hidden
+                  multiple
+                  type="file"
+                  onChange={(event) => {
+                    void addEmailAttachmentFiles(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </div>
+              {attachmentUploads.length ? (
+                <div className="email-upload-list">
+                  {attachmentUploads.map((item) => (
+                    <div className="email-upload-row" key={item.id}>
+                      <div>
+                        <strong>{item.fileName}</strong>
+                        <span className="subtle">{formatBytes(item.size)} · {item.status === "error" ? item.error : item.status === "complete" ? "已添加" : "读取中"}</span>
+                      </div>
+                      <div className="email-upload-progress" aria-label={`${item.fileName} 上传进度`}>
+                        <span style={{ width: `${item.progress}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {emailDraft.attachments?.length ? (
+                <div className="email-attachment-list">
+                  {emailDraft.attachments.map((attachment, index) => (
+                    <button className="secondary-button" key={`modal-${attachment.fileName}-${index}`} type="button" onClick={() => removeEmailAttachment(index)}>
+                      <Paperclip size={14} />
+                      {attachment.fileName} · {formatBytes(attachment.size)}
+                      <XCircle size={14} />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
         ) : null}
       </div>
     </div>
@@ -8172,7 +8804,7 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-async function readEmailAttachmentFile(file: File): Promise<EmailAttachment> {
+async function readEmailAttachmentFile(file: File, onProgress?: (progress: number) => void): Promise<EmailAttachment> {
   if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
     throw new Error(`附件 ${file.name} 超过 5 MB。`);
   }
@@ -8180,15 +8812,21 @@ async function readEmailAttachmentFile(file: File): Promise<EmailAttachment> {
     fileName: file.name,
     contentType: file.type || "application/octet-stream",
     size: file.size,
-    contentBase64: await readFileAsBase64(file)
+    contentBase64: await readFileAsBase64(file, onProgress)
   };
 }
 
-function readFileAsBase64(file: File): Promise<string> {
+function readFileAsBase64(file: File, onProgress?: (progress: number) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    reader.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.min(98, Math.max(8, Math.round((event.loaded / event.total) * 100))));
+      }
+    });
     reader.addEventListener("load", () => {
       const value = typeof reader.result === "string" ? reader.result : "";
+      onProgress?.(100);
       resolve(value.includes(",") ? value.split(",").slice(1).join(",") : value);
     });
     reader.addEventListener("error", () => reject(new Error(`无法读取附件 ${file.name}。`)));

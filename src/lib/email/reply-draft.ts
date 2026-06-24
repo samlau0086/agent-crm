@@ -8,6 +8,12 @@ export type EmailComposeReplyDraft = {
   bcc: string;
   subject: string;
   bodyText: string;
+  bodyHtml?: string;
+  signatureId?: string;
+  replyOriginalBodyText?: string;
+  replyOriginalBodyHtml?: string;
+  replyOriginalFrom?: string;
+  replyOriginalSentAt?: string;
   attachments?: EmailAttachment[];
   aiAssisted?: boolean;
   aiPurpose?: EmailMessage["aiPurpose"];
@@ -17,7 +23,8 @@ export type EmailComposeReplyDraft = {
 };
 
 export type EmailReplyDraftInput = {
-  message: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "cc" | "subject">;
+  message: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "cc" | "subject" | "bodyText"> &
+    Partial<Pick<EmailMessage, "bodyHtml" | "sentAt" | "receivedAt" | "createdAt">>;
   accountEmail?: string;
   recordId?: string;
 };
@@ -38,6 +45,12 @@ export function buildEmailReplyDraft(input: EmailReplyDraftInput): EmailComposeR
     bcc: "",
     subject: replySubject(input.message.subject),
     bodyText: "",
+    bodyHtml: "",
+    signatureId: "",
+    replyOriginalBodyText: input.message.bodyText,
+    replyOriginalBodyHtml: input.message.bodyHtml,
+    replyOriginalFrom: input.message.from,
+    replyOriginalSentAt: input.message.sentAt ?? input.message.receivedAt ?? input.message.createdAt,
     attachments: []
   };
 }

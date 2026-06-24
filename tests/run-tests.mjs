@@ -1775,7 +1775,8 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /data-testid="email-compose-cc"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, cc: event\.target\.value \}\)/);
   assert.match(source, /data-testid="email-compose-bcc"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, bcc: event\.target\.value \}\)/);
   assert.match(source, /data-testid="email-compose-subject"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, subject: event\.target\.value \}\)/);
-  assert.match(source, /data-testid="email-compose-body"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, bodyText: event\.target\.value \}\)/);
+  assert.match(source, /data-testid="email-compose-body"[\s\S]*onInput=\{updateComposeBodyFromEditor\}/);
+  assert.match(source, /function updateComposeBodyFromEditor\(\)[\s\S]*clearEmailDraftAiProvenance\(\{[\s\S]*bodyHtml,[\s\S]*bodyText: stripHtmlToText\(bodyHtml\)/);
   assert.match(source, /const accountId = current\.accountId \|\| props\.emailAccounts\[0\]\?\.id \|\| "";\s*return accountId === current\.accountId \? current : clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId \}\);/);
   assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId;\s*const nextSelectedThreadId = props\.emailThreads\.some\(\(thread\) => thread\.id === preferredThreadId\) \? preferredThreadId : props\.emailThreads\[0\]\?\.id \?\? "";\s*if \(nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
   assert.match(source, /setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId: account\.id \}\)\)/);
@@ -1783,6 +1784,26 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /clearEmailDraftAiProvenance\(\{ \.\.\.current, recordId: thread\.recordId \|\| "" \}\)/);
   assert.match(source, /onSelectThread=\{\(threadId\) => \{[\s\S]*selectEmailThread\(threadId\);/);
   assert.match(source, /setEmailDraft\(\(current\) => \(\{[\s\S]*aiAssisted:\s*true[\s\S]*aiSources:\s*result\.sources/);
+});
+
+await run("email compose supports ai generation signatures rich text and attachment modal", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  assert.match(source, /function prepareEmailDraftForSend\(draft: EmailComposeDraft, accounts: EmailAccount\[\]\): EmailComposeDraft/);
+  assert.match(source, /const htmlParts = \[inlineImageResult\.bodyHtml, signatureHtml, originalHtml\]\.filter\(Boolean\)/);
+  assert.match(source, /const textParts = \[bodyText, signatureText, originalText\]\.filter\(Boolean\)/);
+  assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);
+  assert.match(source, /data-testid="email-compose-ai-prompt"/);
+  assert.match(source, /data-testid="email-compose-ai-generate"/);
+  assert.match(source, /data-testid="email-compose-signature"/);
+  assert.match(source, /data-testid="email-signature-preview"/);
+  assert.match(source, /contentEditable[\s\S]*data-testid="email-compose-body"/);
+  assert.match(source, /document\.execCommand\([\s\S]*"insertHTML"[\s\S]*data-content-base64/);
+  assert.match(source, /data-testid="email-attachment-modal"/);
+  assert.match(source, /data-testid="email-attachment-dropzone"/);
+  assert.match(source, /readEmailAttachmentFile\(file, \(progress\) =>/);
+  assert.match(styles, /\.email-rich-editor/);
+  assert.match(styles, /\.email-attachment-dropzone/);
 });
 
 await run("email workspace explains when translation fallback is not persisted", () => {
@@ -1810,13 +1831,30 @@ await run("email workspace previews html bodies in a sandboxed iframe", () => {
   assert.match(source, /function formatEmailAnalysisForDisplay\(analysis: string\): string/);
   assert.match(source, /looksLikeLeakedEmailAnalysisPrompt\(repaired\)/);
   assert.match(source, /data-testid="email-thread-analysis"/);
-  assert.match(source, /hasEmailHtmlPreview\(message\)[\s\S]*<iframe sandbox="" srcDoc=\{buildEmailHtmlPreview\(message\.bodyHtml \?\? ""\)\}[\s\S]*<details className="email-text-fallback">[\s\S]*显示文本邮件/);
+  assert.match(source, /hasEmailHtmlPreview\(message\)[\s\S]*<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc=\{buildEmailHtmlPreview\(message\.bodyHtml \?\? ""\)\}[\s\S]*<details className="email-text-fallback">[\s\S]*显示文本邮件/);
   assert.match(source, /\{repairEmailMojibake\(message\.bodyText\)\}/);
   assert.doesNotMatch(source, /<div className="email-message-body">\{message\.bodyText\}<\/div>\s*\{hasEmailHtmlPreview\(message\)/);
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
   assert.match(styles, /\.email-html-preview-frame/);
   assert.match(styles, /\.email-thread-analysis-body \{[\s\S]*max-height: 260px;[\s\S]*overflow: auto;/);
   assert.match(styles, /\.gmail-compose-popup-header \.icon-button[\s\S]*background: transparent/);
+});
+
+await run("email workspace supports labels minimized compose restore and record activity markers", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  assert.match(source, /const \[labelFilter, setLabelFilter\] = useState\(""\)/);
+  assert.match(source, /function promptAddEmailLabel\(threadIds: string\[\]\)/);
+  assert.match(source, /data-testid="email-add-label"/);
+  assert.match(source, /getEmailThreadDisplayLabels\(thread, state, messages\)/);
+  assert.match(source, /recordEmailActivityFilter/);
+  assert.match(source, /data-testid=\{`record-email-filter-\$\{selectedRecord\.id\}-\$\{sanitizeTestId\(emailAddress\)\}`\}/);
+  assert.match(source, /record-email-thread-markers/);
+  assert.match(source, /类别：\{getEmailCategoryLabel\(threadCategory\)\}/);
+  assert.match(source, /onClick=\{composeMinimized \? \(\) => setComposeMinimized\(false\) : undefined\}/);
+  assert.match(source, /<base target="_blank">/);
+  assert.match(styles, /\.email-label-pill/);
+  assert.match(styles, /\.gmail-compose-popup\.minimized[\s\S]*cursor: pointer/);
 });
 
 await run("email diagnostics can recover stale sending messages through retry", () => {
