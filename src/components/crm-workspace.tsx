@@ -47,7 +47,7 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
@@ -291,6 +291,11 @@ type PromptDialogState = {
   placeholder?: string;
   defaultValue?: string;
   confirmLabel?: string;
+};
+type TaskCalendarView = "list" | "month" | "week" | "day";
+type TaskCreateInput = {
+  title: string;
+  dueAt: string;
 };
 type KnowledgeArticleDraft = {
   editingArticleId?: string;
@@ -2045,6 +2050,20 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  async function createTaskFromCalendar(input: TaskCreateInput) {
+    const created = await fetchJson<Activity>("/api/activities", {
+      method: "POST",
+      body: {
+        type: "task",
+        title: input.title,
+        dueAt: input.dueAt
+      }
+    });
+    setActivities((current) => mergeActivities(current, [created]));
+    showSuccess(`已创建任务：${created.title}`);
+    router.refresh();
+  }
+
   async function closeDeal(record: CrmRecord, outcome: "won" | "lost") {
     if (
       outcome === "lost" &&
@@ -3792,6 +3811,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
             onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
             onDelete={(activity) => runAction(() => deleteTask(activity))}
+            onCreateTask={(input) => runAction(() => createTaskFromCalendar(input))}
+            onRequestPrompt={requestPrompt}
           />
         )}
         {activeNav === "activities" && <ActivityTimeline activities={activities} records={records} />}
@@ -6757,27 +6778,78 @@ function TaskView({
   users,
   onToggle,
   onArchive,
-  onDelete
+  onDelete,
+  onCreateTask,
+  onRequestPrompt
 }: {
   activities: Activity[];
   users: User[];
   onToggle: (activity: Activity, completed: boolean) => void;
   onArchive: (activity: Activity, archived: boolean) => void;
   onDelete: (activity: Activity) => void;
+  onCreateTask: (input: TaskCreateInput) => void;
+  onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
 }) {
   const [status, setStatus] = useState<"todo" | "completed" | "archived">("todo");
+  const [view, setView] = useState<TaskCalendarView>("list");
+  const [calendarCursor, setCalendarCursor] = useState(() => startOfCalendarDay(new Date()));
   const todoTasks = activities.filter((activity) => !activity.completedAt && !activity.archivedAt);
   const completedTasks = activities.filter((activity) => activity.completedAt && !activity.archivedAt);
   const archivedTasks = activities.filter((activity) => activity.archivedAt);
   const visibleTasks = status === "todo" ? todoTasks : status === "completed" ? completedTasks : archivedTasks;
   const emptyMessage = status === "todo" ? "暂无待办任务" : status === "completed" ? "暂无已完成任务" : "暂无归档任务";
+  const calendarTitle =
+    view === "month"
+      ? formatCalendarMonth(calendarCursor)
+      : view === "week"
+        ? formatCalendarRange(startOfCalendarWeek(calendarCursor), addCalendarDays(startOfCalendarWeek(calendarCursor), 6))
+        : formatCalendarDayLabel(calendarCursor);
+
+  async function requestTaskAt(dueAt: Date) {
+    const title = await onRequestPrompt({
+      title: "添加任务",
+      message: `为 ${formatCalendarDateTime(dueAt)} 创建一个任务。`,
+      placeholder: "输入任务标题",
+      confirmLabel: "创建任务"
+    });
+    const trimmedTitle = title?.trim();
+    if (!trimmedTitle) {
+      return;
+    }
+    onCreateTask({ title: trimmedTitle, dueAt: dueAt.toISOString() });
+  }
+
+  function moveCalendar(offset: number) {
+    const next =
+      view === "month"
+        ? addCalendarMonths(calendarCursor, offset)
+        : view === "week"
+          ? addCalendarDays(calendarCursor, offset * 7)
+          : addCalendarDays(calendarCursor, offset);
+    setCalendarCursor(next);
+  }
 
   return (
     <section className="section">
-      <div className="section-header">
+      <div className="section-header task-view-header">
         <div>
           <h2 className="page-title">任务</h2>
-          <p className="subtle">按待办、已完成、归档管理销售跟进事项。</p>
+          <p className="subtle">按待办、已完成、归档管理销售跟进事项，也可以在日历中按日期和时间直接创建任务。</p>
+        </div>
+        <div className="toolbar" role="group" aria-label="任务视图">
+          {(["list", "month", "week", "day"] as TaskCalendarView[]).map((mode) => (
+            <button
+              aria-pressed={view === mode}
+              className={view === mode ? "primary-button" : "secondary-button"}
+              data-testid={`task-view-${mode}`}
+              key={mode}
+              type="button"
+              onClick={() => setView(mode)}
+            >
+              {mode === "list" ? <List size={16} /> : <CalendarClock size={16} />}
+              {taskViewLabel(mode)}
+            </button>
+          ))}
         </div>
       </div>
       <div className="toolbar" style={{ marginTop: 12 }}>
@@ -6812,15 +6884,61 @@ function TaskView({
           <span className="badge">{archivedTasks.length}</span>
         </button>
       </div>
-      <TaskList
-        activities={visibleTasks}
-        emptyMessage={emptyMessage}
-        testIdPrefix="task-view-task"
-        users={users}
-        onArchive={onArchive}
-        onDelete={onDelete}
-        onToggle={onToggle}
-      />
+      {view === "list" ? (
+        <TaskList
+          activities={visibleTasks}
+          emptyMessage={emptyMessage}
+          testIdPrefix="task-view-task"
+          users={users}
+          onArchive={onArchive}
+          onDelete={onDelete}
+          onToggle={onToggle}
+        />
+      ) : (
+        <div className="task-calendar" data-testid={`task-calendar-${view}`}>
+          <div className="task-calendar-nav">
+            <div>
+              <strong>{calendarTitle}</strong>
+              <div className="subtle">当前显示：{emptyMessage.replace("暂无", "")}</div>
+            </div>
+            <div className="toolbar">
+              <button className="icon-button" type="button" aria-label="上一段时间" onClick={() => moveCalendar(-1)}>
+                <ChevronLeft size={16} />
+              </button>
+              <button className="secondary-button" type="button" onClick={() => setCalendarCursor(startOfCalendarDay(new Date()))}>
+                今天
+              </button>
+              <button className="icon-button" type="button" aria-label="下一段时间" onClick={() => moveCalendar(1)}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+          {view === "month" && (
+            <TaskMonthCalendar
+              cursor={calendarCursor}
+              tasks={visibleTasks}
+              users={users}
+              onCreateTask={requestTaskAt}
+            />
+          )}
+          {view === "week" && (
+            <TaskWeekCalendar
+              cursor={calendarCursor}
+              tasks={visibleTasks}
+              users={users}
+              onCreateTask={requestTaskAt}
+            />
+          )}
+          {view === "day" && (
+            <TaskDayCalendar
+              cursor={calendarCursor}
+              tasks={visibleTasks}
+              users={users}
+              onCreateTask={requestTaskAt}
+            />
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -6909,6 +7027,260 @@ function TaskList({
       })}
     </div>
   );
+}
+
+function TaskMonthCalendar({
+  cursor,
+  tasks,
+  users,
+  onCreateTask
+}: {
+  cursor: Date;
+  tasks: Activity[];
+  users: User[];
+  onCreateTask: (dueAt: Date) => void;
+}) {
+  const days = buildMonthCalendarDays(cursor);
+  const currentMonth = cursor.getMonth();
+
+  return (
+    <div className="task-month-calendar" role="grid" aria-label="任务月视图">
+      {calendarWeekdayLabels.map((label) => (
+        <div className="task-calendar-weekday" key={label}>{label}</div>
+      ))}
+      {days.map((day) => {
+        const dayTasks = tasksForCalendarDay(tasks, day);
+        return (
+          <div className={day.getMonth() === currentMonth ? "task-calendar-day" : "task-calendar-day outside"} key={day.toISOString()} role="gridcell">
+            <div className="task-calendar-day-header">
+              <strong>{day.getDate()}</strong>
+              <button className="secondary-button compact-button" type="button" onClick={() => onCreateTask(calendarDateAtHour(day, 9))}>
+                添加
+              </button>
+            </div>
+            <div className="task-calendar-day-list">
+              {dayTasks.map((task) => (
+                <TaskCalendarChip activity={task} key={task.id} users={users} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskWeekCalendar({
+  cursor,
+  tasks,
+  users,
+  onCreateTask
+}: {
+  cursor: Date;
+  tasks: Activity[];
+  users: User[];
+  onCreateTask: (dueAt: Date) => void;
+}) {
+  const weekStart = startOfCalendarWeek(cursor);
+  const days = Array.from({ length: 7 }, (_, index) => addCalendarDays(weekStart, index));
+
+  return (
+    <div className="task-week-calendar" data-testid="task-calendar-week-grid">
+      <div className="task-week-header-spacer" />
+      {days.map((day) => (
+        <div className="task-week-day-header" key={day.toISOString()}>
+          <strong>{formatShortWeekday(day)}</strong>
+          <span>{formatShortDate(day)}</span>
+        </div>
+      ))}
+      {taskCalendarHours.map((hour) => (
+        <Fragment key={hour}>
+          <div className="task-time-label">{formatHourLabel(hour)}</div>
+          {days.map((day) => {
+            const slotTime = calendarDateAtHour(day, hour);
+            const slotTasks = tasksForCalendarHour(tasks, slotTime);
+            return (
+              <button
+                className="task-calendar-slot"
+                key={`${day.toISOString()}-${hour}`}
+                type="button"
+                onClick={() => onCreateTask(slotTime)}
+              >
+                {slotTasks.map((task) => (
+                  <TaskCalendarChip activity={task} key={task.id} users={users} />
+                ))}
+              </button>
+            );
+          })}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function TaskDayCalendar({
+  cursor,
+  tasks,
+  users,
+  onCreateTask
+}: {
+  cursor: Date;
+  tasks: Activity[];
+  users: User[];
+  onCreateTask: (dueAt: Date) => void;
+}) {
+  return (
+    <div className="task-day-calendar" data-testid="task-calendar-day-grid">
+      {taskCalendarHours.map((hour) => {
+        const slotTime = calendarDateAtHour(cursor, hour);
+        const slotTasks = tasksForCalendarHour(tasks, slotTime);
+        return (
+          <div className="task-day-slot" key={hour}>
+            <div className="task-time-label">{formatHourLabel(hour)}</div>
+            <button className="task-calendar-slot" type="button" onClick={() => onCreateTask(slotTime)}>
+              {slotTasks.length ? (
+                slotTasks.map((task) => <TaskCalendarChip activity={task} key={task.id} users={users} />)
+              ) : (
+                <span className="subtle">点击添加任务</span>
+              )}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskCalendarChip({ activity, users }: { activity: Activity; users: User[] }) {
+  return (
+    <div className="task-calendar-chip" title={activity.title}>
+      <strong>{activity.title}</strong>
+      <span>
+        {formatTaskCalendarTime(activity.dueAt)} · {users.find((user) => user.id === activity.actorId)?.name ?? "未分配"}
+      </span>
+    </div>
+  );
+}
+
+const calendarWeekdayLabels = ["一", "二", "三", "四", "五", "六", "日"];
+const taskCalendarHours = Array.from({ length: 14 }, (_, index) => index + 7);
+
+function taskViewLabel(view: TaskCalendarView): string {
+  if (view === "month") {
+    return "月视图";
+  }
+  if (view === "week") {
+    return "周视图";
+  }
+  if (view === "day") {
+    return "日视图";
+  }
+  return "列表";
+}
+
+function buildMonthCalendarDays(cursor: Date): Date[] {
+  const firstOfMonth = startOfCalendarDay(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
+  const gridStart = startOfCalendarWeek(firstOfMonth);
+  return Array.from({ length: 42 }, (_, index) => addCalendarDays(gridStart, index));
+}
+
+function tasksForCalendarDay(tasks: Activity[], day: Date): Activity[] {
+  return tasks
+    .filter((task) => {
+      const dueAt = taskDueDate(task);
+      return dueAt ? sameCalendarDay(dueAt, day) : false;
+    })
+    .sort(sortTasksByDueAt);
+}
+
+function tasksForCalendarHour(tasks: Activity[], hourDate: Date): Activity[] {
+  return tasks
+    .filter((task) => {
+      const dueAt = taskDueDate(task);
+      return dueAt ? sameCalendarDay(dueAt, hourDate) && dueAt.getHours() === hourDate.getHours() : false;
+    })
+    .sort(sortTasksByDueAt);
+}
+
+function sortTasksByDueAt(left: Activity, right: Activity): number {
+  return (taskDueDate(left)?.getTime() ?? 0) - (taskDueDate(right)?.getTime() ?? 0);
+}
+
+function taskDueDate(task: Activity): Date | null {
+  if (!task.dueAt) {
+    return null;
+  }
+  const dueAt = new Date(task.dueAt);
+  return Number.isNaN(dueAt.getTime()) ? null : dueAt;
+}
+
+function startOfCalendarDay(date: Date): Date {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function startOfCalendarWeek(date: Date): Date {
+  const day = startOfCalendarDay(date);
+  const mondayOffset = (day.getDay() + 6) % 7;
+  return addCalendarDays(day, -mondayOffset);
+}
+
+function addCalendarDays(date: Date, amount: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function addCalendarMonths(date: Date, amount: number): Date {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + amount, 1);
+  return startOfCalendarDay(next);
+}
+
+function calendarDateAtHour(date: Date, hour: number): Date {
+  const next = startOfCalendarDay(date);
+  next.setHours(hour, 0, 0, 0);
+  return next;
+}
+
+function sameCalendarDay(left: Date, right: Date): boolean {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+}
+
+function formatCalendarMonth(date: Date): string {
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(date);
+}
+
+function formatCalendarDayLabel(date: Date): string {
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(date);
+}
+
+function formatCalendarRange(start: Date, end: Date): string {
+  return `${formatShortDate(start)} - ${formatShortDate(end)}`;
+}
+
+function formatShortDate(date: Date): string {
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
+}
+
+function formatShortWeekday(date: Date): string {
+  return new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(date);
+}
+
+function formatHourLabel(hour: number): string {
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
+function formatTaskCalendarTime(value?: string): string {
+  if (!value) {
+    return "未排期";
+  }
+  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function formatCalendarDateTime(date: Date): string {
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 function ActivityTimeline({ activities, records }: { activities: Activity[]; records: CrmRecord[] }) {

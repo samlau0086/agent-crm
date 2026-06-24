@@ -1635,6 +1635,26 @@ await run("task workspace exposes todo completed archived and delete actions", (
   assert.match(route, /deleteActivity\(context, params\.id\)/);
 });
 
+await run("task workspace exposes calendar views and date slot task creation", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /type TaskCalendarView = "list" \| "month" \| "week" \| "day"/);
+  assert.match(source, /useState<TaskCalendarView>\("list"\)/);
+  assert.match(source, /data-testid=\{`task-view-\$\{mode\}`\}/);
+  assert.match(source, /data-testid=\{`task-calendar-\$\{view\}`\}/);
+  assert.match(source, /function TaskMonthCalendar/);
+  assert.match(source, /function TaskWeekCalendar/);
+  assert.match(source, /function TaskDayCalendar/);
+  assert.match(source, /onRequestPrompt\(\{/);
+  assert.match(source, /onCreateTask\(\{ title: trimmedTitle, dueAt: dueAt\.toISOString\(\) \}\)/);
+  assert.match(source, /fetchJson<Activity>\("\/api\/activities", \{/);
+  assert.match(source, /type: "task",[\s\S]*title: input\.title,[\s\S]*dueAt: input\.dueAt/);
+  assert.match(styles, /\.task-month-calendar \{[\s\S]*grid-template-columns: repeat\(7, minmax\(140px, 1fr\)\);/);
+  assert.match(styles, /\.task-week-calendar \{[\s\S]*grid-template-columns: 68px repeat\(7, minmax\(150px, 1fr\)\);/);
+  assert.match(styles, /\.task-day-slot \{[\s\S]*grid-template-columns: 78px minmax\(0, 1fr\);/);
+});
+
 await run("workspace exposes product and quote modules as first-class crm objects", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /key: "products", label: "产品", icon: Package/);
