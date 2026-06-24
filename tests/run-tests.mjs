@@ -1505,6 +1505,10 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /if \(routeRecordId\) \{[\s\S]*setSelectedRecordId\(routeRecordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /pendingRecordOpen\?\.objectKey === route\.objectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
+  assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*selectEmailThread\(threadId\)[\s\S]*setEmailDetailThreadId\(threadId\)[\s\S]*navigateToWorkspace\("email"\)[\s\S]*await loadEmailMessages\(threadId\)/);
+  assert.match(source, /if \(!detailThreadId\) \{[\s\S]*return;[\s\S]*const thread = threads\.find\(\(candidate\) => candidate\.id === detailThreadId\)/);
+  assert.match(source, /setCategory\(\(current\) => \(current === nextCategory \? current : nextCategory\)\)/);
+  assert.match(source, /setMailMode\(\(current\) => \(current === "detail" \? current : "detail"\)\)/);
   assert.match(source, /function startCreateContactForCompany\(company: CrmRecord\)/);
   assert.match(source, /onOpenEmailContact=\{\(threadId, contact\) => openEmailContact\(threadId, contact\)\}/);
   assert.match(source, /data-testid="email-thread-contact-link"/);

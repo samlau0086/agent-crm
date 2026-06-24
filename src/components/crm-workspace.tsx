@@ -1649,12 +1649,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   async function openEmailThread(threadId: string) {
     selectEmailThread(threadId);
-    if (!emailMessagesByThread[threadId]) {
-      await loadEmailMessages(threadId);
-    }
     setEmailDetailThreadId(threadId);
     setEmailWorkspaceView("mail");
     navigateToWorkspace("email");
+    if (!emailMessagesByThread[threadId]) {
+      await loadEmailMessages(threadId);
+    }
   }
 
   function composeEmailForRecord(record: CrmRecord, emailAddress: string) {
@@ -3539,14 +3539,34 @@ function EmailWorkspace({
   }, [messagesByThread, selectedThreadId]);
 
   useEffect(() => {
-    if (detailThreadId && detailThreadId === selectedThreadId && messagesByThread[detailThreadId]?.length) {
-      setMailMode("detail");
-      if (!threadUiState[detailThreadId]?.read) {
-        patchThreadUiState([detailThreadId], { read: true });
-        persistThreadState(detailThreadId, { read: true });
-      }
+    if (!detailThreadId) {
+      return;
     }
-  }, [detailThreadId, messagesByThread, patchThreadUiState, persistThreadState, selectedThreadId, threadUiState]);
+    const thread = threads.find((candidate) => candidate.id === detailThreadId);
+    if (!thread) {
+      return;
+    }
+    const messages = messagesByThread[detailThreadId] ?? [];
+    const state = threadUiState[detailThreadId] ?? {};
+    const isDeleted = Boolean(state.deleted);
+    const isArchived = Boolean(state.archived);
+    const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
+    const nextCategory = state.category ?? inferEmailThreadCategory(thread, messages);
+    const nextMailbox = isDeleted ? "trash" : isArchived ? "archived" : isSnoozed ? "snoozed" : "inbox";
+    setSelectedMailboxAccountId((current) => (current === allEmailAccountsKey ? current : allEmailAccountsKey));
+    setSearchQuery((current) => (current ? "" : current));
+    setSelectedThreadIds((current) => (current.size ? new Set() : current));
+    setCategory((current) => (current === nextCategory ? current : nextCategory));
+    setMailbox((current) => (current === nextMailbox ? current : nextMailbox));
+    setMailMode((current) => (current === "detail" ? current : "detail"));
+    if (detailThreadId !== selectedThreadId) {
+      onSelectThread(detailThreadId);
+    }
+    if (!state.read) {
+      patchThreadUiState([detailThreadId], { read: true });
+      persistThreadState(detailThreadId, { read: true });
+    }
+  }, [detailThreadId, messagesByThread, onSelectThread, patchThreadUiState, persistThreadState, selectedThreadId, threadUiState, threads]);
 
   useEffect(() => {
     if (view === "mail" && hasEmailDraftContent) {
