@@ -542,11 +542,12 @@ export const emailAiSettingsUpdateSchema = z
     features: z.record(emailAiFeatureSchema, z.boolean()).optional(),
     providerConfig: z
       .object({
-        provider: z.enum(["openai", "gemini", "openrouter", "custom", "openai-compatible"]),
-        baseUrl: z.string().trim().url().max(500),
+        provider: z.enum(["openai", "gemini", "openrouter", "custom", "openai-compatible"]).optional(),
+        baseUrl: z.string().trim().url().max(500).optional(),
         apiKey: z.string().trim().max(500).optional(),
-        model: z.string().trim().min(1).max(120),
-        timeoutMs: z.number().int().min(1000).max(60000)
+        hasApiKey: z.boolean().optional(),
+        model: z.string().trim().min(1).max(120).optional(),
+        timeoutMs: z.number().int().min(1000).max(60000).optional()
       })
       .strict()
       .optional(),

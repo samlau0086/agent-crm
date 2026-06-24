@@ -2625,7 +2625,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function updateEmailAiSettingsPatch(
-    patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents" | "providerConfig">> & {
+    patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">> & {
+      providerConfig?: Partial<EmailAiSettings["providerConfig"]>;
       features?: Partial<EmailAiSettings["features"]>;
     }
   ) {
@@ -4115,7 +4116,11 @@ function EmailWorkspace({
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
-  onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents" | "providerConfig">>) => void;
+  onUpdateAiSettings: (
+    patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">> & {
+      providerConfig?: Partial<EmailAiSettings["providerConfig"]>;
+    }
+  ) => void;
   onShowToast: (toast: ToastState) => void;
   onShowSuccess: (message: string) => void;
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
@@ -4187,11 +4192,12 @@ function EmailWorkspace({
     });
   };
   const updateAiProviderConfig = (patch: Partial<EmailAiSettings["providerConfig"]>) => {
+    const nextProviderConfig = sanitizeAiProviderConfigForPatch({
+      ...aiSettings.providerConfig,
+      ...patch
+    });
     onUpdateAiSettings({
-      providerConfig: {
-        ...aiSettings.providerConfig,
-        ...patch
-      }
+      providerConfig: nextProviderConfig
     });
   };
   const linkEmailThreadRecord = (threadId: string, recordId: string) => {
@@ -9559,6 +9565,16 @@ function defaultAiProviderConfigForUi(
     baseUrl: defaults[provider].baseUrl,
     model: defaults[provider].model,
     apiKey: ""
+  };
+}
+
+function sanitizeAiProviderConfigForPatch(config: Partial<EmailAiSettings["providerConfig"]>): Partial<EmailAiSettings["providerConfig"]> {
+  return {
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    ...(config.apiKey?.trim() ? { apiKey: config.apiKey.trim() } : {}),
+    model: config.model,
+    timeoutMs: config.timeoutMs
   };
 }
 

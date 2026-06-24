@@ -2053,7 +2053,7 @@ export class PrismaCrmRepository {
 
   async updateEmailAiSettings(
     context: RequestContext,
-    patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt" | "features" | "agents">> & {
+    patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt" | "features" | "agents" | "providerConfig">> & {
       features?: Partial<EmailAiSettings["features"]>;
       agents?: unknown;
       providerConfig?: Partial<AiProviderConfig>;

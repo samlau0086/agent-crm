@@ -8545,12 +8545,15 @@ await run("email ai settings expose encrypted provider profiles", () => {
   assert.match(migration, /ADD COLUMN "encryptedProviderConfig" TEXT/);
   assert.match(apiSchema, /providerConfig: z/);
   assert.match(apiSchema, /z\.enum\(\["openai", "gemini", "openrouter", "custom", "openai-compatible"\]\)/);
+  assert.match(apiSchema, /hasApiKey: z\.boolean\(\)\.optional\(\)/);
   assert.match(repository, /encryptAiProviderConfig\(providerConfig\)/);
   assert.match(repository, /getEmailAiProviderConfig\(context: RequestContext\)/);
   assert.match(providerConfig, /openrouter: \{ baseUrl: "https:\/\/openrouter\.ai\/api\/v1"/);
   assert.match(providerConfig, /gemini: \{ baseUrl: "https:\/\/generativelanguage\.googleapis\.com\/v1beta\/openai"/);
   assert.match(source, /data-testid="email-ai-provider-panel"/);
   assert.match(source, /data-testid="email-ai-provider-api-key-save"/);
+  assert.match(source, /sanitizeAiProviderConfigForPatch/);
+  assert.doesNotMatch(source, /providerConfig:\s*\{\s*\.\.\.aiSettings\.providerConfig,\s*\.\.\.patch\s*\}/);
   assert.match(emailGenerateRoute, /getEmailAiProviderConfig\(context\)/);
 });
 
