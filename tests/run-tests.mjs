@@ -1811,6 +1811,7 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);
   assert.match(source, /onGenerateAiPromptForDraft=\{\(prompt\) => generateEmailAiPromptForDraft\(prompt\)\}/);
   assert.match(source, /async function generateEmailAiPromptForDraft\(currentPrompt: string\): Promise<string>/);
+  assert.match(source, /不要在正文里加入签名、姓名\/职位\/公司\/联系方式占位符、来源提示、引用列表或来源脚注/);
   assert.match(source, /data-testid="email-compose-ai-prompt"/);
   assert.match(source, /data-testid="email-compose-ai-prompt-generate"/);
   assert.match(source, /data-testid="email-compose-ai-generate"/);
@@ -7983,6 +7984,76 @@ await run("email ai generation bounds provider output before persistence", async
   assert.equal(result.suggestedSubject.length <= MAX_EMAIL_AI_SUBJECT_CHARS, true);
   assert.match(result.suggestedSubject, /\[truncated\]$/);
   assert.equal(result.budget.outputTruncated, true);
+});
+
+await run("email draft generation strips signatures and source footers from body", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, draft: true };
+  const context = buildEmailPromptContext({
+    settings,
+    purpose: "draft",
+    record: {
+      id: "record-ai-no-signature",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "Instagram Contact",
+      data: {},
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z"
+    },
+    thread: {
+      id: "thread-ai-no-signature",
+      workspaceId: defaultWorkspaceId,
+      accountId: "email-account",
+      subject: "Re: Instagram notification",
+      participantEmails: ["no-reply@mail.instagram.com"],
+      lastMessageAt: "2026-06-20T00:00:00.000Z",
+      summary: "Automatic notification with no clear sales intent.",
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z"
+    }
+  });
+  const prompt = buildEmailModelPrompt({ context, userPrompt: "请生成回复邮件" });
+  const result = await generateEmailAiOutput(
+    { context, userPrompt: "请生成回复邮件" },
+    {
+      config: { provider: "openai-compatible", apiKey: "test-key", baseUrl: "https://ai.example/v1", model: "test-model", timeoutMs: 1000 },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    text: [
+                      "尊敬的客户，",
+                      "",
+                      "感谢您的来信。我们会先确认当前需求，再给出下一步建议。",
+                      "",
+                      "祝好，",
+                      "",
+                      "[您的名字]",
+                      "[您的职位]",
+                      "[您的公司]",
+                      "[您的联系方式]",
+                      "",
+                      "来源：Instagram 邮件通知"
+                    ].join("\n"),
+                    suggestedSubject: "Re: Instagram notification"
+                  })
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    }
+  );
+
+  assert.match(prompt, /do not include a "Sources", "来源", citation, signature, sign-off/);
+  assert.equal(result.generationMode, "provider");
+  assert.equal(result.text, "尊敬的客户，\n\n感谢您的来信。我们会先确认当前需求，再给出下一步建议。");
+  assert.doesNotMatch(result.text, /来源|您的名字|祝好|联系方式/);
 });
 
 await run("email assistant blocks generation when required sources are missing", async () => {

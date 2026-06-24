@@ -123,6 +123,7 @@ async function completeEmailAi(input: EmailAiGenerateInput, config: AiProviderCo
               "Use only the supplied CRM record, communication history, and knowledge base context.",
               "Do not claim that CRM data has been changed. Do not modify deal stage, amount, contacts, tasks, or other business records.",
               "When facts are uncertain, state that clearly.",
+              "For draft emails, return customer-facing body content only. Do not include signatures, sign-off blocks, sender placeholders, contact blocks, citations, source labels, or source-reference footers in the body.",
               "Return only JSON in the shape {\"text\":\"...\",\"suggestedSubject\":\"...\"}; suggestedSubject is only needed for draft emails."
             ].join(" ")
           },
@@ -205,7 +206,7 @@ function truncate(value: string, maxLength: number): string {
 
 function normalizeGeneratedContent(purpose: EmailAssistantPurpose, maxContextChars: number, content: EmailAiGeneratedContent): NormalizedEmailAiGeneratedContent {
   const textLimit = getGeneratedTextLimit(purpose, maxContextChars);
-  const rawText = content.text.trim();
+  const rawText = normalizeGeneratedTextForPurpose(purpose, content.text);
   const text = truncate(rawText, textLimit);
   const suggestedSubject = content.suggestedSubject?.trim().replace(/\s+/g, " ");
   const normalizedSubject = suggestedSubject ? truncate(suggestedSubject, MAX_EMAIL_AI_SUBJECT_CHARS) : undefined;
@@ -214,6 +215,54 @@ function normalizeGeneratedContent(purpose: EmailAssistantPurpose, maxContextCha
     ...(normalizedSubject ? { suggestedSubject: normalizedSubject } : {}),
     outputTruncated: text !== rawText || Boolean(suggestedSubject && normalizedSubject !== suggestedSubject)
   };
+}
+
+function normalizeGeneratedTextForPurpose(purpose: EmailAssistantPurpose, value: string): string {
+  const text = value.trim();
+  if (purpose !== "draft") {
+    return text;
+  }
+  return stripDraftOnlyArtifacts(text);
+}
+
+function stripDraftOnlyArtifacts(value: string): string {
+  const lines = value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd());
+  const sourceStartIndex = lines.findIndex((line) => /^(来源|資料來源|资料来源|source|sources|source references?|references?|citations?)\s*[:：]/i.test(line.trim()));
+  const withoutSources = sourceStartIndex >= 0 ? lines.slice(0, sourceStartIndex) : lines;
+  const signatureStartIndex = findTrailingSignatureStart(withoutSources);
+  const withoutSignature = signatureStartIndex >= 0 ? withoutSources.slice(0, signatureStartIndex) : withoutSources;
+  return withoutSignature
+    .filter((line) => !/^\[(您的名字|你的名字|姓名|名字|your name|name|您的职位|职位|title|position|您的公司|公司|company|您的联系方式|联系方式|contact|phone|email)\]$/i.test(line.trim()))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function findTrailingSignatureStart(lines: string[]): number {
+  const signatureLinePattern = /^(祝好|此致|敬礼|谢谢|感谢|顺祝商祺|best regards|kind regards|regards|sincerely|yours sincerely|thanks|thank you)[,，。！!]*$/i;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim() ?? "";
+    if (!line) {
+      continue;
+    }
+    if (signatureLinePattern.test(line)) {
+      return index;
+    }
+    if (/^\[(您的名字|你的名字|姓名|名字|your name|name)\]$/i.test(line)) {
+      let cursor = index - 1;
+      while (cursor >= 0 && !lines[cursor]?.trim()) {
+        cursor -= 1;
+      }
+      if (cursor >= 0 && signatureLinePattern.test(lines[cursor]?.trim() ?? "")) {
+        return cursor;
+      }
+      return index;
+    }
+  }
+  return -1;
 }
 
 function getGeneratedTextLimit(purpose: EmailAssistantPurpose, maxContextChars: number): number {
@@ -237,9 +286,7 @@ function buildLocalOutput(input: EmailAiGenerateInput): EmailAiGeneratedContent 
         "",
         "Thank you for the recent conversation. Based on your current priorities and the latest CRM history, the recommended next step is to confirm deployment constraints, open questions, and a clear follow-up date.",
         "",
-        "I can share the relevant details and help align the next steps. Please let me know a suitable time for the next discussion.",
-        "",
-        "Best regards,"
+        "I can share the relevant details and help align the next steps. Please let me know a suitable time for the next discussion."
       ].join("\n")
     };
   }

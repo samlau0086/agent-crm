@@ -513,7 +513,7 @@ function buildInstruction(
   const agentInstruction = agent?.agentMarkdown ? `\n\nAgent.md:\n${truncate(agent.agentMarkdown, 4000)}` : "";
 
   if (input.purpose === "draft") {
-    return `Draft a sales email in ${locale}. Use customer background, communication history, and knowledge base facts. ${sourceRequirement}${agentInstruction}`;
+    return `Draft a sales email in ${locale}. Use customer background, communication history, and knowledge base facts. Keep CRM source references in metadata only; do not include a "Sources", "来源", citation, signature, sign-off, name/title/company placeholder, or contact block in the email body because signatures are appended separately. ${sourceRequirement}${agentInstruction}`;
   }
   if (input.purpose === "translate") {
     return `Translate the email content to ${locale}. Preserve names, amounts, dates, and CRM facts. ${sourceRequirement}${agentInstruction}`;

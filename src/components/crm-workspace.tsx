@@ -598,6 +598,7 @@ function buildComposePromptFromAiResult(result: EmailAiGenerateResult, currentPr
     currentPrompt.trim() ? `我的补充要求：${currentPrompt.trim()}` : "",
     "语气：专业、简洁、礼貌，避免夸大承诺。",
     "内容要求：回应最近一封邮件的关键点，结合客户背景给出明确下一步，并保留人工确认空间。",
+    "不要在正文里加入签名、姓名/职位/公司/联系方式占位符、来源提示、引用列表或来源脚注；签名会在发送时由系统单独追加，来源只保存在 CRM 元数据里。",
     draft.replyOriginalBodyText || draft.replyOriginalBodyHtml ? "这是回复邮件，生成内容时不要重复引用原邮件全文。" : ""
   ]
     .filter(Boolean)
