@@ -1663,6 +1663,46 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setMessage(`已创建联系人 ${created.title}`);
   }
 
+  async function linkExistingContactFromEmail(threadId: string, contactId: string, emailAddress: string) {
+    const normalizedEmail = emailAddress.trim().toLowerCase();
+    if (!looksLikeEmail(normalizedEmail)) {
+      throw new Error("发件人邮箱无效，不能添加到联系人");
+    }
+    const contact = records.find((record) => record.id === contactId && record.objectKey === "contacts");
+    if (!contact) {
+      throw new Error("请选择一个联系人");
+    }
+    const existingEmails = getRecordEmailAddressesFromData(contact);
+    let updatedContact = contact;
+    if (!existingEmails.includes(normalizedEmail)) {
+      const methods = normalizePrimaryContactMethods([
+        ...contactMethodsFromRecordData(contact),
+        {
+          id: `method-${Date.now()}`,
+          type: "email",
+          value: normalizedEmail,
+          label: "Email",
+          primary: existingEmails.length === 0
+        }
+      ]);
+      updatedContact = await fetchJson<CrmRecord>(`/api/records/contacts/${contact.id}`, {
+        method: "PATCH",
+        body: {
+          title: contact.title,
+          ownerId: contact.ownerId,
+          data: {
+            contactMethods: methods,
+            email: methods.find((method) => method.type === "email" && looksLikeEmail(method.value))?.value.toLowerCase() ?? "",
+            phone: getContactMethodPhone(methods)
+          }
+        }
+      });
+      setRecords((current) => mergeRecords(current, [updatedContact]));
+    }
+    await updateEmailThread(threadId, updatedContact.id);
+    setMessage(`邮件已关联到联系人 ${updatedContact.title}，并已保存邮箱 ${normalizedEmail}`);
+  }
+
   function openEmailContact(threadId: string, contact: CrmRecord) {
     openRecord(contact, { returnEmailThreadId: threadId });
   }
@@ -2845,6 +2885,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateThreadState={(threadId, patch) => updateEmailThreadState(threadId, patch)}
             onDeleteThread={(threadId) => runAction(() => deleteEmailThread(threadId))}
             onCreateContactFromEmail={(threadId, emailAddress) => runAction(() => createContactFromEmail(threadId, emailAddress))}
+            onLinkExistingContactFromEmail={(threadId, contactId, emailAddress) => runAction(() => linkExistingContactFromEmail(threadId, contactId, emailAddress))}
             onOpenEmailContact={(threadId, contact) => openEmailContact(threadId, contact)}
             onCreateAccount={() => runAction(createEmailAccount)}
             onStartOAuth={() => runAction(startEmailOAuth)}
@@ -3049,6 +3090,7 @@ function EmailWorkspace({
   onUpdateThreadState,
   onDeleteThread,
   onCreateContactFromEmail,
+  onLinkExistingContactFromEmail,
   onOpenEmailContact,
   onCreateAccount,
   onStartOAuth,
@@ -3108,6 +3150,7 @@ function EmailWorkspace({
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
   onDeleteThread: (threadId: string) => void;
   onCreateContactFromEmail: (threadId: string, emailAddress: string) => void;
+  onLinkExistingContactFromEmail: (threadId: string, contactId: string, emailAddress: string) => void;
   onOpenEmailContact: (threadId: string, contact: CrmRecord) => void;
   onCreateAccount: () => void;
   onStartOAuth: () => void;
@@ -3168,6 +3211,7 @@ function EmailWorkspace({
   const [emailSettingsStep, setEmailSettingsStep] = useState<EmailSettingsStep>("identity");
   const [accountConnectionTests, setAccountConnectionTests] = useState<Record<string, { status: "testing" | "success" | "failed"; message: string; testedAt?: string }>>({});
   const [existingContactId, setExistingContactId] = useState("");
+  const [existingContactPickerOpen, setExistingContactPickerOpen] = useState(false);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
     onUpdateAiSettings({
@@ -3185,6 +3229,15 @@ function EmailWorkspace({
       return next;
     });
     onUpdateThread(threadId, recordId);
+  };
+  const linkExistingEmailContact = (threadId: string, contactId: string, emailAddress: string) => {
+    setManuallyUnlinkedThreadIds((current) => {
+      const next = new Set(current);
+      next.delete(threadId);
+      return next;
+    });
+    setExistingContactPickerOpen(false);
+    onLinkExistingContactFromEmail(threadId, contactId, emailAddress);
   };
   const updateOutboundServiceDraft = (serviceId: string, patch: Partial<EmailAccountDraftOutboundService>) => {
     onAccountDraftChange({
@@ -3324,6 +3377,7 @@ function EmailWorkspace({
 
   useEffect(() => {
     setExistingContactId(selectedThreadContact?.id ?? contactRecords[0]?.id ?? "");
+    setExistingContactPickerOpen(false);
   }, [contactRecords, selectedThreadContact?.id, selectedThreadId]);
 
   useEffect(() => {
@@ -4389,28 +4443,28 @@ function EmailWorkspace({
                             <UserPlus size={16} />
                             Add new contact
                           </button>
-                          <select
-                            className="select email-existing-contact-select"
-                            data-testid="email-thread-existing-contact"
-                            value={existingContactId}
-                            onChange={(event) => setExistingContactId(event.target.value)}
-                            disabled={disabled || contactRecords.length === 0}
-                          >
-                            {contactRecords.map((record) => (
-                              <option key={record.id} value={record.id}>
-                                {formatEmailContactLabel(record, getPrimaryRecordEmail(record))}
-                              </option>
-                            ))}
-                          </select>
                           <button
                             className="secondary-button"
                             data-testid="email-thread-link-existing-contact"
                             type="button"
-                            onClick={() => existingContactId && linkEmailThreadRecord(selectedThread.id, existingContactId)}
-                            disabled={disabled || !existingContactId}
+                            onClick={() => setExistingContactPickerOpen((current) => !current)}
+                            disabled={disabled || !selectedThreadSenderEmail || contactRecords.length === 0}
                           >
                             Add to existing contact
                           </button>
+                          {existingContactPickerOpen ? (
+                            <EmailContactSearchDropdown
+                              contacts={contactRecords}
+                              disabled={disabled}
+                              value={existingContactId}
+                              onChange={(contactId) => {
+                                setExistingContactId(contactId);
+                                if (contactId && selectedThreadSenderEmail) {
+                                  linkExistingEmailContact(selectedThread.id, contactId, selectedThreadSenderEmail);
+                                }
+                              }}
+                            />
+                          ) : null}
                         </div>
                       )}
                     </div>
@@ -4920,6 +4974,52 @@ function Metric({ label, value, icon: Icon }: { label: string; value: string | n
       </div>
       <span className="metric-value">{value}</span>
     </div>
+  );
+}
+
+function EmailContactSearchDropdown({
+  contacts,
+  disabled,
+  value,
+  onChange
+}: {
+  contacts: CrmRecord[];
+  disabled: boolean;
+  value: string;
+  onChange: (contactId: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const normalizedSearch = search.trim().toLowerCase();
+  const options = contacts
+    .map((contact) => {
+      const emails = getRecordEmailAddressesFromData(contact);
+      return {
+        label: contact.title,
+        value: contact.id,
+        meta: emails.length ? emails.join(", ") : "未保存邮箱"
+      };
+    })
+    .filter((option) => {
+      if (!normalizedSearch) {
+        return true;
+      }
+      return `${option.label} ${option.meta}`.toLowerCase().includes(normalizedSearch);
+    });
+  const selectedContact = contacts.find((contact) => contact.id === value);
+
+  return (
+    <SearchDropdown
+      disabled={disabled}
+      label="选择联系人"
+      options={options}
+      placeholder="搜索联系人"
+      search={search}
+      selectedLabel={selectedContact ? formatEmailContactLabel(selectedContact, getPrimaryRecordEmail(selectedContact)) : ""}
+      testId="email-thread-existing-contact"
+      value={value}
+      onChange={onChange}
+      onSearchChange={setSearch}
+    />
   );
 }
 

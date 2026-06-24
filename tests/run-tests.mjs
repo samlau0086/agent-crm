@@ -1506,8 +1506,16 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /selectedThreadManuallyUnlinked[\s\S]*selectedThreadContact/);
   assert.match(source, /function linkEmailThreadRecord|const linkEmailThreadRecord/);
   assert.match(source, /data-testid="email-thread-create-contact"/);
-  assert.match(source, /data-testid="email-thread-existing-contact"/);
+  assert.match(source, /testId="email-thread-existing-contact"/);
   assert.match(source, /data-testid="email-thread-link-existing-contact"/);
+  assert.match(source, /async function linkExistingContactFromEmail\(threadId: string, contactId: string, emailAddress: string\)/);
+  assert.match(source, /contactMethods: methods/);
+  assert.match(source, /await updateEmailThread\(threadId, updatedContact\.id\)/);
+  assert.match(source, /function EmailContactSearchDropdown/);
+  assert.match(source, /<SearchDropdown[\s\S]*testId="email-thread-existing-contact"/);
+  assert.match(source, /onLinkExistingContactFromEmail=\{\(threadId, contactId, emailAddress\) => runAction\(\(\) => linkExistingContactFromEmail\(threadId, contactId, emailAddress\)\)\}/);
+  assert.match(source, /onClick=\{\(\) => setExistingContactPickerOpen\(\(current\) => !current\)\}/);
+  assert.match(source, /linkExistingEmailContact\(selectedThread\.id, contactId, selectedThreadSenderEmail\)/);
   assert.match(source, /data-testid="email-thread-restore"/);
   assert.match(source, /data-testid="email-thread-permanent-delete"/);
   assert.match(source, /performMailboxAction\(action: "archive" \| "unarchive" \| "delete" \| "restore"/);
