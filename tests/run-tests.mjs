@@ -1519,6 +1519,12 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /async function linkExistingContactFromEmail\(threadId: string, contactId: string, emailAddress: string\)/);
   assert.match(source, /contactMethods: methods/);
   assert.match(source, /await updateEmailThread\(threadId, updatedContact\.id\)/);
+  assert.match(source, /async function unlinkContactEmailFromThread\(threadId: string, contactId: string, emailAddress: string\)/);
+  assert.match(source, /contactMethodsFromRecordData\(contact\)\.filter\(\(method\) => !\(method\.type === "email" && method\.value\.trim\(\)\.toLowerCase\(\) === normalizedEmail\)\)/);
+  assert.match(source, /contactMethods: methods[\s\S]*email: nextEmail[\s\S]*await updateEmailThread\(threadId, ""\)/);
+  assert.match(source, /onUnlinkContactEmailFromThread=\{\(threadId, contactId, emailAddress\) => runAction\(\(\) => unlinkContactEmailFromThread\(threadId, contactId, emailAddress\)\)\}/);
+  assert.match(source, /const unlinkEmailThreadContact = \(threadId: string, contact: CrmRecord, emailAddress: string\)/);
+  assert.match(source, /onClick=\{\(\) => unlinkEmailThreadContact\(selectedThread\.id, selectedThreadDisplayRecord, selectedThreadSenderEmail\)\}/);
   assert.match(source, /function EmailContactSearchDropdown/);
   assert.match(source, /<SearchDropdown[\s\S]*testId="email-thread-existing-contact"/);
   assert.match(source, /onLinkExistingContactFromEmail=\{\(threadId, contactId, emailAddress\) => runAction\(\(\) => linkExistingContactFromEmail\(threadId, contactId, emailAddress\)\)\}/);

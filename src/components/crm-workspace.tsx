@@ -1746,6 +1746,35 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setMessage(`邮件已关联到联系人 ${updatedContact.title}，并已保存邮箱 ${normalizedEmail}`);
   }
 
+  async function unlinkContactEmailFromThread(threadId: string, contactId: string, emailAddress: string) {
+    const normalizedEmail = emailAddress.trim().toLowerCase();
+    const contact = records.find((record) => record.id === contactId && record.objectKey === "contacts");
+    if (!contact || !looksLikeEmail(normalizedEmail)) {
+      await updateEmailThread(threadId, "");
+      return;
+    }
+
+    const methods = normalizePrimaryContactMethods(
+      contactMethodsFromRecordData(contact).filter((method) => !(method.type === "email" && method.value.trim().toLowerCase() === normalizedEmail))
+    );
+    const nextEmail = methods.find((method) => method.type === "email" && looksLikeEmail(method.value))?.value.toLowerCase() ?? "";
+    const updatedContact = await fetchJson<CrmRecord>(`/api/records/contacts/${contact.id}`, {
+      method: "PATCH",
+      body: {
+        title: contact.title,
+        ownerId: contact.ownerId,
+        data: {
+          contactMethods: methods,
+          email: nextEmail,
+          phone: getContactMethodPhone(methods)
+        }
+      }
+    });
+    setRecords((current) => mergeRecords(current, [updatedContact]));
+    await updateEmailThread(threadId, "");
+    setMessage(`邮件已解除关联，并已从联系人 ${updatedContact.title} 删除邮箱 ${normalizedEmail}`);
+  }
+
   function openEmailContact(threadId: string, contact: CrmRecord) {
     openRecord(contact, { returnEmailThreadId: threadId });
   }
@@ -2929,6 +2958,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onDeleteThread={(threadId) => runAction(() => deleteEmailThread(threadId))}
             onCreateContactFromEmail={(threadId, emailAddress) => runAction(() => createContactFromEmail(threadId, emailAddress))}
             onLinkExistingContactFromEmail={(threadId, contactId, emailAddress) => runAction(() => linkExistingContactFromEmail(threadId, contactId, emailAddress))}
+            onUnlinkContactEmailFromThread={(threadId, contactId, emailAddress) => runAction(() => unlinkContactEmailFromThread(threadId, contactId, emailAddress))}
             onOpenEmailContact={(threadId, contact) => openEmailContact(threadId, contact)}
             onCreateAccount={() => runAction(createEmailAccount)}
             onStartOAuth={() => runAction(startEmailOAuth)}
@@ -3134,6 +3164,7 @@ function EmailWorkspace({
   onDeleteThread,
   onCreateContactFromEmail,
   onLinkExistingContactFromEmail,
+  onUnlinkContactEmailFromThread,
   onOpenEmailContact,
   onCreateAccount,
   onStartOAuth,
@@ -3194,6 +3225,7 @@ function EmailWorkspace({
   onDeleteThread: (threadId: string) => void;
   onCreateContactFromEmail: (threadId: string, emailAddress: string) => void;
   onLinkExistingContactFromEmail: (threadId: string, contactId: string, emailAddress: string) => void;
+  onUnlinkContactEmailFromThread: (threadId: string, contactId: string, emailAddress: string) => void;
   onOpenEmailContact: (threadId: string, contact: CrmRecord) => void;
   onCreateAccount: () => void;
   onStartOAuth: () => void;
@@ -3272,6 +3304,18 @@ function EmailWorkspace({
       return next;
     });
     onUpdateThread(threadId, recordId);
+  };
+  const unlinkEmailThreadContact = (threadId: string, contact: CrmRecord, emailAddress: string) => {
+    setManuallyUnlinkedThreadIds((current) => {
+      const next = new Set(current);
+      next.add(threadId);
+      return next;
+    });
+    if (contact.objectKey === "contacts") {
+      onUnlinkContactEmailFromThread(threadId, contact.id, emailAddress);
+    } else {
+      onUpdateThread(threadId, "");
+    }
   };
   const linkExistingEmailContact = (threadId: string, contactId: string, emailAddress: string) => {
     setManuallyUnlinkedThreadIds((current) => {
@@ -4465,7 +4509,7 @@ function EmailWorkspace({
                               className="secondary-button"
                               data-testid="email-thread-unlink-record"
                               type="button"
-                              onClick={() => linkEmailThreadRecord(selectedThread.id, "")}
+                              onClick={() => unlinkEmailThreadContact(selectedThread.id, selectedThreadDisplayRecord, selectedThreadSenderEmail)}
                               disabled={disabled}
                             >
                               <XCircle size={16} />
