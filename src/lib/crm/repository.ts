@@ -19,6 +19,7 @@ import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
+  canRunEmailClassification,
   createDefaultEmailAiSettings,
   normalizeAiAgentSettings,
   normalizeEmailAiFeatures,
@@ -726,6 +727,20 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
 
 function normalizeEmailThreadCategory(value: unknown): EmailThread["category"] {
   return value === "primary" || value === "promotions" || value === "social" || value === "updates" ? value : undefined;
+}
+
+function classifyEmailCategory(message: EmailMessage): NonNullable<EmailThread["category"]> {
+  const text = `${message.from} ${message.subject} ${message.bodyText}`.toLowerCase();
+  if (/(unsubscribe|sale|discount|coupon|offer|promo|promotion|limited time|shop|store|newsletter|marketing|广告|促销|优惠|折扣|订阅)/.test(text)) {
+    return "promotions";
+  }
+  if (/(linkedin|facebook|instagram|twitter|x\.com|wechat|whatsapp|social|follower|connection|commented|liked|社交|关注|评论|点赞)/.test(text)) {
+    return "social";
+  }
+  if (/(receipt|invoice|statement|security|alert|notification|update|verify|verification|password|billing|report|system|提醒|通知|更新|账单|验证|安全)/.test(text)) {
+    return "updates";
+  }
+  return "primary";
 }
 
 function normalizeEmailThreadLabels(value: unknown): string[] {
@@ -1540,6 +1555,9 @@ export class PrismaCrmRepository {
           : {})
       }
     });
+    if (mappedMessage.direction === "inbound" && mappedMessage.status === "received" && canRunEmailClassification(context, settings) && context.role.permissions.includes("crm.read")) {
+      await this.updateEmailThreadState(context, thread.id, { category: classifyEmailCategory(mappedMessage) });
+    }
 
     if (linkedRecord) {
       await this.createActivity(context, {
@@ -1932,7 +1950,7 @@ export class PrismaCrmRepository {
       agents?: unknown;
     }
   ): Promise<EmailAiSettings> {
-    requirePermission(context, "crm.admin");
+    requirePermission(context, "ai.admin");
     const current = await this.ensureEmailAiSettings(context.workspaceId);
     const features = normalizeEmailAiFeatures({ ...current.features, ...(patch.features ?? {}) });
     const agents = patch.agents !== undefined ? normalizeAiAgentSettings(patch.agents) : normalizeAiAgentSettings(current.agents);

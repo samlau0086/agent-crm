@@ -55,6 +55,11 @@ const purposeFeature: Record<EmailAssistantPurpose, EmailAiFeature> = {
 };
 
 export const inboundEmailPreprocessAgentKey = "inbound_email_preprocess";
+export const emailClassificationAgentKey = "email_classification";
+export const emailDraftAgentKey = "email_draft";
+export const emailTranslationAgentKey = "email_translation";
+export const emailContextAnalysisAgentKey = "email_context_analysis";
+export const emailThreadSummaryAgentKey = "email_thread_summary";
 
 const defaultInboundEmailAgentMarkdown = [
   "# Inbound Email Preprocess Agent",
@@ -66,18 +71,109 @@ const defaultInboundEmailAgentMarkdown = [
   "Prefer compact memory that reduces future prompt tokens."
 ].join("\n");
 
+const defaultEmailClassificationAgentMarkdown = [
+  "# Email Classification Agent",
+  "",
+  "Classify newly received emails for a private sales CRM.",
+  "Use sender, subject, body, customer background, communication history, and knowledge base context.",
+  "Return one category only: primary, promotions, social, or updates.",
+  "Do not modify CRM records, deal stages, amounts, contacts, tasks, or mailbox state."
+].join("\n");
+
+const defaultEmailDraftAgentMarkdown = [
+  "# Email Draft Agent",
+  "",
+  "Draft sales emails using customer background, communication history, and the system knowledge base.",
+  "Keep output source-grounded and suitable for human review.",
+  "Do not modify CRM records or send mail automatically."
+].join("\n");
+
+const defaultEmailTranslationAgentMarkdown = [
+  "# Email Translation Agent",
+  "",
+  "Translate email content while preserving names, numbers, dates, product names, URLs, and CRM facts.",
+  "Use customer context and knowledge only to disambiguate meaning.",
+  "Do not add new business claims."
+].join("\n");
+
+const defaultEmailContextAnalysisAgentMarkdown = [
+  "# Email Context Analysis Agent",
+  "",
+  "Analyze email context using customer background, communication history, and knowledge base facts.",
+  "Return concise risks, intent, open questions, and next-step recommendations.",
+  "Do not modify CRM data."
+].join("\n");
+
+const defaultEmailThreadSummaryAgentMarkdown = [
+  "# Email Thread Summary Agent",
+  "",
+  "Summarize email threads into compact CRM memory that reduces future prompt tokens.",
+  "Keep facts source-grounded and omit redundant greetings, signatures, and boilerplate.",
+  "Do not modify CRM data."
+].join("\n");
+
 export function createDefaultAiAgentSettings(): AiAgentSetting[] {
+  const model = process.env.AI_MODEL || "gpt-4.1-mini";
   return [
     {
-      key: inboundEmailPreprocessAgentKey,
+      key: emailClassificationAgentKey,
       name: "入站邮件预处理 Agent",
       scenario: "email",
       enabled: true,
-      model: process.env.AI_MODEL || "gpt-4.1-mini",
-      agentMarkdown: defaultInboundEmailAgentMarkdown,
+      model,
+      agentMarkdown: defaultEmailClassificationAgentMarkdown,
+      maxOutputChars: 1000
+    },
+    {
+      key: emailDraftAgentKey,
+      name: "写邮件 Agent",
+      scenario: "email",
+      enabled: true,
+      model,
+      agentMarkdown: defaultEmailDraftAgentMarkdown,
+      maxOutputChars: 4000
+    },
+    {
+      key: emailTranslationAgentKey,
+      name: "翻译 Agent",
+      scenario: "email",
+      enabled: true,
+      model,
+      agentMarkdown: defaultEmailTranslationAgentMarkdown,
+      maxOutputChars: 4000
+    },
+    {
+      key: emailContextAnalysisAgentKey,
+      name: "上下文分析 Agent",
+      scenario: "email",
+      enabled: true,
+      model,
+      agentMarkdown: defaultEmailContextAnalysisAgentMarkdown,
+      maxOutputChars: 4000
+    },
+    {
+      key: emailThreadSummaryAgentKey,
+      name: "线程总结 Agent",
+      scenario: "email",
+      enabled: true,
+      model,
+      agentMarkdown: defaultEmailThreadSummaryAgentMarkdown,
       maxOutputChars: 4000
     }
   ];
+}
+
+export function getEmailAssistantAgentKey(purpose: EmailAssistantPurpose): string {
+  if (purpose === "draft") return emailDraftAgentKey;
+  if (purpose === "translate") return emailTranslationAgentKey;
+  if (purpose === "context_analysis") return emailContextAnalysisAgentKey;
+  return emailThreadSummaryAgentKey;
+}
+
+export function getEmailAutomationAgentKey(automation: "auto_translate" | "auto_context_analysis" | "auto_summarize"): string {
+  if (automation === "auto_translate") return emailTranslationAgentKey;
+  if (automation === "auto_context_analysis") return emailContextAnalysisAgentKey;
+  return emailThreadSummaryAgentKey;
 }
 
 export function normalizeAiAgentSettings(agents: unknown): AiAgentSetting[] {
@@ -89,7 +185,8 @@ export function normalizeAiAgentSettings(agents: unknown): AiAgentSetting[] {
       continue;
     }
     const raw = value as Partial<AiAgentSetting>;
-    const key = normalizeAgentKey(raw.key);
+    const rawKey = normalizeAgentKey(raw.key);
+    const key = rawKey === inboundEmailPreprocessAgentKey ? emailClassificationAgentKey : rawKey;
     if (!key) {
       continue;
     }
@@ -127,8 +224,8 @@ export function canRunEmailAiAutomation(
   if (!context.role.permissions.includes("ai.use")) {
     return false;
   }
-  const inboundAgent = getAiAgentSetting(settings, inboundEmailPreprocessAgentKey);
-  if (!inboundAgent?.enabled) {
+  const agent = getAiAgentSetting(settings, getEmailAutomationAgentKey(automation));
+  if (!agent?.enabled) {
     return false;
   }
   const features = normalizeEmailAiFeatures(settings.features);
@@ -141,9 +238,16 @@ export function canRunEmailAiAutomation(
   return features.auto_summarize;
 }
 
+export function canRunEmailClassification(context: Pick<RequestContext, "role">, settings: EmailAiSettings): boolean {
+  if (!context.role.permissions.includes("ai.use")) {
+    return false;
+  }
+  return Boolean(getAiAgentSetting(settings, emailClassificationAgentKey)?.enabled);
+}
+
 export function buildEmailAssistantContext(input: EmailAssistantContextInput): EmailAssistantContext {
   const enabledFeatures = normalizeEmailAiFeatures(input.settings.features);
-  const agent = getAiAgentSetting(input.settings, inboundEmailPreprocessAgentKey);
+  const agent = getAiAgentSetting(input.settings, getEmailAssistantAgentKey(input.purpose));
   const purpose = input.purpose;
   const featureEnabled = enabledFeatures[getEmailAiPurposeFeature(purpose)];
   const maxContextChars = normalizeLimit(input.settings.maxContextChars, 8000, 1000, 20000);
@@ -383,7 +487,7 @@ function buildInstruction(
       return `AI email feature "${input.purpose}" requires at least one CRM record, email message, activity, or knowledge article source. Link a record, select a thread/message, or add active knowledge before generating content.`;
     }
     if (disabledReason === "agent_disabled") {
-      return `AI agent "${agent?.name ?? inboundEmailPreprocessAgentKey}" is disabled. Do not generate content for this action.`;
+      return `AI agent "${agent?.name ?? getEmailAssistantAgentKey(input.purpose)}" is disabled. Do not generate content for this action.`;
     }
     return `AI email feature "${input.purpose}" is disabled. Do not generate content for this action.`;
   }

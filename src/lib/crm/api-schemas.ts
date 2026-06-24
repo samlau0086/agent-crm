@@ -208,7 +208,7 @@ export const savedViewCreateSchema = z
 
 export const savedViewUpdateSchema = savedViewCreateSchema.partial().strict();
 
-export const permissionSchema = z.enum(["crm.read", "crm.write", "crm.import", "crm.admin", "ai.use"]);
+export const permissionSchema = z.enum(["crm.read", "crm.write", "crm.import", "crm.admin", "ai.use", "ai.admin"]);
 
 export const roleCreateSchema = z
   .object({

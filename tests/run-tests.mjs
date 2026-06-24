@@ -87,7 +87,7 @@ import { buildEmailAttachmentResponse } from "../src/lib/email/attachment-respon
 import { canOpenEmailAiSource, emailAiSourceKey } from "../src/lib/email/ai-sources.ts";
 import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "../src/lib/email/attachments.ts";
 import { isEmailMessageEligibleForAutomation, runEmailAutomationsBestEffort, scheduleEmailAutomationsBestEffort, shouldRunEmailAutoSummary } from "../src/lib/email/automations.ts";
-import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, getAiAgentSetting, getEmailAiPurposeFeature, inboundEmailPreprocessAgentKey, isEmailAiPurposeEnabled, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "../src/lib/email/assistant.ts";
+import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, emailClassificationAgentKey, emailContextAnalysisAgentKey, emailDraftAgentKey, emailThreadSummaryAgentKey, emailTranslationAgentKey, getAiAgentSetting, getEmailAiPurposeFeature, inboundEmailPreprocessAgentKey, isEmailAiPurposeEnabled, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "../src/lib/email/assistant.ts";
 import { readEmailOAuthCallbackNotice, readEmailOAuthConnectedNotice } from "../src/lib/email/oauth-callback.ts";
 import { getDatabaseConnectionTarget } from "../scripts/database-preflight.ts";
 import { formatDatabasePreflightFailure } from "../scripts/runtime-preflight.mjs";
@@ -1502,6 +1502,9 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /data-testid="email-thread-contact-link"/);
   assert.match(source, /data-testid="email-thread-open-contact"/);
   assert.match(source, /data-testid="email-thread-unlink-record"/);
+  assert.match(source, /const \[manuallyUnlinkedThreadIds, setManuallyUnlinkedThreadIds\] = useState<Set<string>>/);
+  assert.match(source, /selectedThreadManuallyUnlinked[\s\S]*selectedThreadContact/);
+  assert.match(source, /function linkEmailThreadRecord|const linkEmailThreadRecord/);
   assert.match(source, /data-testid="email-thread-create-contact"/);
   assert.match(source, /data-testid="email-thread-existing-contact"/);
   assert.match(source, /data-testid="email-thread-link-existing-contact"/);
@@ -1512,6 +1515,8 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /const contactMethodsValueKey = "__contactMethods"/);
   assert.match(source, /const companyPrimaryContactValueKey = "__primaryContactId"/);
   assert.match(source, /function ContactMethodsEditor/);
+  assert.match(source, /data-testid=\{`\$\{testIdPrefix\}-add-\$\{type\}`\}/);
+  assert.match(source, /function contactMethodsFromValues\(values: Record<string, string>\): ContactMethodDraft\[\] \{[\s\S]*normalizeContactMethods\(parseJsonValue\(values\[contactMethodsValueKey\]\)\)\.filter\(\(method\) => method\.value\.trim\(\)\)/);
   assert.match(source, /function CompanyPrimaryContactSelect/);
   assert.match(source, /data-testid="company-primary-contact-select"/);
   assert.match(source, /data-testid="company-primary-contact-link"/);
@@ -6465,6 +6470,16 @@ await run("email threads support restore unarchive permanent delete and contact 
   });
 
   assert.equal(store.getEmailThread(context, message.threadId).recordId, "contact-method-match");
+  assert.equal(store.getEmailThread(context, message.threadId).category, "primary");
+  const promo = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "offers@example.com",
+    to: ["trash@example.com"],
+    subject: "Limited time discount",
+    bodyText: "Use this coupon before the sale ends."
+  });
+  assert.equal(store.getEmailThread(context, promo.threadId).category, "promotions");
   assert.equal(store.updateEmailThreadState(context, message.threadId, { deleted: true }).deleted, true);
   assert.equal(store.updateEmailThreadState(context, message.threadId, { deleted: false }).deleted, false);
   assert.equal(store.updateEmailThreadState(context, message.threadId, { archived: true }).archived, true);
@@ -8268,29 +8283,40 @@ await run("email ai settings expose configurable backend agents", () => {
   });
   const context = store.getContext("user-admin");
   const settings = store.getEmailAiSettings(context);
-  const inboundAgent = getAiAgentSetting(settings, inboundEmailPreprocessAgentKey);
+  const classificationAgent = getAiAgentSetting(settings, emailClassificationAgentKey);
+  const draftAgent = getAiAgentSetting(settings, emailDraftAgentKey);
+  const translationAgent = getAiAgentSetting(settings, emailTranslationAgentKey);
+  const contextAgent = getAiAgentSetting(settings, emailContextAnalysisAgentKey);
+  const summaryAgent = getAiAgentSetting(settings, emailThreadSummaryAgentKey);
 
-  assert.equal(settings.agents.length >= 1, true);
-  assert.equal(inboundAgent?.enabled, true);
-  assert.match(inboundAgent?.agentMarkdown ?? "", /Inbound Email Preprocess Agent/);
-  assert.equal(normalizeAiAgentSettings([{ key: inboundEmailPreprocessAgentKey, name: "Custom", scenario: "email", enabled: false, model: "custom-model", agentMarkdown: "# Agent", maxOutputChars: 1500 }])[0]?.model, "custom-model");
+  assert.equal(settings.agents.length >= 5, true);
+  assert.equal(classificationAgent?.enabled, true);
+  assert.match(classificationAgent?.agentMarkdown ?? "", /Email Classification Agent/);
+  assert.match(draftAgent?.agentMarkdown ?? "", /Email Draft Agent/);
+  assert.match(translationAgent?.agentMarkdown ?? "", /Email Translation Agent/);
+  assert.match(contextAgent?.agentMarkdown ?? "", /Email Context Analysis Agent/);
+  assert.match(summaryAgent?.agentMarkdown ?? "", /Email Thread Summary Agent/);
+  assert.equal(normalizeAiAgentSettings([{ key: inboundEmailPreprocessAgentKey, name: "Custom", scenario: "email", enabled: false, model: "custom-model", agentMarkdown: "# Agent", maxOutputChars: 1500 }]).some((agent) => agent.key === inboundEmailPreprocessAgentKey), false);
+  assert.equal(getAiAgentSetting({ agents: normalizeAiAgentSettings([{ key: inboundEmailPreprocessAgentKey, name: "Custom", scenario: "email", enabled: false, model: "custom-model", agentMarkdown: "# Agent", maxOutputChars: 1500 }]) }, emailClassificationAgentKey)?.model, "custom-model");
 
   const updated = store.updateEmailAiSettings(context, {
-    agents: settings.agents.map((agent) => (agent.key === inboundEmailPreprocessAgentKey ? { ...agent, enabled: false, model: "crm-inbound-model", agentMarkdown: "# Custom inbound agent", maxOutputChars: 2500 } : agent))
+    agents: settings.agents.map((agent) => (agent.key === emailClassificationAgentKey ? { ...agent, enabled: false, model: "crm-classifier-model", agentMarkdown: "# Custom classifier agent", maxOutputChars: 2500 } : agent))
   });
-  const updatedAgent = getAiAgentSetting(updated, inboundEmailPreprocessAgentKey);
+  const updatedAgent = getAiAgentSetting(updated, emailClassificationAgentKey);
   assert.equal(updatedAgent?.enabled, false);
-  assert.equal(updatedAgent?.model, "crm-inbound-model");
+  assert.equal(updatedAgent?.model, "crm-classifier-model");
   assert.equal(updatedAgent?.maxOutputChars, 2500);
 
   const parsed = emailAiSettingsUpdateSchema.parse({
     agents: updated.agents
   });
-  assert.equal(parsed.agents?.[0]?.key, inboundEmailPreprocessAgentKey);
+  assert.equal(parsed.agents?.some((agent) => agent.key === emailClassificationAgentKey), true);
 
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const aiGeneration = readFileSync("src/lib/email/ai-generation.ts", "utf8");
   assert.match(source, /data-testid="email-ai-agents-panel"/);
+  assert.match(source, /邮件分类 Agent 负责收件后归类到主要、推广、社交或更新/);
+  assert.match(source, /canManageAiSettings/);
   assert.match(source, /data-testid=\{`email-ai-agent-\$\{agent\.key\}`\}/);
   assert.match(source, /data-testid=\{`email-ai-agent-model-\$\{agent\.key\}`\}/);
   assert.match(source, /data-testid=\{`email-ai-agent-md-\$\{agent\.key\}`\}/);
@@ -8304,7 +8330,7 @@ await run("email ai settings require admin to modify global toggles", () => {
   assert.equal(store.getEmailAiSettings(salesContext).features.auto_summarize, true);
   assert.throws(
     () => store.updateEmailAiSettings(salesContext, { features: { draft: true, translate: true, auto_translate: true } }),
-    /crm\.admin/
+    /ai\.admin/
   );
 });
 
@@ -8328,11 +8354,21 @@ await run("email ai automations require ai permission and dependent feature togg
   assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_context_analysis"), false);
   assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_summarize"), false);
 
-  settings.agents = settings.agents.map((agent) => (agent.key === inboundEmailPreprocessAgentKey ? { ...agent, enabled: false } : agent));
+  settings.agents = settings.agents.map((agent) => (agent.key === emailTranslationAgentKey ? { ...agent, enabled: false } : agent));
   assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), false);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_context_analysis"), true);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_summarize"), true);
+  settings.agents = settings.agents.map((agent) => (agent.key === emailTranslationAgentKey ? { ...agent, enabled: true } : agent));
+  settings.agents = settings.agents.map((agent) => (agent.key === emailContextAnalysisAgentKey ? { ...agent, enabled: false } : agent));
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), true);
   assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_context_analysis"), false);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_summarize"), true);
+  settings.agents = settings.agents.map((agent) => (agent.key === emailContextAnalysisAgentKey ? { ...agent, enabled: true } : agent));
+  settings.agents = settings.agents.map((agent) => (agent.key === emailThreadSummaryAgentKey ? { ...agent, enabled: false } : agent));
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), true);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_context_analysis"), true);
   assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_summarize"), false);
-  settings.agents = settings.agents.map((agent) => (agent.key === inboundEmailPreprocessAgentKey ? { ...agent, enabled: true } : agent));
+  settings.agents = settings.agents.map((agent) => (agent.key === emailThreadSummaryAgentKey ? { ...agent, enabled: true } : agent));
 
   settings.features.translate = false;
   assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), false);

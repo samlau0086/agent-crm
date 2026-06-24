@@ -14,7 +14,8 @@ export type Permission =
   | "crm.write"
   | "crm.import"
   | "crm.admin"
-  | "ai.use";
+  | "ai.use"
+  | "ai.admin";
 
 export type EmailAiGenerationMode = "disabled" | "local" | "provider" | "provider_fallback" | "queued";
 

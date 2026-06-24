@@ -7,7 +7,7 @@ import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { adminUserId, defaultWorkspaceId, seedData } from "@/lib/crm/seed";
-import { buildEmailAssistantContext, createDefaultEmailAiSettings, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
+import { buildEmailAssistantContext, canRunEmailClassification, createDefaultEmailAiSettings, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { getEmailProviderCapability } from "@/lib/email/providers";
@@ -933,6 +933,9 @@ export class CrmStore {
     };
     (this.data.emailMessages ??= []).push(message);
     this.updateEmailThreadFromMessage(thread, message, autoRecordId);
+    if (message.direction === "inbound" && message.status === "received" && canRunEmailClassification(context, settings) && context.role.permissions.includes("crm.read")) {
+      this.updateEmailThreadState(context, thread.id, { category: classifyEmailCategory(message) });
+    }
     if (thread.recordId) {
       this.createActivity(context, {
         recordId: thread.recordId,
@@ -1045,7 +1048,7 @@ export class CrmStore {
   }
 
   updateEmailAiSettings(context: RequestContext, patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt">>): EmailAiSettings {
-    requirePermission(context, "crm.admin");
+    requirePermission(context, "ai.admin");
     const settings = this.ensureEmailAiSettings(context.workspaceId);
     if (patch.features) {
       settings.features = normalizeEmailAiFeatures({ ...settings.features, ...patch.features });
@@ -3246,6 +3249,20 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
 
 function normalizeEmailThreadCategory(value: unknown): EmailThread["category"] {
   return value === "primary" || value === "promotions" || value === "social" || value === "updates" ? value : undefined;
+}
+
+function classifyEmailCategory(message: EmailMessage): NonNullable<EmailThread["category"]> {
+  const text = `${message.from} ${message.subject} ${message.bodyText}`.toLowerCase();
+  if (/(unsubscribe|sale|discount|coupon|offer|promo|promotion|limited time|shop|store|newsletter|marketing|广告|促销|优惠|折扣|订阅)/.test(text)) {
+    return "promotions";
+  }
+  if (/(linkedin|facebook|instagram|twitter|x\.com|wechat|whatsapp|social|follower|connection|commented|liked|社交|关注|评论|点赞)/.test(text)) {
+    return "social";
+  }
+  if (/(receipt|invoice|statement|security|alert|notification|update|verify|verification|password|billing|report|system|提醒|通知|更新|账单|验证|安全)/.test(text)) {
+    return "updates";
+  }
+  return "primary";
 }
 
 function normalizeEmailThreadLabels(value: unknown): string[] {

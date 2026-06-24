@@ -24,7 +24,7 @@ export const seedData: CrmSnapshot = {
       id: "role-admin",
       workspaceId: defaultWorkspaceId,
       name: "管理员",
-      permissions: ["crm.read", "crm.write", "crm.import", "crm.admin", "ai.use"]
+      permissions: ["crm.read", "crm.write", "crm.import", "crm.admin", "ai.use", "ai.admin"]
     },
     {
       id: "role-sales",

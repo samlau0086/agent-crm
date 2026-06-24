@@ -37,6 +37,12 @@ export const permissionCatalog = [
     label: "AI 助手",
     description: "使用只读摘要、下一步建议和自然语言查询。",
     risk: "low"
+  },
+  {
+    key: "ai.admin",
+    label: "AI Agent 管理",
+    description: "管理 AI agent.md、模型、自动化 Agent 开关和 AI 策略。",
+    risk: "high"
   }
 ] satisfies PermissionCatalogItem[];
 

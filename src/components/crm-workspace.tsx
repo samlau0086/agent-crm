@@ -791,6 +791,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const canImport = props.role.permissions.includes("crm.import");
   const canManageViews = props.role.permissions.includes("crm.admin");
   const canManageEmailSettings = props.role.permissions.includes("crm.admin");
+  const canManageAiSettings = props.role.permissions.includes("ai.admin") || props.role.permissions.includes("crm.admin");
   const activeImportJobs = useMemo(
     () => importJobs.filter((job) => job.objectKey === activeObject?.key),
     [activeObject?.key, importJobs]
@@ -2827,6 +2828,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             knowledgeDraft={knowledgeDraft}
             disabled={isPending}
             canManageEmailSettings={canManageEmailSettings}
+            canManageAiSettings={canManageAiSettings}
             onAccountDraftChange={setEmailAccountDraft}
             onEmailDraftChange={setEmailDraft}
             onKnowledgeDraftChange={setKnowledgeDraft}
@@ -3035,6 +3037,7 @@ function EmailWorkspace({
   knowledgeDraft,
   disabled,
   canManageEmailSettings,
+  canManageAiSettings,
   onAccountDraftChange,
   onEmailDraftChange,
   onKnowledgeDraftChange,
@@ -3093,6 +3096,7 @@ function EmailWorkspace({
   knowledgeDraft: KnowledgeArticleDraft;
   disabled: boolean;
   canManageEmailSettings: boolean;
+  canManageAiSettings: boolean;
   onAccountDraftChange: (draft: EmailAccountDraft) => void;
   onEmailDraftChange: (draft: EmailComposeDraft) => void;
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
@@ -3139,7 +3143,13 @@ function EmailWorkspace({
   const contactRecords = useMemo(() => records.filter((record) => record.objectKey === "contacts"), [records]);
   const selectedThreadSenderEmail = selectedThread ? getThreadPrimarySenderEmail(selectedThread, selectedMessages, accounts) : "";
   const selectedThreadContact = selectedThreadSenderEmail ? findContactByEmail(records, selectedThreadSenderEmail) : undefined;
-  const selectedThreadDisplayRecord = selectedThreadContact ?? (selectedThreadRecordId ? records.find((record) => record.id === selectedThreadRecordId) : undefined);
+  const [manuallyUnlinkedThreadIds, setManuallyUnlinkedThreadIds] = useState<Set<string>>(() => new Set());
+  const selectedThreadManuallyUnlinked = selectedThread ? manuallyUnlinkedThreadIds.has(selectedThread.id) && !selectedThread.recordId : false;
+  const selectedThreadDisplayRecord = selectedThreadRecordId
+    ? records.find((record) => record.id === selectedThreadRecordId)
+    : selectedThreadManuallyUnlinked
+      ? undefined
+      : selectedThreadContact;
   const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
   const selectedProviderSetupVisibility = getEmailProviderSetupVisibility(accountDraft.provider);
   const selectedEmailAiPurposeEnabled = isEmailAiPurposeEnabled(aiSettings.features, aiPurpose);
@@ -3163,6 +3173,18 @@ function EmailWorkspace({
     onUpdateAiSettings({
       agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
     });
+  };
+  const linkEmailThreadRecord = (threadId: string, recordId: string) => {
+    setManuallyUnlinkedThreadIds((current) => {
+      const next = new Set(current);
+      if (recordId) {
+        next.delete(threadId);
+      } else {
+        next.add(threadId);
+      }
+      return next;
+    });
+    onUpdateThread(threadId, recordId);
   };
   const updateOutboundServiceDraft = (serviceId: string, patch: Partial<EmailAccountDraftOutboundService>) => {
     onAccountDraftChange({
@@ -4346,7 +4368,7 @@ function EmailWorkspace({
                               className="secondary-button"
                               data-testid="email-thread-unlink-record"
                               type="button"
-                              onClick={() => onUpdateThread(selectedThread.id, "")}
+                              onClick={() => linkEmailThreadRecord(selectedThread.id, "")}
                               disabled={disabled}
                             >
                               <XCircle size={16} />
@@ -4384,7 +4406,7 @@ function EmailWorkspace({
                             className="secondary-button"
                             data-testid="email-thread-link-existing-contact"
                             type="button"
-                            onClick={() => existingContactId && onUpdateThread(selectedThread.id, existingContactId)}
+                            onClick={() => existingContactId && linkEmailThreadRecord(selectedThread.id, existingContactId)}
                             disabled={disabled || !existingContactId}
                           >
                             Add to existing contact
@@ -4654,7 +4676,7 @@ function EmailWorkspace({
               自动任务只处理已提交的入站 received 和出站 sent 邮件；草稿、队列、发送中和失败邮件不会进入自动 AI 上下文。
             </div>
           ) : null}
-          {canManageEmailSettings ? (
+          {canManageAiSettings ? (
             <>
           <div className="view-column-grid">
             {Object.entries(aiSettings.features).map(([feature, enabled]) => {
@@ -4702,7 +4724,7 @@ function EmailWorkspace({
               <strong>后台 AI Agents</strong>
               <span className="badge">{aiSettings.agents.filter((agent) => agent.enabled).length}/{aiSettings.agents.length}</span>
             </div>
-            <div className="subtle">配置 agent.md、模型和开关。入站邮件预处理 Agent 会在收到邮件后参与自动摘要、上下文分析和翻译等后台任务。</div>
+            <div className="subtle">每个场景使用独立 Agent、独立模型和独立 agent.md。邮件分类 Agent 负责收件后归类到主要、推广、社交或更新。</div>
             <div className="settings-list" style={{ marginTop: 10 }}>
               {aiSettings.agents.map((agent) => (
                 <div className="settings-item" data-testid={`email-ai-agent-${agent.key}`} key={agent.key}>
@@ -4757,7 +4779,9 @@ function EmailWorkspace({
             </div>
           </div>
             </>
-          ) : null}
+          ) : (
+            <div className="empty-state">当前账号没有 ai.admin 权限，不能配置 AI Agents。</div>
+          )}
           <label>
             <span className="subtle">AI 动作</span>
             <select className="select" data-testid="email-ai-purpose" value={aiPurpose} onChange={(event) => onAiPurposeChange(event.target.value as EmailAiGenerateResult["purpose"])}>
@@ -6697,8 +6721,11 @@ function ContactMethodsEditor({
           <div className="subtle">支持同一种类型添加多条联系方式。</div>
         </div>
         <div className="toolbar">
-          <button className="secondary-button" type="button" onClick={() => addMethod("email")}>添加 Email</button>
-          <button className="secondary-button" type="button" onClick={() => addMethod("mob")}>添加电话</button>
+          {(Object.entries(contactMethodTypeLabels) as Array<[ContactMethodType, string]>).map(([type, label]) => (
+            <button className="secondary-button" data-testid={`${testIdPrefix}-add-${type}`} key={type} type="button" onClick={() => addMethod(type)}>
+              添加 {label}
+            </button>
+          ))}
         </div>
       </div>
       <div className="settings-list" style={{ marginTop: 10 }}>
@@ -6901,7 +6928,7 @@ function normalizeContactMethods(value: unknown): ContactMethodDraft[] {
         label: typeof record.label === "string" ? record.label.trim() : undefined,
         primary: record.primary === true
       };
-      return method.value ? method : undefined;
+      return method;
     })
     .filter((method): method is ContactMethodDraft => Boolean(method));
 }
@@ -6913,7 +6940,7 @@ function normalizePrimaryContactMethods(methods: ContactMethodDraft[]): ContactM
 }
 
 function contactMethodsFromValues(values: Record<string, string>): ContactMethodDraft[] {
-  return normalizeContactMethods(parseJsonValue(values[contactMethodsValueKey]));
+  return normalizeContactMethods(parseJsonValue(values[contactMethodsValueKey])).filter((method) => method.value.trim());
 }
 
 function withContactMethodValues(values: Record<string, string>, methods: ContactMethodDraft[]): Record<string, string> {
