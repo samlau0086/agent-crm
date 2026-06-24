@@ -1433,6 +1433,23 @@ await run("crm workspace routes modules through stable paths", () => {
   assert.doesNotMatch(workspace, /useState<NavKey>\("dashboard"\)/);
 });
 
+await run("settings admin groups configuration panels by tabs", () => {
+  const source = readFileSync("src/components/settings-admin.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "integrations" \| "operations"/);
+  assert.match(source, /const settingsTabs/);
+  assert.match(source, /role="tablist"/);
+  assert.match(source, /aria-selected=\{activeSettingsTab === tab\.key\}/);
+  assert.match(source, /activeSettingsTab === "access"[\s\S]*UserTeamAdminPanel[\s\S]*RoleAdminPanel[\s\S]*PermissionMatrix/);
+  assert.match(source, /activeSettingsTab === "crm"[\s\S]*CurrencyAdminPanel[\s\S]*settings-grid settings-grid-wide[\s\S]*settings-grid settings-grid-wide/);
+  assert.match(source, /activeSettingsTab === "integrations"[\s\S]*ApiKeyAdminPanel[\s\S]*WebhookAdminPanel/);
+  assert.match(source, /activeSettingsTab === "operations"[\s\S]*ImportQueueMonitor[\s\S]*BackupOperationsPanel[\s\S]*audit-panel/);
+  assert.match(styles, /\.settings-tabs-shell/);
+  assert.match(styles, /\.settings-tab-list/);
+  assert.match(styles, /\.settings-tab-button\.active/);
+});
+
 await run("workspace supports deal pipeline drag and email sidebar collapse", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");

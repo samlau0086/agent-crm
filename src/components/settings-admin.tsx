@@ -129,11 +129,21 @@ const fieldTypes: FieldDefinition["type"][] = [
   "reference"
 ];
 
+type SettingsTabKey = "access" | "crm" | "integrations" | "operations";
+
+const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
+  { key: "access", label: "成员权限", description: "用户、团队、角色与权限矩阵" },
+  { key: "crm", label: "CRM 配置", description: "对象、字段、关系、管道、视图与货币" },
+  { key: "integrations", label: "集成接口", description: "API Key、Webhook 与外部系统连接" },
+  { key: "operations", label: "运维审计", description: "导入队列、备份与审计日志" }
+];
+
 export function SettingsAdmin(props: SettingsAdminProps) {
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabKey>("access");
   const [selectedObjectId, setSelectedObjectId] = useState("");
   const [selectedFieldId, setSelectedFieldId] = useState("");
   const [selectedRelationId, setSelectedRelationId] = useState("");
@@ -850,100 +860,129 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       {message && <section className="section settings-banner settings-banner-success">{message}</section>}
       {error && <section className="section settings-banner settings-banner-error">{error}</section>}
 
-      <UserTeamAdminPanel
-        users={props.users}
-        teams={props.teams}
-        roles={props.roles}
-        selectedUserId={selectedUserId}
-        selectedUser={selectedUser}
-        selectedTeamId={selectedTeamId}
-        selectedTeam={selectedTeam}
-        userDraft={userDraft}
-        passwordSetupLink={passwordSetupLink}
-        teamDraft={teamDraft}
-        isPending={isPending}
-        onSelectUser={setSelectedUserId}
-        onSelectTeam={setSelectedTeamId}
-        onNewUser={resetUserForm}
-        onNewTeam={resetTeamForm}
-        onUserChange={(patch) => setUserDraft((current) => ({ ...current, ...patch }))}
-        onTeamNameChange={(name) => setTeamDraft({ name })}
-        onSaveUser={() => runAction(saveUser)}
-        onGeneratePasswordLink={() => runAction(generatePasswordSetupLink)}
-        onSaveTeam={() => runAction(saveTeam)}
-        onDeleteTeam={() => runAction(deleteTeam)}
-      />
+      <section className="settings-tabs-shell" aria-label="设置分类">
+        <div className="settings-tab-list" role="tablist" aria-label="设置分类">
+          {settingsTabs.map((tab) => (
+            <button
+              key={tab.key}
+              className={`settings-tab-button ${activeSettingsTab === tab.key ? "active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={activeSettingsTab === tab.key}
+              onClick={() => setActiveSettingsTab(tab.key)}
+            >
+              <strong>{tab.label}</strong>
+              <span>{tab.description}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
-      <RoleAdminPanel
-        roles={props.roles}
-        selectedRoleId={selectedRoleId}
-        selectedRole={selectedRole}
-        roleDraft={roleDraft}
-        users={props.users}
-        isPending={isPending}
-        currentRoleId={props.role.id}
-        onSelectRole={setSelectedRoleId}
-        onNewRole={resetRoleForm}
-        onNameChange={(name) => setRoleDraft((current) => ({ ...current, name }))}
-        onTogglePermission={toggleRolePermission}
-        onSave={() => runAction(saveRole)}
-        onDelete={() => runAction(deleteRole)}
-      />
+      {activeSettingsTab === "access" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <UserTeamAdminPanel
+            users={props.users}
+            teams={props.teams}
+            roles={props.roles}
+            selectedUserId={selectedUserId}
+            selectedUser={selectedUser}
+            selectedTeamId={selectedTeamId}
+            selectedTeam={selectedTeam}
+            userDraft={userDraft}
+            passwordSetupLink={passwordSetupLink}
+            teamDraft={teamDraft}
+            isPending={isPending}
+            onSelectUser={setSelectedUserId}
+            onSelectTeam={setSelectedTeamId}
+            onNewUser={resetUserForm}
+            onNewTeam={resetTeamForm}
+            onUserChange={(patch) => setUserDraft((current) => ({ ...current, ...patch }))}
+            onTeamNameChange={(name) => setTeamDraft({ name })}
+            onSaveUser={() => runAction(saveUser)}
+            onGeneratePasswordLink={() => runAction(generatePasswordSetupLink)}
+            onSaveTeam={() => runAction(saveTeam)}
+            onDeleteTeam={() => runAction(deleteTeam)}
+          />
 
-      <PermissionMatrix roles={props.roles} currentRoleId={props.role.id} />
+          <RoleAdminPanel
+            roles={props.roles}
+            selectedRoleId={selectedRoleId}
+            selectedRole={selectedRole}
+            roleDraft={roleDraft}
+            users={props.users}
+            isPending={isPending}
+            currentRoleId={props.role.id}
+            onSelectRole={setSelectedRoleId}
+            onNewRole={resetRoleForm}
+            onNameChange={(name) => setRoleDraft((current) => ({ ...current, name }))}
+            onTogglePermission={toggleRolePermission}
+            onSave={() => runAction(saveRole)}
+            onDelete={() => runAction(deleteRole)}
+          />
 
-      <CurrencyAdminPanel
-        currencies={currencyRecords}
-        draft={currencyDraft}
-        selectedCurrencyId={selectedCurrencyId}
-        selectedCurrency={selectedCurrency}
-        isPending={isPending}
-        onSelectCurrency={setSelectedCurrencyId}
-        onDraftChange={(patch) => setCurrencyDraft((current) => ({ ...current, ...patch }))}
-        onNew={resetCurrencyForm}
-        onSave={() => runAction(saveCurrency)}
-        onDelete={() => runAction(deleteCurrency)}
-      />
+          <PermissionMatrix roles={props.roles} currentRoleId={props.role.id} />
+        </div>
+      ) : null}
 
-      <ApiKeyAdminPanel
-        apiKeys={props.apiKeys}
-        users={props.users}
-        draft={apiKeyDraft}
-        createdToken={createdApiKeyToken}
-        isPending={isPending}
-        onDraftChange={(patch) => setApiKeyDraft((current) => ({ ...current, ...patch }))}
-        onTogglePermission={toggleApiKeyPermission}
-        onCreate={() => runAction(createApiKey)}
-        onRevoke={(apiKey) => runAction(() => revokeApiKey(apiKey))}
-        onClearToken={() => setCreatedApiKeyToken(null)}
-        onReset={resetApiKeyForm}
-      />
+      {activeSettingsTab === "crm" ? (
+        <CurrencyAdminPanel
+          currencies={currencyRecords}
+          draft={currencyDraft}
+          selectedCurrencyId={selectedCurrencyId}
+          selectedCurrency={selectedCurrency}
+          isPending={isPending}
+          onSelectCurrency={setSelectedCurrencyId}
+          onDraftChange={(patch) => setCurrencyDraft((current) => ({ ...current, ...patch }))}
+          onNew={resetCurrencyForm}
+          onSave={() => runAction(saveCurrency)}
+          onDelete={() => runAction(deleteCurrency)}
+        />
+      ) : null}
 
-      <WebhookAdminPanel
-        webhooks={props.webhooks}
-        users={props.users}
-        draft={webhookDraft}
-        createdSecret={createdWebhookSecret}
-        deliveries={webhookDeliveries}
-        selectedWebhookId={webhookDeliveryWebhookId}
-        statusFilter={webhookDeliveryStatusFilter}
-        eventFilter={webhookDeliveryEventFilter}
-        isPending={isPending}
-        onDraftChange={(patch) => setWebhookDraft((current) => ({ ...current, ...patch }))}
-        onToggleEvent={toggleWebhookEvent}
-        onCreate={() => runAction(createWebhook)}
-        onToggle={(webhook) => runAction(() => toggleWebhook(webhook))}
-        onTest={(webhook) => runAction(() => testWebhook(webhook))}
-        onRetryDelivery={(delivery) => runAction(() => retryWebhookDelivery(delivery))}
-        onSelectDeliveryWebhook={setWebhookDeliveryWebhookId}
-        onStatusFilterChange={setWebhookDeliveryStatusFilter}
-        onEventFilterChange={setWebhookDeliveryEventFilter}
-        onClearSecret={() => setCreatedWebhookSecret(null)}
-        onReset={resetWebhookForm}
-      />
+      {activeSettingsTab === "integrations" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <ApiKeyAdminPanel
+            apiKeys={props.apiKeys}
+            users={props.users}
+            draft={apiKeyDraft}
+            createdToken={createdApiKeyToken}
+            isPending={isPending}
+            onDraftChange={(patch) => setApiKeyDraft((current) => ({ ...current, ...patch }))}
+            onTogglePermission={toggleApiKeyPermission}
+            onCreate={() => runAction(createApiKey)}
+            onRevoke={(apiKey) => runAction(() => revokeApiKey(apiKey))}
+            onClearToken={() => setCreatedApiKeyToken(null)}
+            onReset={resetApiKeyForm}
+          />
 
-      <div className="settings-grid settings-grid-wide">
-        <section className="settings-panel">
+          <WebhookAdminPanel
+            webhooks={props.webhooks}
+            users={props.users}
+            draft={webhookDraft}
+            createdSecret={createdWebhookSecret}
+            deliveries={webhookDeliveries}
+            selectedWebhookId={webhookDeliveryWebhookId}
+            statusFilter={webhookDeliveryStatusFilter}
+            eventFilter={webhookDeliveryEventFilter}
+            isPending={isPending}
+            onDraftChange={(patch) => setWebhookDraft((current) => ({ ...current, ...patch }))}
+            onToggleEvent={toggleWebhookEvent}
+            onCreate={() => runAction(createWebhook)}
+            onToggle={(webhook) => runAction(() => toggleWebhook(webhook))}
+            onTest={(webhook) => runAction(() => testWebhook(webhook))}
+            onRetryDelivery={(delivery) => runAction(() => retryWebhookDelivery(delivery))}
+            onSelectDeliveryWebhook={setWebhookDeliveryWebhookId}
+            onStatusFilterChange={setWebhookDeliveryStatusFilter}
+            onEventFilterChange={setWebhookDeliveryEventFilter}
+            onClearSecret={() => setCreatedWebhookSecret(null)}
+            onReset={resetWebhookForm}
+          />
+        </div>
+      ) : null}
+
+      {activeSettingsTab === "crm" ? (
+        <div className="settings-grid settings-grid-wide">
+          <section className="settings-panel">
           <div className="settings-panel-header">
             <div>
               <h2 className="page-title">对象与字段</h2>
@@ -1325,11 +1364,13 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               </div>
             </div>
           </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      ) : null}
 
-      <div className="settings-grid settings-grid-wide">
-        <section className="settings-panel">
+      {activeSettingsTab === "crm" ? (
+        <div className="settings-grid settings-grid-wide">
+          <section className="settings-panel">
           <div className="settings-panel-header">
             <div>
               <h2 className="page-title">销售管道</h2>
@@ -1618,16 +1659,19 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               </div>
             </div>
           </div>
-        </section>
-      </div>
-
-      {props.importJobQueueSummary ? (
-        <ImportQueueMonitor summary={props.importJobQueueSummary} users={props.users} />
+          </section>
+        </div>
       ) : null}
 
-      <BackupOperationsPanel backups={backupFiles} isPending={isPending} onCreate={() => runAction(createBackup)} />
+      {activeSettingsTab === "operations" ? (
+        <>
+          {props.importJobQueueSummary ? (
+            <ImportQueueMonitor summary={props.importJobQueueSummary} users={props.users} />
+          ) : null}
 
-      <section className="settings-panel audit-panel">
+          <BackupOperationsPanel backups={backupFiles} isPending={isPending} onCreate={() => runAction(createBackup)} />
+
+          <section className="settings-panel audit-panel">
         <div className="settings-panel-header">
           <div>
             <h2 className="page-title">审计日志</h2>
@@ -1721,7 +1765,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         ) : (
           <div className="empty-state">暂无审计日志</div>
         )}
-      </section>
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }
