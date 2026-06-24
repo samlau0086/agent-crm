@@ -35,6 +35,7 @@ import {
   Trash2,
   Trophy,
   Upload,
+  UserPlus,
   UserRound,
   XCircle,
   type LucideIcon
@@ -561,6 +562,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
   const [query, setQuery] = useState("");
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>("closed");
+  const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState("");
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -1094,16 +1096,28 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     navigateToWorkspace(nextNav, objectKey);
     setQuery("");
     setRecordPanelMode("closed");
+    setRecordReturnEmailThreadId("");
     setShowListSettings(false);
     setMessage(null);
     setError(null);
   }
 
-  function openRecord(record: CrmRecord) {
+  function openRecord(record: CrmRecord, options: { returnEmailThreadId?: string } = {}) {
     setRecords((current) => mergeRecords(current, [record]));
     openObject(record.objectKey);
     setSelectedRecordId(record.id);
+    setRecordReturnEmailThreadId(options.returnEmailThreadId ?? "");
     setRecordPanelMode("detail");
+  }
+
+  async function closeRecordPanel() {
+    if (recordReturnEmailThreadId) {
+      const threadId = recordReturnEmailThreadId;
+      setRecordReturnEmailThreadId("");
+      await openEmailThread(threadId);
+      return;
+    }
+    setRecordPanelMode("closed");
   }
 
   async function submitCreateRecord() {
@@ -1601,6 +1615,33 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailThreads((current) => [thread, ...current.filter((candidate) => candidate.id !== thread.id)]);
     setEmailDraft((current) => (current.recordId || selectedEmailThreadId !== thread.id ? current : clearEmailDraftAiProvenance({ ...current, recordId: thread.recordId || "" })));
     setMessage(thread.recordId ? "邮件线程已关联到客户记录" : "邮件线程已取消关联记录");
+  }
+
+  async function createContactFromEmail(threadId: string, emailAddress: string) {
+    const normalizedEmail = emailAddress.trim().toLowerCase();
+    if (!looksLikeEmail(normalizedEmail)) {
+      throw new Error("发件人邮箱无效，不能创建联系人");
+    }
+    const existingContact = findContactByEmail(records, normalizedEmail);
+    if (existingContact) {
+      await updateEmailThread(threadId, existingContact.id);
+      setMessage(`邮件已关联到联系人 ${existingContact.title}`);
+      return;
+    }
+    const created = await fetchJson<CrmRecord>("/api/records/contacts", {
+      method: "POST",
+      body: {
+        title: contactNameFromEmail(normalizedEmail),
+        data: { email: normalizedEmail }
+      }
+    });
+    setRecords((current) => mergeRecords(current, [created]));
+    await updateEmailThread(threadId, created.id);
+    setMessage(`已创建联系人 ${created.title}`);
+  }
+
+  function openEmailContact(threadId: string, contact: CrmRecord) {
+    openRecord(contact, { returnEmailThreadId: threadId });
   }
 
   async function updateEmailThreadState(threadId: string, patch: Partial<EmailThreadUiState>): Promise<EmailThread> {
@@ -2150,9 +2191,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             {recordPanelMode !== "closed" && (
             <aside className="detail-panel record-drawer">
               <div className="drawer-header record-panel-header">
-                <button className="secondary-button" data-testid="record-panel-back" type="button" onClick={() => setRecordPanelMode("closed")}>
+                <button className="secondary-button" data-testid="record-panel-back" type="button" onClick={() => runAction(closeRecordPanel)}>
                   <ChevronLeft size={16} />
-                  返回列表
+                  {recordReturnEmailThreadId ? "返回邮件" : "返回列表"}
                 </button>
                 <div className="record-panel-context">
                   <div className="subtle">当前对象</div>
@@ -2693,6 +2734,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             }}
             onUpdateThread={(threadId, recordId) => runAction(() => updateEmailThread(threadId, recordId))}
             onUpdateThreadState={(threadId, patch) => updateEmailThreadState(threadId, patch)}
+            onCreateContactFromEmail={(threadId, emailAddress) => runAction(() => createContactFromEmail(threadId, emailAddress))}
+            onOpenEmailContact={(threadId, contact) => openEmailContact(threadId, contact)}
             onCreateAccount={() => runAction(createEmailAccount)}
             onStartOAuth={() => runAction(startEmailOAuth)}
             onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
@@ -2893,6 +2936,8 @@ function EmailWorkspace({
   onSelectThread,
   onUpdateThread,
   onUpdateThreadState,
+  onCreateContactFromEmail,
+  onOpenEmailContact,
   onCreateAccount,
   onStartOAuth,
   onSyncAccount,
@@ -2948,6 +2993,8 @@ function EmailWorkspace({
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
+  onCreateContactFromEmail: (threadId: string, emailAddress: string) => void;
+  onOpenEmailContact: (threadId: string, contact: CrmRecord) => void;
   onCreateAccount: () => void;
   onStartOAuth: () => void;
   onSyncAccount: (accountId: string) => void;
@@ -2979,6 +3026,10 @@ function EmailWorkspace({
   const activeAccounts = accounts.filter((account) => account.status === "active" && account.sendEnabled && account.connectionConfigured && getEmailProviderCapability(account.provider).supportsSend);
   const linkedRecordId = emailDraft.recordId || selectedRecord?.id || selectedThread?.recordId || "";
   const selectedThreadRecordId = selectedThread?.recordId || "";
+  const contactRecords = useMemo(() => records.filter((record) => record.objectKey === "contacts"), [records]);
+  const selectedThreadSenderEmail = selectedThread ? getThreadPrimarySenderEmail(selectedThread, selectedMessages, accounts) : "";
+  const selectedThreadContact = selectedThreadSenderEmail ? findContactByEmail(records, selectedThreadSenderEmail) : undefined;
+  const selectedThreadDisplayRecord = selectedThreadContact ?? (selectedThreadRecordId ? records.find((record) => record.id === selectedThreadRecordId) : undefined);
   const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
   const selectedProviderSetupVisibility = getEmailProviderSetupVisibility(accountDraft.provider);
   const selectedEmailAiPurposeEnabled = isEmailAiPurposeEnabled(aiSettings.features, aiPurpose);
@@ -2995,6 +3046,7 @@ function EmailWorkspace({
   const [composeMinimized, setComposeMinimized] = useState(false);
   const [emailSettingsStep, setEmailSettingsStep] = useState<EmailSettingsStep>("identity");
   const [accountConnectionTests, setAccountConnectionTests] = useState<Record<string, { status: "testing" | "success" | "failed"; message: string; testedAt?: string }>>({});
+  const [existingContactId, setExistingContactId] = useState("");
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const updateOutboundServiceDraft = (serviceId: string, patch: Partial<EmailAccountDraftOutboundService>) => {
     onAccountDraftChange({
@@ -3131,6 +3183,10 @@ function EmailWorkspace({
   useEffect(() => {
     setThreadUiState((current) => ({ ...current, ...buildEmailThreadUiStateMap(threads) }));
   }, [threads]);
+
+  useEffect(() => {
+    setExistingContactId(selectedThreadContact?.id ?? contactRecords[0]?.id ?? "");
+  }, [contactRecords, selectedThreadContact?.id, selectedThreadId]);
 
   useEffect(() => {
     if (selectedMailboxAccountId !== allEmailAccountsKey && !accounts.some((account) => account.id === selectedMailboxAccountId)) {
@@ -4113,15 +4169,55 @@ function EmailWorkspace({
                     </div>
                   </div>
                   <div className="email-thread-actions gmail-detail-actions">
-                    <label className="email-link-record">
-                      <span className="subtle">关联记录</span>
-                      <select className="select" data-testid="email-thread-record" value={selectedThreadRecordId} onChange={(event) => onUpdateThread(selectedThread.id, event.target.value)} disabled={disabled}>
-                        <option value="">不关联</option>
-                        {records.slice(0, 100).map((record) => (
-                          <option key={record.id} value={record.id}>{record.title}</option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="email-contact-link" data-testid="email-thread-contact-link">
+                      <span className="subtle">发件人</span>
+                      {selectedThreadDisplayRecord ? (
+                        <button
+                          className="record-title email-contact-open"
+                          data-testid="email-thread-open-contact"
+                          type="button"
+                          onClick={() => onOpenEmailContact(selectedThread.id, selectedThreadDisplayRecord)}
+                        >
+                          {formatEmailContactLabel(selectedThreadDisplayRecord, selectedThreadSenderEmail)}
+                        </button>
+                      ) : (
+                        <div className="email-contact-link-actions">
+                          <strong>{selectedThreadSenderEmail || "未知发件人"}</strong>
+                          <button
+                            className="secondary-button"
+                            data-testid="email-thread-create-contact"
+                            type="button"
+                            onClick={() => selectedThreadSenderEmail && onCreateContactFromEmail(selectedThread.id, selectedThreadSenderEmail)}
+                            disabled={disabled || !selectedThreadSenderEmail}
+                          >
+                            <UserPlus size={16} />
+                            Add new contact
+                          </button>
+                          <select
+                            className="select email-existing-contact-select"
+                            data-testid="email-thread-existing-contact"
+                            value={existingContactId}
+                            onChange={(event) => setExistingContactId(event.target.value)}
+                            disabled={disabled || contactRecords.length === 0}
+                          >
+                            {contactRecords.map((record) => (
+                              <option key={record.id} value={record.id}>
+                                {formatEmailContactLabel(record, getPrimaryRecordEmail(record))}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="secondary-button"
+                            data-testid="email-thread-link-existing-contact"
+                            type="button"
+                            onClick={() => existingContactId && onUpdateThread(selectedThread.id, existingContactId)}
+                            disabled={disabled || !existingContactId}
+                          >
+                            Add to existing contact
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={onAnalyzeThread} disabled={disabled || !aiSettings.features.context_analysis}>
                       <Bot size={16} />
                       刷新分析
@@ -4587,18 +4683,75 @@ function getRecordEmailAddresses(fields: FieldDefinition[], record: CrmRecord): 
   return [...new Set(candidates.map((email) => email.toLowerCase()))];
 }
 
+function getPrimaryRecordEmail(record: CrmRecord): string {
+  return getRecordEmailAddressesFromData(record)[0] ?? "";
+}
+
+function getRecordEmailAddressesFromData(record: CrmRecord): string[] {
+  const candidates = Object.entries(record.data).flatMap(([key, value]) => {
+    if (typeof value !== "string") {
+      return [];
+    }
+    if (!key.toLowerCase().includes("email") && !looksLikeEmail(value)) {
+      return [];
+    }
+    return splitEmailList(value).filter(looksLikeEmail);
+  });
+  return [...new Set(candidates.map((email) => email.toLowerCase()))];
+}
+
+function findContactByEmail(records: CrmRecord[], emailAddress: string): CrmRecord | undefined {
+  const normalizedEmail = emailAddress.trim().toLowerCase();
+  return records.find((record) => record.objectKey === "contacts" && getRecordEmailAddressesFromData(record).includes(normalizedEmail));
+}
+
+function contactNameFromEmail(emailAddress: string): string {
+  const localPart = emailAddress.split("@")[0]?.trim() || emailAddress;
+  return localPart
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || emailAddress;
+}
+
+function formatEmailContactLabel(record: CrmRecord, fallbackEmail = ""): string {
+  const emailAddress = fallbackEmail || getPrimaryRecordEmail(record);
+  return emailAddress ? `${record.title}<${emailAddress}>` : record.title;
+}
+
+function getThreadPrimarySenderEmail(thread: EmailThread, messages: EmailMessage[], accounts: EmailAccount[]): string {
+  const accountEmails = new Set(accounts.map((account) => account.emailAddress.toLowerCase()));
+  const inboundSender = messages.find((message) => message.direction === "inbound" && !accountEmails.has(message.from.toLowerCase()))?.from;
+  if (inboundSender) {
+    return inboundSender.toLowerCase();
+  }
+  return (
+    thread.participantEmails.find((email) => !accountEmails.has(email.toLowerCase())) ??
+    messages.find((message) => looksLikeEmail(message.from))?.from ??
+    thread.participantEmails[0] ??
+    ""
+  ).toLowerCase();
+}
+
 function getEmailThreadsForRecord(record: CrmRecord, records: CrmRecord[], threads: EmailThread[]): EmailThread[] {
   const recordIds = new Set([record.id]);
+  const emailAddresses = new Set(getRecordEmailAddressesFromData(record));
   if (record.objectKey === "companies") {
     for (const candidate of records) {
       if (candidate.objectKey === "contacts" && candidate.data.companyId === record.id) {
         recordIds.add(candidate.id);
+        getRecordEmailAddressesFromData(candidate).forEach((emailAddress) => emailAddresses.add(emailAddress));
       }
     }
   }
 
   return threads
-    .filter((thread) => Boolean(thread.recordId && recordIds.has(thread.recordId)))
+    .filter((thread) => {
+      if (thread.recordId && recordIds.has(thread.recordId)) {
+        return true;
+      }
+      return thread.participantEmails.some((emailAddress) => emailAddresses.has(emailAddress.toLowerCase()));
+    })
     .sort((left, right) => new Date(right.lastMessageAt ?? right.updatedAt).getTime() - new Date(left.lastMessageAt ?? left.updatedAt).getTime());
 }
 

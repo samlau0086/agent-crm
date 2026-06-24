@@ -1487,6 +1487,31 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.deal-pill\.dragging/);
 });
 
+await run("email thread contact linking is driven by sender email and can return to the email", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+
+  assert.match(source, /const \[recordReturnEmailThreadId, setRecordReturnEmailThreadId\] = useState\(""\)/);
+  assert.match(source, /function openRecord\(record: CrmRecord, options: \{ returnEmailThreadId\?: string \} = \{\}\)/);
+  assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
+  assert.match(source, /onOpenEmailContact=\{\(threadId, contact\) => openEmailContact\(threadId, contact\)\}/);
+  assert.match(source, /data-testid="email-thread-contact-link"/);
+  assert.match(source, /data-testid="email-thread-open-contact"/);
+  assert.match(source, /data-testid="email-thread-create-contact"/);
+  assert.match(source, /data-testid="email-thread-existing-contact"/);
+  assert.match(source, /data-testid="email-thread-link-existing-contact"/);
+  assert.doesNotMatch(source, /data-testid="email-thread-record"/);
+  assert.match(source, /function getThreadPrimarySenderEmail/);
+  assert.match(source, /function findContactByEmail/);
+  assert.match(source, /function formatEmailContactLabel\(record: CrmRecord, fallbackEmail = ""\): string[\s\S]*`\$\{record\.title\}<\$\{emailAddress\}>`/);
+  assert.match(source, /return thread\.participantEmails\.some\(\(emailAddress\) => emailAddresses\.has\(emailAddress\.toLowerCase\(\)\)\)/);
+  assert.match(styles, /\.email-contact-link/);
+  assert.match(styles, /\.email-contact-link-actions/);
+  assert.match(repository, /recordDataHasEmail\(candidate\.data, email\)/);
+  assert.match(repository, /function recordDataHasEmail\(data: unknown, emailAddress: string\): boolean/);
+});
+
 await run("record create and detail panels render full width in the main content flow", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
@@ -1494,7 +1519,7 @@ await run("record create and detail panels render full width in the main content
   assert.match(source, /recordPanelMode === "closed" && \([\s\S]*<section className="table-shell">/);
   assert.match(source, /recordPanelMode !== "closed" && \([\s\S]*<aside className="detail-panel record-drawer">/);
   assert.match(source, /className="drawer-header record-panel-header"/);
-  assert.match(source, /data-testid="record-panel-back"[\s\S]*<ChevronLeft size=\{16\} \/>[\s\S]*返回列表/);
+  assert.match(source, /data-testid="record-panel-back"[\s\S]*runAction\(closeRecordPanel\)[\s\S]*recordReturnEmailThreadId \? "返回邮件" : "返回列表"/);
   assert.doesNotMatch(source, /aria-label="关闭面板"[\s\S]{0,120}setRecordPanelMode\("closed"\)/);
   assert.match(styles, /\.workspace-grid\.has-drawer \{\s*grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(styles, /\.record-drawer \{[\s\S]*order: -1;[\s\S]*position: static;[\s\S]*max-height: none;[\s\S]*overflow: visible;/);

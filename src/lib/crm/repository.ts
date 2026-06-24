@@ -4473,15 +4473,15 @@ export class PrismaCrmRepository {
     const accountAddress = normalizeEmailAddress(accountEmail);
     const emails = Array.from(new Set(participants.map((participant) => normalizeEmailAddress(participant)).filter((email) => email !== accountAddress)));
     for (const email of emails) {
-      const record = await this.db.crmRecord.findFirst({
+      const records = await this.db.crmRecord.findMany({
         where: {
           workspaceId: context.workspaceId,
           objectKey: "contacts",
-          data: { path: ["email"], equals: email },
           ...(await this.recordAccessWhere(context))
         },
         orderBy: [{ updatedAt: "desc" }]
       });
+      const record = records.find((candidate) => recordDataHasEmail(candidate.data, email));
       if (record) {
         return mapRecord(record);
       }
@@ -4946,6 +4946,25 @@ function emailActivityVerb(status: EmailMessage["status"], direction: EmailMessa
     return "Failed";
   }
   return "Sent";
+}
+
+function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return false;
+  }
+  const normalizedEmail = normalizeEmailAddress(emailAddress);
+  return Object.entries(data).some(([key, value]) => {
+    if (typeof value !== "string") {
+      return false;
+    }
+    if (!key.toLowerCase().includes("email") && !value.includes("@")) {
+      return false;
+    }
+    return value
+      .split(/[,\s;]+/)
+      .map(normalizeEmailAddress)
+      .includes(normalizedEmail);
+  });
 }
 
 function emailMessageTime(message: EmailMessage): string {
