@@ -535,6 +535,22 @@ export const emailOAuthStartSchema = z
 export const emailAiSettingsUpdateSchema = z
   .object({
     features: z.record(emailAiFeatureSchema, z.boolean()).optional(),
+    agents: z
+      .array(
+        z
+          .object({
+            key: z.string().trim().regex(/^[a-z][a-z0-9_:-]{1,80}$/),
+            name: labelSchema,
+            scenario: z.enum(["email", "sales", "system"]),
+            enabled: z.boolean(),
+            model: z.string().trim().min(1).max(120),
+            agentMarkdown: z.string().trim().min(1).max(8000),
+            maxOutputChars: z.number().int().min(500).max(12000)
+          })
+          .strict()
+      )
+      .max(20)
+      .optional(),
     defaultLocale: z.string().trim().min(2).max(20).optional(),
     requireSourceLinks: z.boolean().optional(),
     maxHistoryMessages: z.number().int().min(1).max(20).optional(),

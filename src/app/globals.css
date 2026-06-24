@@ -1407,6 +1407,13 @@ button {
   width: min(260px, 100%);
 }
 
+.agent-md-textarea {
+  min-height: 220px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .email-message-list {
   display: grid;
   gap: 10px;

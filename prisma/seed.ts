@@ -191,6 +191,7 @@ async function main() {
       data: {
         workspaceId: settings.workspaceId,
         features: settings.features,
+        agents: settings.agents,
         defaultLocale: settings.defaultLocale,
         requireSourceLinks: settings.requireSourceLinks,
         maxHistoryMessages: settings.maxHistoryMessages,

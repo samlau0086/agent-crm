@@ -1,5 +1,6 @@
 import type {
   Activity,
+  AiAgentSetting,
   CrmRecord,
   EmailAiFeature,
   EmailAiSettings,
@@ -28,6 +29,10 @@ export interface EmailAssistantContextInput {
 export interface EmailAssistantContext {
   enabled: boolean;
   purpose: EmailAssistantPurpose;
+  agentKey?: string;
+  agentName?: string;
+  agentModel?: string;
+  agentMarkdown?: string;
   recordId?: string;
   threadId?: string;
   sourceMessageId?: string;
@@ -49,6 +54,63 @@ const purposeFeature: Record<EmailAssistantPurpose, EmailAiFeature> = {
   summarize: "auto_summarize"
 };
 
+export const inboundEmailPreprocessAgentKey = "inbound_email_preprocess";
+
+const defaultInboundEmailAgentMarkdown = [
+  "# Inbound Email Preprocess Agent",
+  "",
+  "You preprocess newly received customer emails for a private sales CRM.",
+  "Use customer background, communication history, and the system knowledge base.",
+  "Produce concise, source-grounded summaries and next-context signals.",
+  "Do not modify CRM records, deal stages, amounts, contacts, tasks, or mailbox state.",
+  "Prefer compact memory that reduces future prompt tokens."
+].join("\n");
+
+export function createDefaultAiAgentSettings(): AiAgentSetting[] {
+  return [
+    {
+      key: inboundEmailPreprocessAgentKey,
+      name: "入站邮件预处理 Agent",
+      scenario: "email",
+      enabled: true,
+      model: process.env.AI_MODEL || "gpt-4.1-mini",
+      agentMarkdown: defaultInboundEmailAgentMarkdown,
+      maxOutputChars: 4000
+    }
+  ];
+}
+
+export function normalizeAiAgentSettings(agents: unknown): AiAgentSetting[] {
+  const defaults = createDefaultAiAgentSettings();
+  const inputAgents = Array.isArray(agents) ? agents : [];
+  const byKey = new Map(defaults.map((agent) => [agent.key, agent]));
+  for (const value of inputAgents) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const raw = value as Partial<AiAgentSetting>;
+    const key = normalizeAgentKey(raw.key);
+    if (!key) {
+      continue;
+    }
+    const fallback = byKey.get(key);
+    byKey.set(key, {
+      key,
+      name: normalizeText(raw.name, fallback?.name ?? key, 80),
+      scenario: raw.scenario === "sales" || raw.scenario === "system" ? raw.scenario : "email",
+      enabled: raw.enabled ?? fallback?.enabled ?? false,
+      model: normalizeText(raw.model, fallback?.model ?? process.env.AI_MODEL ?? "gpt-4.1-mini", 120),
+      agentMarkdown: normalizeText(raw.agentMarkdown, fallback?.agentMarkdown ?? "", 8000),
+      maxOutputChars: normalizeLimit(Number(raw.maxOutputChars ?? fallback?.maxOutputChars ?? 4000), 500, 500, 12000)
+    });
+  }
+  return Array.from(byKey.values());
+}
+
+export function getAiAgentSetting(settings: Pick<EmailAiSettings, "agents"> | undefined, key: string): AiAgentSetting | undefined {
+  return normalizeAiAgentSettings(settings?.agents).find((agent) => agent.key === key);
+}
+
 export function getEmailAiPurposeFeature(purpose: EmailAssistantPurpose): EmailAiFeature {
   return purposeFeature[purpose];
 }
@@ -65,6 +127,10 @@ export function canRunEmailAiAutomation(
   if (!context.role.permissions.includes("ai.use")) {
     return false;
   }
+  const inboundAgent = getAiAgentSetting(settings, inboundEmailPreprocessAgentKey);
+  if (!inboundAgent?.enabled) {
+    return false;
+  }
   const features = normalizeEmailAiFeatures(settings.features);
   if (automation === "auto_translate") {
     return features.translate && features.auto_translate;
@@ -77,6 +143,7 @@ export function canRunEmailAiAutomation(
 
 export function buildEmailAssistantContext(input: EmailAssistantContextInput): EmailAssistantContext {
   const enabledFeatures = normalizeEmailAiFeatures(input.settings.features);
+  const agent = getAiAgentSetting(input.settings, inboundEmailPreprocessAgentKey);
   const purpose = input.purpose;
   const featureEnabled = enabledFeatures[getEmailAiPurposeFeature(purpose)];
   const maxContextChars = normalizeLimit(input.settings.maxContextChars, 8000, 1000, 20000);
@@ -110,11 +177,16 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
     ...knowledgeArticles.map((article) => ({ label: article.title, knowledgeArticleId: article.id }))
   ];
   const missingRequiredSources = input.settings.requireSourceLinks && sources.length === 0;
-  const enabled = featureEnabled && !missingRequiredSources;
+  const agentEnabled = agent?.enabled ?? true;
+  const enabled = featureEnabled && agentEnabled && !missingRequiredSources;
 
   return {
     enabled,
     purpose,
+    agentKey: agent?.key,
+    agentName: agent?.name,
+    agentModel: agent?.model,
+    agentMarkdown: agent?.agentMarkdown,
     recordId: input.record?.id,
     threadId: input.thread?.id,
     sourceMessageId: input.sourceMessage?.id,
@@ -125,7 +197,12 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
     customerBrief,
     communicationSummary,
     knowledgeBrief,
-    instruction: buildInstruction(input, enabled, featureEnabled ? (missingRequiredSources ? "missing_sources" : undefined) : "feature_disabled"),
+    instruction: buildInstruction(
+      input,
+      enabled,
+      !featureEnabled ? "feature_disabled" : !agentEnabled ? "agent_disabled" : missingRequiredSources ? "missing_sources" : undefined,
+      agent
+    ),
     sources
   };
 }
@@ -154,6 +231,7 @@ export function createDefaultEmailAiSettings(workspaceId: string, now: string): 
       auto_context_analysis: false,
       auto_summarize: true
     },
+    agents: createDefaultAiAgentSettings(),
     defaultLocale: "zh-CN",
     requireSourceLinks: true,
     maxHistoryMessages: 8,
@@ -161,6 +239,14 @@ export function createDefaultEmailAiSettings(workspaceId: string, now: string): 
     maxContextChars: 8000,
     updatedAt: now
   };
+}
+
+function normalizeAgentKey(value: unknown): string {
+  return typeof value === "string" && /^[a-z][a-z0-9_:-]{1,80}$/.test(value.trim()) ? value.trim() : "";
+}
+
+function normalizeText(value: unknown, fallback: string, maxLength: number): string {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : fallback.slice(0, maxLength);
 }
 
 function buildCustomerBrief(record: CrmRecord | undefined, fields: FieldDefinition[]): string {
@@ -286,27 +372,36 @@ function normalizeKnowledgeText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function buildInstruction(input: EmailAssistantContextInput, enabled: boolean, disabledReason?: "feature_disabled" | "missing_sources"): string {
+function buildInstruction(
+  input: EmailAssistantContextInput,
+  enabled: boolean,
+  disabledReason?: "feature_disabled" | "missing_sources" | "agent_disabled",
+  agent?: AiAgentSetting
+): string {
   if (!enabled) {
     if (disabledReason === "missing_sources") {
       return `AI email feature "${input.purpose}" requires at least one CRM record, email message, activity, or knowledge article source. Link a record, select a thread/message, or add active knowledge before generating content.`;
+    }
+    if (disabledReason === "agent_disabled") {
+      return `AI agent "${agent?.name ?? inboundEmailPreprocessAgentKey}" is disabled. Do not generate content for this action.`;
     }
     return `AI email feature "${input.purpose}" is disabled. Do not generate content for this action.`;
   }
 
   const locale = input.targetLocale ?? input.settings.defaultLocale;
   const sourceRequirement = input.settings.requireSourceLinks ? "Include source references to CRM records, email messages, activities, or knowledge articles." : "Source references are optional.";
+  const agentInstruction = agent?.agentMarkdown ? `\n\nAgent.md:\n${truncate(agent.agentMarkdown, 4000)}` : "";
 
   if (input.purpose === "draft") {
-    return `Draft a sales email in ${locale}. Use customer background, communication history, and knowledge base facts. ${sourceRequirement}`;
+    return `Draft a sales email in ${locale}. Use customer background, communication history, and knowledge base facts. ${sourceRequirement}${agentInstruction}`;
   }
   if (input.purpose === "translate") {
-    return `Translate the email content to ${locale}. Preserve names, amounts, dates, and CRM facts. ${sourceRequirement}`;
+    return `Translate the email content to ${locale}. Preserve names, amounts, dates, and CRM facts. ${sourceRequirement}${agentInstruction}`;
   }
   if (input.purpose === "summarize") {
-    return `Summarize the thread into a compact CRM-safe memory that can replace long history in future prompts. ${sourceRequirement}`;
+    return `Summarize the thread into a compact CRM-safe memory that can replace long history in future prompts. ${sourceRequirement}${agentInstruction}`;
   }
-  return `Analyze the thread context and recommend next steps without modifying CRM data. ${sourceRequirement}`;
+  return `Analyze the thread context and recommend next steps without modifying CRM data. ${sourceRequirement}${agentInstruction}`;
 }
 
 function normalizeLimit(value: number, fallback: number, min: number, max: number): number {

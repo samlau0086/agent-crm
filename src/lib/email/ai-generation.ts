@@ -62,7 +62,7 @@ export async function generateEmailAiOutput(input: EmailAiGenerateInput, options
   }
 
   const local = buildEmailAiResult(input, buildLocalOutput(input));
-  const config = readEmailAiProviderConfig(options?.config);
+  const config = readEmailAiProviderConfig({ ...options?.config, model: options?.config?.model ?? context.agentModel });
   if (config.provider !== "openai-compatible" || !config.apiKey) {
     return { ...local, generationMode: "local" };
   }
@@ -161,6 +161,8 @@ export function buildEmailModelPrompt(input: EmailAiGenerateInput): string {
   const userPromptBudget = Math.max(200, Math.floor(budget * 0.1));
   const blocks = [
     `Purpose: ${context.purpose}`,
+    context.agentKey ? `Agent: ${context.agentName ?? context.agentKey} (${context.agentKey})` : undefined,
+    context.agentModel ? `Agent model: ${context.agentModel}` : undefined,
     `Instruction: ${context.instruction}`,
     input.userPrompt?.trim() ? `User request: ${truncate(input.userPrompt.trim(), userPromptBudget)}` : undefined,
     input.sourceText?.trim() ? `Source text: ${truncate(input.sourceText.trim(), sourceTextBudget)}` : undefined,

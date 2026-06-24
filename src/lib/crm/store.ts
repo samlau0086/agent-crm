@@ -7,7 +7,7 @@ import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { adminUserId, defaultWorkspaceId, seedData } from "@/lib/crm/seed";
-import { buildEmailAssistantContext, createDefaultEmailAiSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
+import { buildEmailAssistantContext, createDefaultEmailAiSettings, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { getEmailProviderCapability } from "@/lib/email/providers";
@@ -1037,6 +1037,11 @@ export class CrmStore {
     const settings = this.ensureEmailAiSettings(context.workspaceId);
     if (patch.features) {
       settings.features = normalizeEmailAiFeatures({ ...settings.features, ...patch.features });
+    }
+    if (patch.agents !== undefined) {
+      settings.agents = normalizeAiAgentSettings(patch.agents);
+    } else {
+      settings.agents = normalizeAiAgentSettings(settings.agents);
     }
     if (patch.defaultLocale !== undefined) settings.defaultLocale = normalizeRequiredText(patch.defaultLocale, "Default locale");
     if (patch.requireSourceLinks !== undefined) settings.requireSourceLinks = patch.requireSourceLinks;
@@ -2818,6 +2823,7 @@ export class CrmStore {
   private ensureEmailAiSettings(workspaceId: string): EmailAiSettings {
     const settings = (this.data.emailAiSettings ??= []).find((candidate) => candidate.workspaceId === workspaceId);
     if (settings) {
+      settings.agents = normalizeAiAgentSettings(settings.agents);
       settings.features = normalizeEmailAiFeatures(settings.features);
       return settings;
     }

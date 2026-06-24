@@ -340,6 +340,25 @@ export const seedData: CrmSnapshot = {
       auto_context_analysis: false,
       auto_summarize: true
       },
+      agents: [
+        {
+          key: "inbound_email_preprocess",
+          name: "入站邮件预处理 Agent",
+          scenario: "email",
+          enabled: true,
+          model: "gpt-4.1-mini",
+          agentMarkdown: [
+            "# Inbound Email Preprocess Agent",
+            "",
+            "You preprocess newly received customer emails for a private sales CRM.",
+            "Use customer background, communication history, and the system knowledge base.",
+            "Produce concise, source-grounded summaries and next-context signals.",
+            "Do not modify CRM records, deal stages, amounts, contacts, tasks, or mailbox state.",
+            "Prefer compact memory that reduces future prompt tokens."
+          ].join("\n"),
+          maxOutputChars: 4000
+        }
+      ],
       defaultLocale: "zh-CN",
       requireSourceLinks: true,
       maxHistoryMessages: 8,

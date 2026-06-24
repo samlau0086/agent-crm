@@ -87,7 +87,7 @@ import { buildEmailAttachmentResponse } from "../src/lib/email/attachment-respon
 import { canOpenEmailAiSource, emailAiSourceKey } from "../src/lib/email/ai-sources.ts";
 import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "../src/lib/email/attachments.ts";
 import { isEmailMessageEligibleForAutomation, runEmailAutomationsBestEffort, scheduleEmailAutomationsBestEffort, shouldRunEmailAutoSummary } from "../src/lib/email/automations.ts";
-import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, getEmailAiPurposeFeature, isEmailAiPurposeEnabled, normalizeEmailAiFeatures } from "../src/lib/email/assistant.ts";
+import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, getAiAgentSetting, getEmailAiPurposeFeature, inboundEmailPreprocessAgentKey, isEmailAiPurposeEnabled, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "../src/lib/email/assistant.ts";
 import { readEmailOAuthCallbackNotice, readEmailOAuthConnectedNotice } from "../src/lib/email/oauth-callback.ts";
 import { getDatabaseConnectionTarget } from "../scripts/database-preflight.ts";
 import { formatDatabasePreflightFailure } from "../scripts/runtime-preflight.mjs";
@@ -8188,6 +8188,47 @@ await run("email ai settings normalize missing feature keys for existing workspa
   assert.equal(isEmailAiPurposeEnabled({ ...updated.features, auto_summarize: false }, "summarize"), false);
 });
 
+await run("email ai settings expose configurable backend agents", () => {
+  const store = new CrmStore({
+    ...seedData,
+    emailAiSettings: [
+      {
+        ...seedData.emailAiSettings[0],
+        agents: []
+      }
+    ]
+  });
+  const context = store.getContext("user-admin");
+  const settings = store.getEmailAiSettings(context);
+  const inboundAgent = getAiAgentSetting(settings, inboundEmailPreprocessAgentKey);
+
+  assert.equal(settings.agents.length >= 1, true);
+  assert.equal(inboundAgent?.enabled, true);
+  assert.match(inboundAgent?.agentMarkdown ?? "", /Inbound Email Preprocess Agent/);
+  assert.equal(normalizeAiAgentSettings([{ key: inboundEmailPreprocessAgentKey, name: "Custom", scenario: "email", enabled: false, model: "custom-model", agentMarkdown: "# Agent", maxOutputChars: 1500 }])[0]?.model, "custom-model");
+
+  const updated = store.updateEmailAiSettings(context, {
+    agents: settings.agents.map((agent) => (agent.key === inboundEmailPreprocessAgentKey ? { ...agent, enabled: false, model: "crm-inbound-model", agentMarkdown: "# Custom inbound agent", maxOutputChars: 2500 } : agent))
+  });
+  const updatedAgent = getAiAgentSetting(updated, inboundEmailPreprocessAgentKey);
+  assert.equal(updatedAgent?.enabled, false);
+  assert.equal(updatedAgent?.model, "crm-inbound-model");
+  assert.equal(updatedAgent?.maxOutputChars, 2500);
+
+  const parsed = emailAiSettingsUpdateSchema.parse({
+    agents: updated.agents
+  });
+  assert.equal(parsed.agents?.[0]?.key, inboundEmailPreprocessAgentKey);
+
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const aiGeneration = readFileSync("src/lib/email/ai-generation.ts", "utf8");
+  assert.match(source, /data-testid="email-ai-agents-panel"/);
+  assert.match(source, /data-testid=\{`email-ai-agent-\$\{agent\.key\}`\}/);
+  assert.match(source, /data-testid=\{`email-ai-agent-model-\$\{agent\.key\}`\}/);
+  assert.match(source, /data-testid=\{`email-ai-agent-md-\$\{agent\.key\}`\}/);
+  assert.match(aiGeneration, /model: options\?\.config\?\.model \?\? context\.agentModel/);
+});
+
 await run("email ai settings require admin to modify global toggles", () => {
   const store = new CrmStore();
   const salesContext = store.getContext("user-sales");
@@ -8218,6 +8259,12 @@ await run("email ai automations require ai permission and dependent feature togg
   assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_translate"), false);
   assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_context_analysis"), false);
   assert.equal(canRunEmailAiAutomation(noAiContext, settings, "auto_summarize"), false);
+
+  settings.agents = settings.agents.map((agent) => (agent.key === inboundEmailPreprocessAgentKey ? { ...agent, enabled: false } : agent));
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), false);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_context_analysis"), false);
+  assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_summarize"), false);
+  settings.agents = settings.agents.map((agent) => (agent.key === inboundEmailPreprocessAgentKey ? { ...agent, enabled: true } : agent));
 
   settings.features.translate = false;
   assert.equal(canRunEmailAiAutomation(aiContext, settings, "auto_translate"), false);

@@ -300,12 +300,23 @@ export interface KnowledgeArticle {
 export interface EmailAiSettings {
   workspaceId: string;
   features: Record<EmailAiFeature, boolean>;
+  agents: AiAgentSetting[];
   defaultLocale: string;
   requireSourceLinks: boolean;
   maxHistoryMessages: number;
   maxKnowledgeArticles: number;
   maxContextChars: number;
   updatedAt: string;
+}
+
+export interface AiAgentSetting {
+  key: string;
+  name: string;
+  scenario: "email" | "sales" | "system";
+  enabled: boolean;
+  model: string;
+  agentMarkdown: string;
+  maxOutputChars: number;
 }
 
 export interface EmailAiGenerationAuditInput {

@@ -20,6 +20,7 @@ import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, nor
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
   createDefaultEmailAiSettings,
+  normalizeAiAgentSettings,
   normalizeEmailAiFeatures,
   type EmailAssistantContext,
   type EmailAssistantPurpose
@@ -400,6 +401,7 @@ function mapKnowledgeArticle(article: {
 function mapEmailAiSettings(settings: {
   workspaceId: string;
   features: Prisma.JsonValue;
+  agents?: Prisma.JsonValue;
   defaultLocale: string;
   requireSourceLinks: boolean;
   maxHistoryMessages: number;
@@ -410,6 +412,7 @@ function mapEmailAiSettings(settings: {
   return {
     workspaceId: settings.workspaceId,
     features: normalizeEmailAiFeatures(settings.features as Partial<EmailAiSettings["features"]>),
+    agents: normalizeAiAgentSettings(settings.agents),
     defaultLocale: settings.defaultLocale,
     requireSourceLinks: settings.requireSourceLinks,
     maxHistoryMessages: settings.maxHistoryMessages,
@@ -1910,15 +1913,20 @@ export class PrismaCrmRepository {
 
   async updateEmailAiSettings(
     context: RequestContext,
-    patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt" | "features">> & { features?: Partial<EmailAiSettings["features"]> }
+    patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt" | "features" | "agents">> & {
+      features?: Partial<EmailAiSettings["features"]>;
+      agents?: unknown;
+    }
   ): Promise<EmailAiSettings> {
     requirePermission(context, "crm.admin");
     const current = await this.ensureEmailAiSettings(context.workspaceId);
     const features = normalizeEmailAiFeatures({ ...current.features, ...(patch.features ?? {}) });
+    const agents = patch.agents !== undefined ? normalizeAiAgentSettings(patch.agents) : normalizeAiAgentSettings(current.agents);
     const updated = await this.db.emailAiSettings.update({
       where: { workspaceId: context.workspaceId },
       data: {
         features: features as Prisma.InputJsonValue,
+        agents: agents as unknown as Prisma.InputJsonValue,
         defaultLocale: patch.defaultLocale?.trim() || current.defaultLocale,
         requireSourceLinks: patch.requireSourceLinks ?? current.requireSourceLinks,
         maxHistoryMessages: normalizeIntegerLimit(patch.maxHistoryMessages ?? current.maxHistoryMessages, 1, 20),
@@ -1928,7 +1936,7 @@ export class PrismaCrmRepository {
     });
     await this.writeAuditLog(context, "update", "email_ai_settings", context.workspaceId, {
       summary: "Updated email AI settings",
-      details: { features: updated.features, defaultLocale: updated.defaultLocale }
+      details: { features: updated.features, defaultLocale: updated.defaultLocale, agentCount: agents.length }
     });
     return mapEmailAiSettings(updated);
   }
@@ -4347,6 +4355,7 @@ export class PrismaCrmRepository {
       data: {
         workspaceId,
         features: defaults.features as Prisma.InputJsonValue,
+        agents: defaults.agents as unknown as Prisma.InputJsonValue,
         defaultLocale: defaults.defaultLocale,
         requireSourceLinks: defaults.requireSourceLinks,
         maxHistoryMessages: defaults.maxHistoryMessages,

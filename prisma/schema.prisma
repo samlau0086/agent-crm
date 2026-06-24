@@ -508,6 +508,7 @@ model KnowledgeArticle {
 model EmailAiSettings {
   workspaceId          String    @id
   features             Json
+  agents               Json      @default("[]")
   defaultLocale        String    @default("zh-CN")
   requireSourceLinks   Boolean   @default(true)
   maxHistoryMessages   Int       @default(8)

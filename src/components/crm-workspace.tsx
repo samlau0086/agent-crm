@@ -1812,7 +1812,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return updateEmailAiSettingsPatch({ features: { [feature]: enabled } });
   }
 
-  async function updateEmailAiSettingsPatch(patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars">> & { features?: Partial<EmailAiSettings["features"]> }) {
+  async function updateEmailAiSettingsPatch(
+    patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">> & {
+      features?: Partial<EmailAiSettings["features"]>;
+    }
+  ) {
     const settings = await fetchJson<EmailAiSettings>("/api/email/ai-settings", {
       method: "PATCH",
       body: patch
@@ -3017,7 +3021,7 @@ function EmailWorkspace({
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
-  onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars">>) => void;
+  onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">>) => void;
   sidebarCollapsed: boolean;
   onToggleAppSidebar: () => void;
 }) {
@@ -3048,6 +3052,11 @@ function EmailWorkspace({
   const [accountConnectionTests, setAccountConnectionTests] = useState<Record<string, { status: "testing" | "success" | "failed"; message: string; testedAt?: string }>>({});
   const [existingContactId, setExistingContactId] = useState("");
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || emailDraft.bodyText.trim() || emailDraft.attachments?.length || emailDraft.aiAssisted);
+  const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
+    onUpdateAiSettings({
+      agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
+    });
+  };
   const updateOutboundServiceDraft = (serviceId: string, patch: Partial<EmailAccountDraftOutboundService>) => {
     onAccountDraftChange({
       ...accountDraft,
@@ -4522,6 +4531,65 @@ function EmailWorkspace({
               <span className="subtle">上下文字符预算</span>
               <input className="input" max={20000} min={1000} step={500} type="number" value={aiSettings.maxContextChars} onChange={(event) => onUpdateAiSettings({ maxContextChars: numberInputValue(event.target.value, aiSettings.maxContextChars) })} />
             </label>
+          </div>
+          <div className="settings-item" data-testid="email-ai-agents-panel" style={{ marginTop: 12 }}>
+            <div className="stage-header">
+              <strong>后台 AI Agents</strong>
+              <span className="badge">{aiSettings.agents.filter((agent) => agent.enabled).length}/{aiSettings.agents.length}</span>
+            </div>
+            <div className="subtle">配置 agent.md、模型和开关。入站邮件预处理 Agent 会在收到邮件后参与自动摘要、上下文分析和翻译等后台任务。</div>
+            <div className="settings-list" style={{ marginTop: 10 }}>
+              {aiSettings.agents.map((agent) => (
+                <div className="settings-item" data-testid={`email-ai-agent-${agent.key}`} key={agent.key}>
+                  <div className="stage-header">
+                    <strong>{agent.name}</strong>
+                    <span className={agent.enabled ? "badge" : "danger-badge"}>{agent.enabled ? "enabled" : "disabled"}</span>
+                  </div>
+                  <div className="form-grid" style={{ marginTop: 8 }}>
+                    <label className="settings-toggle">
+                      <input
+                        data-testid={`email-ai-agent-enabled-${agent.key}`}
+                        type="checkbox"
+                        checked={agent.enabled}
+                        onChange={(event) => updateAiAgent(agent.key, { enabled: event.target.checked })}
+                      />
+                      启用
+                    </label>
+                    <label>
+                      <span className="subtle">模型</span>
+                      <input
+                        className="input"
+                        data-testid={`email-ai-agent-model-${agent.key}`}
+                        value={agent.model}
+                        onChange={(event) => updateAiAgent(agent.key, { model: event.target.value })}
+                        placeholder="gpt-4.1-mini"
+                      />
+                    </label>
+                    <label>
+                      <span className="subtle">最大输出字符</span>
+                      <input
+                        className="input"
+                        max={12000}
+                        min={500}
+                        step={500}
+                        type="number"
+                        value={agent.maxOutputChars}
+                        onChange={(event) => updateAiAgent(agent.key, { maxOutputChars: numberInputValue(event.target.value, agent.maxOutputChars) })}
+                      />
+                    </label>
+                    <label className="wide">
+                      <span className="subtle">agent.md</span>
+                      <textarea
+                        className="textarea agent-md-textarea"
+                        data-testid={`email-ai-agent-md-${agent.key}`}
+                        value={agent.agentMarkdown}
+                        onChange={(event) => updateAiAgent(agent.key, { agentMarkdown: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
             </>
           ) : null}
