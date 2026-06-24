@@ -95,7 +95,6 @@ import { buildEmailReplyDraft, type EmailComposeReplyDraft } from "@/lib/email/r
 import { formatEmailSendResultMessage } from "@/lib/email/status-messages";
 import type { EmailDiagnosticStatus, EmailSubsystemDiagnostics } from "@/lib/email/diagnostics";
 import { formatCurrency, formatDate, labelForOption } from "@/lib/utils/format";
-import { shouldProceedWithDangerousAction } from "@/lib/ui/confirm";
 import type { BackupFile } from "@/lib/ops/backups";
 
 interface CrmWorkspaceProps {
@@ -247,6 +246,23 @@ type EmailAttachmentUploadItem = {
   progress: number;
   status: "queued" | "reading" | "complete" | "error";
   error?: string;
+};
+type ToastState = {
+  intent: "success" | "error" | "info";
+  message: string;
+};
+type ConfirmDialogState = {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  danger?: boolean;
+};
+type PromptDialogState = {
+  title: string;
+  message: string;
+  placeholder?: string;
+  defaultValue?: string;
+  confirmLabel?: string;
 };
 type KnowledgeArticleDraft = {
   editingArticleId?: string;
@@ -887,6 +903,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeArticleDraft>({ title: "", body: "", tags: "", active: true });
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const [promptDialog, setPromptDialog] = useState<PromptDialogState | null>(null);
+  const [promptValue, setPromptValue] = useState("");
   const [isHydrated, setIsHydrated] = useState(false);
   const [isPending, startTransition] = useTransition();
   const previousCreateFormResetKey = useRef("");
@@ -894,6 +914,53 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const previousEditFormResetKey = useRef("");
   const pendingRecordOpenRef = useRef<{ objectKey: string; recordId: string; returnEmailThreadId: string } | null>(null);
   const pendingRecordCreateRef = useRef<{ objectKey: string; values: Record<string, string> } | null>(null);
+  const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
+  const promptResolverRef = useRef<((value: string | null) => void) | null>(null);
+
+  function showToast(nextToast: ToastState) {
+    setToast(nextToast);
+    window.setTimeout(() => {
+      setToast((current) => (current?.message === nextToast.message && current.intent === nextToast.intent ? null : current));
+    }, 3600);
+  }
+
+  function showSuccess(messageText: string) {
+    setMessage(messageText);
+    showToast({ intent: "success", message: messageText });
+  }
+
+  function showError(messageText: string) {
+    setError(messageText);
+    showToast({ intent: "error", message: messageText });
+  }
+
+  function requestConfirm(options: ConfirmDialogState): Promise<boolean> {
+    setConfirmDialog(options);
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve;
+    });
+  }
+
+  function resolveConfirm(confirmed: boolean) {
+    confirmResolverRef.current?.(confirmed);
+    confirmResolverRef.current = null;
+    setConfirmDialog(null);
+  }
+
+  function requestPrompt(options: PromptDialogState): Promise<string | null> {
+    setPromptDialog(options);
+    setPromptValue(options.defaultValue ?? "");
+    return new Promise((resolve) => {
+      promptResolverRef.current = resolve;
+    });
+  }
+
+  function resolvePrompt(value: string | null) {
+    promptResolverRef.current?.(value);
+    promptResolverRef.current = null;
+    setPromptDialog(null);
+    setPromptValue("");
+  }
 
   const routeObjectKeys = useMemo(() => props.objects.map((object) => object.key), [props.objects]);
   const activeObject = useMemo(
@@ -1598,7 +1665,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (!selectedRecord) {
       return;
     }
-    if (!shouldProceedWithDangerousAction(`确定删除记录“${selectedRecord.title}”？相关活动也会被删除。`)) {
+    if (
+      !(await requestConfirm({
+        title: "删除记录",
+        message: `确定删除记录“${selectedRecord.title}”？相关活动也会被删除。`,
+        confirmLabel: "删除",
+        danger: true
+      }))
+    ) {
       return;
     }
 
@@ -1654,9 +1728,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (
       importStrategy === "update-existing" &&
       importPreview?.conflictRows &&
-      !shouldProceedWithDangerousAction(
-        `本次导入会更新 ${importPreview.conflictRows} 条已有记录。请确认这些冲突行已经检查无误。`
-      )
+      !(await requestConfirm({
+        title: "确认更新已有记录",
+        message: `本次导入会更新 ${importPreview.conflictRows} 条已有记录。请确认这些冲突行已经检查无误。`,
+        confirmLabel: "继续导入",
+        danger: true
+      }))
     ) {
       setMessage("已取消导入");
       return;
@@ -1739,7 +1816,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setError("请选择一个导入预设");
       return;
     }
-    if (!shouldProceedWithDangerousAction(`删除导入预设“${preset.name}”？`)) {
+    if (
+      !(await requestConfirm({
+        title: "删除导入预设",
+        message: `删除导入预设“${preset.name}”？`,
+        confirmLabel: "删除",
+        danger: true
+      }))
+    ) {
       return;
     }
 
@@ -1813,7 +1897,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (!activeView) {
       return;
     }
-    if (!shouldProceedWithDangerousAction(`确定删除视图“${activeView.name}”？`)) {
+    if (
+      !(await requestConfirm({
+        title: "删除视图",
+        message: `确定删除视图“${activeView.name}”？`,
+        confirmLabel: "删除",
+        danger: true
+      }))
+    ) {
       return;
     }
 
@@ -1854,7 +1945,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function deleteTask(activity: Activity) {
-    if (!shouldProceedWithDangerousAction(`确定删除任务“${activity.title}”？`)) {
+    if (
+      !(await requestConfirm({
+        title: "删除任务",
+        message: `确定删除任务“${activity.title}”？`,
+        confirmLabel: "删除",
+        danger: true
+      }))
+    ) {
       return;
     }
     await fetchJson(`/api/activities/${activity.id}`, { method: "DELETE" });
@@ -1864,7 +1962,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function closeDeal(record: CrmRecord, outcome: "won" | "lost") {
-    if (outcome === "lost" && !shouldProceedWithDangerousAction(`确定将交易“${record.title}”标记为输单？`)) {
+    if (
+      outcome === "lost" &&
+      !(await requestConfirm({
+        title: "标记输单",
+        message: `确定将交易“${record.title}”标记为输单？`,
+        confirmLabel: "确认输单",
+        danger: true
+      }))
+    ) {
       return;
     }
 
@@ -2166,7 +2272,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   async function deleteEmailThread(threadId: string) {
     const thread = emailThreads.find((candidate) => candidate.id === threadId);
-    if (thread && !shouldProceedWithDangerousAction(`确定彻底删除邮件线程“${thread.subject}”？此操作不能撤销。`)) {
+    if (
+      thread &&
+      !(await requestConfirm({
+        title: "彻底删除邮件",
+        message: `确定彻底删除邮件线程“${thread.subject}”？此操作不能撤销。`,
+        confirmLabel: "彻底删除",
+        danger: true
+      }))
+    ) {
       return;
     }
     await fetchJson(`/api/email/threads/${threadId}`, { method: "DELETE" });
@@ -2524,7 +2638,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       try {
         await action();
       } catch (actionError) {
-        setError(actionError instanceof Error ? actionError.message : "操作失败");
+        showError(actionError instanceof Error ? actionError.message : "操作失败");
       }
     });
   }
@@ -2605,7 +2719,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           </div>
           <div className="toolbar">
             <button className="secondary-button" type="button" onClick={() => router.refresh()}>
-              <RefreshCw size={16} />
+              <RefreshCw className={isPending ? "spin-icon" : undefined} size={16} />
               刷新
             </button>
             {showRecordWorkspace && activeObject ? (
@@ -2622,9 +2736,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           </div>
         </div>
         ) : null}
-
-        {message && <section className="section" style={{ marginBottom: 12, borderColor: "#86efac", background: "#f0fdf4" }}>{message}</section>}
-        {error && <section className="section" style={{ marginBottom: 12, borderColor: "#fca5a5", background: "#fef2f2" }}>{error}</section>}
 
         {activeNav === "dashboard" && (
           <Dashboard
@@ -3362,7 +3473,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         字段说明
                       </a>
                       <button className="secondary-button" data-testid="import-preview-submit" type="button" onClick={() => runAction(submitImportPreview)} disabled={isPending}>
-                        <RefreshCw size={16} />
+                        <RefreshCw className={isPending ? "spin-icon" : undefined} size={16} />
                         预检 CSV
                       </button>
                       <button
@@ -3375,7 +3486,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         导入当前对象
                       </button>
                       <button className="secondary-button" type="button" onClick={() => runAction(refreshImportJobs)} disabled={isPending}>
-                        <RefreshCw size={16} />
+                        <RefreshCw className={isPending ? "spin-icon" : undefined} size={16} />
                         刷新任务
                       </button>
                     </div>
@@ -3479,6 +3590,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
             onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
+            onShowToast={showToast}
+            onShowSuccess={showSuccess}
+            onRequestPrompt={requestPrompt}
             sidebarCollapsed={appSidebarCollapsed}
             onToggleAppSidebar={toggleAppSidebar}
           />
@@ -3514,6 +3628,100 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
 
       </main>
+      <ToastViewport toast={toast ?? (error ? { intent: "error", message: error } : message ? { intent: "success", message } : null)} onDismiss={() => { setToast(null); setMessage(null); setError(null); }} />
+      <ConfirmDialog
+        state={confirmDialog}
+        onCancel={() => resolveConfirm(false)}
+        onConfirm={() => resolveConfirm(true)}
+      />
+      <PromptDialog
+        state={promptDialog}
+        value={promptValue}
+        onChange={setPromptValue}
+        onCancel={() => resolvePrompt(null)}
+        onConfirm={() => resolvePrompt(promptValue)}
+      />
+    </div>
+  );
+}
+
+function ToastViewport({ toast, onDismiss }: { toast: ToastState | null; onDismiss: () => void }) {
+  if (!toast) {
+    return null;
+  }
+  return (
+    <div className={`toast toast-${toast.intent}`} role="status" aria-live="polite">
+      <span>{toast.message}</span>
+      <button className="icon-button" aria-label="关闭提示" type="button" onClick={onDismiss}>
+        <XCircle size={16} />
+      </button>
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  state,
+  onCancel,
+  onConfirm
+}: {
+  state: ConfirmDialogState | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!state) {
+    return null;
+  }
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={state.title}>
+      <div className="modal-panel app-dialog">
+        <h2 className="page-title" style={{ fontSize: 18 }}>{state.title}</h2>
+        <p>{state.message}</p>
+        <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+          <button className="secondary-button" type="button" onClick={onCancel}>取消</button>
+          <button className={state.danger ? "danger-button" : "primary-button"} type="button" onClick={onConfirm}>
+            {state.confirmLabel ?? "确认"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PromptDialog({
+  state,
+  value,
+  onChange,
+  onCancel,
+  onConfirm
+}: {
+  state: PromptDialogState | null;
+  value: string;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!state) {
+    return null;
+  }
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={state.title}>
+      <form
+        className="modal-panel app-dialog"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onConfirm();
+        }}
+      >
+        <h2 className="page-title" style={{ fontSize: 18 }}>{state.title}</h2>
+        <p>{state.message}</p>
+        <input className="input" autoFocus value={value} onChange={(event) => onChange(event.target.value)} placeholder={state.placeholder} />
+        <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+          <button className="secondary-button" type="button" onClick={onCancel}>取消</button>
+          <button className="primary-button" type="submit" disabled={!value.trim()}>
+            {state.confirmLabel ?? "确认"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -3686,6 +3894,9 @@ function EmailWorkspace({
   onUpdateKnowledgeArticle,
   onToggleAiFeature,
   onUpdateAiSettings,
+  onShowToast,
+  onShowSuccess,
+  onRequestPrompt,
   sidebarCollapsed,
   onToggleAppSidebar
 }: {
@@ -3748,6 +3959,9 @@ function EmailWorkspace({
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
   onUpdateAiSettings: (patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">>) => void;
+  onShowToast: (toast: ToastState) => void;
+  onShowSuccess: (message: string) => void;
+  onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
   sidebarCollapsed: boolean;
   onToggleAppSidebar: () => void;
 }) {
@@ -3982,13 +4196,18 @@ function EmailWorkspace({
     persistThreadState(threadId, { labels: normalizedLabels });
   }
 
-  function promptAddEmailLabel(threadIds: string[]) {
+  async function promptAddEmailLabel(threadIds: string[]) {
     const uniqueThreadIds = Array.from(new Set(threadIds.filter(Boolean)));
     if (!uniqueThreadIds.length) {
-      window.alert("请先选择邮件线程。");
+      onShowToast({ intent: "info", message: "请先选择邮件线程。" });
       return;
     }
-    const label = window.prompt("输入邮件标签");
+    const label = await onRequestPrompt({
+      title: "添加邮件标签",
+      message: "输入一个标签名称，用于后续筛选和客户活动标记。",
+      placeholder: "例如：重要客户 / 报价 / 售后",
+      confirmLabel: "添加"
+    });
     const normalizedLabel = label?.trim();
     if (!normalizedLabel) {
       return;
@@ -4003,6 +4222,7 @@ function EmailWorkspace({
       updateThreadLabels(threadId, [...storedLabels, normalizedLabel]);
     }
     setLabelFilter(normalizedLabel);
+    onShowSuccess(`已添加标签：${normalizedLabel}`);
   }
 
   function removeEmailLabel(threadId: string, label: string) {
@@ -4137,10 +4357,15 @@ function EmailWorkspace({
     );
   }
 
-  function runComposeEditorCommand(command: "bold" | "italic" | "underline" | "insertUnorderedList" | "createLink") {
+  async function runComposeEditorCommand(command: "bold" | "italic" | "underline" | "insertUnorderedList" | "createLink") {
     composeEditorRef.current?.focus();
     if (command === "createLink") {
-      const url = window.prompt("输入链接 URL");
+      const url = await onRequestPrompt({
+        title: "插入链接",
+        message: "输入要插入到邮件正文中的链接 URL。",
+        placeholder: "https://example.com",
+        confirmLabel: "插入"
+      });
       if (!url) {
         return;
       }
@@ -4156,11 +4381,11 @@ function EmailWorkspace({
       return;
     }
     if (!file.type.startsWith("image/")) {
-      window.alert("只能插入图片文件。");
+      onShowToast({ intent: "error", message: "只能插入图片文件。" });
       return;
     }
     if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
-      window.alert(`图片不能超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}。`);
+      onShowToast({ intent: "error", message: `图片不能超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}。` });
       return;
     }
     const contentBase64 = await readFileAsBase64(file);
@@ -4271,7 +4496,7 @@ function EmailWorkspace({
     }
     const existing = emailDraft.attachments ?? [];
     if (existing.length + selectedFiles.length > 10) {
-      window.alert("邮件附件最多 10 个文件。");
+      onShowToast({ intent: "error", message: "邮件附件最多 10 个文件。" });
       return;
     }
     const uploadItems = selectedFiles.map((file) => ({
@@ -4692,7 +4917,7 @@ function EmailWorkspace({
               })
             }
           >
-            <RefreshCw size={16} />
+            <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
             同步全部
           </button>
         ) : null}
@@ -4739,7 +4964,7 @@ function EmailWorkspace({
                 {canManageEmailSettings ? (
                   <div className="toolbar email-account-actions">
                     <button className="secondary-button" type="button" onClick={() => runAccountConnectionTest(account)} disabled={disabled || isTesting}>
-                      <RefreshCw size={16} />
+                      <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
                       {isTesting ? "测试中" : "测试连接"}
                     </button>
                     <button
@@ -4774,7 +4999,7 @@ function EmailWorkspace({
                       {account.status === "disabled" ? "启用" : "停用"}
                     </button>
                     <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || account.status !== "active"}>
-                      <RefreshCw size={16} />
+                      <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
                       同步
                     </button>
                   </div>
@@ -4951,7 +5176,7 @@ function EmailWorkspace({
                 aria-label="新增标签"
                 data-testid="email-add-label"
                 type="button"
-                onClick={() => promptAddEmailLabel(selectedThreadIdsArray.length ? selectedThreadIdsArray : selectedThread ? [selectedThread.id] : [])}
+                onClick={() => void promptAddEmailLabel(selectedThreadIdsArray.length ? selectedThreadIdsArray : selectedThread ? [selectedThread.id] : [])}
               >
                 <Tag size={14} />
               </button>
@@ -4997,7 +5222,7 @@ function EmailWorkspace({
                   onClick={syncCurrentMailboxAccount}
                   disabled={disabled || !canManageEmailSettings || !selectedMailboxAccountCanSync}
                 >
-                  <RefreshCw size={16} />
+                  <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
                 </button>
                 {mailbox === "archived" ? (
                   <button className="icon-button" aria-label="取消归档" title="取消归档" type="button" onClick={() => performMailboxAction("unarchive")} disabled={!selectedThreadIds.size}>
@@ -5026,7 +5251,7 @@ function EmailWorkspace({
                 <button className="icon-button" aria-label="标记未读" title="标记未读" type="button" onClick={() => performMailboxAction("unread")} disabled={!selectedThreadIds.size}>
                   <Mail size={16} />
                 </button>
-                <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => promptAddEmailLabel(selectedThreadIdsArray)} disabled={!selectedThreadIds.size}>
+                <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => void promptAddEmailLabel(selectedThreadIdsArray)} disabled={!selectedThreadIds.size}>
                   <Tag size={16} />
                 </button>
                 <button className="icon-button" aria-label="更多" type="button">
@@ -5157,7 +5382,7 @@ function EmailWorkspace({
                 <button className="icon-button" aria-label="重要" title="重要" type="button" onClick={() => selectedThread && performMailboxAction("important", [selectedThread.id])} disabled={!selectedThread}>
                   <Tag size={16} />
                 </button>
-                <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => selectedThread && promptAddEmailLabel([selectedThread.id])} disabled={!selectedThread}>
+                <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => { if (selectedThread) void promptAddEmailLabel([selectedThread.id]); }} disabled={!selectedThread}>
                   <Tag size={16} />
                 </button>
                 <button className="icon-button" aria-label="更多" type="button">
@@ -5297,7 +5522,7 @@ function EmailWorkspace({
                           <div className="toolbar" style={{ marginTop: 8 }}>
                             {message.failureReason ? <span className="danger-badge">{message.failureReason}</span> : null}
                             <button className="secondary-button" type="button" onClick={() => onRetryMessage(message.id)} disabled={disabled}>
-                              <RefreshCw size={14} />
+                              <RefreshCw className={disabled ? "spin-icon" : undefined} size={14} />
                               重试
                             </button>
                           </div>
@@ -5465,11 +5690,11 @@ function EmailWorkspace({
                 </div>
                 <div className="email-compose-editor-shell">
                   <div className="email-compose-toolbar" aria-label="正文格式工具栏">
-                    <button className="icon-button" aria-label="加粗" type="button" onClick={() => runComposeEditorCommand("bold")}><Bold size={15} /></button>
-                    <button className="icon-button" aria-label="斜体" type="button" onClick={() => runComposeEditorCommand("italic")}><Italic size={15} /></button>
-                    <button className="icon-button" aria-label="下划线" type="button" onClick={() => runComposeEditorCommand("underline")}><Underline size={15} /></button>
-                    <button className="icon-button" aria-label="列表" type="button" onClick={() => runComposeEditorCommand("insertUnorderedList")}><List size={15} /></button>
-                    <button className="icon-button" aria-label="链接" type="button" onClick={() => runComposeEditorCommand("createLink")}><Link size={15} /></button>
+                    <button className="icon-button" aria-label="加粗" type="button" onClick={() => void runComposeEditorCommand("bold")}><Bold size={15} /></button>
+                    <button className="icon-button" aria-label="斜体" type="button" onClick={() => void runComposeEditorCommand("italic")}><Italic size={15} /></button>
+                    <button className="icon-button" aria-label="下划线" type="button" onClick={() => void runComposeEditorCommand("underline")}><Underline size={15} /></button>
+                    <button className="icon-button" aria-label="列表" type="button" onClick={() => void runComposeEditorCommand("insertUnorderedList")}><List size={15} /></button>
+                    <button className="icon-button" aria-label="链接" type="button" onClick={() => void runComposeEditorCommand("createLink")}><Link size={15} /></button>
                     <button className="icon-button" aria-label="插入图片" type="button" onClick={() => composeInlineImageInputRef.current?.click()}><ImageIcon size={15} /></button>
                     <button className="icon-button" aria-label="添加附件" type="button" onClick={() => setAttachmentModalOpen(true)}><Paperclip size={15} /></button>
                     <input
@@ -6347,7 +6572,7 @@ function ViewConfigurator({
           <div className="subtle">筛选、排序和列配置会先应用到当前列表。</div>
         </div>
         <button className="secondary-button" type="button" onClick={onReset} disabled={isPending}>
-          <RefreshCw size={16} />
+          <RefreshCw className={isPending ? "spin-icon" : undefined} size={16} />
           重置
         </button>
       </div>
@@ -6524,7 +6749,7 @@ function ImportJobList({
             ) : null}
             {job.status === "completed" ? (
               <button className="secondary-button" type="button" onClick={() => onRerun(job)} disabled={disabled}>
-                <RefreshCw size={15} />
+                <RefreshCw className={disabled ? "spin-icon" : undefined} size={15} />
                 再次运行
               </button>
             ) : null}
@@ -8553,7 +8778,7 @@ function EmailDiagnosticsPanel({
         </div>
         <div className="toolbar">
         <button className="secondary-button" type="button" onClick={onRefresh} disabled={disabled}>
-          <RefreshCw size={16} />
+          <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
           刷新诊断
         </button>
           <button className="secondary-button" type="button" onClick={onTestAll} disabled={disabled}>
@@ -8606,7 +8831,7 @@ function EmailDiagnosticsPanel({
                   <div className="toolbar">
                     <DiagnosticBadge status="warning" label="发送认领超时" />
                     <button className="secondary-button" type="button" onClick={() => onRetryMessage(message.id)} disabled={disabled}>
-                      <RefreshCw size={14} />
+                      <RefreshCw className={disabled ? "spin-icon" : undefined} size={14} />
                       恢复发送
                     </button>
                   </div>

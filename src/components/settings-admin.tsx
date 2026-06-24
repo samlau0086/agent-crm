@@ -1,7 +1,7 @@
 "use client";
 
 import { CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
@@ -9,7 +9,6 @@ import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmRecord, CsvImportJob, FieldDefinition, ImportJobQueueSummary, ObjectDefinition, Permission, Pipeline, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
-import { shouldProceedWithDangerousAction } from "@/lib/ui/confirm";
 
 interface SettingsAdminProps {
   role: Role;
@@ -114,6 +113,8 @@ type CurrencyDraft = {
   isBase: boolean;
   active: boolean;
 };
+type ToastState = { intent: "success" | "error" | "info"; message: string };
+type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
 const availableWebhookEvents: WebhookEvent[] = ["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"];
 
@@ -142,6 +143,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+  const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const [isPending, startTransition] = useTransition();
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabKey>("access");
   const [selectedObjectId, setSelectedObjectId] = useState("");
@@ -227,6 +231,31 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     [auditActionFilter, auditActorFilter, auditEntityFilter, auditObjectFilter, auditQuery]
   );
   const fieldObject = props.objects.find((object) => object.key === fieldDraft.objectKey);
+
+  function showToast(nextToast: ToastState) {
+    setToast(nextToast);
+    window.setTimeout(() => {
+      setToast((current) => (current?.message === nextToast.message && current.intent === nextToast.intent ? null : current));
+    }, 3600);
+  }
+
+  function showError(messageText: string) {
+    setError(messageText);
+    showToast({ intent: "error", message: messageText });
+  }
+
+  function requestConfirm(options: ConfirmDialogState): Promise<boolean> {
+    setConfirmDialog(options);
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve;
+    });
+  }
+
+  function resolveConfirm(confirmed: boolean) {
+    confirmResolverRef.current?.(confirmed);
+    confirmResolverRef.current = null;
+    setConfirmDialog(null);
+  }
 
   useEffect(() => {
     setSelectedObjectId((current) => (current && !props.objects.some((object) => object.id === current) ? "" : current));
@@ -444,7 +473,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         await action();
         router.refresh();
       } catch (actionError) {
-        setError(actionError instanceof Error ? actionError.message : "操作失败");
+        showError(actionError instanceof Error ? actionError.message : "操作失败");
       }
     });
   }
@@ -478,7 +507,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function deleteObject() {
     if (!selectedObject) return;
-    if (!shouldProceedWithDangerousAction(`确定删除对象“${selectedObject.label}”？这会删除该对象的字段、关系、管道和视图配置。`)) return;
+    if (!(await requestConfirm({ title: "删除对象", message: `确定删除对象“${selectedObject.label}”？这会删除该对象的字段、关系、管道和视图配置。`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/object-definitions/${selectedObject.id}`, { method: "DELETE" });
     setMessage(`已删除对象 ${selectedObject.label}`);
     resetObjectForm();
@@ -519,7 +548,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function deleteField() {
     if (!selectedField) return;
-    if (!shouldProceedWithDangerousAction(`确定删除字段“${selectedField.label}”？`)) return;
+    if (!(await requestConfirm({ title: "删除字段", message: `确定删除字段“${selectedField.label}”？`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/field-definitions/${selectedField.id}`, { method: "DELETE" });
     setMessage(`已删除字段 ${selectedField.label}`);
     resetFieldForm();
@@ -547,7 +576,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function deleteRelation() {
     if (!selectedRelation) return;
-    if (!shouldProceedWithDangerousAction(`确定删除关系“${selectedRelation.label}”？`)) return;
+    if (!(await requestConfirm({ title: "删除关系", message: `确定删除关系“${selectedRelation.label}”？`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/relation-definitions/${selectedRelation.id}`, { method: "DELETE" });
     setMessage(`已删除关系 ${selectedRelation.label}`);
     resetRelationForm();
@@ -574,7 +603,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function deletePipeline() {
     if (!selectedPipeline) return;
-    if (!shouldProceedWithDangerousAction(`确定删除管道“${selectedPipeline.name}”？`)) return;
+    if (!(await requestConfirm({ title: "删除管道", message: `确定删除管道“${selectedPipeline.name}”？`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/pipelines/${selectedPipeline.id}`, { method: "DELETE" });
     setMessage(`已删除管道 ${selectedPipeline.name}`);
     resetPipelineForm();
@@ -609,7 +638,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function deleteView() {
     if (!selectedView) return;
-    if (!shouldProceedWithDangerousAction(`确定删除视图“${selectedView.name}”？`)) return;
+    if (!(await requestConfirm({ title: "删除视图", message: `确定删除视图“${selectedView.name}”？`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/saved-views/${selectedView.id}`, { method: "DELETE" });
     setMessage(`已删除视图 ${selectedView.name}`);
     resetViewForm();
@@ -634,7 +663,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function deleteRole() {
     if (!selectedRole) return;
-    if (!shouldProceedWithDangerousAction(`确定删除角色“${selectedRole.name}”？`)) return;
+    if (!(await requestConfirm({ title: "删除角色", message: `确定删除角色“${selectedRole.name}”？`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/roles/${selectedRole.id}`, { method: "DELETE" });
     setMessage(`已删除角色 ${selectedRole.name}`);
     resetRoleForm();
@@ -650,7 +679,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }
 
   async function saveUser() {
-    if (selectedUser?.active && !userDraft.active && !shouldProceedWithDangerousAction(`确定停用用户“${selectedUser.email}”？该用户会立即失去访问权限。`)) {
+    if (
+      selectedUser?.active &&
+      !userDraft.active &&
+      !(await requestConfirm({ title: "停用用户", message: `确定停用用户“${selectedUser.email}”？该用户会立即失去访问权限。`, confirmLabel: "停用", danger: true }))
+    ) {
       return;
     }
 
@@ -708,7 +741,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function deleteTeam() {
     if (!selectedTeam) return;
-    if (!shouldProceedWithDangerousAction(`确定删除团队“${selectedTeam.name}”？`)) return;
+    if (!(await requestConfirm({ title: "删除团队", message: `确定删除团队“${selectedTeam.name}”？`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/teams/${selectedTeam.id}`, { method: "DELETE" });
     setMessage(`已删除团队 ${selectedTeam.name}`);
     resetTeamForm();
@@ -738,7 +771,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }
 
   async function revokeApiKey(apiKey: ApiKey) {
-    if (!shouldProceedWithDangerousAction(`确定撤销 API Key“${apiKey.name}”？撤销后使用该 token 的集成会立即失效。`)) return;
+    if (!(await requestConfirm({ title: "撤销 API Key", message: `确定撤销 API Key“${apiKey.name}”？撤销后使用该 token 的集成会立即失效。`, confirmLabel: "撤销", danger: true }))) return;
     await fetchJson(`/api/api-keys/${apiKey.id}`, { method: "PATCH", body: { action: "revoke" } });
     setMessage(`Revoked API key ${apiKey.name}`);
     setCreatedApiKeyToken(null);
@@ -762,7 +795,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }
 
   async function toggleWebhook(webhook: WebhookEndpoint) {
-    if (webhook.active && !shouldProceedWithDangerousAction(`确定停用 Webhook“${webhook.name}”？相关集成将不再收到事件。`)) return;
+    if (webhook.active && !(await requestConfirm({ title: "停用 Webhook", message: `确定停用 Webhook“${webhook.name}”？相关集成将不再收到事件。`, confirmLabel: "停用", danger: true }))) return;
     await fetchJson(`/api/webhooks/${webhook.id}`, { method: "PATCH", body: { active: !webhook.active } });
     setMessage(`${webhook.active ? "Disabled" : "Enabled"} webhook ${webhook.name}`);
   }
@@ -833,7 +866,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     if (selectedCurrency.data.isBase === true) {
       throw new Error("不能删除基准币种，请先指定其他基准币种");
     }
-    if (!shouldProceedWithDangerousAction(`确定删除币种“${selectedCurrency.title}”？已有产品或报价引用该币种时会保留原代码。`)) return;
+    if (!(await requestConfirm({ title: "删除币种", message: `确定删除币种“${selectedCurrency.title}”？已有产品或报价引用该币种时会保留原代码。`, confirmLabel: "删除", danger: true }))) return;
     await fetchJson(`/api/records/currencies/${selectedCurrency.id}`, { method: "DELETE" });
     setMessage(`已删除币种 ${selectedCurrency.title}`);
     resetCurrencyForm();
@@ -857,9 +890,6 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   return (
     <div className="settings-stack">
-      {message && <section className="section settings-banner settings-banner-success">{message}</section>}
-      {error && <section className="section settings-banner settings-banner-error">{error}</section>}
-
       <section className="settings-tabs-shell" aria-label="设置分类">
         <div className="settings-tab-list" role="tablist" aria-label="设置分类">
           {settingsTabs.map((tab) => (
@@ -1768,6 +1798,61 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           </section>
         </>
       ) : null}
+      <ToastViewport
+        toast={toast ?? (error ? { intent: "error", message: error } : message ? { intent: "success", message } : null)}
+        onDismiss={() => {
+          setToast(null);
+          setMessage(null);
+          setError(null);
+        }}
+      />
+      <ConfirmDialog
+        state={confirmDialog}
+        onCancel={() => resolveConfirm(false)}
+        onConfirm={() => resolveConfirm(true)}
+      />
+    </div>
+  );
+}
+
+function ToastViewport({ toast, onDismiss }: { toast: ToastState | null; onDismiss: () => void }) {
+  if (!toast) {
+    return null;
+  }
+  return (
+    <div className={`toast toast-${toast.intent}`} role="status" aria-live="polite">
+      <span>{toast.message}</span>
+      <button className="icon-button" aria-label="关闭提示" type="button" onClick={onDismiss}>
+        <XCircle size={16} />
+      </button>
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  state,
+  onCancel,
+  onConfirm
+}: {
+  state: ConfirmDialogState | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!state) {
+    return null;
+  }
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={state.title}>
+      <div className="modal-panel app-dialog">
+        <h2 className="page-title" style={{ fontSize: 18 }}>{state.title}</h2>
+        <p>{state.message}</p>
+        <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+          <button className="secondary-button" type="button" onClick={onCancel}>取消</button>
+          <button className={state.danger ? "danger-button" : "primary-button"} type="button" onClick={onConfirm}>
+            {state.confirmLabel ?? "确认"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2483,7 +2568,7 @@ function WebhookAdminPanel({
                 {delivery.responseBody ? <code className="audit-details">{delivery.responseBody}</code> : null}
                 {delivery.status === "failed" ? (
                   <button className="secondary-button" data-testid={`settings-webhook-delivery-retry-${delivery.id}`} type="button" onClick={() => onRetryDelivery(delivery)} disabled={isPending} style={{ marginTop: 10 }}>
-                    <RefreshCw size={15} />
+                    <RefreshCw className={isPending ? "spin-icon" : undefined} size={15} />
                     Retry
                   </button>
                 ) : null}

@@ -82,7 +82,6 @@ import { buildServiceHealthPayload } from "../src/lib/ops/service-health.ts";
 import { appUrl, getAppBaseUrl } from "../src/lib/security/app-origin.ts";
 import { shouldBlockCrossSiteMutation } from "../src/lib/security/csrf.ts";
 import { applySecurityHeaders, buildSecurityHeaders } from "../src/lib/security/headers.ts";
-import { shouldProceedWithDangerousAction } from "../src/lib/ui/confirm.ts";
 import { buildEmailAttachmentResponse } from "../src/lib/email/attachment-response.ts";
 import { canOpenEmailAiSource, emailAiSourceKey } from "../src/lib/email/ai-sources.ts";
 import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "../src/lib/email/attachments.ts";
@@ -716,17 +715,6 @@ await run("list query pagination accepts only positive integers and caps page si
   });
   assert.equal(cappedAuditQuery.page, 4);
   assert.equal(cappedAuditQuery.pageSize, 200);
-});
-
-await run("dangerous action confirmation follows the provided confirm result", () => {
-  const messages = [];
-  assert.equal(shouldProceedWithDangerousAction("Delete record?", (message) => {
-    messages.push(message);
-    return false;
-  }), false);
-  assert.deepEqual(messages, ["Delete record?"]);
-  assert.equal(shouldProceedWithDangerousAction("Delete record?", () => true), true);
-  assert.equal(shouldProceedWithDangerousAction("Delete record?", undefined), true);
 });
 
 await run("audit action labels are readable Chinese text", () => {
@@ -1464,6 +1452,28 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(styles, /\.settings-tabs-shell/);
   assert.match(styles, /\.settings-tab-list/);
   assert.match(styles, /\.settings-tab-button\.active/);
+});
+
+await run("workspace and settings use friendly feedback instead of browser dialogs", () => {
+  const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  const sourceWithUi = `${workspace}\n${settings}`;
+
+  assert.doesNotMatch(sourceWithUi, /window\.(alert|prompt|confirm)/);
+  assert.doesNotMatch(sourceWithUi, /shouldProceedWithDangerousAction/);
+  assert.match(workspace, /function ToastViewport/);
+  assert.match(workspace, /function ConfirmDialog/);
+  assert.match(workspace, /function PromptDialog/);
+  assert.match(settings, /function ToastViewport/);
+  assert.match(settings, /function ConfirmDialog/);
+  assert.match(sourceWithUi, /requestConfirm\(\{[\s\S]*danger: true/);
+  assert.match(styles, /\.toast/);
+  assert.match(styles, /\.app-dialog/);
+  assert.match(styles, /\.spin-icon/);
+  assert.match(styles, /@keyframes spin/);
+  assert.match(styles, /button:not\(:disabled\):active/);
+  assert.match(sourceWithUi, /<RefreshCw className=\{[^}]*spin-icon/);
 });
 
 await run("workspace supports deal pipeline drag and email sidebar collapse", () => {

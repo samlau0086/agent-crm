@@ -39,6 +39,28 @@ textarea {
 }
 
 button {
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+button:not(:disabled):active {
+  transform: translateY(1px) scale(0.99);
+}
+
+button:disabled {
+  cursor: progress;
+}
+
+.spin-icon {
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+button {
   cursor: pointer;
 }
 
@@ -1586,6 +1608,55 @@ button {
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 22px 60px rgba(15, 23, 42, 0.28);
+}
+
+.app-dialog {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.app-dialog p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.toast {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 120;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: min(420px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.18);
+}
+
+.toast span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-success {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.toast-error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.toast-info {
+  border-color: #93c5fd;
+  background: #eff6ff;
 }
 
 .email-attachment-modal {
