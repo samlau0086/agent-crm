@@ -643,6 +643,18 @@ export class CrmStore {
     return clone(this.mergeEmailThreadState(context, thread));
   }
 
+  deleteEmailThread(context: RequestContext, threadId: string): void {
+    requirePermission(context, "crm.write");
+    const thread = this.assertEmailThread(context, threadId);
+    this.data.emailMessages = (this.data.emailMessages ?? []).filter((message) => message.threadId !== thread.id);
+    this.data.emailThreadStates = (this.data.emailThreadStates ?? []).filter((state) => state.threadId !== thread.id);
+    this.data.emailThreads = (this.data.emailThreads ?? []).filter((candidate) => candidate.id !== thread.id);
+    this.writeAuditLog(context, "delete", "email_thread", thread.id, {
+      summary: `Deleted email thread ${thread.subject}`,
+      details: { threadId: thread.id, subject: thread.subject }
+    });
+  }
+
   updateEmailThreadState(
     context: RequestContext,
     threadId: string,
@@ -2949,7 +2961,7 @@ export class CrmStore {
     const emails = Array.from(new Set(participants.map((participant) => normalizeEmailAddress(participant)).filter((email) => email !== accountAddress)));
     return this.data.records
       .filter((record) => record.workspaceId === context.workspaceId && record.objectKey === "contacts" && this.canAccessRecord(context, record))
-      .find((record) => emails.includes(String(record.data.email ?? "").trim().toLowerCase()))?.id;
+      .find((record) => emails.some((email) => recordDataHasEmail(record.data, email)))?.id;
   }
 
   private createEmailThreadForMessage(
@@ -3080,6 +3092,43 @@ function normalizeEmailAddress(value: string): string {
     throw new Error("Email address must be valid");
   }
   return email;
+}
+
+function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return false;
+  }
+  const normalizedEmail = normalizeEmailAddress(emailAddress);
+  const record = data as Record<string, unknown>;
+  const contactMethods = Array.isArray(record.contactMethods) ? record.contactMethods : [];
+  const methodEmails = contactMethods.flatMap((method) => {
+    if (!method || typeof method !== "object" || Array.isArray(method)) {
+      return [];
+    }
+    const methodRecord = method as Record<string, unknown>;
+    return typeof methodRecord.value === "string" && (methodRecord.type === "email" || methodRecord.value.includes("@")) ? [methodRecord.value] : [];
+  });
+  const fieldEmails = Object.entries(record).flatMap(([key, value]) => {
+    if (typeof value !== "string") {
+      return [];
+    }
+    if (!key.toLowerCase().includes("email") && !value.includes("@")) {
+      return [];
+    }
+    return [value];
+  });
+  return [...methodEmails, ...fieldEmails].some((value) =>
+    value
+      .split(/[,\s;]+/)
+      .map((candidate) => {
+        try {
+          return normalizeEmailAddress(candidate);
+        } catch {
+          return "";
+        }
+      })
+      .includes(normalizedEmail)
+  );
 }
 
 function normalizeEmailSubject(value: string): string {

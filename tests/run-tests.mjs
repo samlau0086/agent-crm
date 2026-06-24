@@ -1491,17 +1491,32 @@ await run("email thread contact linking is driven by sender email and can return
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
   const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+  const store = readFileSync("src/lib/crm/store.ts", "utf8");
+  const threadRoute = readFileSync("src/app/api/email/threads/[id]/route.ts", "utf8");
 
   assert.match(source, /const \[recordReturnEmailThreadId, setRecordReturnEmailThreadId\] = useState\(""\)/);
   assert.match(source, /function openRecord\(record: CrmRecord, options: \{ returnEmailThreadId\?: string \} = \{\}\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
+  assert.match(source, /function startCreateContactForCompany\(company: CrmRecord\)/);
   assert.match(source, /onOpenEmailContact=\{\(threadId, contact\) => openEmailContact\(threadId, contact\)\}/);
   assert.match(source, /data-testid="email-thread-contact-link"/);
   assert.match(source, /data-testid="email-thread-open-contact"/);
+  assert.match(source, /data-testid="email-thread-unlink-record"/);
   assert.match(source, /data-testid="email-thread-create-contact"/);
   assert.match(source, /data-testid="email-thread-existing-contact"/);
   assert.match(source, /data-testid="email-thread-link-existing-contact"/);
+  assert.match(source, /data-testid="email-thread-restore"/);
+  assert.match(source, /data-testid="email-thread-permanent-delete"/);
+  assert.match(source, /performMailboxAction\(action: "archive" \| "unarchive" \| "delete" \| "restore"/);
   assert.doesNotMatch(source, /data-testid="email-thread-record"/);
+  assert.match(source, /const contactMethodsValueKey = "__contactMethods"/);
+  assert.match(source, /const companyPrimaryContactValueKey = "__primaryContactId"/);
+  assert.match(source, /function ContactMethodsEditor/);
+  assert.match(source, /function CompanyPrimaryContactSelect/);
+  assert.match(source, /data-testid="company-primary-contact-select"/);
+  assert.match(source, /data-testid="company-primary-contact-link"/);
+  assert.match(source, /getRecordEmailAddressesForComposer\(selectedFields, selectedRecord, records\)/);
+  assert.match(source, /getCompanyPrimaryContact\(record, records\)/);
   assert.match(source, /function getThreadPrimarySenderEmail/);
   assert.match(source, /function findContactByEmail/);
   assert.match(source, /function formatEmailContactLabel\(record: CrmRecord, fallbackEmail = ""\): string[\s\S]*`\$\{record\.title\}<\$\{emailAddress\}>`/);
@@ -1510,6 +1525,12 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(styles, /\.email-contact-link-actions/);
   assert.match(repository, /recordDataHasEmail\(candidate\.data, email\)/);
   assert.match(repository, /function recordDataHasEmail\(data: unknown, emailAddress: string\): boolean/);
+  assert.match(repository, /record\.contactMethods/);
+  assert.match(repository, /async deleteEmailThread\(context: RequestContext, threadId: string\): Promise<void>/);
+  assert.match(store, /find\(\(record\) => emails\.some\(\(email\) => recordDataHasEmail\(record\.data, email\)\)\)\?\.id/);
+  assert.match(store, /deleteEmailThread\(context: RequestContext, threadId: string\): void/);
+  assert.match(threadRoute, /export async function DELETE/);
+  assert.match(threadRoute, /deleteEmailThread\(context, params\.id\)/);
 });
 
 await run("record create and detail panels render full width in the main content flow", () => {
@@ -6405,6 +6426,53 @@ await run("email thread user state persists per user", () => {
   assert.equal(store.listEmailThreads(adminContext).find((thread) => thread.id === message.threadId)?.starred, true);
   assert.equal(store.getEmailThread(peerContext, message.threadId).archived, false);
   assert.equal(store.getEmailThread(peerContext, message.threadId).starred, false);
+});
+
+await run("email threads support restore unarchive permanent delete and contact method matching", () => {
+  const snapshot = structuredClone(seedData);
+  snapshot.records.push({
+    id: "contact-method-match",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Method Match",
+    ownerId: "user-admin",
+    data: {
+      contactMethods: [
+        { id: "method-email-1", type: "email", value: "method-match@example.com", label: "Work", primary: true },
+        { id: "method-whatsapp-1", type: "whatsapp", value: "+8613800000000", label: "WhatsApp" }
+      ]
+    },
+    createdAt: "2026-06-24T00:00:00.000Z",
+    updatedAt: "2026-06-24T00:00:00.000Z"
+  });
+  const store = new CrmStore(snapshot);
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Trash Inbox",
+    emailAddress: "trash@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "method-match@example.com",
+    to: ["trash@example.com"],
+    subject: "Contact method auto link",
+    bodyText: "The thread should link through contactMethods email."
+  });
+
+  assert.equal(store.getEmailThread(context, message.threadId).recordId, "contact-method-match");
+  assert.equal(store.updateEmailThreadState(context, message.threadId, { deleted: true }).deleted, true);
+  assert.equal(store.updateEmailThreadState(context, message.threadId, { deleted: false }).deleted, false);
+  assert.equal(store.updateEmailThreadState(context, message.threadId, { archived: true }).archived, true);
+  assert.equal(store.updateEmailThreadState(context, message.threadId, { archived: false }).archived, false);
+
+  store.deleteEmailThread(context, message.threadId);
+  assert.throws(() => store.getEmailThread(context, message.threadId), /Email thread not found/);
+  assert.throws(() => store.listEmailMessages(context, message.threadId), /Email thread not found/);
 });
 
 await run("email threads respect record visibility and unlinked ownership", () => {

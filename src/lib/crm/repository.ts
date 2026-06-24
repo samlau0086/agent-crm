@@ -1325,6 +1325,20 @@ export class PrismaCrmRepository {
     return mapEmailThread(updated, state);
   }
 
+  async deleteEmailThread(context: RequestContext, threadId: string): Promise<void> {
+    requirePermission(context, "crm.write");
+    const thread = await this.assertEmailThread(context, threadId);
+    await this.db.$transaction([
+      this.db.emailMessage.deleteMany({ where: { workspaceId: context.workspaceId, threadId: thread.id } }),
+      this.db.emailThreadState.deleteMany({ where: { workspaceId: context.workspaceId, threadId: thread.id } }),
+      this.db.emailThread.delete({ where: { id: thread.id } })
+    ]);
+    await this.writeAuditLog(context, "delete", "email_thread", thread.id, {
+      summary: `Deleted email thread ${thread.subject}`,
+      details: { threadId: thread.id, subject: thread.subject }
+    });
+  }
+
   async listEmailMessages(context: RequestContext, threadId: string): Promise<EmailMessage[]> {
     requirePermission(context, "crm.read");
     await this.assertEmailThread(context, threadId);
@@ -4962,18 +4976,30 @@ function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
     return false;
   }
   const normalizedEmail = normalizeEmailAddress(emailAddress);
-  return Object.entries(data).some(([key, value]) => {
+  const record = data as Record<string, unknown>;
+  const contactMethods = Array.isArray(record.contactMethods) ? record.contactMethods : [];
+  const methodEmails = contactMethods.flatMap((method) => {
+    if (!method || typeof method !== "object" || Array.isArray(method)) {
+      return [];
+    }
+    const methodRecord = method as Record<string, unknown>;
+    return typeof methodRecord.value === "string" && (methodRecord.type === "email" || methodRecord.value.includes("@")) ? [methodRecord.value] : [];
+  });
+  const fieldEmails = Object.entries(record).flatMap(([key, value]) => {
     if (typeof value !== "string") {
-      return false;
+      return [];
     }
     if (!key.toLowerCase().includes("email") && !value.includes("@")) {
-      return false;
+      return [];
     }
-    return value
+    return [value];
+  });
+  return [...methodEmails, ...fieldEmails].some((value) =>
+    value
       .split(/[,\s;]+/)
       .map(normalizeEmailAddress)
-      .includes(normalizedEmail);
-  });
+      .includes(normalizedEmail)
+  );
 }
 
 function emailMessageTime(message: EmailMessage): string {

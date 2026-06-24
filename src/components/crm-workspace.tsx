@@ -732,12 +732,20 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     [selectedActivities]
   );
   const selectedRecordEmailAddresses = useMemo(
-    () => (selectedRecord ? getRecordEmailAddresses(selectedFields, selectedRecord) : []),
-    [selectedFields, selectedRecord]
+    () => (selectedRecord ? getRecordEmailAddressesForComposer(selectedFields, selectedRecord, records) : []),
+    [records, selectedFields, selectedRecord]
   );
   const selectedRecordEmailThreads = useMemo(
     () => (selectedRecord ? getEmailThreadsForRecord(selectedRecord, records, emailThreads) : []),
     [emailThreads, records, selectedRecord]
+  );
+  const selectedCompanyContacts = useMemo(
+    () => (selectedRecord?.objectKey === "companies" ? getCompanyContactRecords(selectedRecord, records) : []),
+    [records, selectedRecord]
+  );
+  const selectedCompanyPrimaryContact = useMemo(
+    () => (selectedRecord?.objectKey === "companies" ? getCompanyPrimaryContact(selectedRecord, records) : undefined),
+    [records, selectedRecord]
   );
   const openTasks = useMemo(
     () =>
@@ -1108,6 +1116,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setSelectedRecordId(record.id);
     setRecordReturnEmailThreadId(options.returnEmailThreadId ?? "");
     setRecordPanelMode("detail");
+  }
+
+  function startCreateContactForCompany(company: CrmRecord) {
+    const contactFields = props.fields.filter((field) => field.objectKey === "contacts").sort((left, right) => left.position - right.position);
+    openObject("contacts");
+    setSelectedRecordId("");
+    setCreateTitle("");
+    setCreateOwnerId(props.contextUser.id);
+    setCreateValues({ ...buildInitialValues(contactFields, "contacts"), companyId: company.id });
+    setRecordReturnEmailThreadId("");
+    setRecordPanelMode("create");
   }
 
   async function closeRecordPanel() {
@@ -1632,7 +1651,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       method: "POST",
       body: {
         title: contactNameFromEmail(normalizedEmail),
-        data: { email: normalizedEmail }
+        data: {
+          contactMethods: [{ id: `method-${Date.now()}`, type: "email", value: normalizedEmail, label: "Email", primary: true }],
+          email: normalizedEmail
+        }
       }
     });
     setRecords((current) => mergeRecords(current, [created]));
@@ -1651,6 +1673,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     setEmailThreads((current) => [thread, ...current.filter((candidate) => candidate.id !== thread.id)]);
     return thread;
+  }
+
+  async function deleteEmailThread(threadId: string) {
+    const thread = emailThreads.find((candidate) => candidate.id === threadId);
+    if (thread && !shouldProceedWithDangerousAction(`确定彻底删除邮件线程“${thread.subject}”？此操作不能撤销。`)) {
+      return;
+    }
+    await fetchJson(`/api/email/threads/${threadId}`, { method: "DELETE" });
+    setEmailThreads((current) => current.filter((candidate) => candidate.id !== threadId));
+    setEmailMessagesByThread((current) => {
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+    if (selectedEmailThreadId === threadId) {
+      selectEmailThread(emailThreads.find((candidate) => candidate.id !== threadId)?.id ?? "");
+    }
+    setMessage("邮件线程已彻底删除");
+    router.refresh();
   }
 
   async function sendEmail() {
@@ -2250,6 +2291,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onChange={setCreateValues}
                     />
                   ) : null}
+                  {activeObject.key === "contacts" ? (
+                    <ContactMethodsEditor
+                      testIdPrefix="create-contact-method"
+                      value={createValues[contactMethodsValueKey] ?? ""}
+                      onChange={(methods) => setCreateValues((current) => withContactMethodValues(current, methods))}
+                    />
+                  ) : null}
                 </div>
                 <div className="toolbar" style={{ marginTop: 12 }}>
                   <button
@@ -2324,6 +2372,20 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onChange={setEditValues}
                         />
                       ) : null}
+                      {selectedRecord.objectKey === "contacts" ? (
+                        <ContactMethodsEditor
+                          testIdPrefix="edit-contact-method"
+                          value={editValues[contactMethodsValueKey] ?? ""}
+                          onChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
+                        />
+                      ) : null}
+                      {selectedRecord.objectKey === "companies" ? (
+                        <CompanyPrimaryContactSelect
+                          contacts={selectedCompanyContacts}
+                          value={editValues[companyPrimaryContactValueKey] ?? ""}
+                          onChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
+                        />
+                      ) : null}
                     </div>
                     <div className="toolbar" style={{ marginTop: 12 }}>
                       <button className="primary-button" data-testid="edit-record-save" type="button" onClick={() => runAction(submitUpdateRecord)} disabled={isPending || !editTitle.trim()}>
@@ -2347,6 +2409,47 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         </button>
                       )}
                     </div>
+
+                    {selectedRecord.objectKey === "companies" && (
+                      <section style={{ marginTop: 16 }}>
+                        <div className="stage-header" style={{ marginBottom: 8 }}>
+                          <div className="property-name">公司联系人</div>
+                          <button className="secondary-button" type="button" onClick={() => startCreateContactForCompany(selectedRecord)}>
+                            <UserPlus size={16} />
+                            新增联系人
+                          </button>
+                        </div>
+                        {selectedCompanyPrimaryContact ? (
+                          <button
+                            className="settings-item record-title"
+                            data-testid="company-primary-contact-link"
+                            type="button"
+                            onClick={() => openRecord(selectedCompanyPrimaryContact)}
+                          >
+                            <strong>主联系人：{formatEmailContactLabel(selectedCompanyPrimaryContact, getPrimaryRecordEmail(selectedCompanyPrimaryContact))}</strong>
+                            <div className="subtle">给公司发邮件时默认发送给此联系人</div>
+                          </button>
+                        ) : (
+                          <div className="empty-state">暂无主联系人。可先在联系人中关联此公司，再回到公司编辑主联系人。</div>
+                        )}
+                        {selectedCompanyContacts.length > 0 ? (
+                          <div className="settings-list" style={{ marginTop: 8 }}>
+                            {selectedCompanyContacts.map((contact) => (
+                              <button
+                                className="settings-item record-title"
+                                data-testid={`company-contact-${contact.id}`}
+                                key={contact.id}
+                                type="button"
+                                onClick={() => openRecord(contact)}
+                              >
+                                <strong>{formatEmailContactLabel(contact, getPrimaryRecordEmail(contact))}</strong>
+                                <div className="subtle">{contact.id === selectedCompanyPrimaryContact?.id ? "主联系人" : "关联联系人"}</div>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </section>
+                    )}
 
                     {(selectedRecordEmailAddresses.length > 0 || selectedRecordEmailThreads.length > 0) && (
                       <section style={{ marginTop: 16 }}>
@@ -2738,6 +2841,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             }}
             onUpdateThread={(threadId, recordId) => runAction(() => updateEmailThread(threadId, recordId))}
             onUpdateThreadState={(threadId, patch) => updateEmailThreadState(threadId, patch)}
+            onDeleteThread={(threadId) => runAction(() => deleteEmailThread(threadId))}
             onCreateContactFromEmail={(threadId, emailAddress) => runAction(() => createContactFromEmail(threadId, emailAddress))}
             onOpenEmailContact={(threadId, contact) => openEmailContact(threadId, contact)}
             onCreateAccount={() => runAction(createEmailAccount)}
@@ -2940,6 +3044,7 @@ function EmailWorkspace({
   onSelectThread,
   onUpdateThread,
   onUpdateThreadState,
+  onDeleteThread,
   onCreateContactFromEmail,
   onOpenEmailContact,
   onCreateAccount,
@@ -2997,6 +3102,7 @@ function EmailWorkspace({
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
+  onDeleteThread: (threadId: string) => void;
   onCreateContactFromEmail: (threadId: string, emailAddress: string) => void;
   onOpenEmailContact: (threadId: string, contact: CrmRecord) => void;
   onCreateAccount: () => void;
@@ -3046,6 +3152,7 @@ function EmailWorkspace({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
+  const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
   const [emailSettingsStep, setEmailSettingsStep] = useState<EmailSettingsStep>("identity");
@@ -3265,15 +3372,19 @@ function EmailWorkspace({
     closeComposePopup();
   }
 
-  function performMailboxAction(action: "archive" | "delete" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
+  function performMailboxAction(action: "archive" | "unarchive" | "delete" | "restore" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
     if (!threadIds.length) {
       return;
     }
     let patchByThreadId = new Map<string, Partial<EmailThreadUiState>>();
     if (action === "archive") {
       patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { archived: true, deleted: false }]));
+    } else if (action === "unarchive") {
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { archived: false }]));
     } else if (action === "delete") {
       patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { deleted: true, archived: false }]));
+    } else if (action === "restore") {
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { deleted: false }]));
     } else if (action === "read") {
       patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { read: true }]));
     } else if (action === "unread") {
@@ -3289,7 +3400,7 @@ function EmailWorkspace({
       persistThreadState(threadId, patch);
     }
     setSelectedThreadIds(new Set());
-    if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "snooze")) {
+    if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "restore" || action === "unarchive" || action === "snooze")) {
       setMailMode("list");
     }
   }
@@ -4048,12 +4159,24 @@ function EmailWorkspace({
                 >
                   <RefreshCw size={16} />
                 </button>
-                <button className="icon-button" aria-label="归档" title="归档" type="button" onClick={() => performMailboxAction("archive")} disabled={!selectedThreadIds.size}>
-                  <Archive size={16} />
-                </button>
-                <button className="icon-button" aria-label="删除" title="删除" type="button" onClick={() => performMailboxAction("delete")} disabled={!selectedThreadIds.size}>
-                  <Trash2 size={16} />
-                </button>
+                {mailbox === "archived" ? (
+                  <button className="icon-button" aria-label="取消归档" title="取消归档" type="button" onClick={() => performMailboxAction("unarchive")} disabled={!selectedThreadIds.size}>
+                    <RotateCcw size={16} />
+                  </button>
+                ) : (
+                  <button className="icon-button" aria-label="归档" title="归档" type="button" onClick={() => performMailboxAction("archive")} disabled={!selectedThreadIds.size}>
+                    <Archive size={16} />
+                  </button>
+                )}
+                {mailbox === "trash" ? (
+                  <button className="icon-button" aria-label="恢复" title="恢复" type="button" onClick={() => performMailboxAction("restore")} disabled={!selectedThreadIds.size}>
+                    <RotateCcw size={16} />
+                  </button>
+                ) : (
+                  <button className="icon-button" aria-label="删除" title="删除" type="button" onClick={() => performMailboxAction("delete")} disabled={!selectedThreadIds.size}>
+                    <Trash2 size={16} />
+                  </button>
+                )}
                 <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => performMailboxAction("snooze")} disabled={!selectedThreadIds.size}>
                   <Clock3 size={16} />
                 </button>
@@ -4131,8 +4254,19 @@ function EmailWorkspace({
                       </button>
                       <span className="gmail-thread-date">{formatDate(emailThreadTimeValue(thread))}</span>
                       <div className="gmail-row-actions">
-                        <button className="icon-button" aria-label="归档" type="button" onClick={() => performMailboxAction("archive", [thread.id])}><Archive size={15} /></button>
-                        <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
+                        {state.archived ? (
+                          <button className="icon-button" aria-label="取消归档" type="button" onClick={() => performMailboxAction("unarchive", [thread.id])}><RotateCcw size={15} /></button>
+                        ) : (
+                          <button className="icon-button" aria-label="归档" type="button" onClick={() => performMailboxAction("archive", [thread.id])}><Archive size={15} /></button>
+                        )}
+                        {state.deleted ? (
+                          <>
+                            <button className="icon-button" aria-label="恢复" type="button" onClick={() => performMailboxAction("restore", [thread.id])}><RotateCcw size={15} /></button>
+                            <button className="icon-button" aria-label="彻底删除" type="button" onClick={() => onDeleteThread(thread.id)}><Trash2 size={15} /></button>
+                          </>
+                        ) : (
+                          <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
+                        )}
                         <button className="icon-button" aria-label="稍后提醒" type="button" onClick={() => performMailboxAction("snooze", [thread.id])}><Clock3 size={15} /></button>
                         <button className="icon-button" aria-label={isRead ? "标记未读" : "标记已读"} type="button" onClick={() => performMailboxAction(isRead ? "unread" : "read", [thread.id])}>{isRead ? <Mail size={15} /> : <MailOpen size={15} />}</button>
                       </div>
@@ -4148,12 +4282,29 @@ function EmailWorkspace({
                 <button className="icon-button" aria-label="返回列表" type="button" onClick={() => setMailMode("list")}>
                   <ChevronLeft size={18} />
                 </button>
-                <button className="icon-button" aria-label="归档" title="归档" type="button" onClick={() => selectedThread && performMailboxAction("archive", [selectedThread.id])} disabled={!selectedThread}>
-                  <Archive size={16} />
-                </button>
-                <button className="icon-button" aria-label="删除" title="删除" type="button" onClick={() => selectedThread && performMailboxAction("delete", [selectedThread.id])} disabled={!selectedThread}>
-                  <Trash2 size={16} />
-                </button>
+                {selectedThreadState.archived ? (
+                  <button className="icon-button" aria-label="取消归档" title="取消归档" type="button" onClick={() => selectedThread && performMailboxAction("unarchive", [selectedThread.id])} disabled={!selectedThread}>
+                    <RotateCcw size={16} />
+                  </button>
+                ) : (
+                  <button className="icon-button" aria-label="归档" title="归档" type="button" onClick={() => selectedThread && performMailboxAction("archive", [selectedThread.id])} disabled={!selectedThread}>
+                    <Archive size={16} />
+                  </button>
+                )}
+                {selectedThreadState.deleted ? (
+                  <>
+                    <button className="icon-button" data-testid="email-thread-restore" aria-label="恢复" title="恢复" type="button" onClick={() => selectedThread && performMailboxAction("restore", [selectedThread.id])} disabled={!selectedThread}>
+                      <RotateCcw size={16} />
+                    </button>
+                    <button className="icon-button" data-testid="email-thread-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={() => selectedThread && onDeleteThread(selectedThread.id)} disabled={!selectedThread}>
+                      <Trash2 size={16} />
+                    </button>
+                  </>
+                ) : (
+                  <button className="icon-button" aria-label="删除" title="删除" type="button" onClick={() => selectedThread && performMailboxAction("delete", [selectedThread.id])} disabled={!selectedThread}>
+                    <Trash2 size={16} />
+                  </button>
+                )}
                 <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => selectedThread && performMailboxAction("snooze", [selectedThread.id])} disabled={!selectedThread}>
                   <Clock3 size={16} />
                 </button>
@@ -4181,14 +4332,28 @@ function EmailWorkspace({
                     <div className="email-contact-link" data-testid="email-thread-contact-link">
                       <span className="subtle">发件人</span>
                       {selectedThreadDisplayRecord ? (
-                        <button
-                          className="record-title email-contact-open"
-                          data-testid="email-thread-open-contact"
-                          type="button"
-                          onClick={() => onOpenEmailContact(selectedThread.id, selectedThreadDisplayRecord)}
-                        >
-                          {formatEmailContactLabel(selectedThreadDisplayRecord, selectedThreadSenderEmail)}
-                        </button>
+                        <div className="email-contact-link-actions">
+                          <button
+                            className="record-title email-contact-open"
+                            data-testid="email-thread-open-contact"
+                            type="button"
+                            onClick={() => onOpenEmailContact(selectedThread.id, selectedThreadDisplayRecord)}
+                          >
+                            {formatEmailContactLabel(selectedThreadDisplayRecord, selectedThreadSenderEmail)}
+                          </button>
+                          {selectedThread.recordId ? (
+                            <button
+                              className="secondary-button"
+                              data-testid="email-thread-unlink-record"
+                              type="button"
+                              onClick={() => onUpdateThread(selectedThread.id, "")}
+                              disabled={disabled}
+                            >
+                              <XCircle size={16} />
+                              解除关联
+                            </button>
+                          ) : null}
+                        </div>
                       ) : (
                         <div className="email-contact-link-actions">
                           <strong>{selectedThreadSenderEmail || "未知发件人"}</strong>
@@ -4735,6 +4900,7 @@ function Metric({ label, value, icon: Icon }: { label: string; value: string | n
 }
 
 function getRecordEmailAddresses(fields: FieldDefinition[], record: CrmRecord): string[] {
+  const contactMethodEmails = record.objectKey === "contacts" ? getContactMethodEmails(record) : [];
   const candidates = fields.flatMap((field) => {
     const value = record.data[field.key];
     if (typeof value !== "string") {
@@ -4748,7 +4914,7 @@ function getRecordEmailAddresses(fields: FieldDefinition[], record: CrmRecord): 
     return splitEmailList(value).filter(looksLikeEmail);
   });
 
-  return [...new Set(candidates.map((email) => email.toLowerCase()))];
+  return [...new Set([...contactMethodEmails, ...candidates.map((email) => email.toLowerCase())])];
 }
 
 function getPrimaryRecordEmail(record: CrmRecord): string {
@@ -4756,6 +4922,7 @@ function getPrimaryRecordEmail(record: CrmRecord): string {
 }
 
 function getRecordEmailAddressesFromData(record: CrmRecord): string[] {
+  const contactMethodEmails = record.objectKey === "contacts" ? getContactMethodEmails(record) : [];
   const candidates = Object.entries(record.data).flatMap(([key, value]) => {
     if (typeof value !== "string") {
       return [];
@@ -4765,7 +4932,29 @@ function getRecordEmailAddressesFromData(record: CrmRecord): string[] {
     }
     return splitEmailList(value).filter(looksLikeEmail);
   });
-  return [...new Set(candidates.map((email) => email.toLowerCase()))];
+  return [...new Set([...contactMethodEmails, ...candidates.map((email) => email.toLowerCase())])];
+}
+
+function getCompanyContactRecords(company: CrmRecord, records: CrmRecord[]): CrmRecord[] {
+  return records.filter((record) => record.objectKey === "contacts" && record.data.companyId === company.id);
+}
+
+function getCompanyPrimaryContact(company: CrmRecord, records: CrmRecord[]): CrmRecord | undefined {
+  const contacts = getCompanyContactRecords(company, records);
+  const primaryContactId = typeof company.data.primaryContactId === "string" ? company.data.primaryContactId : "";
+  return contacts.find((contact) => contact.id === primaryContactId) ?? contacts[0];
+}
+
+function getRecordEmailAddressesForComposer(fields: FieldDefinition[], record: CrmRecord, records: CrmRecord[]): string[] {
+  const directEmails = getRecordEmailAddresses(fields, record);
+  if (record.objectKey !== "companies") {
+    return directEmails;
+  }
+
+  const primaryContact = getCompanyPrimaryContact(record, records);
+  const primaryEmails = primaryContact ? getRecordEmailAddressesFromData(primaryContact) : [];
+  const relatedEmails = getCompanyContactRecords(record, records).flatMap((contact) => getRecordEmailAddressesFromData(contact));
+  return [...new Set([...primaryEmails, ...directEmails, ...relatedEmails].map((email) => email.toLowerCase()))];
 }
 
 function findContactByEmail(records: CrmRecord[], emailAddress: string): CrmRecord | undefined {
@@ -6454,16 +6643,158 @@ function ProductThumbnail({ imageUrl, title }: { imageUrl: unknown; title: strin
   );
 }
 
+type ContactMethodType = "email" | "whatsapp" | "mob" | "tel" | "other";
+
+type ContactMethodDraft = {
+  id: string;
+  type: ContactMethodType;
+  value: string;
+  label?: string;
+  primary?: boolean;
+};
+
+const contactMethodsValueKey = "__contactMethods";
+const companyPrimaryContactValueKey = "__primaryContactId";
+const hiddenContactFormFields = new Set(["email", "phone"]);
+const contactMethodTypeLabels: Record<ContactMethodType, string> = {
+  email: "Email",
+  whatsapp: "WhatsApp",
+  mob: "Mob",
+  tel: "Tel",
+  other: "其他"
+};
+
+function ContactMethodsEditor({
+  testIdPrefix,
+  value,
+  onChange
+}: {
+  testIdPrefix: string;
+  value: string;
+  onChange: (methods: ContactMethodDraft[]) => void;
+}) {
+  const methods = normalizeContactMethods(parseJsonValue(value));
+  const visibleMethods = methods.length ? methods : [emptyContactMethod("email", true)];
+
+  function updateMethod(methodId: string, patch: Partial<ContactMethodDraft>) {
+    const next = visibleMethods.map((method) => (method.id === methodId ? { ...method, ...patch } : method));
+    onChange(normalizePrimaryContactMethods(next));
+  }
+
+  function addMethod(type: ContactMethodType) {
+    onChange(normalizePrimaryContactMethods([...visibleMethods, emptyContactMethod(type)]));
+  }
+
+  function removeMethod(methodId: string) {
+    onChange(normalizePrimaryContactMethods(visibleMethods.filter((method) => method.id !== methodId)));
+  }
+
+  return (
+    <section className="wide settings-card" data-testid={`${testIdPrefix}-editor`}>
+      <div className="stage-header">
+        <div>
+          <strong>联系方式</strong>
+          <div className="subtle">支持同一种类型添加多条联系方式。</div>
+        </div>
+        <div className="toolbar">
+          <button className="secondary-button" type="button" onClick={() => addMethod("email")}>添加 Email</button>
+          <button className="secondary-button" type="button" onClick={() => addMethod("mob")}>添加电话</button>
+        </div>
+      </div>
+      <div className="settings-list" style={{ marginTop: 10 }}>
+        {visibleMethods.map((method, index) => (
+          <div className="settings-item" key={method.id}>
+            <div className="form-grid">
+              <label>
+                <span className="subtle">类型</span>
+                <select
+                  className="select"
+                  data-testid={`${testIdPrefix}-type-${index}`}
+                  value={method.type}
+                  onChange={(event) => updateMethod(method.id, { type: event.target.value as ContactMethodType })}
+                >
+                  {Object.entries(contactMethodTypeLabels).map(([type, label]) => (
+                    <option key={type} value={type}>{label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="subtle">值</span>
+                <input
+                  className="input"
+                  data-testid={`${testIdPrefix}-value-${index}`}
+                  value={method.value}
+                  onChange={(event) => updateMethod(method.id, { value: event.target.value })}
+                  placeholder={method.type === "email" ? "name@example.com" : "联系方式"}
+                />
+              </label>
+              <label>
+                <span className="subtle">标签</span>
+                <input
+                  className="input"
+                  value={method.label ?? ""}
+                  onChange={(event) => updateMethod(method.id, { label: event.target.value })}
+                  placeholder="工作 / 私人 / 采购"
+                />
+              </label>
+              <label className="checkbox-row" style={{ alignSelf: "end" }}>
+                <input
+                  checked={Boolean(method.primary)}
+                  type="checkbox"
+                  onChange={(event) => updateMethod(method.id, { primary: event.target.checked })}
+                />
+                主联系方式
+              </label>
+              <button className="icon-button" aria-label="删除联系方式" type="button" onClick={() => removeMethod(method.id)}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CompanyPrimaryContactSelect({
+  contacts,
+  value,
+  onChange
+}: {
+  contacts: CrmRecord[];
+  value: string;
+  onChange: (contactId: string) => void;
+}) {
+  return (
+    <label className="wide" data-testid="company-primary-contact-select">
+      <span className="subtle">主联系人</span>
+      <select className="select" value={value} onChange={(event) => onChange(event.target.value)} disabled={contacts.length === 0}>
+        <option value="">不指定</option>
+        {contacts.map((contact) => (
+          <option key={contact.id} value={contact.id}>
+            {formatEmailContactLabel(contact, getPrimaryRecordEmail(contact))}
+          </option>
+        ))}
+      </select>
+      <span className="subtle">联系人通过“联系人”的关联公司字段归属到此公司。给公司发邮件时会优先使用主联系人邮箱。</span>
+    </label>
+  );
+}
+
 const quoteLineItemsValueKey = "__quoteLineItems";
 const quoteFeesValueKey = "__quoteFees";
 const hiddenQuoteFormFields = new Set(["productId", "quoteCurrency", "totalAmount"]);
 
 function visibleFormFieldsForObject(objectKey: string | undefined, fields: FieldDefinition[]): FieldDefinition[] {
-  if (objectKey !== "quotes") {
-    return fields;
+  if (objectKey === "contacts") {
+    return fields.filter((field) => !hiddenContactFormFields.has(field.key));
   }
 
-  return fields.filter((field) => !hiddenQuoteFormFields.has(field.key));
+  if (objectKey === "quotes") {
+    return fields.filter((field) => !hiddenQuoteFormFields.has(field.key));
+  }
+
+  return fields;
 }
 
 function quoteLineItemsFromValues(values: Record<string, string>, fallbackCurrency?: string): QuoteLineItem[] {
@@ -6538,11 +6869,100 @@ function parseJsonValue(value: string | undefined): unknown {
   }
 }
 
+function emptyContactMethod(type: ContactMethodType, primary = false): ContactMethodDraft {
+  return {
+    id: `method-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    value: "",
+    label: contactMethodTypeLabels[type],
+    primary
+  };
+}
+
+function normalizeContactMethodType(value: unknown): ContactMethodType {
+  return value === "email" || value === "whatsapp" || value === "mob" || value === "tel" || value === "other" ? value : "other";
+}
+
+function normalizeContactMethods(value: unknown): ContactMethodDraft[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      const method: ContactMethodDraft = {
+        id: typeof record.id === "string" && record.id ? record.id : `method-${index}`,
+        type: normalizeContactMethodType(record.type),
+        value: typeof record.value === "string" ? record.value.trim() : "",
+        label: typeof record.label === "string" ? record.label.trim() : undefined,
+        primary: record.primary === true
+      };
+      return method.value ? method : undefined;
+    })
+    .filter((method): method is ContactMethodDraft => Boolean(method));
+}
+
+function normalizePrimaryContactMethods(methods: ContactMethodDraft[]): ContactMethodDraft[] {
+  const normalized = methods.map((method) => ({ ...method, value: method.value.trim(), label: method.label?.trim() })).filter((method) => method.value || method.id);
+  const firstPrimaryIndex = normalized.findIndex((method) => method.primary);
+  return normalized.map((method, index) => ({ ...method, primary: firstPrimaryIndex >= 0 ? index === firstPrimaryIndex : index === 0 }));
+}
+
+function contactMethodsFromValues(values: Record<string, string>): ContactMethodDraft[] {
+  return normalizeContactMethods(parseJsonValue(values[contactMethodsValueKey]));
+}
+
+function withContactMethodValues(values: Record<string, string>, methods: ContactMethodDraft[]): Record<string, string> {
+  return {
+    ...values,
+    [contactMethodsValueKey]: JSON.stringify(normalizePrimaryContactMethods(methods))
+  };
+}
+
+function contactMethodsFromRecordData(record: CrmRecord): ContactMethodDraft[] {
+  const methods = normalizeContactMethods(record.data.contactMethods);
+  if (methods.length) {
+    return methods;
+  }
+
+  const fallbackMethods: ContactMethodDraft[] = [];
+  const email = typeof record.data.email === "string" ? record.data.email.trim() : "";
+  const phone = typeof record.data.phone === "string" ? record.data.phone.trim() : "";
+  if (email) {
+    fallbackMethods.push({ id: "legacy-email", type: "email", value: email, label: "Email", primary: true });
+  }
+  if (phone) {
+    fallbackMethods.push({ id: "legacy-phone", type: "tel", value: phone, label: "Tel", primary: fallbackMethods.length === 0 });
+  }
+  return normalizePrimaryContactMethods(fallbackMethods);
+}
+
+function getContactMethodEmails(record: CrmRecord): string[] {
+  return contactMethodsFromRecordData(record)
+    .filter((method) => method.type === "email" && looksLikeEmail(method.value))
+    .map((method) => method.value.toLowerCase());
+}
+
+function getContactMethodPhone(methods: ContactMethodDraft[]): string {
+  return methods.find((method) => method.type === "mob" || method.type === "tel" || method.type === "whatsapp")?.value ?? "";
+}
+
 function buildInitialValues(fields: FieldDefinition[], objectKey?: string): Record<string, string> {
-  return fields.reduce<Record<string, string>>((accumulator, field) => {
+  const initialValues = fields.reduce<Record<string, string>>((accumulator, field) => {
     accumulator[field.key] = toInputValue(field.defaultValue);
     return accumulator;
   }, objectKey === "quotes" ? withQuotePricingValues({}, [], []) : {});
+  if (objectKey === "contacts") {
+    return withContactMethodValues(initialValues, []);
+  }
+  if (objectKey === "companies") {
+    return { ...initialValues, [companyPrimaryContactValueKey]: "" };
+  }
+  return initialValues;
 }
 
 function buildRecordValues(fields: FieldDefinition[], record: CrmRecord): Record<string, string> {
@@ -6559,6 +6979,14 @@ function buildRecordValues(fields: FieldDefinition[], record: CrmRecord): Record
   if (record.objectKey === "quotes") {
     const quoteCurrency = normalizeCurrencyCode(record.data.quoteCurrency) || "CNY";
     return withQuotePricingValues(values, normalizeQuoteLineItems(record.data.lineItems, quoteCurrency), normalizeQuoteFees(record.data.fees, quoteCurrency), quoteCurrency);
+  }
+
+  if (record.objectKey === "contacts") {
+    return withContactMethodValues(values, contactMethodsFromRecordData(record));
+  }
+
+  if (record.objectKey === "companies") {
+    values[companyPrimaryContactValueKey] = typeof record.data.primaryContactId === "string" ? record.data.primaryContactId : "";
   }
 
   return values;
@@ -6603,6 +7031,19 @@ function parseFormValues(fields: FieldDefinition[], values: Record<string, strin
     data.lineItems = lineItems;
     data.fees = fees;
     data.totalAmount = totals.totalAmount;
+  }
+
+  if (objectKey === "contacts") {
+    const methods = contactMethodsFromValues(values);
+    const primaryEmail = methods.find((method) => method.type === "email" && looksLikeEmail(method.value))?.value ?? "";
+    data.contactMethods = methods;
+    data.email = primaryEmail ? primaryEmail.toLowerCase() : "";
+    const phone = getContactMethodPhone(methods);
+    data.phone = phone || "";
+  }
+
+  if (objectKey === "companies") {
+    data.primaryContactId = values[companyPrimaryContactValueKey] || "";
   }
 
   return data;

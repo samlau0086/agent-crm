@@ -23,3 +23,13 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     return handleApiError(error, request);
   }
 }
+
+export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const context = await getRequestContext(request);
+    await getCrmRepository().deleteEmailThread(context, params.id);
+    return ok({ deleted: true });
+  } catch (error) {
+    return handleApiError(error, request);
+  }
+}
