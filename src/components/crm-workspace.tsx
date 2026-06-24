@@ -621,6 +621,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const previousCreateFormResetKey = useRef("");
   const previousViewDraftResetKey = useRef("");
   const previousEditFormResetKey = useRef("");
+  const pendingRecordOpenRef = useRef<{ objectKey: string; recordId: string; returnEmailThreadId: string } | null>(null);
 
   const routeObjectKeys = useMemo(() => props.objects.map((object) => object.key), [props.objects]);
   const activeObject = useMemo(
@@ -862,8 +863,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const nextNav = route.navKey as NavKey;
     setActiveNav(nextNav);
     if (nextNav === "records" || coreObjects.has(nextNav)) {
+      const pendingRecordOpen = pendingRecordOpenRef.current;
       setActiveObjectKey(route.objectKey);
-      setRecordPanelMode("closed");
+      if (pendingRecordOpen?.objectKey === route.objectKey) {
+        setSelectedRecordId(pendingRecordOpen.recordId);
+        setRecordReturnEmailThreadId(pendingRecordOpen.returnEmailThreadId);
+        setRecordPanelMode("detail");
+        pendingRecordOpenRef.current = null;
+      } else {
+        pendingRecordOpenRef.current = null;
+        setRecordPanelMode("closed");
+      }
       setShowListSettings(false);
     }
   }, [pathname, routeObjectKeys]);
@@ -1112,8 +1122,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   function openRecord(record: CrmRecord, options: { returnEmailThreadId?: string } = {}) {
+    const nextNav = coreObjects.has(record.objectKey) ? (record.objectKey as NavKey) : "records";
+    const nextPath = crmPathForNav(nextNav, record.objectKey);
     setRecords((current) => mergeRecords(current, [record]));
-    openObject(record.objectKey);
+    setActiveObjectKey(record.objectKey);
+    setActiveNav(nextNav);
+    if (pathname !== nextPath) {
+      pendingRecordOpenRef.current = {
+        objectKey: record.objectKey,
+        recordId: record.id,
+        returnEmailThreadId: options.returnEmailThreadId ?? ""
+      };
+      router.push(nextPath);
+    } else {
+      pendingRecordOpenRef.current = null;
+    }
+    setQuery("");
+    setShowListSettings(false);
+    setMessage(null);
+    setError(null);
     setSelectedRecordId(record.id);
     setRecordReturnEmailThreadId(options.returnEmailThreadId ?? "");
     setRecordPanelMode("detail");
