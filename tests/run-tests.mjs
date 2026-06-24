@@ -1569,6 +1569,9 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /linkExistingEmailContact\(selectedThread\.id, contactId, selectedThreadSenderEmail\)/);
   assert.match(source, /data-testid="email-thread-restore"/);
   assert.match(source, /data-testid="email-thread-permanent-delete"/);
+  assert.match(source, /data-testid="email-thread-bulk-permanent-delete"/);
+  assert.match(source, /async function deleteEmailThreads\(threadIds: string\[\]\)/);
+  assert.match(source, /确定彻底删除 \$\{targetThreads\.length\} 个邮件线程/);
   assert.match(source, /performMailboxAction\(action: "archive" \| "unarchive" \| "delete" \| "restore"/);
   assert.doesNotMatch(source, /data-testid="email-thread-record"/);
   assert.match(source, /const contactMethodsValueKey = "__contactMethods"/);
@@ -1697,6 +1700,26 @@ await run("email account settings separate inbound credentials from outbound ser
   assert.match(schema, /outboundServices: z\.array\(emailOutboundServiceConfigSchema\)\.max\(10\)\.optional\(\)/);
   assert.match(schema, /scope: z\.enum\(\["all", "inbound", "outbound"\]\)\.optional\(\)/);
   assert.match(schema, /outboundServiceId: z\.string\(\)\.trim\(\)\.min\(1\)\.max\(120\)\.optional\(\)/);
+});
+
+await run("email workspace exposes background sync schedule settings", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const page = readFileSync("src/app/crm-page.tsx", "utf8");
+  const route = readFileSync("src/app/api/email/sync-settings/route.ts", "utf8");
+  const schema = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
+  const migration = readFileSync("prisma/migrations/20260625093000_email_sync_settings/migration.sql", "utf8");
+  assert.match(source, /data-testid="email-sync-settings-panel"/);
+  assert.match(source, /data-testid="email-sync-enabled"/);
+  assert.match(source, /data-testid="email-sync-mode"/);
+  assert.match(source, /data-testid="email-sync-interval-minutes"/);
+  assert.match(source, /data-testid="email-sync-daily-at"/);
+  assert.match(source, /data-testid="email-sync-limit"/);
+  assert.match(source, /\/api\/email\/sync-settings/);
+  assert.match(page, /getEmailSyncSettings\(context\)/);
+  assert.match(route, /emailSyncSettingsUpdateSchema/);
+  assert.match(schema, /mode: z\.enum\(\["interval", "daily"\]\)\.optional\(\)/);
+  assert.match(schema, /dailyAt: z\.string\(\)\.trim\(\)\.regex/);
+  assert.match(migration, /CREATE TABLE "EmailSyncSettings"/);
 });
 
 await run("email workspace diagnostics display ai automation eligibility policy", () => {
@@ -2342,10 +2365,14 @@ await run("email sync script dry run describes loop scheduler settings", () => {
   assert.equal(plan.loop, true);
   assert.equal(plan.intervalMs, 60000);
   assert.equal(plan.limit, 25);
+  assert.match(plan.scheduleSource, /database EmailSyncSettings/);
   assert.equal(plan.requiredPermission, "crm.admin");
   const syncScript = readFileSync("scripts/email-sync.ts", "utf8");
   assert.match(syncScript, /resolveOperationalUser/);
   assert.match(syncScript, /runSyncCycle/);
+  assert.match(syncScript, /getEmailSyncSettings\(userResolution\.context\)/);
+  assert.match(syncScript, /msUntilDailyTime\(settings\.dailyAt\)/);
+  assert.match(syncScript, /settings\.intervalMinutes \* 60_000/);
   assert.match(syncScript, /operationalUser:\s*\{/);
   assert.match(syncScript, /fallbackUsed:\s*userResolution\.fallbackUsed/);
 });

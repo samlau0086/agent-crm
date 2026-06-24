@@ -575,6 +575,16 @@ export const emailAiSettingsUpdateSchema = z
   })
   .strict();
 
+export const emailSyncSettingsUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(["interval", "daily"]).optional(),
+    intervalMinutes: z.number().int().min(1).max(1440).optional(),
+    dailyAt: z.string().trim().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+    limit: z.number().int().min(1).max(100).optional()
+  })
+  .strict();
+
 export const emailAssistantContextSchema = z
   .object({
     purpose: emailAssistantPurposeSchema,

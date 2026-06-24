@@ -67,6 +67,7 @@ import type {
   EmailAccount,
   EmailAttachment,
   EmailAiSettings,
+  EmailSyncSettings,
   EmailConnectionConfig,
   EmailInboundConnectionConfig,
   EmailMessage,
@@ -122,6 +123,7 @@ interface CrmWorkspaceProps {
   emailAccounts: EmailAccount[];
   emailThreads: EmailThread[];
   emailAiSettings: EmailAiSettings;
+  emailSyncSettings?: EmailSyncSettings;
   knowledgeArticles: KnowledgeArticle[];
   mediaAssets: MediaAsset[];
   auditLogs: AuditLog[];
@@ -151,6 +153,15 @@ type EmailThreadUiState = {
 type AiSource = { label: string; objectKey?: string; recordId?: string; activityId?: string };
 type AiResponse = { text: string; sources: AiSource[] };
 type EmailAiSource = EmailAiSourceRef;
+const defaultEmailSyncSettings: EmailSyncSettings = {
+  workspaceId: "",
+  enabled: true,
+  mode: "interval",
+  intervalMinutes: 5,
+  dailyAt: "03:00",
+  limit: 25,
+  updatedAt: ""
+};
 type EmailAiGenerateResult = {
   enabled: boolean;
   purpose: "draft" | "translate" | "context_analysis" | "summarize";
@@ -948,6 +959,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailDetailThreadId, setEmailDetailThreadId] = useState(routeEmailThreadId);
   const [emailWorkspaceView, setEmailWorkspaceView] = useState<EmailWorkspaceView>("mail");
   const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
+  const [emailSyncSettings, setEmailSyncSettings] = useState<EmailSyncSettings>(props.emailSyncSettings ?? defaultEmailSyncSettings);
   const [emailAccountDraft, setEmailAccountDraft] = useState<EmailAccountDraft>(() => createEmptyEmailAccountDraft());
   const [emailDraft, setEmailDraft] = useState<EmailComposeDraft>({
     clientRequestId: createEmailClientRequestId(),
@@ -1362,6 +1374,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailAccounts(props.emailAccounts);
     setEmailThreads(props.emailThreads);
     setEmailAiSettings(props.emailAiSettings);
+    setEmailSyncSettings(props.emailSyncSettings ?? defaultEmailSyncSettings);
     setKnowledgeArticles(props.knowledgeArticles);
     setMediaAssets(props.mediaAssets);
     setEmailDraft((current) => {
@@ -1374,7 +1387,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEmailDraft((current) => clearEmailDraftAiProvenance(current));
       setSelectedEmailThreadId(nextSelectedThreadId);
     }
-  }, [props.emailAccounts, props.emailAiSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
+  }, [props.emailAccounts, props.emailAiSettings, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
 
   useEffect(() => {
     if (!routeEmailThreadId) {
@@ -2356,29 +2369,39 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function deleteEmailThread(threadId: string) {
-    const thread = emailThreads.find((candidate) => candidate.id === threadId);
+    await deleteEmailThreads([threadId]);
+  }
+
+  async function deleteEmailThreads(threadIds: string[]) {
+    const ids = Array.from(new Set(threadIds)).filter(Boolean);
+    if (!ids.length) {
+      return;
+    }
+    const targetThreads = emailThreads.filter((candidate) => ids.includes(candidate.id));
+    const thread = targetThreads[0];
     if (
-      thread &&
       !(await requestConfirm({
         title: "彻底删除邮件",
-        message: `确定彻底删除邮件线程“${thread.subject}”？此操作不能撤销。`,
+        message: targetThreads.length > 1 ? `确定彻底删除 ${targetThreads.length} 个邮件线程？此操作不能撤销。` : `确定彻底删除邮件线程“${thread?.subject ?? ids[0]}”？此操作不能撤销。`,
         confirmLabel: "彻底删除",
         danger: true
       }))
     ) {
       return;
     }
-    await fetchJson(`/api/email/threads/${threadId}`, { method: "DELETE" });
-    setEmailThreads((current) => current.filter((candidate) => candidate.id !== threadId));
+    await Promise.all(ids.map((threadId) => fetchJson(`/api/email/threads/${threadId}`, { method: "DELETE" })));
+    setEmailThreads((current) => current.filter((candidate) => !ids.includes(candidate.id)));
     setEmailMessagesByThread((current) => {
       const next = { ...current };
-      delete next[threadId];
+      ids.forEach((threadId) => {
+        delete next[threadId];
+      });
       return next;
     });
-    if (selectedEmailThreadId === threadId) {
-      selectEmailThread(emailThreads.find((candidate) => candidate.id !== threadId)?.id ?? "");
+    if (ids.includes(selectedEmailThreadId)) {
+      selectEmailThread(emailThreads.find((candidate) => !ids.includes(candidate.id))?.id ?? "");
     }
-    setMessage("邮件线程已彻底删除");
+    setMessage(ids.length > 1 ? `已彻底删除 ${ids.length} 个邮件线程` : "邮件线程已彻底删除");
     router.refresh();
   }
 
@@ -2637,6 +2660,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     setEmailAiSettings(settings);
     setMessage("邮件 AI 设置已更新");
+  }
+
+  async function updateEmailSyncSettingsPatch(patch: Partial<Omit<EmailSyncSettings, "workspaceId" | "updatedAt">>) {
+    const settings = await fetchJson<EmailSyncSettings>("/api/email/sync-settings", {
+      method: "PATCH",
+      body: patch
+    });
+    setEmailSyncSettings(settings);
+    setMessage("邮件后台同步设置已更新");
   }
 
   async function refreshEmailDiagnostics() {
@@ -3683,6 +3715,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             selectedRecord={selectedRecord}
             records={records}
             aiSettings={emailAiSettings}
+            syncSettings={emailSyncSettings}
             accountDraft={emailAccountDraft}
             emailDraft={emailDraft}
             aiPurpose={emailAiPurpose}
@@ -3712,6 +3745,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateThread={(threadId, recordId) => runAction(() => updateEmailThread(threadId, recordId))}
             onUpdateThreadState={(threadId, patch) => updateEmailThreadState(threadId, patch)}
             onDeleteThread={(threadId) => runAction(() => deleteEmailThread(threadId))}
+            onDeleteThreads={(threadIds) => runAction(() => deleteEmailThreads(threadIds))}
             onCreateContactFromEmail={(threadId, emailAddress) => runAction(() => createContactFromEmail(threadId, emailAddress))}
             onLinkExistingContactFromEmail={(threadId, contactId, emailAddress) => runAction(() => linkExistingContactFromEmail(threadId, contactId, emailAddress))}
             onUnlinkContactEmailFromThread={(threadId, contactId, emailAddress) => runAction(() => unlinkContactEmailFromThread(threadId, contactId, emailAddress))}
@@ -3743,6 +3777,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
             onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
+            onUpdateSyncSettings={(patch) => runAction(() => updateEmailSyncSettingsPatch(patch))}
             onShowToast={showToast}
             onShowSuccess={showSuccess}
             onRequestPrompt={requestPrompt}
@@ -3997,6 +4032,7 @@ function EmailWorkspace({
   selectedRecord,
   records,
   aiSettings,
+  syncSettings,
   accountDraft,
   emailDraft,
   aiPurpose,
@@ -4021,6 +4057,7 @@ function EmailWorkspace({
   onUpdateThread,
   onUpdateThreadState,
   onDeleteThread,
+  onDeleteThreads,
   onCreateContactFromEmail,
   onLinkExistingContactFromEmail,
   onUnlinkContactEmailFromThread,
@@ -4050,6 +4087,7 @@ function EmailWorkspace({
   onUpdateKnowledgeArticle,
   onToggleAiFeature,
   onUpdateAiSettings,
+  onUpdateSyncSettings,
   onShowToast,
   onShowSuccess,
   onRequestPrompt,
@@ -4065,6 +4103,7 @@ function EmailWorkspace({
   selectedRecord?: CrmRecord;
   records: CrmRecord[];
   aiSettings: EmailAiSettings;
+  syncSettings: EmailSyncSettings;
   accountDraft: EmailAccountDraft;
   emailDraft: EmailComposeDraft;
   aiPurpose: EmailAiGenerateResult["purpose"];
@@ -4089,6 +4128,7 @@ function EmailWorkspace({
   onUpdateThread: (threadId: string, recordId: string) => void;
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
   onDeleteThread: (threadId: string) => void;
+  onDeleteThreads: (threadIds: string[]) => void;
   onCreateContactFromEmail: (threadId: string, emailAddress: string) => void;
   onLinkExistingContactFromEmail: (threadId: string, contactId: string, emailAddress: string) => void;
   onUnlinkContactEmailFromThread: (threadId: string, contactId: string, emailAddress: string) => void;
@@ -4122,6 +4162,7 @@ function EmailWorkspace({
       providerConfig?: Partial<EmailAiSettings["providerConfig"]>;
     }
   ) => void;
+  onUpdateSyncSettings: (patch: Partial<Omit<EmailSyncSettings, "workspaceId" | "updatedAt">>) => void;
   onShowToast: (toast: ToastState) => void;
   onShowSuccess: (message: string) => void;
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
@@ -5257,6 +5298,59 @@ function EmailWorkspace({
     );
   }
 
+  function renderEmailSyncSettingsPanel() {
+    const enabledAccountCount = accounts.filter((account) => {
+      const capability = getEmailProviderCapability(account.provider);
+      return account.status === "active" && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
+    }).length;
+    return (
+      <section className="section email-account-list-panel" data-testid="email-sync-settings-panel">
+        <div className="settings-panel-header">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>后台自动同步</h2>
+            <div className="subtle">不打开浏览器也会由 email-sync 容器按此策略同步收件箱。</div>
+          </div>
+          <span className={syncSettings.enabled ? "badge" : "danger-badge"}>{syncSettings.enabled ? "已启用" : "已关闭"}</span>
+        </div>
+        <div className="settings-list">
+          <label className="settings-toggle">
+            <input data-testid="email-sync-enabled" type="checkbox" checked={syncSettings.enabled} onChange={(event) => onUpdateSyncSettings({ enabled: event.target.checked })} disabled={disabled} />
+            启用后台自动同步
+          </label>
+          <div className="form-grid">
+            <label>
+              <span className="subtle">同步模式</span>
+              <select className="select" data-testid="email-sync-mode" value={syncSettings.mode} onChange={(event) => onUpdateSyncSettings({ mode: event.target.value as EmailSyncSettings["mode"] })} disabled={disabled || !syncSettings.enabled}>
+                <option value="interval">按间隔同步</option>
+                <option value="daily">每日固定时间</option>
+              </select>
+            </label>
+            {syncSettings.mode === "interval" ? (
+              <label>
+                <span className="subtle">间隔分钟</span>
+                <input className="input" data-testid="email-sync-interval-minutes" min={1} max={1440} type="number" value={syncSettings.intervalMinutes} onChange={(event) => onUpdateSyncSettings({ intervalMinutes: numberInputValue(event.target.value, syncSettings.intervalMinutes) })} disabled={disabled || !syncSettings.enabled} />
+              </label>
+            ) : (
+              <label>
+                <span className="subtle">每日时间</span>
+                <input className="input" data-testid="email-sync-daily-at" type="time" value={syncSettings.dailyAt} onChange={(event) => onUpdateSyncSettings({ dailyAt: event.target.value })} disabled={disabled || !syncSettings.enabled} />
+              </label>
+            )}
+            <label>
+              <span className="subtle">每轮上限</span>
+              <input className="input" data-testid="email-sync-limit" min={1} max={100} type="number" value={syncSettings.limit} onChange={(event) => onUpdateSyncSettings({ limit: numberInputValue(event.target.value, syncSettings.limit) })} disabled={disabled || !syncSettings.enabled} />
+            </label>
+          </div>
+          <div className="toolbar">
+            <span className="badge">可同步账户 {enabledAccountCount}</span>
+            <span className="badge">{syncSettings.mode === "daily" ? `每日 ${syncSettings.dailyAt}` : `每 ${syncSettings.intervalMinutes} 分钟`}</span>
+            <span className="badge">上限 {syncSettings.limit}</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div className={`email-workspace ${view === "mail" ? "mail-view" : ""}`}>
       {view !== "mail" ? (
@@ -5280,6 +5374,7 @@ function EmailWorkspace({
         <div className="email-settings-layout">
           <div className="email-settings-side">
             {renderEmailAccountList()}
+            {canManageEmailSettings ? renderEmailSyncSettingsPanel() : null}
             {canManageEmailSettings ? <EmailDiagnosticsPanel diagnostics={diagnostics} connectionTestRun={connectionTestRun} disabled={disabled} onRefresh={onRefreshDiagnostics} onTestAll={onTestAllConnections} onRetryMessage={onRetryMessage} /> : null}
           </div>
           <section className="section email-settings-main">
@@ -5476,9 +5571,14 @@ function EmailWorkspace({
                   </button>
                 )}
                 {mailbox === "trash" ? (
-                  <button className="icon-button" aria-label="恢复" title="恢复" type="button" onClick={() => performMailboxAction("restore")} disabled={!selectedThreadIds.size}>
-                    <RotateCcw size={16} />
-                  </button>
+                  <>
+                    <button className="icon-button" aria-label="恢复" title="恢复" type="button" onClick={() => performMailboxAction("restore")} disabled={!selectedThreadIds.size}>
+                      <RotateCcw size={16} />
+                    </button>
+                    <button className="icon-button" data-testid="email-thread-bulk-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={() => onDeleteThreads(selectedThreadIdsArray)} disabled={!selectedThreadIds.size}>
+                      <Trash2 size={16} />
+                    </button>
+                  </>
                 ) : (
                   <button className="icon-button" aria-label="删除" title="删除" type="button" onClick={() => performMailboxAction("delete")} disabled={!selectedThreadIds.size}>
                     <Trash2 size={16} />

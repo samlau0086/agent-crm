@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { getRequestContextByUserId } from "@/lib/crm/repository";
+import { getCrmRepository, getRequestContextByUserId } from "@/lib/crm/repository";
 import { scheduleEmailSyncForActiveAccounts } from "@/lib/email/sync-scheduler";
+import type { EmailSyncSettings } from "@/lib/crm/types";
 import { assertDatabaseReachable } from "./database-preflight.ts";
 import { loadLocalEnvFiles } from "./load-env.ts";
 import { configuredOperationalUserId, resolveOperationalUser, type OperationalUserResolution } from "./operational-user.ts";
@@ -10,8 +11,8 @@ loadLocalEnvFiles();
 const args = parseArgs(process.argv.slice(2));
 const userSelection = configuredOperationalUserId(args, ["EMAIL_SYNC_USER_ID", "JOB_USER_ID"]);
 const loop = Boolean(args.loop);
-const intervalMs = normalizePositiveInteger(args["interval-ms"], process.env.EMAIL_SYNC_INTERVAL_MS, 300000);
-const limit = normalizeSyncLimit(args.limit, process.env.EMAIL_SYNC_LIMIT);
+const fallbackIntervalMs = normalizePositiveInteger(args["interval-ms"], process.env.EMAIL_SYNC_INTERVAL_MS, 300000);
+const fallbackLimit = normalizeSyncLimit(args.limit, process.env.EMAIL_SYNC_LIMIT);
 let stopping = false;
 
 try {
@@ -25,8 +26,9 @@ try {
             ? "Use the explicit --user-id value and fail if it is unavailable or lacks crm.admin."
             : "Try the configured user id first, then fall back to the first active user with crm.admin.",
           loop,
-          intervalMs,
-          limit,
+          intervalMs: fallbackIntervalMs,
+          limit: fallbackLimit,
+          scheduleSource: "database EmailSyncSettings when available; environment fallback otherwise",
           requiredPermission: "crm.admin",
           action: "schedule active sync-enabled mailbox accounts"
         },
@@ -41,9 +43,9 @@ try {
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
     while (!stopping) {
-      await runSyncCycle();
-      if (!stopping) {
-        await sleep(intervalMs);
+      const nextDelayMs = await runSyncCycle();
+      if (!stopping && nextDelayMs > 0) {
+        await sleep(nextDelayMs);
       }
     }
   } else {
@@ -61,7 +63,7 @@ try {
   process.exit(1);
 }
 
-async function runSyncCycle(): Promise<void> {
+async function runSyncCycle(): Promise<number> {
   try {
     await assertDatabaseReachable({ label: "email-sync" });
     const userResolution = await resolveOperationalUser({
@@ -69,15 +71,31 @@ async function runSyncCycle(): Promise<void> {
       strict: userSelection.strict,
       purpose: "email sync scheduling"
     });
-    await runSync(userResolution.context, userResolution);
+    const settings = await getCrmRepository().getEmailSyncSettings(userResolution.context);
+    if (!settings.enabled) {
+      console.log(JSON.stringify({ event: "email_sync_skipped", reason: "disabled", workspaceId: userResolution.context.workspaceId, userId: userResolution.context.user.id }));
+      return 60_000;
+    }
+    const delayBeforeRun = settings.mode === "daily" ? msUntilDailyTime(settings.dailyAt) : 0;
+    if (delayBeforeRun > 0) {
+      console.log(JSON.stringify({ event: "email_sync_waiting", mode: settings.mode, dailyAt: settings.dailyAt, nextRunInMs: delayBeforeRun }));
+      await sleep(delayBeforeRun);
+      if (stopping) {
+        return 0;
+      }
+    }
+    await runSync(userResolution.context, userResolution, settings);
+    return settings.mode === "interval" ? settings.intervalMinutes * 60_000 : 60_000;
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
+    return fallbackIntervalMs;
   }
 }
 
-async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUserId>>, userResolution: OperationalUserResolution): Promise<void> {
+async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUserId>>, userResolution: OperationalUserResolution, settings?: EmailSyncSettings): Promise<void> {
   try {
-    const summary = await scheduleEmailSyncForActiveAccounts(context, { limit });
+    const effectiveLimit = settings?.limit ?? fallbackLimit;
+    const summary = await scheduleEmailSyncForActiveAccounts(context, { limit: effectiveLimit });
     console.log(
       JSON.stringify(
         {
@@ -92,7 +110,10 @@ async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUse
             requiredPermission: userResolution.requiredPermission
           },
           loop,
-          intervalMs: loop ? intervalMs : undefined,
+          schedule: settings
+            ? { enabled: settings.enabled, mode: settings.mode, intervalMinutes: settings.intervalMinutes, dailyAt: settings.dailyAt, limit: settings.limit }
+            : { enabled: true, mode: "interval", intervalMinutes: Math.max(1, Math.floor(fallbackIntervalMs / 60_000)), limit: fallbackLimit },
+          intervalMs: loop ? (settings?.intervalMinutes ? settings.intervalMinutes * 60_000 : fallbackIntervalMs) : undefined,
           limit: summary.limit,
           scheduledCount: summary.scheduledCount,
           skippedCount: summary.skippedCount,
@@ -152,4 +173,17 @@ function normalizeSyncLimit(argValue: string | boolean | undefined, envValue: st
     throw new Error("EMAIL_SYNC_LIMIT or --limit must be an integer between 1 and 100.");
   }
   return value;
+}
+
+function msUntilDailyTime(value: string): number {
+  const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  const hours = match ? Number(match[1]) : 3;
+  const minutes = match ? Number(match[2]) : 0;
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(hours, minutes, 0, 0);
+  if (next.getTime() <= now.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+  return Math.max(1000, next.getTime() - now.getTime());
 }

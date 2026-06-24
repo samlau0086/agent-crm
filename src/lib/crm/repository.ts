@@ -50,6 +50,7 @@ import type {
   EmailAttachment,
   EmailAiGenerationAuditInput,
   EmailAiSettings,
+  EmailSyncSettings,
   AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
@@ -483,6 +484,26 @@ function mapEmailAiSettings(settings: {
     maxHistoryMessages: settings.maxHistoryMessages,
     maxKnowledgeArticles: settings.maxKnowledgeArticles,
     maxContextChars: settings.maxContextChars,
+    updatedAt: settings.updatedAt.toISOString()
+  };
+}
+
+function mapEmailSyncSettings(settings: {
+  workspaceId: string;
+  enabled: boolean;
+  mode: string;
+  intervalMinutes: number;
+  dailyAt: string;
+  limit: number;
+  updatedAt: Date;
+}): EmailSyncSettings {
+  return {
+    workspaceId: settings.workspaceId,
+    enabled: settings.enabled,
+    mode: settings.mode === "daily" ? "daily" : "interval",
+    intervalMinutes: normalizeIntegerLimit(settings.intervalMinutes, 1, 1440),
+    dailyAt: normalizeDailyTime(settings.dailyAt),
+    limit: normalizeIntegerLimit(settings.limit, 1, 100),
     updatedAt: settings.updatedAt.toISOString()
   };
 }
@@ -2088,6 +2109,31 @@ export class PrismaCrmRepository {
   async getEmailAiProviderConfig(context: RequestContext): Promise<AiProviderConfig> {
     requirePermission(context, "ai.use");
     return this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+  }
+
+  async getEmailSyncSettings(context: RequestContext): Promise<EmailSyncSettings> {
+    requirePermission(context, "crm.admin");
+    return this.ensureEmailSyncSettings(context.workspaceId);
+  }
+
+  async updateEmailSyncSettings(context: RequestContext, patch: Partial<Omit<EmailSyncSettings, "workspaceId" | "updatedAt">>): Promise<EmailSyncSettings> {
+    requirePermission(context, "crm.admin");
+    const current = await this.ensureEmailSyncSettings(context.workspaceId);
+    const updated = await this.db.emailSyncSettings.update({
+      where: { workspaceId: context.workspaceId },
+      data: {
+        enabled: patch.enabled ?? current.enabled,
+        mode: patch.mode === "daily" ? "daily" : patch.mode === "interval" ? "interval" : current.mode,
+        intervalMinutes: normalizeIntegerLimit(patch.intervalMinutes ?? current.intervalMinutes, 1, 1440),
+        dailyAt: normalizeDailyTime(patch.dailyAt ?? current.dailyAt),
+        limit: normalizeIntegerLimit(patch.limit ?? current.limit, 1, 100)
+      }
+    });
+    await this.writeAuditLog(context, "update", "email_sync_settings", context.workspaceId, {
+      summary: "Updated email sync schedule settings",
+      details: { enabled: updated.enabled, mode: updated.mode, intervalMinutes: updated.intervalMinutes, dailyAt: updated.dailyAt, limit: updated.limit }
+    });
+    return mapEmailSyncSettings(updated);
   }
 
   async buildEmailAssistantContext(
@@ -4521,6 +4567,24 @@ export class PrismaCrmRepository {
     return readAiProviderConfigFromEncrypted(settings?.encryptedProviderConfig);
   }
 
+  private async ensureEmailSyncSettings(workspaceId: string): Promise<EmailSyncSettings> {
+    const settings = await this.db.emailSyncSettings.findUnique({ where: { workspaceId } });
+    if (settings) {
+      return mapEmailSyncSettings(settings);
+    }
+    const created = await this.db.emailSyncSettings.create({
+      data: {
+        workspaceId,
+        enabled: true,
+        mode: "interval",
+        intervalMinutes: 5,
+        dailyAt: "03:00",
+        limit: 25
+      }
+    });
+    return mapEmailSyncSettings(created);
+  }
+
   private async assertEmailAccount(context: RequestContext, accountId: string): Promise<EmailAccount> {
     const account = await this.db.emailAccount.findFirst({
       where: { id: accountId, workspaceId: context.workspaceId }
@@ -5097,6 +5161,11 @@ function normalizeIntegerLimit(value: number, min: number, max: number): number 
     return min;
   }
   return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function normalizeDailyTime(value: string): string {
+  const match = value.trim().match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  return match ? `${match[1]}:${match[2]}` : "03:00";
 }
 
 function emailActivityVerb(status: EmailMessage["status"], direction: EmailMessage["direction"]): string {

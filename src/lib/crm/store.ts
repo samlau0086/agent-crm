@@ -36,6 +36,7 @@ import type {
   EmailAttachment,
   EmailAiGenerationAuditInput,
   EmailAiSettings,
+  EmailSyncSettings,
   AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
@@ -1114,6 +1115,27 @@ export class CrmStore {
   getEmailAiProviderConfig(context: RequestContext): AiProviderConfig {
     requirePermission(context, "ai.use");
     return normalizeAiProviderConfig(this.ensureEmailAiSettings(context.workspaceId).providerConfig);
+  }
+
+  getEmailSyncSettings(context: RequestContext): EmailSyncSettings {
+    requirePermission(context, "crm.admin");
+    return clone(this.ensureEmailSyncSettings(context.workspaceId));
+  }
+
+  updateEmailSyncSettings(context: RequestContext, patch: Partial<Omit<EmailSyncSettings, "workspaceId" | "updatedAt">>): EmailSyncSettings {
+    requirePermission(context, "crm.admin");
+    const settings = this.ensureEmailSyncSettings(context.workspaceId);
+    if (patch.enabled !== undefined) settings.enabled = patch.enabled;
+    if (patch.mode === "interval" || patch.mode === "daily") settings.mode = patch.mode;
+    if (patch.intervalMinutes !== undefined) settings.intervalMinutes = normalizeIntegerLimit(patch.intervalMinutes, 1, 1440);
+    if (patch.dailyAt !== undefined) settings.dailyAt = normalizeDailyTime(patch.dailyAt);
+    if (patch.limit !== undefined) settings.limit = normalizeIntegerLimit(patch.limit, 1, 100);
+    settings.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_sync_settings", context.workspaceId, {
+      summary: "Updated email sync schedule settings",
+      details: { enabled: settings.enabled, mode: settings.mode, intervalMinutes: settings.intervalMinutes, dailyAt: settings.dailyAt, limit: settings.limit }
+    });
+    return clone(settings);
   }
 
   buildEmailAssistantContext(
@@ -2893,6 +2915,28 @@ export class CrmStore {
     return created;
   }
 
+  private ensureEmailSyncSettings(workspaceId: string): EmailSyncSettings {
+    const settings = (this.data.emailSyncSettings ??= []).find((candidate) => candidate.workspaceId === workspaceId);
+    if (settings) {
+      settings.mode = settings.mode === "daily" ? "daily" : "interval";
+      settings.intervalMinutes = normalizeIntegerLimit(settings.intervalMinutes, 1, 1440);
+      settings.dailyAt = normalizeDailyTime(settings.dailyAt);
+      settings.limit = normalizeIntegerLimit(settings.limit, 1, 100);
+      return settings;
+    }
+    const created: EmailSyncSettings = {
+      workspaceId,
+      enabled: true,
+      mode: "interval",
+      intervalMinutes: 5,
+      dailyAt: "03:00",
+      limit: 25,
+      updatedAt: stamp()
+    };
+    this.data.emailSyncSettings.push(created);
+    return created;
+  }
+
   private assertEmailAccount(context: RequestContext, accountId: string): EmailAccount {
     const account = (this.data.emailAccounts ?? []).find((candidate) => candidate.id === accountId && candidate.workspaceId === context.workspaceId);
     if (!account) {
@@ -3193,6 +3237,11 @@ function normalizeIntegerLimit(value: number, min: number, max: number): number 
     return min;
   }
   return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function normalizeDailyTime(value: string): string {
+  const match = value.trim().match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  return match ? `${match[1]}:${match[2]}` : "03:00";
 }
 
 function emailMessageTime(message: EmailMessage): string {

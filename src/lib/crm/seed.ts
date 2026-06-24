@@ -379,6 +379,17 @@ export const seedData: CrmSnapshot = {
       updatedAt: now
     }
   ],
+  emailSyncSettings: [
+    {
+      workspaceId: defaultWorkspaceId,
+      enabled: true,
+      mode: "interval",
+      intervalMinutes: 5,
+      dailyAt: "03:00",
+      limit: 25,
+      updatedAt: now
+    }
+  ],
   savedViews: [
     { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "email", "phone", "companyId", "birthday", "gender"], isDefault: true },
     { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "domain", "industry", "billingAddresses", "shippingAddresses"], isDefault: true },

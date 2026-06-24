@@ -324,6 +324,18 @@ export interface EmailAiSettings {
   updatedAt: string;
 }
 
+export type EmailSyncScheduleMode = "interval" | "daily";
+
+export interface EmailSyncSettings {
+  workspaceId: string;
+  enabled: boolean;
+  mode: EmailSyncScheduleMode;
+  intervalMinutes: number;
+  dailyAt: string;
+  limit: number;
+  updatedAt: string;
+}
+
 export interface AiProviderConfig {
   provider: AiProviderType;
   baseUrl: string;
@@ -646,6 +658,7 @@ export interface CrmSnapshot {
   emailMessages: EmailMessage[];
   knowledgeArticles: KnowledgeArticle[];
   emailAiSettings: EmailAiSettings[];
+  emailSyncSettings?: EmailSyncSettings[];
   mediaAssets?: MediaAsset[];
 }
 

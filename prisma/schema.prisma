@@ -36,6 +36,7 @@ model Workspace {
   emailMessages       EmailMessage[]
   knowledgeArticles   KnowledgeArticle[]
   emailAiSettings     EmailAiSettings?
+  emailSyncSettings   EmailSyncSettings?
   mediaAssets         MediaAsset[]
 }
 
@@ -536,4 +537,15 @@ model EmailAiSettings {
   maxContextChars      Int       @default(8000)
   updatedAt            DateTime  @updatedAt
   workspace            Workspace @relation(fields: [workspaceId], references: [id])
+}
+
+model EmailSyncSettings {
+  workspaceId      String    @id
+  enabled          Boolean   @default(true)
+  mode             String    @default("interval")
+  intervalMinutes  Int       @default(5)
+  dailyAt          String    @default("03:00")
+  limit            Int       @default(25)
+  updatedAt        DateTime  @updatedAt
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
