@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { CrmWorkspace } from "@/components/crm-workspace";
 import { requireAppContext } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
-import type { CrmRecord, FieldDefinition } from "@/lib/crm/types";
+import type { CrmRecord, FieldDefinition, RelationDefinition } from "@/lib/crm/types";
 import { resolveCrmRoute } from "@/lib/crm/navigation";
 import { listBackupFiles } from "@/lib/ops/backups";
 
@@ -45,6 +45,7 @@ export async function CrmPage({ moduleSegments = [] }: CrmPageProps) {
   const initialObjectKey = route.objectKey;
   const initialRecordList = await repository.queryRecords(context, initialObjectKey, { page: 1, pageSize: 50 });
   const referenceObjectKeys = getReferenceObjectKeys(fields, initialObjectKey);
+  getRelationObjectKeys(relations, initialObjectKey).forEach((objectKey) => referenceObjectKeys.add(objectKey));
   for (const objectKey of ["products", "quotes", "currencies"]) {
     if (objects.some((object) => object.key === objectKey)) {
       referenceObjectKeys.add(objectKey);
@@ -100,6 +101,18 @@ function getReferenceObjectKeys(fields: FieldDefinition[], objectKey: string): S
       if (referencedObjectKey) {
         keys.add(referencedObjectKey);
       }
+    }
+    return keys;
+  }, new Set());
+}
+
+function getRelationObjectKeys(relations: RelationDefinition[], objectKey: string): Set<string> {
+  return relations.reduce<Set<string>>((keys, relation) => {
+    if (relation.fromObjectKey === objectKey) {
+      keys.add(relation.toObjectKey);
+    }
+    if (relation.toObjectKey === objectKey) {
+      keys.add(relation.fromObjectKey);
     }
     return keys;
   }, new Set());

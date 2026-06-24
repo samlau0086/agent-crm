@@ -1079,7 +1079,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         if (!Array.isArray(result.records)) {
           throw new Error("Record list response is invalid");
         }
-        const referenceObjectKeys = getReferenceObjectKeysForObject(props.fields, activeObject.key);
+        const referenceObjectKeys = getReferenceObjectKeysForObject(props.fields, activeObject.key, props.relations);
         const referenceLists = await Promise.all(
           [...referenceObjectKeys].map((objectKey) =>
             fetchJson<RecordListResult>(buildRecordListUrl(objectKey, emptySavedView(objectKey), "", 1), {
@@ -1105,7 +1105,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       });
 
     return () => controller.abort();
-  }, [activeObject, effectiveView, props.fields, query, recordPage]);
+  }, [activeObject, effectiveView, props.fields, props.relations, query, recordPage]);
 
   useEffect(() => {
     if (previousViewDraftResetKey.current === viewDraftResetKey) {
@@ -1136,6 +1136,35 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
     return () => controller.abort();
   }, [selectedRecord?.id]);
+
+  useEffect(() => {
+    if (selectedRecord?.objectKey !== "companies" || !props.objects.some((object) => object.key === "contacts")) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const companyContactsView: SavedView = {
+      ...emptySavedView("contacts"),
+      filters: [{ field: "companyId", operator: "equals", value: selectedRecord.id }]
+    };
+    fetchJson<RecordListResult>(buildRecordListUrl("contacts", companyContactsView, "", 1, "/api/records/contacts", 200), {
+      method: "GET",
+      signal: controller.signal
+    })
+      .then((result) => {
+        if (Array.isArray(result.records)) {
+          setRecords((current) => mergeRecords(current, result.records));
+        }
+      })
+      .catch((contactError) => {
+        if (contactError instanceof DOMException && contactError.name === "AbortError") {
+          return;
+        }
+        setError(contactError instanceof Error ? contactError.message : "公司联系人加载失败");
+      });
+
+    return () => controller.abort();
+  }, [props.objects, selectedRecord?.id, selectedRecord?.objectKey]);
 
   useEffect(() => {
     if (activeNav !== "activities" && activeNav !== "tasks") {
@@ -5319,7 +5348,7 @@ function getRecordEmailAddressesFromData(record: CrmRecord): string[] {
 }
 
 function getCompanyContactRecords(company: CrmRecord, records: CrmRecord[]): CrmRecord[] {
-  return records.filter((record) => record.objectKey === "contacts" && record.data.companyId === company.id);
+  return records.filter((record) => record.objectKey === "contacts" && recordReferencesId(record.data.companyId, company.id));
 }
 
 function getCompanyPrimaryContact(company: CrmRecord, records: CrmRecord[]): CrmRecord | undefined {
@@ -5378,7 +5407,7 @@ function getEmailThreadsForRecord(record: CrmRecord, records: CrmRecord[], threa
   const emailAddresses = new Set(getRecordEmailAddressesFromData(record));
   if (record.objectKey === "companies") {
     for (const candidate of records) {
-      if (candidate.objectKey === "contacts" && candidate.data.companyId === record.id) {
+      if (candidate.objectKey === "contacts" && recordReferencesId(candidate.data.companyId, record.id)) {
         recordIds.add(candidate.id);
         getRecordEmailAddressesFromData(candidate).forEach((emailAddress) => emailAddresses.add(emailAddress));
       }
@@ -5393,6 +5422,23 @@ function getEmailThreadsForRecord(record: CrmRecord, records: CrmRecord[], threa
       return thread.participantEmails.some((emailAddress) => emailAddresses.has(emailAddress.toLowerCase()));
     })
     .sort((left, right) => new Date(right.lastMessageAt ?? right.updatedAt).getTime() - new Date(left.lastMessageAt ?? left.updatedAt).getTime());
+}
+
+function recordReferencesId(value: unknown, recordId: string): boolean {
+  if (!recordId) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim() === recordId;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => recordReferencesId(item, recordId));
+  }
+  if (value && typeof value === "object") {
+    const candidate = value as { id?: unknown; recordId?: unknown; value?: unknown };
+    return [candidate.id, candidate.recordId, candidate.value].some((item) => recordReferencesId(item, recordId));
+  }
+  return false;
 }
 
 function looksLikeEmail(value: string): boolean {
@@ -7792,16 +7838,27 @@ function normalizeViewColumns(columns: string[]): string[] {
   return Array.from(new Set(["title", ...columns.filter(Boolean)]));
 }
 
-function getReferenceObjectKeysForObject(fields: FieldDefinition[], objectKey: string): Set<string> {
-  return fields.reduce<Set<string>>((keys, field) => {
+function getReferenceObjectKeysForObject(fields: FieldDefinition[], objectKey: string, relations: RelationDefinition[] = []): Set<string> {
+  const keys = fields.reduce<Set<string>>((result, field) => {
     if (field.objectKey === objectKey && field.type === "reference") {
       const referencedObjectKey = field.options?.[0]?.value;
       if (referencedObjectKey) {
-        keys.add(referencedObjectKey);
+        result.add(referencedObjectKey);
       }
     }
-    return keys;
+    return result;
   }, new Set());
+
+  for (const relation of relations) {
+    if (relation.fromObjectKey === objectKey) {
+      keys.add(relation.toObjectKey);
+    }
+    if (relation.toObjectKey === objectKey) {
+      keys.add(relation.fromObjectKey);
+    }
+  }
+
+  return keys;
 }
 
 function emptySavedView(objectKey: string): SavedView {

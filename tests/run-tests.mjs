@@ -1433,6 +1433,22 @@ await run("crm workspace routes modules through stable paths", () => {
   assert.doesNotMatch(workspace, /useState<NavKey>\("dashboard"\)/);
 });
 
+await run("company detail loads inverse contact relationships", () => {
+  const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const crmPage = readFileSync("src/app/crm-page.tsx", "utf8");
+
+  assert.match(crmPage, /getRelationObjectKeys\(relations, initialObjectKey\)\.forEach\(\(objectKey\) => referenceObjectKeys\.add\(objectKey\)\)/);
+  assert.match(crmPage, /function getRelationObjectKeys\(relations: RelationDefinition\[\], objectKey: string\): Set<string>/);
+  assert.match(workspace, /getReferenceObjectKeysForObject\(props\.fields, activeObject\.key, props\.relations\)/);
+  assert.match(workspace, /function getReferenceObjectKeysForObject\(fields: FieldDefinition\[\], objectKey: string, relations: RelationDefinition\[\] = \[\]\): Set<string>/);
+  assert.match(workspace, /relation\.fromObjectKey === objectKey[\s\S]*keys\.add\(relation\.toObjectKey\)/);
+  assert.match(workspace, /selectedRecord\?\.objectKey !== "companies"[\s\S]*filters: \[\{ field: "companyId", operator: "equals", value: selectedRecord\.id \}\]/);
+  assert.match(workspace, /buildRecordListUrl\("contacts", companyContactsView, "", 1, "\/api\/records\/contacts", 200\)/);
+  assert.match(workspace, /function getCompanyContactRecords\(company: CrmRecord, records: CrmRecord\[\]\): CrmRecord\[\] \{[\s\S]*recordReferencesId\(record\.data\.companyId, company\.id\)/);
+  assert.match(workspace, /function recordReferencesId\(value: unknown, recordId: string\): boolean/);
+  assert.match(workspace, /Array\.isArray\(value\)[\s\S]*value\.some\(\(item\) => recordReferencesId\(item, recordId\)\)/);
+});
+
 await run("settings admin groups configuration panels by tabs", () => {
   const source = readFileSync("src/components/settings-admin.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
