@@ -80,6 +80,7 @@ import { findRelatedRecords } from "@/lib/crm/views";
 import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
 import { canOpenEmailAiSource, emailAiSourceKey, type EmailAiSourceRef } from "@/lib/email/ai-sources";
 import { isEmailAiPurposeEnabled } from "@/lib/email/assistant";
+import { repairEmailMojibake } from "@/lib/email/mojibake";
 import { readEmailOAuthCallbackNotice } from "@/lib/email/oauth-callback";
 import { getEmailProviderCapability, getEmailProviderSetupVisibility, isOAuthEmailProvider, listEmailProviderCapabilities } from "@/lib/email/providers";
 import { buildEmailReplyDraft, type EmailComposeReplyDraft } from "@/lib/email/reply-draft";
@@ -326,13 +327,14 @@ function upsertEmailMessage(messages: EmailMessage[], message: EmailMessage): Em
 }
 
 function buildEmailHtmlPreview(bodyHtml: string): string {
+  const repairedHtml = repairEmailMojibake(bodyHtml);
   return [
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: cid:; style-src \'unsafe-inline\'; font-src data:;">',
     "<style>html,body{margin:0;padding:12px;background:#fff;color:#111827;font:14px/1.5 Arial,sans-serif;overflow-wrap:anywhere;}table{max-width:100%;}img{max-width:100%;height:auto;}</style>",
     "</head><body>",
-    bodyHtml,
+    repairedHtml,
     "</body></html>"
   ].join("");
 }
@@ -4172,11 +4174,11 @@ function EmailWorkspace({
                             <iframe sandbox="" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
                             <details className="email-text-fallback">
                               <summary>显示文本邮件</summary>
-                              <div className="email-message-body">{message.bodyText}</div>
+                              <div className="email-message-body">{repairEmailMojibake(message.bodyText)}</div>
                             </details>
                           </div>
                         ) : (
-                          <div className="email-message-body">{message.bodyText}</div>
+                          <div className="email-message-body">{repairEmailMojibake(message.bodyText)}</div>
                         )}
                         {message.attachments?.length ? (
                           <div className="toolbar" style={{ marginTop: 8 }}>

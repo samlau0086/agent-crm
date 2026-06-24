@@ -58,6 +58,7 @@ import { sendResendEmail } from "../src/lib/email/resend.ts";
 import { getEmailProviderCapability, getEmailProviderSetupVisibility, getOAuthEmailProviderCapability, isOAuthEmailProvider, listEmailProviderCapabilities, oauthEmailProviderKeys } from "../src/lib/email/providers.ts";
 import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
+import { repairEmailMojibake } from "../src/lib/email/mojibake.ts";
 import { buildImapFallbackExternalMessageId, buildPop3FallbackExternalMessageId, fetchRecentPop3Emails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId, withPop3FallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
 import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
 import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
@@ -1686,7 +1687,10 @@ await run("email workspace previews html bodies in a sandboxed iframe", () => {
   assert.match(source, /http-equiv="Content-Security-Policy"/);
   assert.match(source, /hasEmailHtmlPreview\(message\)/);
   assert.match(source, /data-testid=\{`email-message-html-\$\{message\.id\}`\}/);
+  assert.match(source, /import \{ repairEmailMojibake \} from "@\/lib\/email\/mojibake"/);
+  assert.match(source, /const repairedHtml = repairEmailMojibake\(bodyHtml\)/);
   assert.match(source, /hasEmailHtmlPreview\(message\)[\s\S]*<iframe sandbox="" srcDoc=\{buildEmailHtmlPreview\(message\.bodyHtml \?\? ""\)\}[\s\S]*<details className="email-text-fallback">[\s\S]*显示文本邮件/);
+  assert.match(source, /\{repairEmailMojibake\(message\.bodyText\)\}/);
   assert.doesNotMatch(source, /<div className="email-message-body">\{message\.bodyText\}<\/div>\s*\{hasEmailHtmlPreview\(message\)/);
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
   assert.match(styles, /\.email-html-preview-frame/);
@@ -9083,6 +9087,26 @@ await run("imap raw email parser decodes quoted printable charset html bodies", 
   assert.equal(parsed?.subject, "看看 Instagram 上的新鲜事吧");
   assert.equal(parsed?.bodyHtml, "<p>你好 Instagram</p>");
   assert.equal(parsed?.bodyText, "你好 Instagram");
+});
+
+await run("email mojibake repair recovers already-stored utf8 text decoded as windows-1252", () => {
+  const mojibake = new TextDecoder("windows-1252").decode(Buffer.from("看看 Instagram 上的新鲜事吧", "utf8"));
+  assert.notEqual(mojibake, "看看 Instagram 上的新鲜事吧");
+  assert.equal(repairEmailMojibake(mojibake), "看看 Instagram 上的新鲜事吧");
+  assert.equal(repairEmailMojibake(`<p>${mojibake}</p>`), "<p>看看 Instagram 上的新鲜事吧</p>");
+
+  const parsed = parseRawEmailMessage(
+    [
+      "Message-ID: <mojibake@example.com>",
+      "From: Instagram <no-reply@mail.instagram.com>",
+      "To: Info <info@example.com>",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      `<p>${mojibake}</p>`
+    ].join("\r\n")
+  );
+  assert.equal(parsed?.bodyHtml, "<p>看看 Instagram 上的新鲜事吧</p>");
+  assert.equal(parsed?.bodyText, "看看 Instagram 上的新鲜事吧");
 });
 
 await run("imap sync fallback message ids prevent duplicate imports without message-id headers", () => {

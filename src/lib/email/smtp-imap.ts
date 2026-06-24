@@ -3,6 +3,7 @@ import tls from "node:tls";
 import type { EmailAttachment, EmailConnectionConfig, EmailOutboundServiceConfig } from "@/lib/crm/types";
 import { MAX_EMAIL_ATTACHMENT_BYTES, normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
+import { repairEmailMojibake } from "@/lib/email/mojibake";
 import type { EmailSendInput } from "@/lib/email/provider";
 
 export interface InboundEmail {
@@ -551,14 +552,16 @@ export function parseRawEmailMessage(messageText: string): InboundEmail | undefi
   const contentType = parseContentType(headers["content-type"]);
   const body = bodyParts.join("\n\n");
   const parsedBody = parseMimeBody(body, contentType, headers);
+  const bodyHtml = parsedBody.bodyHtml ? repairEmailMojibake(parsedBody.bodyHtml) : undefined;
+  const bodyText = repairEmailMojibake(parsedBody.bodyText);
   return {
     externalMessageId: headers["message-id"],
     from,
     to,
     ...(cc.length ? { cc } : {}),
-    subject: decodeHeader(headers.subject ?? "(no subject)"),
-    bodyText: parsedBody.bodyText.trim().slice(0, 20000),
-    bodyHtml: parsedBody.bodyHtml?.trim().slice(0, 20000),
+    subject: repairEmailMojibake(decodeHeader(headers.subject ?? "(no subject)")),
+    bodyText: bodyText.trim().slice(0, 20000),
+    bodyHtml: bodyHtml?.trim().slice(0, 20000),
     attachments: parsedBody.attachments,
     receivedAt: safeIsoDate(headers.date)
   };
