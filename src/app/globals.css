@@ -550,6 +550,39 @@ button {
   overflow-wrap: anywhere;
 }
 
+.record-title-with-media {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.record-title-with-media span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.record-list-avatar,
+.record-list-logo {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  background-color: var(--surface-strong);
+  background-position: center;
+  background-size: cover;
+}
+
+.record-list-avatar {
+  border-radius: 999px;
+}
+
+.record-list-logo {
+  border-radius: 7px;
+}
+
 .property-list,
 .activity-list,
 .settings-list {
@@ -753,6 +786,62 @@ button {
 
 .task-calendar-chip span {
   color: var(--muted);
+}
+
+.task-edit-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.task-attachment-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.task-attachment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.task-attachment-item {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.task-attachment-item img {
+  width: 54px;
+  height: 42px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--surface-strong);
+}
+
+.task-attachment-item strong,
+.task-attachment-item span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-media-picker {
+  margin-top: 0;
 }
 
 .pipeline-board {

@@ -1640,19 +1640,63 @@ await run("task workspace exposes calendar views and date slot task creation", (
   const styles = readFileSync("src/app/globals.css", "utf8");
 
   assert.match(source, /type TaskCalendarView = "list" \| "month" \| "week" \| "day"/);
+  assert.match(source, /type TaskCreateInput = \{[\s\S]*title: string;[\s\S]*dueAt\?: string;/);
   assert.match(source, /useState<TaskCalendarView>\("list"\)/);
+  assert.match(source, /data-testid="task-create-from-list"/);
+  assert.match(source, /data-testid="task-edit-title"/);
+  assert.match(source, /data-testid="task-edit-due-at"/);
+  assert.match(source, /data-testid="task-edit-body"/);
+  assert.match(source, /data-testid="task-edit-save"/);
+  assert.match(source, /data-testid="task-attachment-grid"/);
+  assert.match(source, /data-testid="task-edit-media-library"/);
+  assert.match(source, /type TaskAttachment = \{/);
+  assert.match(source, /format: "task\.v1"/);
+  assert.match(source, /function parseTaskDetails/);
+  assert.match(source, /function serializeTaskDetails/);
+  assert.match(source, /function TaskEditDialog/);
+  assert.match(source, /function TaskAttachmentPreview/);
+  assert.match(source, /onUpdateTask=\{\(activity, draft\) => runAction\(\(\) => updateTask\(activity, draft\)\)\}/);
+  assert.match(source, /method: "PATCH"[\s\S]*body: \{[\s\S]*title: draft\.title,[\s\S]*body: serializeTaskDetails/);
+  assert.match(source, /setDeletedActivityIds\(\(current\) => new Set\(\[\.\.\.current, activity\.id\]\)\)/);
   assert.match(source, /data-testid=\{`task-view-\$\{mode\}`\}/);
   assert.match(source, /data-testid=\{`task-calendar-\$\{view\}`\}/);
   assert.match(source, /function TaskMonthCalendar/);
   assert.match(source, /function TaskWeekCalendar/);
   assert.match(source, /function TaskDayCalendar/);
+  assert.match(source, /function requestTaskWithoutDate\(\)/);
   assert.match(source, /onRequestPrompt\(\{/);
   assert.match(source, /onCreateTask\(\{ title: trimmedTitle, dueAt: dueAt\.toISOString\(\) \}\)/);
+  assert.match(source, /onCreateTask\(\{ title: trimmedTitle \}\)/);
   assert.match(source, /fetchJson<Activity>\("\/api\/activities", \{/);
-  assert.match(source, /type: "task",[\s\S]*title: input\.title,[\s\S]*dueAt: input\.dueAt/);
+  assert.match(source, /type: "task",[\s\S]*title: input\.title,[\s\S]*dueAt: input\.dueAt \|\| undefined/);
   assert.match(styles, /\.task-month-calendar \{[\s\S]*grid-template-columns: repeat\(7, minmax\(140px, 1fr\)\);/);
   assert.match(styles, /\.task-week-calendar \{[\s\S]*grid-template-columns: 68px repeat\(7, minmax\(150px, 1fr\)\);/);
   assert.match(styles, /\.task-day-slot \{[\s\S]*grid-template-columns: 78px minmax\(0, 1fr\);/);
+  assert.match(styles, /\.task-edit-dialog/);
+  assert.match(styles, /\.task-attachment-grid/);
+  assert.match(styles, /\.task-attachment-item/);
+});
+
+await run("contact and company lists render avatar and logo media fields", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const seed = readFileSync("src/lib/crm/seed.ts", "utf8");
+  const migration = readFileSync("prisma/migrations/20260625_contact_avatar_company_logo/migration.sql", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(seed, /objectKey: "contacts", key: "avatarUrl"/);
+  assert.match(seed, /objectKey: "companies", key: "logoUrl"/);
+  assert.match(migration, /'avatarUrl'/);
+  assert.match(migration, /'logoUrl'/);
+  assert.match(source, /function RecordTitleButton/);
+  assert.match(source, /record\.objectKey === "contacts" \? record\.data\.avatarUrl : record\.objectKey === "companies" \? record\.data\.logoUrl/);
+  assert.match(source, /<RecordTitleButton record=\{record\} onOpen=\{\(\) => openRecord\(record\)\} \/>/);
+  assert.match(source, /field\.objectKey === "contacts" && field\.key === "avatarUrl"/);
+  assert.match(source, /field\.objectKey === "companies" && field\.key === "logoUrl"/);
+  assert.match(source, /record\.objectKey === "contacts" && column\.field\.key === "avatarUrl"/);
+  assert.match(source, /record\.objectKey === "companies" && column\.field\.key === "logoUrl"/);
+  assert.match(styles, /\.record-title-with-media/);
+  assert.match(styles, /\.record-list-avatar/);
+  assert.match(styles, /\.record-list-logo/);
 });
 
 await run("workspace exposes product and quote modules as first-class crm objects", () => {

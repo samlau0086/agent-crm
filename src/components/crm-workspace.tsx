@@ -29,6 +29,7 @@ import {
   MoreVertical,
   Package,
   Paperclip,
+  Pencil,
   FileText,
   RefreshCw,
   RotateCcw,
@@ -295,7 +296,25 @@ type PromptDialogState = {
 type TaskCalendarView = "list" | "month" | "week" | "day";
 type TaskCreateInput = {
   title: string;
+  dueAt?: string;
+};
+type TaskAttachment = {
+  id: string;
+  mediaAssetId: string;
+  name: string;
+  contentType: string;
+  size: number;
+};
+type TaskDetailsPayload = {
+  format: "task.v1";
+  text: string;
+  attachments: TaskAttachment[];
+};
+type TaskEditDraft = {
+  title: string;
   dueAt: string;
+  text: string;
+  attachments: TaskAttachment[];
 };
 type KnowledgeArticleDraft = {
   editingArticleId?: string;
@@ -988,6 +1007,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>(props.knowledgeArticles);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>(props.mediaAssets);
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeArticleDraft>({ title: "", body: "", tags: "", active: true });
+  const [deletedActivityIds, setDeletedActivityIds] = useState<Set<string>>(() => new Set());
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -1143,9 +1163,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const selectedActivities = useMemo(
     () =>
       activities
+        .filter((activity) => !deletedActivityIds.has(activity.id))
         .filter((activity) => activity.recordId === selectedRecord?.id)
         .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
-    [activities, selectedRecord?.id]
+    [activities, deletedActivityIds, selectedRecord?.id]
   );
   const selectedTasks = useMemo(
     () =>
@@ -1184,16 +1205,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const openTasks = useMemo(
     () =>
       activities
+        .filter((activity) => !deletedActivityIds.has(activity.id))
         .filter((activity) => activity.type === "task" && !activity.completedAt && !activity.archivedAt)
         .sort((left, right) => new Date(left.dueAt ?? left.createdAt).getTime() - new Date(right.dueAt ?? right.createdAt).getTime()),
-    [activities]
+    [activities, deletedActivityIds]
   );
   const taskActivities = useMemo(
     () =>
       activities
+        .filter((activity) => !deletedActivityIds.has(activity.id))
         .filter((activity) => activity.type === "task")
         .sort((left, right) => new Date(left.dueAt ?? left.createdAt).getTime() - new Date(right.dueAt ?? right.createdAt).getTime()),
-    [activities]
+    [activities, deletedActivityIds]
   );
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
@@ -2045,8 +2068,23 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
     await fetchJson(`/api/activities/${activity.id}`, { method: "DELETE" });
+    setDeletedActivityIds((current) => new Set([...current, activity.id]));
     setActivities((current) => current.filter((candidate) => candidate.id !== activity.id));
-    setMessage("任务已删除");
+    showSuccess("任务已删除");
+    router.refresh();
+  }
+
+  async function updateTask(activity: Activity, draft: TaskEditDraft) {
+    const updated = await fetchJson<Activity>(`/api/activities/${activity.id}`, {
+      method: "PATCH",
+      body: {
+        title: draft.title,
+        body: serializeTaskDetails({ text: draft.text, attachments: draft.attachments }),
+        dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null
+      }
+    });
+    setActivities((current) => mergeActivities(current, [updated]));
+    showSuccess(`任务已更新：${updated.title}`);
     router.refresh();
   }
 
@@ -2056,7 +2094,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: {
         type: "task",
         title: input.title,
-        dueAt: input.dueAt
+        dueAt: input.dueAt || undefined
       }
     });
     setActivities((current) => mergeActivities(current, [created]));
@@ -3067,9 +3105,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     {filteredRecords.map((record) => (
                       <tr key={record.id}>
                         <td>
-                          <button className="record-title" data-testid={`record-row-${record.id}`} type="button" onClick={() => openRecord(record)}>
-                            {record.title}
-                          </button>
+                          <RecordTitleButton record={record} onOpen={() => openRecord(record)} />
                         </td>
                         {visibleTableColumns.map((column) => (
                           <td key={column.key}>{displayTableColumnValue(column, record, records, props.users, currencies)}</td>
@@ -3518,8 +3554,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       <TaskList
                         activities={selectedTasks}
                         emptyMessage="暂无任务"
+                        mediaAssets={mediaAssets}
                         testIdPrefix="record-task"
                         users={props.users}
+                        onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
+                        onDelete={(activity) => runAction(() => deleteTask(activity))}
+                        onEdit={(activity) => {
+                          navigateToWorkspace("tasks");
+                          showToast({ intent: "info", message: `请在任务工作台中编辑“${activity.title}”。` });
+                        }}
                         onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
                       />
                     </section>
@@ -3807,12 +3850,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         {activeNav === "tasks" && (
           <TaskView
             activities={taskActivities}
+            mediaAssets={mediaAssets}
             users={props.users}
             onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
             onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
             onDelete={(activity) => runAction(() => deleteTask(activity))}
             onCreateTask={(input) => runAction(() => createTaskFromCalendar(input))}
+            onUpdateTask={(activity, draft) => runAction(() => updateTask(activity, draft))}
+            onUploadMediaAssets={uploadMediaAssets}
             onRequestPrompt={requestPrompt}
+            onShowToast={showToast}
           />
         )}
         {activeNav === "activities" && <ActivityTimeline activities={activities} records={records} />}
@@ -6334,7 +6381,7 @@ function EmailWorkspace({
                   }}
                   disabled={!aiProviderApiKeyDraft.trim()}
                 >
-                  <Save size={16} />
+                  <Pencil size={16} />
                   保存 API Key
                 </button>
               </div>
@@ -6775,24 +6822,35 @@ function sanitizeTestId(value: string): string {
 
 function TaskView({
   activities,
+  mediaAssets,
   users,
   onToggle,
   onArchive,
   onDelete,
   onCreateTask,
-  onRequestPrompt
+  onUpdateTask,
+  onUploadMediaAssets,
+  onRequestPrompt,
+  onShowToast
 }: {
   activities: Activity[];
+  mediaAssets: MediaAsset[];
   users: User[];
   onToggle: (activity: Activity, completed: boolean) => void;
   onArchive: (activity: Activity, archived: boolean) => void;
   onDelete: (activity: Activity) => void;
   onCreateTask: (input: TaskCreateInput) => void;
+  onUpdateTask: (activity: Activity, draft: TaskEditDraft) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
+  onShowToast: (toast: ToastState) => void;
 }) {
   const [status, setStatus] = useState<"todo" | "completed" | "archived">("todo");
   const [view, setView] = useState<TaskCalendarView>("list");
   const [calendarCursor, setCalendarCursor] = useState(() => startOfCalendarDay(new Date()));
+  const [editingTask, setEditingTask] = useState<Activity | null>(null);
+  const [editDraft, setEditDraft] = useState<TaskEditDraft>(() => createTaskEditDraft(null));
+  const [isUploadingTaskImage, setIsUploadingTaskImage] = useState(false);
   const todoTasks = activities.filter((activity) => !activity.completedAt && !activity.archivedAt);
   const completedTasks = activities.filter((activity) => activity.completedAt && !activity.archivedAt);
   const archivedTasks = activities.filter((activity) => activity.archivedAt);
@@ -6819,6 +6877,20 @@ function TaskView({
     onCreateTask({ title: trimmedTitle, dueAt: dueAt.toISOString() });
   }
 
+  async function requestTaskWithoutDate() {
+    const title = await onRequestPrompt({
+      title: "新建任务",
+      message: "创建一个未排期任务，之后可在任务详情或日历中补充截止时间。",
+      placeholder: "输入任务标题",
+      confirmLabel: "创建任务"
+    });
+    const trimmedTitle = title?.trim();
+    if (!trimmedTitle) {
+      return;
+    }
+    onCreateTask({ title: trimmedTitle });
+  }
+
   function moveCalendar(offset: number) {
     const next =
       view === "month"
@@ -6829,6 +6901,42 @@ function TaskView({
     setCalendarCursor(next);
   }
 
+  function openTaskEditor(activity: Activity) {
+    setEditingTask(activity);
+    setEditDraft(createTaskEditDraft(activity));
+  }
+
+  function closeTaskEditor() {
+    setEditingTask(null);
+    setEditDraft(createTaskEditDraft(null));
+    setIsUploadingTaskImage(false);
+  }
+
+  function saveTaskEdit() {
+    if (!editingTask || !editDraft.title.trim()) {
+      return;
+    }
+    onUpdateTask(editingTask, { ...editDraft, title: editDraft.title.trim(), text: editDraft.text.trim() });
+    closeTaskEditor();
+  }
+
+  async function uploadTaskImages(files: FileList | File[] | null) {
+    setIsUploadingTaskImage(true);
+    try {
+      const uploaded = await onUploadMediaAssets(files);
+      if (uploaded.length) {
+        setEditDraft((current) => ({
+          ...current,
+          attachments: uploaded.reduce((attachments, asset) => appendUniqueTaskAttachment(attachments, taskAttachmentFromMediaAsset(asset)), current.attachments)
+        }));
+      }
+    } catch (error) {
+      onShowToast({ intent: "error", message: error instanceof Error ? error.message : "图片上传失败" });
+    } finally {
+      setIsUploadingTaskImage(false);
+    }
+  }
+
   return (
     <section className="section">
       <div className="section-header task-view-header">
@@ -6837,6 +6945,10 @@ function TaskView({
           <p className="subtle">按待办、已完成、归档管理销售跟进事项，也可以在日历中按日期和时间直接创建任务。</p>
         </div>
         <div className="toolbar" role="group" aria-label="任务视图">
+          <button className="primary-button" data-testid="task-create-from-list" type="button" onClick={requestTaskWithoutDate}>
+            <CheckCircle2 size={16} />
+            新建任务
+          </button>
           {(["list", "month", "week", "day"] as TaskCalendarView[]).map((mode) => (
             <button
               aria-pressed={view === mode}
@@ -6888,10 +7000,12 @@ function TaskView({
         <TaskList
           activities={visibleTasks}
           emptyMessage={emptyMessage}
+          mediaAssets={mediaAssets}
           testIdPrefix="task-view-task"
           users={users}
           onArchive={onArchive}
           onDelete={onDelete}
+          onEdit={openTaskEditor}
           onToggle={onToggle}
         />
       ) : (
@@ -6939,6 +7053,30 @@ function TaskView({
           )}
         </div>
       )}
+      {editingTask && (
+        <TaskEditDialog
+          draft={editDraft}
+          isUploading={isUploadingTaskImage}
+          mediaAssets={mediaAssets}
+          task={editingTask}
+          onAddMediaAsset={(asset) =>
+            setEditDraft((current) => ({
+              ...current,
+              attachments: appendUniqueTaskAttachment(current.attachments, taskAttachmentFromMediaAsset(asset))
+            }))
+          }
+          onCancel={closeTaskEditor}
+          onChange={setEditDraft}
+          onRemoveAttachment={(attachmentId) =>
+            setEditDraft((current) => ({
+              ...current,
+              attachments: current.attachments.filter((attachment) => attachment.id !== attachmentId)
+            }))
+          }
+          onSave={saveTaskEdit}
+          onUploadImages={uploadTaskImages}
+        />
+      )}
     </section>
   );
 }
@@ -6946,18 +7084,22 @@ function TaskView({
 function TaskList({
   activities,
   emptyMessage,
+  mediaAssets = [],
   testIdPrefix,
   users,
   onArchive,
   onDelete,
+  onEdit,
   onToggle
 }: {
   activities: Activity[];
   emptyMessage: string;
+  mediaAssets?: MediaAsset[];
   testIdPrefix?: string;
   users: User[];
   onArchive?: (activity: Activity, archived: boolean) => void;
   onDelete?: (activity: Activity) => void;
+  onEdit?: (activity: Activity) => void;
   onToggle: (activity: Activity, completed: boolean) => void;
 }) {
   if (activities.length === 0) {
@@ -6970,6 +7112,7 @@ function TaskList({
         const completed = Boolean(activity.completedAt);
         const archived = Boolean(activity.archivedAt);
         const overdue = isTaskOverdue(activity);
+        const taskDetails = parseTaskDetails(activity.body);
         return (
           <div
             className="activity-item"
@@ -6986,8 +7129,20 @@ function TaskList({
               {!completed && overdue && <span className="badge danger-badge">已逾期</span>}
             </div>
             <strong>{activity.title}</strong>
-            {activity.body && <div className="subtle">{activity.body}</div>}
+            {taskDetails.text && <div className="subtle">{taskDetails.text}</div>}
+            <TaskAttachmentPreview attachments={taskDetails.attachments} mediaAssets={mediaAssets} />
             <div className="toolbar" style={{ marginTop: 10 }}>
+              {onEdit && (
+                <button
+                  className="secondary-button"
+                  data-testid={testIdPrefix ? `${testIdPrefix}-edit-${activity.id}` : undefined}
+                  type="button"
+                  onClick={() => onEdit(activity)}
+                >
+                  <Save size={16} />
+                  编辑
+                </button>
+              )}
               <button
                 className="secondary-button"
                 data-completed={completed ? "true" : "false"}
@@ -7022,6 +7177,149 @@ function TaskList({
                 </button>
               )}
             </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskEditDialog({
+  draft,
+  isUploading,
+  mediaAssets,
+  task,
+  onAddMediaAsset,
+  onCancel,
+  onChange,
+  onRemoveAttachment,
+  onSave,
+  onUploadImages
+}: {
+  draft: TaskEditDraft;
+  isUploading: boolean;
+  mediaAssets: MediaAsset[];
+  task: Activity;
+  onAddMediaAsset: (asset: MediaAsset) => void;
+  onCancel: () => void;
+  onChange: (draft: TaskEditDraft) => void;
+  onRemoveAttachment: (attachmentId: string) => void;
+  onSave: () => void;
+  onUploadImages: (files: FileList | File[] | null) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={`编辑任务 ${task.title}`}>
+      <form
+        className="modal-panel task-edit-dialog"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave();
+        }}
+      >
+        <div className="drawer-header">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>编辑任务</h2>
+            <p className="subtle">修改标题、截止时间、备注，并添加图片附件。</p>
+          </div>
+          <button className="icon-button" aria-label="关闭编辑任务" type="button" onClick={onCancel}>
+            <XCircle size={18} />
+          </button>
+        </div>
+        <div className="form-grid">
+          <label className="wide">
+            <span className="subtle">标题</span>
+            <input className="input" data-testid="task-edit-title" value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">截止时间</span>
+            <input
+              className="input"
+              data-testid="task-edit-due-at"
+              type="datetime-local"
+              value={draft.dueAt}
+              onChange={(event) => onChange({ ...draft, dueAt: event.target.value })}
+            />
+          </label>
+          <label className="wide">
+            <span className="subtle">备注</span>
+            <textarea className="textarea" data-testid="task-edit-body" value={draft.text} onChange={(event) => onChange({ ...draft, text: event.target.value })} />
+          </label>
+        </div>
+        <div className="task-attachment-panel">
+          <div className="toolbar between">
+            <strong>图片附件</strong>
+            <div className="toolbar">
+              <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+                <ImageIcon size={16} />
+                {isUploading ? "上传中" : "上传图片"}
+              </button>
+              <input
+                ref={fileInputRef}
+                hidden
+                accept="image/*"
+                multiple
+                type="file"
+                onChange={(event) => {
+                  onUploadImages(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+            </div>
+          </div>
+          <TaskAttachmentPreview attachments={draft.attachments} mediaAssets={mediaAssets} onRemove={onRemoveAttachment} />
+          {mediaAssets.length ? (
+            <div className="media-picker-strip task-media-picker" data-testid="task-edit-media-library">
+              {mediaAssets.slice(0, 16).map((asset) => (
+                <button key={asset.id} type="button" onClick={() => onAddMediaAsset(asset)} title={asset.name}>
+                  <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="subtle">媒体库暂无图片，可先上传。</div>
+          )}
+        </div>
+        <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+          <button className="secondary-button" type="button" onClick={onCancel}>取消</button>
+          <button className="primary-button" data-testid="task-edit-save" type="submit" disabled={!draft.title.trim()}>
+            <Save size={16} />
+            保存
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function TaskAttachmentPreview({
+  attachments,
+  mediaAssets,
+  onRemove
+}: {
+  attachments: TaskAttachment[];
+  mediaAssets: MediaAsset[];
+  onRemove?: (attachmentId: string) => void;
+}) {
+  if (!attachments.length) {
+    return null;
+  }
+  return (
+    <div className="task-attachment-grid" data-testid="task-attachment-grid">
+      {attachments.map((attachment) => {
+        const asset = mediaAssets.find((candidate) => candidate.id === attachment.mediaAssetId);
+        return (
+          <div className="task-attachment-item" key={attachment.id}>
+            {asset ? <img alt={attachment.name} src={mediaAssetDataUrl(asset)} /> : <Paperclip size={18} />}
+            <div>
+              <strong>{attachment.name}</strong>
+              <span className="subtle">{attachment.contentType} · {formatBytes(attachment.size)}</span>
+            </div>
+            {onRemove && (
+              <button className="icon-button" aria-label={`移除 ${attachment.name}`} type="button" onClick={() => onRemove(attachment.id)}>
+                <XCircle size={16} />
+              </button>
+            )}
           </div>
         );
       })}
@@ -7321,13 +7619,16 @@ function ActivityList({
 
   return (
     <div className="activity-list" style={{ marginTop: 12 }}>
-      {activities.map((activity) => (
-        <div className="activity-item" data-testid={testIdPrefix ? `${testIdPrefix}-${activity.id}` : undefined} key={activity.id}>
-          <div className="activity-meta">{renderMeta(activity)}</div>
-          <strong>{activity.title}</strong>
-          {activity.body && <div className="subtle">{activity.body}</div>}
-        </div>
-      ))}
+      {activities.map((activity) => {
+        const body = activity.type === "task" ? parseTaskDetails(activity.body).text : activity.body;
+        return (
+          <div className="activity-item" data-testid={testIdPrefix ? `${testIdPrefix}-${activity.id}` : undefined} key={activity.id}>
+            <div className="activity-meta">{renderMeta(activity)}</div>
+            <strong>{activity.title}</strong>
+            {body && <div className="subtle">{body}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -8153,7 +8454,11 @@ function FieldInput({
   onUploadMediaAssets?: (files: FileList | File[] | null) => void;
   onChange: (value: string) => void;
 }) {
-  if (field.objectKey === "products" && field.key === "mainImageUrl") {
+  if (
+    (field.objectKey === "products" && field.key === "mainImageUrl") ||
+    (field.objectKey === "contacts" && field.key === "avatarUrl") ||
+    (field.objectKey === "companies" && field.key === "logoUrl")
+  ) {
     return (
       <MediaImageFieldInput
         label={field.label}
@@ -8813,6 +9118,31 @@ function QuoteProductSearchDropdown({
   );
 }
 
+function RecordTitleButton({ record, onOpen }: { record: CrmRecord; onOpen: () => void }) {
+  const imageUrl = record.objectKey === "contacts" ? record.data.avatarUrl : record.objectKey === "companies" ? record.data.logoUrl : undefined;
+  const hasImage = typeof imageUrl === "string" && imageUrl.trim().length > 0;
+  return (
+    <button className="record-title record-title-with-media" data-testid={`record-row-${record.id}`} type="button" onClick={onOpen}>
+      {hasImage && <RecordListImage imageUrl={imageUrl} title={record.title} objectKey={record.objectKey} />}
+      <span>{record.title}</span>
+    </button>
+  );
+}
+
+function RecordListImage({ imageUrl, title, objectKey }: { imageUrl: unknown; title: string; objectKey: string }) {
+  const src = typeof imageUrl === "string" ? imageUrl.trim() : "";
+  if (!src) {
+    return <span className="subtle">-</span>;
+  }
+  return (
+    <span
+      className={objectKey === "contacts" ? "record-list-avatar" : "record-list-logo"}
+      aria-label={objectKey === "contacts" ? `${title} 头像` : `${title} Logo`}
+      style={{ backgroundImage: `url("${src.replace(/"/g, "%22")}")` }}
+    />
+  );
+}
+
 function ProductThumbnail({ imageUrl, title }: { imageUrl: unknown; title: string }) {
   const src = typeof imageUrl === "string" ? imageUrl.trim() : "";
   return (
@@ -9424,6 +9754,14 @@ function displayTableColumnValue(column: TableColumn, record: CrmRecord, records
     return <ProductThumbnail imageUrl={record.data.mainImageUrl} title={record.title} />;
   }
 
+  if (record.objectKey === "contacts" && column.field.key === "avatarUrl") {
+    return <RecordListImage imageUrl={record.data.avatarUrl} title={record.title} objectKey={record.objectKey} />;
+  }
+
+  if (record.objectKey === "companies" && column.field.key === "logoUrl") {
+    return <RecordListImage imageUrl={record.data.logoUrl} title={record.title} objectKey={record.objectKey} />;
+  }
+
   if (record.objectKey === "products" && column.field.key === "unitPrice") {
     return formatMoneyWithCurrency(record.data.unitPrice, normalizeCurrencyCode(record.data.unitPriceCurrency) || getBaseCurrencyCode(currencies), currencies);
   }
@@ -9463,6 +9801,87 @@ function displayValue(field: FieldDefinition | undefined, value: unknown, record
   }
 
   return String(value ?? "-");
+}
+
+function parseTaskDetails(body?: string): TaskDetailsPayload {
+  if (!body) {
+    return { format: "task.v1", text: "", attachments: [] };
+  }
+  try {
+    const parsed = JSON.parse(body) as Partial<TaskDetailsPayload>;
+    if (parsed?.format === "task.v1") {
+      return {
+        format: "task.v1",
+        text: typeof parsed.text === "string" ? parsed.text : "",
+        attachments: Array.isArray(parsed.attachments) ? parsed.attachments.filter(isTaskAttachment) : []
+      };
+    }
+  } catch {
+    // Existing task bodies were plain text before task attachments were introduced.
+  }
+  return { format: "task.v1", text: body, attachments: [] };
+}
+
+function serializeTaskDetails(input: Pick<TaskDetailsPayload, "text" | "attachments">): string | undefined {
+  const text = input.text.trim();
+  const attachments = input.attachments.filter(isTaskAttachment);
+  if (!text && !attachments.length) {
+    return undefined;
+  }
+  return JSON.stringify({ format: "task.v1", text, attachments } satisfies TaskDetailsPayload);
+}
+
+function createTaskEditDraft(activity: Activity | null): TaskEditDraft {
+  const details = parseTaskDetails(activity?.body);
+  return {
+    title: activity?.title ?? "",
+    dueAt: toDateTimeLocalValue(activity?.dueAt),
+    text: details.text,
+    attachments: details.attachments
+  };
+}
+
+function taskAttachmentFromMediaAsset(asset: MediaAsset): TaskAttachment {
+  return {
+    id: `${asset.id}-${Date.now()}`,
+    mediaAssetId: asset.id,
+    name: asset.name,
+    contentType: asset.contentType,
+    size: asset.size
+  };
+}
+
+function appendUniqueTaskAttachment(attachments: TaskAttachment[], attachment: TaskAttachment): TaskAttachment[] {
+  if (attachments.some((candidate) => candidate.mediaAssetId === attachment.mediaAssetId)) {
+    return attachments;
+  }
+  return [...attachments, attachment];
+}
+
+function isTaskAttachment(value: unknown): value is TaskAttachment {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as TaskAttachment;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.mediaAssetId === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.contentType === "string" &&
+    typeof candidate.size === "number"
+  );
+}
+
+function toDateTimeLocalValue(value?: string): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
 function isCurrencyCodeField(field: FieldDefinition): boolean {
