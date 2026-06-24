@@ -1219,7 +1219,11 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
 });
 
 await run("product quote currency migration handles malformed quote json arrays", () => {
-  const migration = readFileSync("prisma/migrations/20260624_product_images_quote_currencies/migration.sql", "utf8");
+  const migrationPath = "prisma/migrations/20260624_product_images_quote_currencies/migration.sql";
+  const migrationBytes = readFileSync(migrationPath);
+  const migration = migrationBytes.toString("utf8");
+  assert.notDeepEqual([...migrationBytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.equal(/^[\x00-\x7F]*$/.test(migration), true);
   assert.match(migration, /jsonb_typeof\("CrmRecord"\."data"->'lineItems'\) = 'array'/);
   assert.match(migration, /jsonb_typeof\("CrmRecord"\."data"->'fees'\) = 'array'/);
   assert.doesNotMatch(migration, /jsonb_array_elements\(COALESCE\("CrmRecord"\."data"->'lineItems'/);
