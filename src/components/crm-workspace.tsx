@@ -68,12 +68,15 @@ import type {
   EmailAttachment,
   EmailAiSettings,
   EmailConnectionConfig,
+  EmailInboundConnectionConfig,
   EmailMessage,
+  EmailOutboundServiceConfig,
   EmailThread,
   FieldDefinition,
   ImportJobQueueSummary,
   ImportPreset,
   KnowledgeArticle,
+  MediaAsset,
   ObjectDefinition,
   Pipeline,
   RecordListResult,
@@ -120,6 +123,7 @@ interface CrmWorkspaceProps {
   emailThreads: EmailThread[];
   emailAiSettings: EmailAiSettings;
   knowledgeArticles: KnowledgeArticle[];
+  mediaAssets: MediaAsset[];
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
   importJobs: CsvImportJob[];
@@ -225,6 +229,18 @@ type EmailAccountDraftOutboundService = {
   username: string;
   password: string;
   resendApiKey: string;
+};
+type SanitizedEmailConnectionConfig = {
+  inbound?: Omit<EmailInboundConnectionConfig, "password" | "accessToken" | "refreshToken"> & {
+    hasPassword?: boolean;
+    hasAccessToken?: boolean;
+    hasRefreshToken?: boolean;
+  };
+  outboundServices?: Array<Omit<EmailOutboundServiceConfig, "password" | "resendApiKey"> & {
+    hasPassword?: boolean;
+    hasResendApiKey?: boolean;
+  }>;
+  defaultOutboundServiceId?: string;
 };
 type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "status" | "syncEnabled" | "sendEnabled">> & {
   connectionConfig?: EmailConnectionConfig;
@@ -568,6 +584,25 @@ function buildDraftAiSourceText(draft: EmailComposeDraft, thread?: EmailThread, 
     .join("\n\n");
 }
 
+function buildComposePromptFromAiResult(result: EmailAiGenerateResult, currentPrompt: string, draft: EmailComposeDraft, thread?: EmailThread): string {
+  const text = result.text.trim();
+  const looksLikeEmailBody = /^hello,?/i.test(text) || /best regards/i.test(text) || text.split(/\r?\n/).length > 6;
+  if (text && !looksLikeEmailBody) {
+    return text;
+  }
+  return [
+    "请根据当前 CRM 客户背景、邮件线程摘要、AI 上下文分析和系统知识库撰写一封销售邮件。",
+    draft.to.trim() ? `收件人：${draft.to.trim()}` : "",
+    draft.subject.trim() ? `当前主题：${draft.subject.trim()}` : thread?.subject ? `邮件线程：${thread.subject}` : "",
+    currentPrompt.trim() ? `我的补充要求：${currentPrompt.trim()}` : "",
+    "语气：专业、简洁、礼貌，避免夸大承诺。",
+    "内容要求：回应最近一封邮件的关键点，结合客户背景给出明确下一步，并保留人工确认空间。",
+    draft.replyOriginalBodyText || draft.replyOriginalBodyHtml ? "这是回复邮件，生成内容时不要重复引用原邮件全文。" : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function formatEmailAnalysisForDisplay(analysis: string): string {
   const repaired = repairEmailMojibake(analysis).replace(/&#0*64;/gi, "@").trim();
   if (!looksLikeLeakedEmailAnalysisPrompt(repaired)) {
@@ -759,14 +794,46 @@ function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}
   };
 }
 
-function createEmailAccountEditDraft(account: EmailAccount): EmailAccountDraft {
+function createEmailAccountEditDraft(account: EmailAccount, config?: SanitizedEmailConnectionConfig): EmailAccountDraft {
+  const inbound = config?.inbound;
+  const outboundServices = config?.outboundServices?.length
+    ? config.outboundServices.map((service) =>
+        createEmailOutboundServiceDraft(service.type, {
+          id: service.id,
+          name: service.name,
+          enabled: service.enabled !== false,
+          fromEmail: service.fromEmail ?? "",
+          smtpHost: service.smtpHost ?? "",
+          smtpPort: service.smtpPort ? String(service.smtpPort) : service.type === "smtp" ? "465" : "",
+          smtpSecure: service.smtpSecure ?? service.type === "smtp",
+          smtpStartTls: service.smtpStartTls === true,
+          username: service.username ?? "",
+          password: "",
+          resendApiKey: ""
+        })
+      )
+    : undefined;
   return createEmptyEmailAccountDraft({
     editingAccountId: account.id,
     name: account.name,
     emailAddress: account.emailAddress,
     provider: account.provider,
     syncEnabled: account.syncEnabled,
-    sendEnabled: account.sendEnabled
+    sendEnabled: account.sendEnabled,
+    defaultOutboundServiceId: config?.defaultOutboundServiceId ?? "smtp",
+    ...(outboundServices ? { outboundServices } : {}),
+    syncProtocol: inbound?.syncProtocol ?? "imap",
+    imapHost: inbound?.imapHost ?? "",
+    imapPort: inbound?.imapPort ? String(inbound.imapPort) : "993",
+    imapSecure: inbound?.imapSecure ?? true,
+    pop3Host: inbound?.pop3Host ?? "",
+    pop3Port: inbound?.pop3Port ? String(inbound.pop3Port) : "995",
+    pop3Secure: inbound?.pop3Secure ?? true,
+    username: inbound?.username ?? "",
+    password: "",
+    mailbox: inbound?.mailbox ?? "INBOX",
+    oauthExpiresAt: inbound?.expiresAt ? inbound.expiresAt.slice(0, 16) : "",
+    oauthScope: inbound?.scope ?? ""
   });
 }
 
@@ -900,6 +967,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailDiagnostics, setEmailDiagnostics] = useState<EmailSubsystemDiagnostics | null>(null);
   const [emailConnectionTestRun, setEmailConnectionTestRun] = useState<EmailConnectionTestRun | null>(null);
   const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>(props.knowledgeArticles);
+  const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>(props.mediaAssets);
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeArticleDraft>({ title: "", body: "", tags: "", active: true });
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1293,6 +1361,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailThreads(props.emailThreads);
     setEmailAiSettings(props.emailAiSettings);
     setKnowledgeArticles(props.knowledgeArticles);
+    setMediaAssets(props.mediaAssets);
     setEmailDraft((current) => {
       const accountId = current.accountId || props.emailAccounts[0]?.id || "";
       return accountId === current.accountId ? current : clearEmailDraftAiProvenance({ ...current, accountId });
@@ -1303,7 +1372,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEmailDraft((current) => clearEmailDraftAiProvenance(current));
       setSelectedEmailThreadId(nextSelectedThreadId);
     }
-  }, [props.emailAccounts, props.emailAiSettings, props.emailThreads, props.knowledgeArticles, routeEmailThreadId, selectedEmailThreadId]);
+  }, [props.emailAccounts, props.emailAiSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
 
   useEffect(() => {
     if (!routeEmailThreadId) {
@@ -2079,6 +2148,19 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailAccountDraft(createEmptyEmailAccountDraft());
   }
 
+  async function editEmailAccount(account: EmailAccount) {
+    setEmailAccountDraft(createEmailAccountEditDraft(account));
+    if (!account.connectionConfigured) {
+      return;
+    }
+    try {
+      const config = await fetchJson<SanitizedEmailConnectionConfig>(`/api/email/accounts/${account.id}/connection-config`, { method: "GET" });
+      setEmailAccountDraft(createEmailAccountEditDraft(account, config));
+    } catch (configError) {
+      showError(configError instanceof Error ? configError.message : "邮箱连接配置加载失败");
+    }
+  }
+
   async function startEmailOAuth() {
     const result = await fetchJson<{ authorizationUrl: string }>("/api/email/oauth/start", {
       method: "POST",
@@ -2445,6 +2527,34 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
   }
 
+  async function generateEmailAiPromptForDraft(currentPrompt: string): Promise<string> {
+    const selectedSourceMessageId = selectedEmailThreadId
+      ? emailMessagesByThread[selectedEmailThreadId]?.at(-1)?.id
+      : undefined;
+    const selectedThread = selectedEmailThreadId ? emailThreads.find((thread) => thread.id === selectedEmailThreadId) : undefined;
+    const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
+      method: "POST",
+      body: {
+        purpose: "draft",
+        threadId: selectedEmailThreadId || undefined,
+        recordId: emailDraft.recordId || selectedRecord?.id,
+        sourceMessageId: selectedSourceMessageId,
+        userPrompt: "Generate a concise, actionable prompt for the email drafting agent. Include recipient/customer context, desired tone, key points, current draft intent, and the next sales action. Return only the prompt text, not the email body.",
+        sourceText: [
+          buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : []),
+          currentPrompt.trim() ? `Current prompt idea:\n${currentPrompt.trim()}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      }
+    });
+    setEmailAiPurpose("draft");
+    setEmailAiPrompt(currentPrompt);
+    setEmailAiResult(result);
+    setMessage("AI 提示词已生成，请确认后再一键生成正文。");
+    return buildComposePromptFromAiResult(result, currentPrompt, emailDraft, selectedThread);
+  }
+
   async function generateEmailAiForMessage(message: EmailMessage, purpose: "translate" | "context_analysis") {
     if (purpose === "translate") {
       const translated = await fetchJson<EmailMessage>(`/api/email/messages/${message.id}/translate`, {
@@ -2629,6 +2739,36 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)]);
     setMessage(`知识库文章已更新：${article.title}`);
     router.refresh();
+  }
+
+  async function uploadMediaAssets(files: FileList | File[] | null): Promise<MediaAsset[]> {
+    const imageFiles = Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
+    if (!imageFiles.length) {
+      showToast({ intent: "info", message: "请选择图片文件。" });
+      return [];
+    }
+    const createdAssets: MediaAsset[] = [];
+    for (const file of imageFiles.slice(0, 10)) {
+      if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
+        showToast({ intent: "error", message: `${file.name} 超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}，已跳过。` });
+        continue;
+      }
+      const asset = await fetchJson<MediaAsset>("/api/media-assets", {
+        method: "POST",
+        body: {
+          name: file.name,
+          contentType: file.type || "image/png",
+          size: file.size,
+          contentBase64: await readFileAsBase64(file)
+        }
+      });
+      createdAssets.push(asset);
+    }
+    if (createdAssets.length) {
+      setMediaAssets((current) => mergeMediaAssets(createdAssets, current));
+      showSuccess(`已上传 ${createdAssets.length} 张图片到媒体库`);
+    }
+    return createdAssets;
   }
 
   function runAction(action: () => Promise<void>) {
@@ -2931,9 +3071,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       field={field}
                       value={createValues[field.key] ?? ""}
                       allRecords={records}
+                      mediaAssets={mediaAssets}
                       users={props.users}
                       testId={`create-field-${activeObject.key}-${field.key}`}
                       onRecordsLoaded={mergeLoadedRecords}
+                      onUploadMediaAssets={(files) => runAction(() => uploadMediaAssets(files).then(() => undefined))}
                       onChange={(nextValue) => setCreateValues((current) => ({ ...current, [field.key]: nextValue }))}
                     />
                   ))}
@@ -3028,9 +3170,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           field={field}
                           value={editValues[field.key] ?? ""}
                           allRecords={records}
+                          mediaAssets={mediaAssets}
                           users={props.users}
                           testId={`edit-field-${selectedRecord.objectKey}-${field.key}`}
                           onRecordsLoaded={mergeLoadedRecords}
+                          onUploadMediaAssets={(files) => runAction(() => uploadMediaAssets(files).then(() => undefined))}
                           onChange={(nextValue) => setEditValues((current) => ({ ...current, [field.key]: nextValue }))}
                         />
                       ))}
@@ -3544,12 +3688,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             connectionTestRun={emailConnectionTestRun}
             knowledgeArticles={knowledgeArticles}
             knowledgeDraft={knowledgeDraft}
+            mediaAssets={mediaAssets}
             disabled={isPending}
             canManageEmailSettings={canManageEmailSettings}
             canManageAiSettings={canManageAiSettings}
             onAccountDraftChange={setEmailAccountDraft}
             onEmailDraftChange={setEmailDraft}
             onKnowledgeDraftChange={setKnowledgeDraft}
+            onUploadMediaAssets={uploadMediaAssets}
             onAiPurposeChange={setEmailAiPurpose}
             onAiPromptChange={setEmailAiPrompt}
             onViewChange={setEmailWorkspaceView}
@@ -3571,7 +3717,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
             onSyncAllAccounts={() => runAction(syncAllEmailAccounts)}
             onTestConnection={testEmailConnection}
-            onEditAccount={(account) => setEmailAccountDraft(createEmailAccountEditDraft(account))}
+            onEditAccount={(account) => {
+              void editEmailAccount(account);
+            }}
             onUpdateAccount={(accountId, patch) => runAction(() => updateEmailAccount(accountId, patch))}
             onUpdateAccountFromDraft={() => runAction(updateEmailAccountFromDraft)}
             onResetAccountDraft={() => setEmailAccountDraft(createEmptyEmailAccountDraft())}
@@ -3581,6 +3729,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onGenerateAiForMessage={(message, purpose) => runAction(() => generateEmailAiForMessage(message, purpose))}
             onGenerateAi={() => runAction(generateEmailAi)}
             onGenerateAiForDraft={(prompt) => runAction(() => generateEmailAiForDraft(prompt))}
+            onGenerateAiPromptForDraft={(prompt) => generateEmailAiPromptForDraft(prompt)}
             onOpenAiSource={(source) => runAction(() => openEmailAiSource(source))}
             onSummarizeThread={() => runAction(summarizeEmailThread)}
             onAnalyzeThread={() => runAction(analyzeEmailThread)}
@@ -3853,12 +4002,14 @@ function EmailWorkspace({
   connectionTestRun,
   knowledgeArticles,
   knowledgeDraft,
+  mediaAssets,
   disabled,
   canManageEmailSettings,
   canManageAiSettings,
   onAccountDraftChange,
   onEmailDraftChange,
   onKnowledgeDraftChange,
+  onUploadMediaAssets,
   onAiPurposeChange,
   onAiPromptChange,
   onViewChange,
@@ -3885,6 +4036,7 @@ function EmailWorkspace({
   onGenerateAiForMessage,
   onGenerateAi,
   onGenerateAiForDraft,
+  onGenerateAiPromptForDraft,
   onOpenAiSource,
   onSummarizeThread,
   onAnalyzeThread,
@@ -3918,12 +4070,14 @@ function EmailWorkspace({
   connectionTestRun: EmailConnectionTestRun | null;
   knowledgeArticles: KnowledgeArticle[];
   knowledgeDraft: KnowledgeArticleDraft;
+  mediaAssets: MediaAsset[];
   disabled: boolean;
   canManageEmailSettings: boolean;
   canManageAiSettings: boolean;
   onAccountDraftChange: (draft: EmailAccountDraft) => void;
   onEmailDraftChange: (draft: EmailComposeDraft) => void;
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
   onAiPurposeChange: (purpose: EmailAiGenerateResult["purpose"]) => void;
   onAiPromptChange: (prompt: string) => void;
   onViewChange: (view: EmailWorkspaceView) => void;
@@ -3950,6 +4104,7 @@ function EmailWorkspace({
   onGenerateAiForMessage: (message: EmailMessage, purpose: "translate" | "context_analysis") => void;
   onGenerateAi: () => void;
   onGenerateAiForDraft: (prompt: string) => void;
+  onGenerateAiPromptForDraft: (prompt: string) => Promise<string>;
   onOpenAiSource: (source: EmailAiSource) => void;
   onSummarizeThread: () => void;
   onAnalyzeThread: () => void;
@@ -3971,6 +4126,15 @@ function EmailWorkspace({
   const linkedRecordId = emailDraft.recordId || selectedRecord?.id || selectedThread?.recordId || "";
   const selectedThreadRecordId = selectedThread?.recordId || "";
   const contactRecords = useMemo(() => records.filter((record) => record.objectKey === "contacts"), [records]);
+  const contactByEmail = useMemo(() => {
+    const map = new Map<string, CrmRecord>();
+    for (const contact of contactRecords) {
+      for (const emailAddress of getRecordEmailAddressesFromData(contact)) {
+        map.set(emailAddress.toLowerCase(), contact);
+      }
+    }
+    return map;
+  }, [contactRecords]);
   const selectedThreadSenderEmail = selectedThread ? getThreadPrimarySenderEmail(selectedThread, selectedMessages, accounts) : "";
   const selectedThreadContact = selectedThreadSenderEmail ? findContactByEmail(records, selectedThreadSenderEmail) : undefined;
   const [manuallyUnlinkedThreadIds, setManuallyUnlinkedThreadIds] = useState<Set<string>>(() => new Set());
@@ -4001,7 +4165,9 @@ function EmailWorkspace({
   const [existingContactId, setExistingContactId] = useState("");
   const [existingContactPickerOpen, setExistingContactPickerOpen] = useState(false);
   const [composeAiPrompt, setComposeAiPrompt] = useState("");
+  const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [attachmentUploads, setAttachmentUploads] = useState<EmailAttachmentUploadItem[]>([]);
   const composeEditorRef = useRef<HTMLDivElement>(null);
@@ -4400,6 +4566,18 @@ function EmailWorkspace({
     updateComposeBodyFromEditor();
   }
 
+  function insertMediaAssetInline(asset: MediaAsset) {
+    const contentId = `${inlineImageContentIdPrefix}${asset.id}`;
+    composeEditorRef.current?.focus();
+    document.execCommand(
+      "insertHTML",
+      false,
+      `<img src="${mediaAssetDataUrl(asset)}" data-content-id="${escapeHtml(contentId)}" data-file-name="${escapeHtml(asset.name)}" data-content-type="${escapeHtml(asset.contentType)}" data-size="${asset.size}" data-content-base64="${asset.contentBase64}" alt="${escapeHtml(asset.name)}">`
+    );
+    updateComposeBodyFromEditor();
+    setMediaLibraryOpen(false);
+  }
+
   function performMailboxAction(action: "archive" | "unarchive" | "delete" | "restore" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
     if (!threadIds.length) {
       return;
@@ -4542,6 +4720,16 @@ function EmailWorkspace({
 
   function generateComposeDraftWithAi() {
     onGenerateAiForDraft(composeAiPrompt.trim());
+  }
+
+  async function generateComposePromptWithAi() {
+    setComposePromptGenerating(true);
+    try {
+      const nextPrompt = await onGenerateAiPromptForDraft(composeAiPrompt.trim());
+      setComposeAiPrompt(nextPrompt);
+    } finally {
+      setComposePromptGenerating(false);
+    }
   }
 
   function renderEmailAiSources(sources?: EmailAiSource[]) {
@@ -4748,7 +4936,7 @@ function EmailWorkspace({
             </label>
             <label>
               <span className="subtle">收件密码/应用密码</span>
-              <input className="input" data-testid="email-account-inbound-password" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} />
+              <input className="input" data-testid="email-account-inbound-password" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} placeholder={accountDraft.editingAccountId ? "留空保留已保存密码" : undefined} />
             </label>
             {accountDraft.syncProtocol === "imap" ? (
               <label>
@@ -4766,11 +4954,11 @@ function EmailWorkspace({
             </div>
             <label>
               <span className="subtle">OAuth Access Token</span>
-              <input className="input" type="password" value={accountDraft.oauthAccessToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthAccessToken: event.target.value })} />
+              <input className="input" type="password" value={accountDraft.oauthAccessToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthAccessToken: event.target.value })} placeholder={accountDraft.editingAccountId ? "留空保留 access token" : undefined} />
             </label>
             <label>
               <span className="subtle">OAuth Refresh Token</span>
-              <input className="input" type="password" value={accountDraft.oauthRefreshToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthRefreshToken: event.target.value })} />
+              <input className="input" type="password" value={accountDraft.oauthRefreshToken} onChange={(event) => onAccountDraftChange({ ...accountDraft, oauthRefreshToken: event.target.value })} placeholder={accountDraft.editingAccountId ? "留空保留 refresh token" : undefined} />
             </label>
             <label>
               <span className="subtle">OAuth Expires At</span>
@@ -4869,13 +5057,13 @@ function EmailWorkspace({
                       </label>
                       <label>
                         <span className="subtle">SMTP 密码/API Key</span>
-                        <input className="input" data-testid={index === 0 ? "email-account-smtp-password" : `email-account-smtp-password-${service.id}`} type="password" value={service.password} onChange={(event) => updateOutboundServiceDraft(service.id, { password: event.target.value })} />
+                        <input className="input" data-testid={index === 0 ? "email-account-smtp-password" : `email-account-smtp-password-${service.id}`} type="password" value={service.password} onChange={(event) => updateOutboundServiceDraft(service.id, { password: event.target.value })} placeholder={accountDraft.editingAccountId ? "留空保留已保存密码" : undefined} />
                       </label>
                     </>
                   ) : (
                     <label className="wide">
                       <span className="subtle">Resend API Key</span>
-                      <input className="input" data-testid={index === 0 ? "email-account-resend-api-key" : `email-account-resend-api-key-${service.id}`} type="password" value={service.resendApiKey} onChange={(event) => updateOutboundServiceDraft(service.id, { resendApiKey: event.target.value })} />
+                      <input className="input" data-testid={index === 0 ? "email-account-resend-api-key" : `email-account-resend-api-key-${service.id}`} type="password" value={service.resendApiKey} onChange={(event) => updateOutboundServiceDraft(service.id, { resendApiKey: event.target.value })} placeholder={accountDraft.editingAccountId ? "留空保留 Resend API Key" : undefined} />
                     </label>
                   )}
                 </div>
@@ -5656,18 +5844,30 @@ function EmailWorkspace({
                       ))}
                     </select>
                   </label>
-                  <label>
-                    <span className="subtle">收件人</span>
-                    <input className="input" data-testid="email-compose-to" value={emailDraft.to} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: event.target.value }))} placeholder="buyer@example.com" />
-                  </label>
-                  <label>
-                    <span className="subtle">CC</span>
-                    <input className="input" data-testid="email-compose-cc" value={emailDraft.cc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: event.target.value }))} placeholder="manager@example.com" />
-                  </label>
-                  <label>
-                    <span className="subtle">BCC</span>
-                    <input className="input" data-testid="email-compose-bcc" value={emailDraft.bcc} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: event.target.value }))} placeholder="archive@example.com" />
-                  </label>
+                  <EmailRecipientInput
+                    label="收件人"
+                    testId="email-compose-to"
+                    value={emailDraft.to}
+                    contactByEmail={contactByEmail}
+                    placeholder="buyer@example.com"
+                    onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: nextValue }))}
+                  />
+                  <EmailRecipientInput
+                    label="CC"
+                    testId="email-compose-cc"
+                    value={emailDraft.cc}
+                    contactByEmail={contactByEmail}
+                    placeholder="manager@example.com"
+                    onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: nextValue }))}
+                  />
+                  <EmailRecipientInput
+                    label="BCC"
+                    testId="email-compose-bcc"
+                    value={emailDraft.bcc}
+                    contactByEmail={contactByEmail}
+                    placeholder="archive@example.com"
+                    onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: nextValue }))}
+                  />
                   <label>
                     <span className="subtle">主题</span>
                     <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
@@ -5684,8 +5884,12 @@ function EmailWorkspace({
                 <div className="email-compose-ai-bar">
                   <Bot size={16} />
                   <input className="input" data-testid="email-compose-ai-prompt" value={composeAiPrompt} onChange={(event) => setComposeAiPrompt(event.target.value)} placeholder="告诉 AI 这封邮件要表达什么，例如：礼貌跟进报价并约下周会议" />
+                  <button className="secondary-button" data-testid="email-compose-ai-prompt-generate" type="button" onClick={() => void generateComposePromptWithAi()} disabled={disabled || composePromptGenerating || !aiSettings.features.draft}>
+                    {composePromptGenerating ? <RefreshCw className="spin-icon" size={15} /> : <Bot size={15} />}
+                    生成提示词
+                  </button>
                   <button className="secondary-button" data-testid="email-compose-ai-generate" type="button" onClick={generateComposeDraftWithAi} disabled={disabled || !aiSettings.features.draft}>
-                    一键生成
+                    生成正文
                   </button>
                 </div>
                 <div className="email-compose-editor-shell">
@@ -5695,7 +5899,7 @@ function EmailWorkspace({
                     <button className="icon-button" aria-label="下划线" type="button" onClick={() => void runComposeEditorCommand("underline")}><Underline size={15} /></button>
                     <button className="icon-button" aria-label="列表" type="button" onClick={() => void runComposeEditorCommand("insertUnorderedList")}><List size={15} /></button>
                     <button className="icon-button" aria-label="链接" type="button" onClick={() => void runComposeEditorCommand("createLink")}><Link size={15} /></button>
-                    <button className="icon-button" aria-label="插入图片" type="button" onClick={() => composeInlineImageInputRef.current?.click()}><ImageIcon size={15} /></button>
+                    <button className="icon-button" aria-label="打开媒体库插入图片" type="button" onClick={() => setMediaLibraryOpen(true)}><ImageIcon size={15} /></button>
                     <button className="icon-button" aria-label="添加附件" type="button" onClick={() => setAttachmentModalOpen(true)}><Paperclip size={15} /></button>
                     <input
                       ref={composeInlineImageInputRef}
@@ -5704,7 +5908,11 @@ function EmailWorkspace({
                       accept="image/*"
                       type="file"
                       onChange={(event) => {
-                        void insertComposeInlineImage(event.target.files?.[0]);
+                        void onUploadMediaAssets(event.target.files).then((assets) => {
+                          if (assets[0]) {
+                            insertMediaAssetInline(assets[0]);
+                          }
+                        });
                         event.target.value = "";
                       }}
                     />
@@ -5781,6 +5989,40 @@ function EmailWorkspace({
               </div>
             )}
           </section>
+        ) : null}
+
+        {mediaLibraryOpen ? (
+          <div className="modal-backdrop" data-testid="email-media-library-modal" role="dialog" aria-modal="true" aria-label="媒体库">
+            <div className="modal-panel media-library-modal">
+              <div className="email-pane-header compact">
+                <div>
+                  <h2 className="page-title" style={{ fontSize: 18 }}>媒体库</h2>
+                  <p className="subtle">选择图片插入邮件正文，或上传新图片供产品主图和邮件复用。</p>
+                </div>
+                <button className="icon-button" aria-label="关闭媒体库" type="button" onClick={() => setMediaLibraryOpen(false)}>
+                  <XCircle size={16} />
+                </button>
+              </div>
+              <div className="toolbar">
+                <button className="secondary-button" type="button" onClick={() => composeInlineImageInputRef.current?.click()} disabled={disabled}>
+                  <ImageIcon size={16} />
+                  上传图片
+                </button>
+              </div>
+              {mediaAssets.length ? (
+                <div className="media-library-grid">
+                  {mediaAssets.map((asset) => (
+                    <button key={asset.id} type="button" onClick={() => insertMediaAssetInline(asset)}>
+                      <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
+                      <span>{asset.name}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">媒体库暂无图片</div>
+              )}
+            </div>
+          </div>
         ) : null}
 
         {attachmentModalOpen ? (
@@ -7256,23 +7498,98 @@ function AiAssistant({
   );
 }
 
+function MediaImageFieldInput({
+  label,
+  mediaAssets,
+  testId,
+  value,
+  onChange,
+  onUploadMediaAssets
+}: {
+  label: string;
+  mediaAssets: MediaAsset[];
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+  onUploadMediaAssets?: (files: FileList | File[] | null) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  return (
+    <label className="wide media-field">
+      <span className="subtle">{label}</span>
+      <div className="media-field-grid">
+        <div className="media-field-preview">
+          {value ? <img alt={label} src={value} /> : <span className="subtle">未选择图片</span>}
+        </div>
+        <div className="media-field-controls">
+          <input className="input" data-testid={testId} value={value} onChange={(event) => onChange(event.target.value)} placeholder="图片 URL 或从媒体库选择" />
+          <div className="toolbar compact-toolbar">
+            <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()}>
+              <ImageIcon size={15} />
+              上传图片
+            </button>
+            <input
+              ref={fileInputRef}
+              hidden
+              accept="image/*"
+              type="file"
+              onChange={(event) => {
+                onUploadMediaAssets?.(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </div>
+          {mediaAssets.length ? (
+            <div className="media-picker-strip" data-testid={testId ? `${testId}-media-library` : undefined}>
+              {mediaAssets.slice(0, 12).map((asset) => (
+                <button key={asset.id} type="button" onClick={() => onChange(mediaAssetDataUrl(asset))} title={asset.name}>
+                  <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span className="subtle">媒体库暂无图片，可先上传。</span>
+          )}
+        </div>
+      </div>
+    </label>
+  );
+}
+
 function FieldInput({
   field,
   value,
   allRecords,
+  mediaAssets = [],
   users,
   testId,
   onRecordsLoaded,
+  onUploadMediaAssets,
   onChange
 }: {
   field: FieldDefinition;
   value: string;
   allRecords: CrmRecord[];
+  mediaAssets?: MediaAsset[];
   users: User[];
   testId?: string;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
+  onUploadMediaAssets?: (files: FileList | File[] | null) => void;
   onChange: (value: string) => void;
 }) {
+  if (field.objectKey === "products" && field.key === "mainImageUrl") {
+    return (
+      <MediaImageFieldInput
+        label={field.label}
+        mediaAssets={mediaAssets}
+        testId={testId}
+        value={value}
+        onChange={onChange}
+        onUploadMediaAssets={onUploadMediaAssets}
+      />
+    );
+  }
+
   if (isCurrencyCodeField(field)) {
     const currencies = getCurrencyDefinitions(allRecords);
     return (
@@ -8644,6 +8961,13 @@ function mergeEmailAccounts(current: EmailAccount[], updated: EmailAccount[]): E
   return [...merged, ...updated.filter((account) => !currentIds.has(account.id))];
 }
 
+function mergeMediaAssets(...groups: Array<Array<MediaAsset | null | undefined> | null | undefined>): MediaAsset[] {
+  const assets = groups.flatMap((group) => group ?? []).filter((asset): asset is MediaAsset => Boolean(asset?.id));
+  return [...new Map(assets.map((asset) => [asset.id, asset])).values()].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
+}
+
 function mergeImportJobs(current: CsvImportJob[], updatedForObject: CsvImportJob[], objectKey: string): CsvImportJob[] {
   return [
     ...updatedForObject,
@@ -8943,6 +9267,92 @@ function DiagnosticBadge({ status, label }: { status: EmailDiagnosticStatus; lab
   return <span className={status === "ok" ? "badge" : "danger-badge"}>{label}</span>;
 }
 
+function EmailRecipientInput({
+  contactByEmail,
+  label,
+  placeholder,
+  testId,
+  value,
+  onChange
+}: {
+  contactByEmail: Map<string, CrmRecord>;
+  label: string;
+  placeholder?: string;
+  testId: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const recipients = splitEmailList(value);
+
+  function commitRecipients(rawValue: string) {
+    const nextRecipients = splitEmailList(rawValue);
+    if (!nextRecipients.length) {
+      return;
+    }
+    const seen = new Set(recipients.map((recipient) => recipient.toLowerCase()));
+    const merged = [...recipients];
+    for (const recipient of nextRecipients) {
+      const normalized = recipient.toLowerCase();
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        merged.push(recipient);
+      }
+    }
+    onChange(merged.join(", "));
+    setDraft("");
+  }
+
+  function removeRecipient(recipient: string) {
+    onChange(recipients.filter((candidate) => candidate.toLowerCase() !== recipient.toLowerCase()).join(", "));
+  }
+
+  return (
+    <label className="email-recipient-field">
+      <span className="subtle">{label}</span>
+      <div className="email-recipient-input">
+        {recipients.map((recipient) => {
+          const contact = contactByEmail.get(recipient.toLowerCase());
+          return (
+            <span className={contact ? "email-recipient-token linked" : "email-recipient-token"} key={recipient}>
+              {contact ? `${contact.title}<${recipient}>` : recipient}
+              <button aria-label={`移除 ${recipient}`} type="button" onClick={() => removeRecipient(recipient)}>
+                <XCircle size={13} />
+              </button>
+            </span>
+          );
+        })}
+        <input
+          data-testid={testId}
+          value={draft}
+          placeholder={recipients.length ? "" : placeholder}
+          onBlur={() => commitRecipients(draft)}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            if (/[,\n;]/.test(nextValue)) {
+              commitRecipients(nextValue);
+              return;
+            }
+            setDraft(nextValue);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === "Tab") {
+              if (draft.trim()) {
+                event.preventDefault();
+                commitRecipients(draft);
+              }
+            }
+            if (event.key === "Backspace" && !draft && recipients.length) {
+              event.preventDefault();
+              onChange(recipients.slice(0, -1).join(", "));
+            }
+          }}
+        />
+      </div>
+    </label>
+  );
+}
+
 function formatEmailAiAutomationFailure(failure: EmailSubsystemDiagnostics["aiAutomationFailures"]["recentFailures"][number]): string {
   const related = [
     failure.threadId ? `thread ${failure.threadId}` : undefined,
@@ -9027,6 +9437,10 @@ function formatBytes(value: number): string {
     return `${(value / 1024).toFixed(1)} KB`;
   }
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function mediaAssetDataUrl(asset: MediaAsset): string {
+  return `data:${asset.contentType};base64,${asset.contentBase64}`;
 }
 
 async function readEmailAttachmentFile(file: File, onProgress?: (progress: number) => void): Promise<EmailAttachment> {

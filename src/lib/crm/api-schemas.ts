@@ -8,6 +8,7 @@ export const MAX_SAVED_VIEW_COLUMNS = 100;
 export const MAX_SAVED_VIEW_FILTERS = 50;
 export const MAX_PIPELINE_STAGES = 50;
 export const MAX_FIELD_OPTIONS = 200;
+export const MAX_MEDIA_ASSET_BYTES = MAX_EMAIL_ATTACHMENT_BYTES;
 
 export const objectKeySchema = z.string().trim().regex(/^[a-z][a-z0-9-]*s$/, "Object key must be plural lowercase, for example partners");
 const keySchema = z.string().trim().regex(/^[a-z][a-z0-9_]*$/, "Key must start with a lowercase letter and contain only letters, numbers, and underscores");
@@ -17,6 +18,7 @@ const optionalIdSchema = z
   .union([z.string().min(1), z.literal(""), z.null()])
   .optional()
   .transform((value) => value || undefined);
+const imageContentTypeSchema = z.enum(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
 
 export const fieldTypeSchema = z.enum(["text", "textarea", "number", "currency", "date", "select", "boolean", "user", "reference"]);
 
@@ -624,6 +626,21 @@ export const knowledgeArticleCreateSchema = z
   .strict();
 
 export const knowledgeArticleUpdateSchema = knowledgeArticleCreateSchema.partial().strict();
+
+export const mediaAssetCreateSchema = z
+  .object({
+    name: labelSchema.max(200),
+    contentType: imageContentTypeSchema,
+    size: z.number().int().min(1).max(MAX_MEDIA_ASSET_BYTES),
+    contentBase64: z.string().trim().min(1).refine(isValidEmailAttachmentBase64, {
+      message: "contentBase64 must be valid base64"
+    })
+  })
+  .strict()
+  .refine((value) => Buffer.from(value.contentBase64, "base64").length <= MAX_MEDIA_ASSET_BYTES, {
+    path: ["contentBase64"],
+    message: `Media asset must be at most ${MAX_MEDIA_ASSET_BYTES} bytes`
+  });
 
 export const teamCreateSchema = z
   .object({

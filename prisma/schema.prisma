@@ -36,6 +36,7 @@ model Workspace {
   emailMessages       EmailMessage[]
   knowledgeArticles   KnowledgeArticle[]
   emailAiSettings     EmailAiSettings?
+  mediaAssets         MediaAsset[]
 }
 
 model User {
@@ -58,6 +59,7 @@ model User {
   apiKeys             ApiKey[]
   webhooksCreated     WebhookEndpoint[]
   emailThreadStates   EmailThreadState[]
+  mediaAssetsCreated  MediaAsset[]
 
   @@unique([workspaceId, email])
   @@index([workspaceId, teamId])
@@ -503,6 +505,23 @@ model KnowledgeArticle {
 
   @@index([workspaceId, active, updatedAt])
   @@index([workspaceId, createdById, createdAt])
+}
+
+model MediaAsset {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  name          String
+  contentType   String
+  size          Int
+  contentBase64 String
+  createdById   String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User      @relation(fields: [createdById], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, contentType])
 }
 
 model EmailAiSettings {

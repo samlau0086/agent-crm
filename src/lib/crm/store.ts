@@ -43,6 +43,7 @@ import type {
   ImportPreset,
   ImportJobQueueSummary,
   KnowledgeArticle,
+  MediaAsset,
   ObjectDefinition,
   Permission,
   Pipeline,
@@ -1040,6 +1041,38 @@ export class CrmStore {
   deleteKnowledgeArticle(context: RequestContext, articleId: string): void {
     requirePermission(context, "crm.admin");
     this.updateKnowledgeArticle(context, articleId, { active: false });
+  }
+
+  listMediaAssets(context: RequestContext): MediaAsset[] {
+    requirePermission(context, "crm.read");
+    return clone(
+      (this.data.mediaAssets ?? [])
+        .filter((asset) => asset.workspaceId === context.workspaceId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 200)
+    );
+  }
+
+  createMediaAsset(context: RequestContext, input: Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">): MediaAsset {
+    requirePermission(context, "crm.write");
+    const now = stamp();
+    const asset: MediaAsset = {
+      id: createId("media"),
+      workspaceId: context.workspaceId,
+      name: normalizeRequiredText(input.name, "Media name"),
+      contentType: input.contentType,
+      size: input.size,
+      contentBase64: input.contentBase64,
+      createdById: context.user.id,
+      createdAt: now,
+      updatedAt: now
+    };
+    (this.data.mediaAssets ??= []).push(asset);
+    this.writeAuditLog(context, "create", "media_asset", asset.id, {
+      summary: `Created media asset ${asset.name}`,
+      details: { contentType: asset.contentType, size: asset.size }
+    });
+    return clone(asset);
   }
 
   getEmailAiSettings(context: RequestContext): EmailAiSettings {

@@ -27,7 +27,7 @@ import {
   type EmailAssistantPurpose
 } from "@/lib/email/assistant";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
-import { decryptEmailConnectionConfig, encryptEmailConnectionConfig } from "@/lib/email/connection-config";
+import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, normalizeEmailConnectionConfig } from "@/lib/email/connection-config";
 import { getEmailProviderCapability } from "@/lib/email/providers";
 import type {
   Activity,
@@ -57,6 +57,7 @@ import type {
   ImportPreset,
   ImportJobQueueSummary,
   KnowledgeArticle,
+  MediaAsset,
   ObjectDefinition,
   Permission,
   Pipeline,
@@ -256,6 +257,41 @@ function mapEmailAccount(account: {
   };
 }
 
+function mergeEmailConnectionConfigSecrets(existing: EmailConnectionConfig | undefined, next: EmailConnectionConfig): EmailConnectionConfig {
+  if (!existing) {
+    return normalizeEmailConnectionConfig(next);
+  }
+  const normalizedExisting = normalizeEmailConnectionConfig(existing);
+  const existingServicesById = new Map((normalizedExisting.outboundServices ?? []).map((service) => [service.id, service]));
+  const nextInbound = next.inbound;
+  const inbound = nextInbound
+    ? {
+        ...nextInbound,
+        password: nextInbound.password ?? normalizedExisting.inbound?.password,
+        accessToken: nextInbound.accessToken ?? normalizedExisting.inbound?.accessToken,
+        refreshToken: nextInbound.refreshToken ?? normalizedExisting.inbound?.refreshToken,
+        tokenType: nextInbound.tokenType ?? normalizedExisting.inbound?.tokenType
+      }
+    : nextInbound;
+  const outboundServices = (next.outboundServices ?? []).map((service) => {
+    const existingService = existingServicesById.get(service.id);
+    return {
+      ...service,
+      password: service.password ?? existingService?.password,
+      resendApiKey: service.resendApiKey ?? existingService?.resendApiKey
+    };
+  });
+  return normalizeEmailConnectionConfig({
+    ...next,
+    inbound,
+    outboundServices,
+    password: next.password ?? normalizedExisting.password,
+    accessToken: next.accessToken ?? normalizedExisting.accessToken,
+    refreshToken: next.refreshToken ?? normalizedExisting.refreshToken,
+    tokenType: next.tokenType ?? normalizedExisting.tokenType
+  });
+}
+
 function mapEmailThread(thread: {
   id: string;
   workspaceId: string;
@@ -396,6 +432,30 @@ function mapKnowledgeArticle(article: {
     createdById: article.createdById,
     createdAt: article.createdAt.toISOString(),
     updatedAt: article.updatedAt.toISOString()
+  };
+}
+
+function mapMediaAsset(asset: {
+  id: string;
+  workspaceId: string;
+  name: string;
+  contentType: string;
+  size: number;
+  contentBase64: string;
+  createdById: string;
+  createdAt: Date;
+  updatedAt: Date;
+}): MediaAsset {
+  return {
+    id: asset.id,
+    workspaceId: asset.workspaceId,
+    name: asset.name,
+    contentType: asset.contentType,
+    size: asset.size,
+    contentBase64: asset.contentBase64,
+    createdById: asset.createdById,
+    createdAt: asset.createdAt.toISOString(),
+    updatedAt: asset.updatedAt.toISOString()
   };
 }
 
@@ -1199,7 +1259,8 @@ export class PrismaCrmRepository {
     data.syncEnabled = toggles.syncEnabled;
     data.sendEnabled = toggles.sendEnabled;
     if (input.connectionConfig) {
-      data.encryptedConnectionConfig = encryptEmailConnectionConfig(input.connectionConfig);
+      const existingConfig = await this.getEmailAccountConnectionConfig(context, existing.id);
+      data.encryptedConnectionConfig = encryptEmailConnectionConfig(mergeEmailConnectionConfigSecrets(existingConfig, input.connectionConfig));
       data.lastConnectionError = null;
       if (input.status === undefined && existing.status === "draft") {
         data.status = "active";
@@ -1936,6 +1997,38 @@ export class PrismaCrmRepository {
       summary: `Disabled knowledge article ${article.title}`,
       details: { active: false }
     });
+  }
+
+  async listMediaAssets(context: RequestContext): Promise<MediaAsset[]> {
+    requirePermission(context, "crm.read");
+    const assets = await this.db.mediaAsset.findMany({
+      where: { workspaceId: context.workspaceId },
+      orderBy: [{ createdAt: "desc" }, { name: "asc" }],
+      take: 200
+    });
+    return assets.map(mapMediaAsset);
+  }
+
+  async createMediaAsset(
+    context: RequestContext,
+    input: Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">
+  ): Promise<MediaAsset> {
+    requirePermission(context, "crm.write");
+    const asset = await this.db.mediaAsset.create({
+      data: {
+        workspaceId: context.workspaceId,
+        name: normalizeRequiredText(input.name, "Media name"),
+        contentType: input.contentType,
+        size: input.size,
+        contentBase64: input.contentBase64,
+        createdById: context.user.id
+      }
+    });
+    await this.writeAuditLog(context, "create", "media_asset", asset.id, {
+      summary: `Created media asset ${asset.name}`,
+      details: { contentType: asset.contentType, size: asset.size }
+    });
+    return mapMediaAsset(asset);
   }
 
   async getEmailAiSettings(context: RequestContext): Promise<EmailAiSettings> {

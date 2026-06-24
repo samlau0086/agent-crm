@@ -298,6 +298,18 @@ export interface KnowledgeArticle {
   updatedAt: string;
 }
 
+export interface MediaAsset {
+  id: string;
+  workspaceId: string;
+  name: string;
+  contentType: string;
+  size: number;
+  contentBase64: string;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface EmailAiSettings {
   workspaceId: string;
   features: Record<EmailAiFeature, boolean>;
@@ -623,6 +635,7 @@ export interface CrmSnapshot {
   emailMessages: EmailMessage[];
   knowledgeArticles: KnowledgeArticle[];
   emailAiSettings: EmailAiSettings[];
+  mediaAssets?: MediaAsset[];
 }
 
 export interface RequestContext {

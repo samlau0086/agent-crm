@@ -1781,9 +1781,9 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /aiSources:\s*undefined/);
   assert.match(source, /data-testid="email-compose-account"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, accountId: event\.target\.value \}\)/);
   assert.match(source, /<span className="subtle">关联记录<\/span>[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, recordId: event\.target\.value \}\)/);
-  assert.match(source, /data-testid="email-compose-to"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, to: event\.target\.value \}\)/);
-  assert.match(source, /data-testid="email-compose-cc"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, cc: event\.target\.value \}\)/);
-  assert.match(source, /data-testid="email-compose-bcc"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, bcc: event\.target\.value \}\)/);
+  assert.match(source, /testId="email-compose-to"[\s\S]*onChange=\{\(nextValue\) => onEmailDraftChange\(clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, to: nextValue \}\)\)\}/);
+  assert.match(source, /testId="email-compose-cc"[\s\S]*onChange=\{\(nextValue\) => onEmailDraftChange\(clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, cc: nextValue \}\)\)\}/);
+  assert.match(source, /testId="email-compose-bcc"[\s\S]*onChange=\{\(nextValue\) => onEmailDraftChange\(clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, bcc: nextValue \}\)\)\}/);
   assert.match(source, /data-testid="email-compose-subject"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, subject: event\.target\.value \}\)/);
   assert.match(source, /data-testid="email-compose-body"[\s\S]*onInput=\{updateComposeBodyFromEditor\}/);
   assert.match(source, /function updateComposeBodyFromEditor\(\)[\s\S]*clearEmailDraftAiProvenance\(\{[\s\S]*bodyHtml,[\s\S]*bodyText: stripHtmlToText\(bodyHtml\)/);
@@ -1803,8 +1803,13 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /const htmlParts = \[inlineImageResult\.bodyHtml, signatureHtml, originalHtml\]\.filter\(Boolean\)/);
   assert.match(source, /const textParts = \[bodyText, signatureText, originalText\]\.filter\(Boolean\)/);
   assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);
+  assert.match(source, /onGenerateAiPromptForDraft=\{\(prompt\) => generateEmailAiPromptForDraft\(prompt\)\}/);
+  assert.match(source, /async function generateEmailAiPromptForDraft\(currentPrompt: string\): Promise<string>/);
   assert.match(source, /data-testid="email-compose-ai-prompt"/);
+  assert.match(source, /data-testid="email-compose-ai-prompt-generate"/);
   assert.match(source, /data-testid="email-compose-ai-generate"/);
+  assert.match(source, /function EmailRecipientInput/);
+  assert.match(source, /contactByEmail=\{contactByEmail\}/);
   assert.match(source, /data-testid="email-compose-signature"/);
   assert.match(source, /data-testid="email-signature-preview"/);
   assert.match(source, /contentEditable[\s\S]*data-testid="email-compose-body"/);
@@ -1813,7 +1818,49 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /data-testid="email-attachment-dropzone"/);
   assert.match(source, /readEmailAttachmentFile\(file, \(progress\) =>/);
   assert.match(styles, /\.email-rich-editor/);
+  assert.match(styles, /\.email-recipient-input/);
+  assert.match(styles, /\.email-recipient-token/);
   assert.match(styles, /\.email-attachment-dropzone/);
+});
+
+await run("email account edit loads sanitized connection config without clearing saved secrets", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+  const route = readFileSync("src/app/api/email/accounts/[id]/connection-config/route.ts", "utf8");
+  assert.match(source, /function createEmailAccountEditDraft\(account: EmailAccount, config\?: SanitizedEmailConnectionConfig\): EmailAccountDraft/);
+  assert.match(source, /\/api\/email\/accounts\/\$\{account\.id\}\/connection-config/);
+  assert.match(source, /留空保留已保存密码/);
+  assert.match(source, /留空保留 Resend API Key/);
+  assert.match(repository, /function mergeEmailConnectionConfigSecrets\(existing: EmailConnectionConfig \| undefined, next: EmailConnectionConfig\): EmailConnectionConfig/);
+  assert.match(repository, /const outboundServices = \(next\.outboundServices \?\? \[\]\)\.map\(\(service\) => \{/);
+  assert.match(repository, /password: service\.password \?\? existingService\?\.password/);
+  assert.match(repository, /resendApiKey: service\.resendApiKey \?\? existingService\?\.resendApiKey/);
+  assert.match(repository, /encryptEmailConnectionConfig\(mergeEmailConnectionConfigSecrets\(existingConfig, input\.connectionConfig\)\)/);
+  assert.match(route, /type SanitizedEmailConnectionConfig/);
+  assert.match(route, /hasPassword: Boolean\(normalized\.inbound\.password\)/);
+  assert.match(route, /hasResendApiKey: Boolean\(service\.resendApiKey\)/);
+});
+
+await run("media library stores reusable images for product main images and email inserts", () => {
+  const schema = readFileSync("prisma/schema.prisma", "utf8");
+  const migration = readFileSync("prisma/migrations/20260624082000_add_media_assets/migration.sql", "utf8");
+  const types = readFileSync("src/lib/crm/types.ts", "utf8");
+  const route = readFileSync("src/app/api/media-assets/route.ts", "utf8");
+  const page = readFileSync("src/app/crm-page.tsx", "utf8");
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  assert.match(schema, /model MediaAsset/);
+  assert.match(migration, /CREATE TABLE "MediaAsset"/);
+  assert.match(types, /export interface MediaAsset/);
+  assert.match(route, /mediaAssetCreateSchema/);
+  assert.match(page, /repository\.listMediaAssets\(context\)/);
+  assert.match(source, /async function uploadMediaAssets\(files: FileList \| File\[\] \| null\): Promise<MediaAsset\[\]>/);
+  assert.match(source, /function MediaImageFieldInput/);
+  assert.match(source, /field\.objectKey === "products" && field\.key === "mainImageUrl"/);
+  assert.match(source, /data-testid="email-media-library-modal"/);
+  assert.match(source, /function insertMediaAssetInline\(asset: MediaAsset\)/);
+  assert.match(styles, /\.media-library-grid/);
+  assert.match(styles, /\.media-field-preview/);
 });
 
 await run("email workspace explains when translation fallback is not persisted", () => {
