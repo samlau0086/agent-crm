@@ -1,7 +1,16 @@
 import type { Permission, RequestContext } from "@/lib/crm/types";
 
 export function hasPermission(context: RequestContext, permission: Permission): boolean {
-  return context.role.permissions.includes(permission);
+  if (context.role.permissions.includes(permission)) {
+    return true;
+  }
+  if (permission === "ai.admin") {
+    return context.role.permissions.includes("crm.admin");
+  }
+  if (permission === "ai.use") {
+    return context.role.permissions.includes("ai.admin") || context.role.permissions.includes("crm.admin");
+  }
+  return false;
 }
 
 export function requirePermission(context: RequestContext, permission: Permission): void {

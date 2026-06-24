@@ -8557,6 +8557,27 @@ await run("email ai settings expose encrypted provider profiles", () => {
   assert.match(emailGenerateRoute, /getEmailAiProviderConfig\(context\)/);
 });
 
+await run("crm admins inherit ai administration for upgraded workspaces", () => {
+  const store = new CrmStore({
+    ...seedData,
+    roles: seedData.roles.map((role) =>
+      role.id === "role-admin"
+        ? { ...role, permissions: ["crm.read", "crm.write", "crm.import", "crm.admin"] }
+        : role
+    )
+  });
+  const context = store.getContext("user-admin");
+  const updated = store.updateEmailAiSettings(context, {
+    providerConfig: { provider: "gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-1.5-flash", timeoutMs: 10000 }
+  });
+  const migration = readFileSync("prisma/migrations/20260624104000_backfill_ai_admin_permissions/migration.sql", "utf8");
+  const rbac = readFileSync("src/lib/auth/rbac.ts", "utf8");
+  assert.equal(updated.providerConfig.provider, "gemini");
+  assert.match(migration, /'crm\.admin' = ANY\("permissions"\)/);
+  assert.match(migration, /'ai\.admin'/);
+  assert.match(rbac, /permission === "ai\.admin"[\s\S]*crm\.admin/);
+});
+
 await run("email ai settings require admin to modify global toggles", () => {
   const store = new CrmStore();
   const salesContext = store.getContext("user-sales");
