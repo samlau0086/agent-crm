@@ -1916,6 +1916,45 @@ button {
   background: #eff6ff;
 }
 
+.email-thread-analysis {
+  display: block;
+}
+
+.email-thread-analysis summary {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.email-thread-analysis summary::-webkit-details-marker {
+  display: none;
+}
+
+.email-thread-analysis summary span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.email-thread-analysis summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.email-thread-analysis-body {
+  margin-top: 12px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .empty-state {
   padding: 22px;
   color: var(--muted);

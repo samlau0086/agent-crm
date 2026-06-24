@@ -344,6 +344,52 @@ function hasEmailHtmlPreview(message: EmailMessage): boolean {
   return Boolean(message.bodyHtml?.trim());
 }
 
+function formatEmailAnalysisForDisplay(analysis: string): string {
+  const repaired = repairEmailMojibake(analysis).replace(/&#0*64;/gi, "@").trim();
+  if (!looksLikeLeakedEmailAnalysisPrompt(repaired)) {
+    return repaired;
+  }
+
+  const recommendation = repaired.match(/Recommendation:\s*([\s\S]*)/i)?.[1]?.trim();
+  const noLinkedRecord = /No linked CRM record/i.test(repaired);
+  const isNotification = /instagram|facebook|notification|unsubscribe|通知|推广|社交/i.test(repaired);
+  const conclusion = isNotification
+    ? "该线程更像自动通知、推广或社交类邮件，当前没有清晰采购意图。"
+    : noLinkedRecord
+      ? "该线程当前未关联 CRM 记录，需要先确认发件人身份和客户关系。"
+      : "该线程已有客户上下文，可以围绕最近沟通确认下一步。";
+  const nextStep = recommendation && !looksLikeLeakedEmailAnalysisPrompt(recommendation)
+    ? recommendation
+    : noLinkedRecord
+      ? "先关联到现有联系人或新建联系人，再重新运行分析；在确认客户意图前不要修改交易阶段、金额或联系人关键字段。"
+      : "确认客户当前目标，处理最近未解决事项，并创建人工跟进任务。";
+
+  return [
+    "AI 线程分析",
+    "",
+    `结论：${conclusion}`,
+    `客户与关联：${noLinkedRecord ? "未关联 CRM 记录。" : "已有关联上下文。"}`,
+    "",
+    "建议下一步：",
+    nextStep
+  ].join("\n");
+}
+
+function getEmailAnalysisPreview(analysis: string): string {
+  const displayText = formatEmailAnalysisForDisplay(analysis);
+  const conclusion = displayText.match(/结论：(.+)/)?.[1]?.trim();
+  return conclusion ? truncateInline(conclusion, 120) : truncateInline(displayText.split("\n").find((line) => line.trim()) ?? "查看分析详情", 120);
+}
+
+function looksLikeLeakedEmailAnalysisPrompt(value: string): boolean {
+  return /^Context analysis:/i.test(value) && /Recent email history:|Knowledge base:|User request:/i.test(value);
+}
+
+function truncateInline(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 1))}...` : normalized;
+}
+
 function inferEmailThreadCategory(thread: EmailThread, messages: EmailMessage[] = []): EmailCategoryKey {
   const haystack = [
     thread.subject,
@@ -4696,11 +4742,16 @@ function EmailWorkspace({
                     </div>
                   ) : null}
                   {selectedThread.aiAnalysis ? (
-                    <div className="ai-box">
-                      <div className="activity-meta">AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}</div>
-                      <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.aiAnalysis}</div>
+                    <details className="ai-box email-thread-analysis" data-testid="email-thread-analysis">
+                      <summary>
+                        <span>
+                          AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}
+                        </span>
+                        <strong>{getEmailAnalysisPreview(selectedThread.aiAnalysis)}</strong>
+                      </summary>
+                      <div className="email-thread-analysis-body">{formatEmailAnalysisForDisplay(selectedThread.aiAnalysis)}</div>
                       {renderEmailAiSources(selectedThread.aiAnalysisSources)}
-                    </div>
+                    </details>
                   ) : null}
                   <div className="email-message-list">
                     {selectedMessages.map((message) => (

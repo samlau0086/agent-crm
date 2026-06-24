@@ -287,16 +287,57 @@ function buildLocalOutput(input: EmailAiGenerateInput): EmailAiGeneratedContent 
 
   return {
     text: [
-      "Context analysis:",
-      context.customerBrief || "No linked customer record.",
-      context.communicationSummary ? `\nRecent communication:\n${context.communicationSummary}` : "",
-      context.knowledgeBrief ? `\nKnowledge base:\n${context.knowledgeBrief}` : "",
-      prompt ? `\nUser request:\n${prompt}` : "",
-      "\nRecommendation: confirm the customer's current objective, address the most recent unresolved item, and create a follow-up task before changing any CRM fields."
+      "AI 线程分析",
+      "",
+      `结论：${buildLocalAnalysisConclusion(context)}`,
+      "",
+      `客户与关联：${context.customerBrief && !context.customerBrief.includes("No linked CRM record") ? "已关联 CRM 记录，可结合客户资料继续判断。" : "当前没有关联 CRM 记录，先不要把这封邮件当作明确销售机会处理。"}`,
+      `邮件重点：${buildLocalAnalysisEmailFocus(context, sourceText)}`,
+      context.knowledgeBrief ? `知识库参考：已纳入相关知识库内容，但仅用于建议，不会修改 CRM 数据。` : "知识库参考：未发现明显相关知识库内容。",
+      "",
+      "建议下一步：",
+      ...buildLocalAnalysisActions(context, prompt)
     ]
       .filter(Boolean)
       .join("\n")
   };
+}
+
+function buildLocalAnalysisConclusion(context: EmailAssistantContext): string {
+  const text = `${context.communicationSummary}\n${context.customerBrief}`.toLowerCase();
+  if (/unsubscribe|instagram|facebook|notification|通知|推广|促销|社交/.test(text)) {
+    return "该线程更像自动通知、推广或社交类邮件，当前没有清晰采购意图。";
+  }
+  if (context.customerBrief && !context.customerBrief.includes("No linked CRM record")) {
+    return "该线程已具备客户上下文，可以基于最近沟通确认下一步销售动作。";
+  }
+  return "该线程缺少明确客户背景，需要先完成联系人关联和意图判断。";
+}
+
+function buildLocalAnalysisEmailFocus(context: EmailAssistantContext, sourceText: string | undefined): string {
+  const firstSource = sourceText?.trim() || context.communicationSummary.split("\n").find((line) => line.trim()) || "";
+  if (!firstSource) {
+    return "暂无足够邮件内容可判断。";
+  }
+  const normalized = firstSource.replace(/\s+/g, " ").trim();
+  return truncate(normalized, 220);
+}
+
+function buildLocalAnalysisActions(context: EmailAssistantContext, prompt: string | undefined): string[] {
+  const hasRecord = Boolean(context.customerBrief && !context.customerBrief.includes("No linked CRM record"));
+  const text = `${context.communicationSummary}\n${prompt ?? ""}`.toLowerCase();
+  if (/unsubscribe|instagram|facebook|notification|通知|推广|促销|社交/.test(text) && !hasRecord) {
+    return [
+      "1. 如果发件人不是客户或潜在客户，归档或标记为非销售邮件。",
+      "2. 如果该邮箱属于真实客户，先关联到现有联系人或新建联系人，再重新运行分析。",
+      "3. 不要自动修改交易阶段、金额、联系人等关键业务字段。"
+    ];
+  }
+  return [
+    "1. 确认该邮件对应的联系人或公司，并补齐关联关系。",
+    "2. 针对最近一封邮件中的未解决问题准备回复或跟进任务。",
+    "3. 在客户确认意图之前，不自动修改交易阶段、金额或联系人关键字段。"
+  ];
 }
 
 function buildSuggestedSubject(context: EmailAssistantContext, prompt: string | undefined): string {

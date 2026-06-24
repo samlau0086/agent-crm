@@ -1791,11 +1791,15 @@ await run("email workspace previews html bodies in a sandboxed iframe", () => {
   assert.match(source, /data-testid=\{`email-message-html-\$\{message\.id\}`\}/);
   assert.match(source, /import \{ repairEmailMojibake \} from "@\/lib\/email\/mojibake"/);
   assert.match(source, /const repairedHtml = repairEmailMojibake\(bodyHtml\)/);
+  assert.match(source, /function formatEmailAnalysisForDisplay\(analysis: string\): string/);
+  assert.match(source, /looksLikeLeakedEmailAnalysisPrompt\(repaired\)/);
+  assert.match(source, /data-testid="email-thread-analysis"/);
   assert.match(source, /hasEmailHtmlPreview\(message\)[\s\S]*<iframe sandbox="" srcDoc=\{buildEmailHtmlPreview\(message\.bodyHtml \?\? ""\)\}[\s\S]*<details className="email-text-fallback">[\s\S]*显示文本邮件/);
   assert.match(source, /\{repairEmailMojibake\(message\.bodyText\)\}/);
   assert.doesNotMatch(source, /<div className="email-message-body">\{message\.bodyText\}<\/div>\s*\{hasEmailHtmlPreview\(message\)/);
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
   assert.match(styles, /\.email-html-preview-frame/);
+  assert.match(styles, /\.email-thread-analysis-body \{[\s\S]*max-height: 260px;[\s\S]*overflow: auto;/);
   assert.match(styles, /\.gmail-compose-popup-header \.icon-button[\s\S]*background: transparent/);
 });
 
@@ -4317,7 +4321,8 @@ await run("store record email triggers enabled translate summarize and analyze a
   assert.equal(translated.translatedBodyText, undefined);
   assert.equal(translated.translatedSources, undefined);
   assert.match(thread?.summary ?? "", /Compact thread memory/);
-  assert.match(thread?.aiAnalysis ?? "", /Context analysis/);
+  assert.match(thread?.aiAnalysis ?? "", /AI 线程分析/);
+  assert.match(thread?.aiAnalysis ?? "", /建议下一步/);
   assert.equal(thread?.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
   assert.equal(aiAudits.some((log) => log.details.purpose === "translate" && log.details.sourceMessageId === message.id && log.details.persisted === false), true);
   assert.equal(aiAudits.some((log) => log.details.purpose === "summarize" && log.details.threadId === message.threadId), true);
@@ -4462,8 +4467,9 @@ await run("inline background executor refreshes email thread analysis through ai
   assert.equal(response.updated, true);
   assert.equal(response.result.enabled, true);
   assert.equal(thread?.id, message.threadId);
-  assert.match(thread?.aiAnalysis ?? "", /Context analysis/);
-  assert.match(thread?.aiAnalysis ?? "", /Recommendation/);
+  assert.match(thread?.aiAnalysis ?? "", /AI 线程分析/);
+  assert.match(thread?.aiAnalysis ?? "", /建议下一步/);
+  assert.doesNotMatch(thread?.aiAnalysis ?? "", /Recent email history:|Knowledge base:|User request:/);
   assert.equal(thread?.aiAnalysisSources?.some((source) => source.recordId === "contact-lin"), true);
   assert.equal(thread?.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
   const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "context_analysis" && log.details.threadId === message.threadId);
@@ -4634,7 +4640,8 @@ await run("worker processes email analyze job envelopes", async () => {
   assert.equal(result.processed, true);
   assert.equal(result.jobType, "email_analyze");
   assert.equal(result.emailThread.id, message.threadId);
-  assert.match(result.emailThread.aiAnalysis ?? "", /Context analysis/);
+  assert.match(result.emailThread.aiAnalysis ?? "", /AI 线程分析/);
+  assert.match(result.emailThread.aiAnalysis ?? "", /建议下一步/);
   assert.equal(result.emailThread.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
   assert.equal(formatJobWorkerResult(result), `Processed email analyze for thread ${message.threadId}`);
 });
@@ -8152,8 +8159,37 @@ await run("email message translation and analysis use CRM thread context and kno
   assert.equal(translation.sources.some((source) => source.messageId === message.id), true);
   assert.equal(translation.sources.some((source) => source.knowledgeArticleId === article.id), true);
   assert.equal(analysis.enabled, true);
-  assert.match(analysis.text, /Context analysis/);
-  assert.match(analysis.text, /Recommendation/);
+  assert.match(analysis.text, /AI 线程分析/);
+  assert.match(analysis.text, /建议下一步/);
+  assert.doesNotMatch(analysis.text, /Recent email history:|Knowledge base:|User request:/);
+});
+
+await run("email context analysis repairs mojibake and hides prompt internals", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { context_analysis: true, auto_summarize: true }, requireSourceLinks: false });
+  const account = store.createEmailAccount(context, {
+    name: "Mojibake analysis inbox",
+    emailAddress: "mojibake-analysis@example.com",
+    provider: "custom",
+    status: "active"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    status: "received",
+    from: "no-reply@mail.instagram.com",
+    to: [account.emailAddress],
+    subject: "Instagram notification",
+    bodyText: "ã nugplugger åå¶ä»ç¨æ·åå¸äºæ°åå®¹ã"
+  });
+  const assistantContext = store.buildEmailAssistantContext(context, { purpose: "context_analysis", threadId: message.threadId, sourceMessageId: message.id });
+  const analysis = await generateEmailAiOutput({ context: assistantContext });
+
+  assert.match(assistantContext.communicationSummary, /和其他用户发布了新内容/);
+  assert.match(analysis.text, /AI 线程分析/);
+  assert.match(analysis.text, /自动通知|社交类邮件/);
+  assert.doesNotMatch(analysis.text, /ã|å|User request:|Recent email history:/);
 });
 
 await run("email assistant context infers thread and customer record from source message", async () => {

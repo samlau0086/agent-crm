@@ -10,6 +10,7 @@ import type {
   KnowledgeArticle,
   RequestContext
 } from "@/lib/crm/types";
+import { repairEmailMojibake } from "@/lib/email/mojibake";
 
 export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize";
 
@@ -359,19 +360,25 @@ function buildCustomerBrief(record: CrmRecord | undefined, fields: FieldDefiniti
   }
 
   const fieldText = fields
-    .map((field) => `${field.label || field.key}: ${formatValue(record.data[field.key])}`)
+    .map((field) => `${cleanEmailContextText(field.label || field.key)}: ${cleanEmailContextText(formatValue(record.data[field.key]))}`)
     .filter((line) => !line.endsWith(": "))
     .join("\n");
 
-  return [`Record: ${record.title}`, `Object: ${record.objectKey}`, record.stageKey ? `Stage: ${record.stageKey}` : undefined, fieldText].filter(Boolean).join("\n");
+  return [`Record: ${cleanEmailContextText(record.title)}`, `Object: ${record.objectKey}`, record.stageKey ? `Stage: ${record.stageKey}` : undefined, fieldText].filter(Boolean).join("\n");
 }
 
 function buildCommunicationSummary(thread: EmailThread | undefined, messages: EmailMessage[], activities: Activity[]): string {
-  const threadSummary = thread?.summary ? `Existing thread summary: ${thread.summary}` : undefined;
+  const threadSummary = thread?.summary ? `Existing thread summary: ${cleanEmailContextText(thread.summary)}` : undefined;
   const messageSummary = messages
-    .map((message) => `${message.direction} ${message.status} ${message.subject} from ${message.from} to ${message.to.join(", ")}: ${truncate(message.bodyText, 500)}`)
+    .map((message) => {
+      const subject = cleanEmailContextText(message.subject);
+      const bodyText = truncate(cleanEmailContextText(message.bodyText), 500);
+      return `${message.direction} ${message.status} ${subject} from ${cleanEmailContextText(message.from)} to ${message.to.map(cleanEmailContextText).join(", ")}: ${bodyText}`;
+    })
     .join("\n");
-  const activitySummary = activities.map((activity) => `${activity.type}: ${activity.title}${activity.body ? ` - ${truncate(activity.body, 300)}` : ""}`).join("\n");
+  const activitySummary = activities
+    .map((activity) => `${activity.type}: ${cleanEmailContextText(activity.title)}${activity.body ? ` - ${truncate(cleanEmailContextText(activity.body), 300)}` : ""}`)
+    .join("\n");
 
   return [threadSummary, messageSummary ? `Recent email history:\n${messageSummary}` : undefined, activitySummary ? `CRM activity history:\n${activitySummary}` : undefined]
     .filter(Boolean)
@@ -414,7 +421,9 @@ function selectMessagesForContext(
 }
 
 function buildKnowledgeBrief(articles: KnowledgeArticle[]): string {
-  return articles.map((article) => `${article.title} [${article.tags.join(", ")}]\n${truncate(article.body, 700)}`).join("\n\n");
+  return articles
+    .map((article) => `${cleanEmailContextText(article.title)} [${article.tags.map(cleanEmailContextText).join(", ")}]\n${truncate(cleanEmailContextText(article.body), 700)}`)
+    .join("\n\n");
 }
 
 function rankKnowledgeArticles(articles: KnowledgeArticle[], queryText: string): KnowledgeArticle[] {
@@ -433,12 +442,12 @@ function rankKnowledgeArticles(articles: KnowledgeArticle[], queryText: string):
 function buildKnowledgeQuery(input: EmailAssistantContextInput, customerBrief: string, messages: EmailMessage[], activities: Activity[]): string {
   return [
     input.purpose,
-    input.thread?.subject,
+    input.thread?.subject ? cleanEmailContextText(input.thread.subject) : undefined,
     customerBrief,
-    input.sourceMessage?.subject,
-    input.sourceMessage?.bodyText,
-    ...messages.flatMap((message) => [message.subject, message.bodyText]),
-    ...activities.flatMap((activity) => [activity.title, activity.body])
+    input.sourceMessage?.subject ? cleanEmailContextText(input.sourceMessage.subject) : undefined,
+    input.sourceMessage?.bodyText ? cleanEmailContextText(input.sourceMessage.bodyText) : undefined,
+    ...messages.flatMap((message) => [cleanEmailContextText(message.subject), cleanEmailContextText(message.bodyText)]),
+    ...activities.flatMap((activity) => [cleanEmailContextText(activity.title), activity.body ? cleanEmailContextText(activity.body) : undefined])
   ]
     .filter(Boolean)
     .join("\n");
@@ -518,6 +527,14 @@ function messageTime(message: EmailMessage): string {
 
 function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 20))}\n[truncated]` : value;
+}
+
+function cleanEmailContextText(value: string): string {
+  return repairEmailMojibake(value)
+    .replace(/&#0*64;/gi, "@")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function formatValue(value: unknown): string {
