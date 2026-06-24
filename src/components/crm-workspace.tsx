@@ -6801,7 +6801,12 @@ function ContactMethodsEditor({
   const visibleMethods = methods.length ? methods : [emptyContactMethod("email", true)];
 
   function updateMethod(methodId: string, patch: Partial<ContactMethodDraft>) {
-    const next = visibleMethods.map((method) => (method.id === methodId ? { ...method, ...patch } : method));
+    const next = visibleMethods.map((method) => {
+      if (patch.primary === true) {
+        return { ...method, ...(method.id === methodId ? patch : {}), primary: method.id === methodId };
+      }
+      return method.id === methodId ? { ...method, ...patch } : method;
+    });
     onChange(normalizePrimaryContactMethods(next));
   }
 

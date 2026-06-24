@@ -1524,6 +1524,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /const companyPrimaryContactValueKey = "__primaryContactId"/);
   assert.match(source, /function ContactMethodsEditor/);
   assert.match(source, /data-testid=\{`\$\{testIdPrefix\}-add-\$\{type\}`\}/);
+  assert.match(source, /patch\.primary === true[\s\S]*primary: method\.id === methodId/);
   assert.match(source, /function contactMethodsFromValues\(values: Record<string, string>\): ContactMethodDraft\[\] \{[\s\S]*normalizeContactMethods\(parseJsonValue\(values\[contactMethodsValueKey\]\)\)\.filter\(\(method\) => method\.value\.trim\(\)\)/);
   assert.match(source, /function CompanyPrimaryContactSelect/);
   assert.match(source, /data-testid="company-primary-contact-select"/);
