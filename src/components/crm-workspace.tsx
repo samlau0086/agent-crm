@@ -41,7 +41,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
@@ -546,6 +546,9 @@ function AppSidebarToggleButton({
 export function CrmWorkspace(props: CrmWorkspaceProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const routeRecordId = searchParams.get("recordId") ?? "";
+  const routeReturnEmailThreadId = searchParams.get("returnEmailThreadId") ?? "";
   const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
   const [activeObjectKey, setActiveObjectKey] = useState(props.initialObjectKey);
@@ -553,7 +556,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [activities, setActivities] = useState<Activity[]>(() =>
     mergeActivities(props.activities, props.dashboardSummary.openTasks, props.dashboardSummary.recentActivities)
   );
-  const [selectedRecordId, setSelectedRecordId] = useState(props.initialRecordList.records[0]?.id ?? props.records[0]?.id ?? "");
+  const [selectedRecordId, setSelectedRecordId] = useState(routeRecordId || props.initialRecordList.records[0]?.id || props.records[0]?.id || "");
   const [selectedViewId, setSelectedViewId] = useState("");
   const [recordPage, setRecordPage] = useState(1);
   const [recordListObjectKey, setRecordListObjectKey] = useState(props.initialObjectKey);
@@ -561,8 +564,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
   const [query, setQuery] = useState("");
-  const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>("closed");
-  const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState("");
+  const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
+  const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -865,7 +868,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (nextNav === "records" || coreObjects.has(nextNav)) {
       const pendingRecordOpen = pendingRecordOpenRef.current;
       setActiveObjectKey(route.objectKey);
-      if (pendingRecordOpen?.objectKey === route.objectKey) {
+      if (routeRecordId) {
+        setSelectedRecordId(routeRecordId);
+        setRecordReturnEmailThreadId(routeReturnEmailThreadId);
+        setRecordPanelMode("detail");
+        pendingRecordOpenRef.current = null;
+      } else if (pendingRecordOpen?.objectKey === route.objectKey) {
         setSelectedRecordId(pendingRecordOpen.recordId);
         setRecordReturnEmailThreadId(pendingRecordOpen.returnEmailThreadId);
         setRecordPanelMode("detail");
@@ -876,7 +884,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
       setShowListSettings(false);
     }
-  }, [pathname, routeObjectKeys]);
+  }, [pathname, routeObjectKeys, routeRecordId, routeReturnEmailThreadId]);
 
   useEffect(() => {
     setRecords(mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
@@ -1124,16 +1132,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   function openRecord(record: CrmRecord, options: { returnEmailThreadId?: string } = {}) {
     const nextNav = coreObjects.has(record.objectKey) ? (record.objectKey as NavKey) : "records";
     const nextPath = crmPathForNav(nextNav, record.objectKey);
+    const detailParams = new URLSearchParams({ recordId: record.id });
+    if (options.returnEmailThreadId) {
+      detailParams.set("returnEmailThreadId", options.returnEmailThreadId);
+    }
+    const nextDetailPath = `${nextPath}?${detailParams.toString()}`;
     setRecords((current) => mergeRecords(current, [record]));
     setActiveObjectKey(record.objectKey);
     setActiveNav(nextNav);
-    if (pathname !== nextPath) {
+    if (`${pathname}?${searchParams.toString()}` !== nextDetailPath) {
       pendingRecordOpenRef.current = {
         objectKey: record.objectKey,
         recordId: record.id,
         returnEmailThreadId: options.returnEmailThreadId ?? ""
       };
-      router.push(nextPath);
+      router.push(nextDetailPath);
     } else {
       pendingRecordOpenRef.current = null;
     }
@@ -1165,6 +1178,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
     setRecordPanelMode("closed");
+    if (routeRecordId && activeObject) {
+      router.push(crmPathForNav(coreObjects.has(activeObject.key) ? activeObject.key : "records", activeObject.key));
+    }
   }
 
   async function submitCreateRecord() {

@@ -1494,10 +1494,15 @@ await run("email thread contact linking is driven by sender email and can return
   const store = readFileSync("src/lib/crm/store.ts", "utf8");
   const threadRoute = readFileSync("src/app/api/email/threads/[id]/route.ts", "utf8");
 
-  assert.match(source, /const \[recordReturnEmailThreadId, setRecordReturnEmailThreadId\] = useState\(""\)/);
+  assert.match(source, /const \[recordReturnEmailThreadId, setRecordReturnEmailThreadId\] = useState\(routeReturnEmailThreadId\)/);
+  assert.match(source, /useSearchParams\(\)/);
+  assert.match(source, /const routeRecordId = searchParams\.get\("recordId"\) \?\? ""/);
   assert.match(source, /const pendingRecordOpenRef = useRef<\{ objectKey: string; recordId: string; returnEmailThreadId: string \} \| null>\(null\)/);
   assert.match(source, /function openRecord\(record: CrmRecord, options: \{ returnEmailThreadId\?: string \} = \{\}\)/);
+  assert.match(source, /new URLSearchParams\(\{ recordId: record\.id \}\)/);
+  assert.match(source, /router\.push\(nextDetailPath\)/);
   assert.match(source, /pendingRecordOpenRef\.current = \{[\s\S]*recordId: record\.id[\s\S]*returnEmailThreadId: options\.returnEmailThreadId \?\? ""[\s\S]*\}/);
+  assert.match(source, /if \(routeRecordId\) \{[\s\S]*setSelectedRecordId\(routeRecordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /pendingRecordOpen\?\.objectKey === route\.objectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
   assert.match(source, /function startCreateContactForCompany\(company: CrmRecord\)/);
