@@ -549,6 +549,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const searchParams = useSearchParams();
   const routeRecordId = searchParams.get("recordId") ?? "";
   const routeReturnEmailThreadId = searchParams.get("returnEmailThreadId") ?? "";
+  const routeMode = searchParams.get("mode") ?? "";
+  const routeCompanyId = searchParams.get("companyId") ?? "";
   const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
   const [activeObjectKey, setActiveObjectKey] = useState(props.initialObjectKey);
@@ -625,6 +627,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const previousViewDraftResetKey = useRef("");
   const previousEditFormResetKey = useRef("");
   const pendingRecordOpenRef = useRef<{ objectKey: string; recordId: string; returnEmailThreadId: string } | null>(null);
+  const pendingRecordCreateRef = useRef<{ objectKey: string; values: Record<string, string> } | null>(null);
 
   const routeObjectKeys = useMemo(() => props.objects.map((object) => object.key), [props.objects]);
   const activeObject = useMemo(
@@ -873,6 +876,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         setRecordReturnEmailThreadId(routeReturnEmailThreadId);
         setRecordPanelMode("detail");
         pendingRecordOpenRef.current = null;
+      } else if (routeMode === "create") {
+        setSelectedRecordId("");
+        setRecordReturnEmailThreadId("");
+        setRecordPanelMode("create");
       } else if (pendingRecordOpen?.objectKey === route.objectKey) {
         setSelectedRecordId(pendingRecordOpen.recordId);
         setRecordReturnEmailThreadId(pendingRecordOpen.returnEmailThreadId);
@@ -884,7 +891,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
       setShowListSettings(false);
     }
-  }, [pathname, routeObjectKeys, routeRecordId, routeReturnEmailThreadId]);
+  }, [pathname, routeObjectKeys, routeRecordId, routeReturnEmailThreadId, routeMode]);
 
   useEffect(() => {
     setRecords(mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
@@ -1070,13 +1077,27 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
     previousCreateFormResetKey.current = createFormResetKey;
+    const pendingRecordCreate = pendingRecordCreateRef.current;
+    if (pendingRecordCreate?.objectKey === activeObject?.key) {
+      setCreateTitle("");
+      setCreateOwnerId(props.contextUser.id);
+      setCreateValues({ ...buildInitialValues(objectFields, activeObject?.key), ...pendingRecordCreate.values });
+      setCreateFormObjectKey(activeObject?.key ?? "");
+      setImportCsv(sampleCsvFor(activeObject?.key ?? "contacts", objectFields));
+      setImportPreview(null);
+      pendingRecordCreateRef.current = null;
+      return;
+    }
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
-    setCreateValues(buildInitialValues(objectFields, activeObject?.key));
+    setCreateValues({
+      ...buildInitialValues(objectFields, activeObject?.key),
+      ...(routeMode === "create" && activeObject?.key === "contacts" && routeCompanyId ? { companyId: routeCompanyId } : {})
+    });
     setCreateFormObjectKey(activeObject?.key ?? "");
     setImportCsv(sampleCsvFor(activeObject?.key ?? "contacts", objectFields));
     setImportPreview(null);
-  }, [activeObject?.key, createFormResetKey, objectFields, props.contextUser.id]);
+  }, [activeObject?.key, createFormResetKey, objectFields, props.contextUser.id, routeCompanyId, routeMode]);
 
   useEffect(() => {
     if (!selectedRecord) {
@@ -1161,7 +1182,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   function startCreateContactForCompany(company: CrmRecord) {
     const contactFields = props.fields.filter((field) => field.objectKey === "contacts").sort((left, right) => left.position - right.position);
-    openObject("contacts");
+    const nextPath = `${crmPathForNav("contacts")}?mode=create&companyId=${encodeURIComponent(company.id)}`;
+    pendingRecordCreateRef.current = { objectKey: "contacts", values: { companyId: company.id } };
+    setActiveObjectKey("contacts");
+    setActiveNav("contacts");
+    if (`${pathname}?${searchParams.toString()}` !== nextPath) {
+      router.push(nextPath);
+    }
     setSelectedRecordId("");
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
@@ -1178,7 +1205,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
     setRecordPanelMode("closed");
-    if (routeRecordId && activeObject) {
+    if ((routeRecordId || routeMode === "create") && activeObject) {
       router.push(crmPathForNav(coreObjects.has(activeObject.key) ? activeObject.key : "records", activeObject.key));
     }
   }
@@ -2411,6 +2438,22 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onChange={(methods) => setCreateValues((current) => withContactMethodValues(current, methods))}
                     />
                   ) : null}
+                  {activeObject.key === "companies" ? (
+                    <>
+                      <CompanyAddressesEditor
+                        title="Billing address"
+                        testIdPrefix="create-company-billing-address"
+                        value={createValues[companyBillingAddressesValueKey] ?? ""}
+                        onChange={(addresses) => setCreateValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
+                      />
+                      <CompanyAddressesEditor
+                        title="Shipping address"
+                        testIdPrefix="create-company-shipping-address"
+                        value={createValues[companyShippingAddressesValueKey] ?? ""}
+                        onChange={(addresses) => setCreateValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
+                      />
+                    </>
+                  ) : null}
                 </div>
                 <div className="toolbar" style={{ marginTop: 12 }}>
                   <button
@@ -2493,11 +2536,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         />
                       ) : null}
                       {selectedRecord.objectKey === "companies" ? (
-                        <CompanyPrimaryContactSelect
-                          contacts={selectedCompanyContacts}
-                          value={editValues[companyPrimaryContactValueKey] ?? ""}
-                          onChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
-                        />
+                        <>
+                          <CompanyPrimaryContactSelect
+                            contacts={selectedCompanyContacts}
+                            value={editValues[companyPrimaryContactValueKey] ?? ""}
+                            onChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
+                          />
+                          <CompanyAddressesEditor
+                            title="Billing address"
+                            testIdPrefix="edit-company-billing-address"
+                            value={editValues[companyBillingAddressesValueKey] ?? ""}
+                            onChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
+                          />
+                          <CompanyAddressesEditor
+                            title="Shipping address"
+                            testIdPrefix="edit-company-shipping-address"
+                            value={editValues[companyShippingAddressesValueKey] ?? ""}
+                            onChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
+                          />
+                        </>
                       ) : null}
                     </div>
                     <div className="toolbar" style={{ marginTop: 12 }}>
@@ -6854,7 +6911,7 @@ function ProductThumbnail({ imageUrl, title }: { imageUrl: unknown; title: strin
   );
 }
 
-type ContactMethodType = "email" | "whatsapp" | "mob" | "tel" | "other";
+type ContactMethodType = "email" | "whatsapp" | "mob" | "tel" | "wechat" | "linkedin" | "instagram" | "facebook" | "x" | "website" | "other";
 
 type ContactMethodDraft = {
   id: string;
@@ -6866,12 +6923,21 @@ type ContactMethodDraft = {
 
 const contactMethodsValueKey = "__contactMethods";
 const companyPrimaryContactValueKey = "__primaryContactId";
+const companyBillingAddressesValueKey = "__billingAddresses";
+const companyShippingAddressesValueKey = "__shippingAddresses";
 const hiddenContactFormFields = new Set(["email", "phone"]);
+const hiddenCompanyFormFields = new Set(["billingAddresses", "shippingAddresses"]);
 const contactMethodTypeLabels: Record<ContactMethodType, string> = {
   email: "Email",
   whatsapp: "WhatsApp",
   mob: "Mob",
   tel: "Tel",
+  wechat: "WeChat",
+  linkedin: "LinkedIn",
+  instagram: "Instagram",
+  facebook: "Facebook",
+  x: "X",
+  website: "Website",
   other: "其他"
 };
 
@@ -7000,6 +7066,97 @@ function CompanyPrimaryContactSelect({
   );
 }
 
+type CompanyAddressDraft = {
+  id: string;
+  label?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  line1?: string;
+  line2?: string;
+  postalCode?: string;
+};
+
+function CompanyAddressesEditor({
+  title,
+  testIdPrefix,
+  value,
+  onChange
+}: {
+  title: string;
+  testIdPrefix: string;
+  value: string;
+  onChange: (addresses: CompanyAddressDraft[]) => void;
+}) {
+  const addresses = normalizeCompanyAddresses(parseJsonValue(value));
+  const visibleAddresses = addresses.length ? addresses : [emptyCompanyAddress()];
+
+  function updateAddress(addressId: string, patch: Partial<CompanyAddressDraft>) {
+    onChange(normalizeCompanyAddresses(visibleAddresses.map((address) => (address.id === addressId ? { ...address, ...patch } : address))));
+  }
+
+  function addAddress() {
+    onChange(normalizeCompanyAddresses([...visibleAddresses, emptyCompanyAddress()]));
+  }
+
+  function removeAddress(addressId: string) {
+    onChange(normalizeCompanyAddresses(visibleAddresses.filter((address) => address.id !== addressId)));
+  }
+
+  return (
+    <section className="wide settings-card" data-testid={`${testIdPrefix}-editor`}>
+      <div className="stage-header">
+        <div>
+          <strong>{title}</strong>
+          <div className="subtle">支持添加多条地址。</div>
+        </div>
+        <button className="secondary-button" data-testid={`${testIdPrefix}-add`} type="button" onClick={addAddress}>
+          添加地址
+        </button>
+      </div>
+      <div className="settings-list" style={{ marginTop: 10 }}>
+        {visibleAddresses.map((address, index) => (
+          <div className="settings-item" key={address.id}>
+            <div className="form-grid">
+              <label>
+                <span className="subtle">标签</span>
+                <input className="input" value={address.label ?? ""} onChange={(event) => updateAddress(address.id, { label: event.target.value })} placeholder="总部 / 仓库 / 办公室" />
+              </label>
+              <label>
+                <span className="subtle">国家/地区</span>
+                <input className="input" value={address.country ?? ""} onChange={(event) => updateAddress(address.id, { country: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">省/州</span>
+                <input className="input" value={address.region ?? ""} onChange={(event) => updateAddress(address.id, { region: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">城市</span>
+                <input className="input" value={address.city ?? ""} onChange={(event) => updateAddress(address.id, { city: event.target.value })} />
+              </label>
+              <label className="wide">
+                <span className="subtle">地址 1</span>
+                <input className="input" data-testid={`${testIdPrefix}-line1-${index}`} value={address.line1 ?? ""} onChange={(event) => updateAddress(address.id, { line1: event.target.value })} />
+              </label>
+              <label className="wide">
+                <span className="subtle">地址 2</span>
+                <input className="input" value={address.line2 ?? ""} onChange={(event) => updateAddress(address.id, { line2: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">邮编</span>
+                <input className="input" value={address.postalCode ?? ""} onChange={(event) => updateAddress(address.id, { postalCode: event.target.value })} />
+              </label>
+              <button className="icon-button" aria-label="删除地址" type="button" onClick={() => removeAddress(address.id)}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 const quoteLineItemsValueKey = "__quoteLineItems";
 const quoteFeesValueKey = "__quoteFees";
 const hiddenQuoteFormFields = new Set(["productId", "quoteCurrency", "totalAmount"]);
@@ -7007,6 +7164,10 @@ const hiddenQuoteFormFields = new Set(["productId", "quoteCurrency", "totalAmoun
 function visibleFormFieldsForObject(objectKey: string | undefined, fields: FieldDefinition[]): FieldDefinition[] {
   if (objectKey === "contacts") {
     return fields.filter((field) => !hiddenContactFormFields.has(field.key));
+  }
+
+  if (objectKey === "companies") {
+    return fields.filter((field) => !hiddenCompanyFormFields.has(field.key));
   }
 
   if (objectKey === "quotes") {
@@ -7099,7 +7260,19 @@ function emptyContactMethod(type: ContactMethodType, primary = false): ContactMe
 }
 
 function normalizeContactMethodType(value: unknown): ContactMethodType {
-  return value === "email" || value === "whatsapp" || value === "mob" || value === "tel" || value === "other" ? value : "other";
+  return value === "email" ||
+    value === "whatsapp" ||
+    value === "mob" ||
+    value === "tel" ||
+    value === "wechat" ||
+    value === "linkedin" ||
+    value === "instagram" ||
+    value === "facebook" ||
+    value === "x" ||
+    value === "website" ||
+    value === "other"
+    ? value
+    : "other";
 }
 
 function normalizeContactMethods(value: unknown): ContactMethodDraft[] {
@@ -7108,7 +7281,7 @@ function normalizeContactMethods(value: unknown): ContactMethodDraft[] {
   }
 
   return value
-    .map((item, index) => {
+    .map<CompanyAddressDraft | undefined>((item, index) => {
       if (!item || typeof item !== "object") {
         return undefined;
       }
@@ -7129,6 +7302,60 @@ function normalizePrimaryContactMethods(methods: ContactMethodDraft[]): ContactM
   const normalized = methods.map((method) => ({ ...method, value: method.value.trim(), label: method.label?.trim() })).filter((method) => method.value || method.id);
   const firstPrimaryIndex = normalized.findIndex((method) => method.primary);
   return normalized.map((method, index) => ({ ...method, primary: firstPrimaryIndex >= 0 ? index === firstPrimaryIndex : index === 0 }));
+}
+
+function emptyCompanyAddress(): CompanyAddressDraft {
+  return {
+    id: `address-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: "",
+    country: "",
+    region: "",
+    city: "",
+    line1: "",
+    line2: "",
+    postalCode: ""
+  };
+}
+
+function normalizeCompanyAddresses(value: unknown): CompanyAddressDraft[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map<CompanyAddressDraft | undefined>((item, index) => {
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      return {
+        id: typeof record.id === "string" && record.id ? record.id : `address-${index}`,
+        label: typeof record.label === "string" ? record.label.trim() : "",
+        country: typeof record.country === "string" ? record.country.trim() : "",
+        region: typeof record.region === "string" ? record.region.trim() : "",
+        city: typeof record.city === "string" ? record.city.trim() : "",
+        line1: typeof record.line1 === "string" ? record.line1.trim() : "",
+        line2: typeof record.line2 === "string" ? record.line2.trim() : "",
+        postalCode: typeof record.postalCode === "string" ? record.postalCode.trim() : ""
+      } satisfies CompanyAddressDraft;
+    })
+    .filter((address): address is CompanyAddressDraft => Boolean(address))
+    .filter((address) => address.id || companyAddressHasContent(address));
+}
+
+function companyAddressHasContent(address: CompanyAddressDraft): boolean {
+  return Boolean(address.label || address.country || address.region || address.city || address.line1 || address.line2 || address.postalCode);
+}
+
+function companyAddressesFromValues(values: Record<string, string>, valueKey: string): CompanyAddressDraft[] {
+  return normalizeCompanyAddresses(parseJsonValue(values[valueKey])).filter(companyAddressHasContent);
+}
+
+function withCompanyAddressValues(values: Record<string, string>, valueKey: string, addresses: CompanyAddressDraft[]): Record<string, string> {
+  return {
+    ...values,
+    [valueKey]: JSON.stringify(normalizeCompanyAddresses(addresses))
+  };
 }
 
 function contactMethodsFromValues(values: Record<string, string>): ContactMethodDraft[] {
@@ -7179,7 +7406,12 @@ function buildInitialValues(fields: FieldDefinition[], objectKey?: string): Reco
     return withContactMethodValues(initialValues, []);
   }
   if (objectKey === "companies") {
-    return { ...initialValues, [companyPrimaryContactValueKey]: "" };
+    return {
+      ...initialValues,
+      [companyPrimaryContactValueKey]: "",
+      [companyBillingAddressesValueKey]: JSON.stringify([]),
+      [companyShippingAddressesValueKey]: JSON.stringify([])
+    };
   }
   return initialValues;
 }
@@ -7206,6 +7438,8 @@ function buildRecordValues(fields: FieldDefinition[], record: CrmRecord): Record
 
   if (record.objectKey === "companies") {
     values[companyPrimaryContactValueKey] = typeof record.data.primaryContactId === "string" ? record.data.primaryContactId : "";
+    values[companyBillingAddressesValueKey] = JSON.stringify(normalizeCompanyAddresses(record.data.billingAddresses));
+    values[companyShippingAddressesValueKey] = JSON.stringify(normalizeCompanyAddresses(record.data.shippingAddresses));
   }
 
   return values;
@@ -7263,6 +7497,8 @@ function parseFormValues(fields: FieldDefinition[], values: Record<string, strin
 
   if (objectKey === "companies") {
     data.primaryContactId = values[companyPrimaryContactValueKey] || "";
+    data.billingAddresses = companyAddressesFromValues(values, companyBillingAddressesValueKey);
+    data.shippingAddresses = companyAddressesFromValues(values, companyShippingAddressesValueKey);
   }
 
   return data;
@@ -7309,6 +7545,10 @@ function displayValue(field: FieldDefinition | undefined, value: unknown, record
   }
   if (field.type === "boolean") {
     return value ? "是" : "否";
+  }
+  if (field.objectKey === "companies" && (field.key === "billingAddresses" || field.key === "shippingAddresses")) {
+    const addresses = normalizeCompanyAddresses(value);
+    return addresses.length ? `${addresses.length} 条地址` : "-";
   }
 
   return String(value ?? "-");

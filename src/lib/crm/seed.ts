@@ -141,11 +141,16 @@ export const seedData: CrmSnapshot = {
     }
   ],
   fieldDefinitions: [
-    { id: "field-contact-email", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "email", label: "邮箱", type: "text", required: true, unique: true, isSystem: true, position: 1 },
+    { id: "field-contact-email", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "email", label: "邮箱", type: "text", required: false, unique: true, isSystem: true, position: 1 },
     { id: "field-contact-phone", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "phone", label: "电话", type: "text", required: false, unique: false, isSystem: true, position: 2 },
     { id: "field-contact-company", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "companyId", label: "公司", type: "reference", required: false, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 3 },
+    { id: "field-contact-birthday", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "birthday", label: "生日", type: "date", required: false, unique: false, isSystem: true, position: 4 },
+    { id: "field-contact-gender", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "gender", label: "性别", type: "select", required: false, unique: false, options: [{ label: "女性", value: "female" }, { label: "男性", value: "male" }, { label: "非二元", value: "non_binary" }, { label: "不透露", value: "not_disclosed" }], isSystem: true, position: 5 },
+    { id: "field-contact-address", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "address", label: "地址", type: "textarea", required: false, unique: false, isSystem: true, position: 6 },
     { id: "field-company-domain", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "domain", label: "域名", type: "text", required: true, unique: true, isSystem: true, position: 1 },
     { id: "field-company-industry", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "industry", label: "行业", type: "select", required: false, unique: false, options: [{ label: "软件", value: "software" }, { label: "制造", value: "manufacturing" }, { label: "金融", value: "finance" }], isSystem: true, position: 2 },
+    { id: "field-company-billing-addresses", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "billingAddresses", label: "Billing addresses", type: "textarea", required: false, unique: false, isSystem: true, position: 3 },
+    { id: "field-company-shipping-addresses", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "shippingAddresses", label: "Shipping addresses", type: "textarea", required: false, unique: false, isSystem: true, position: 4 },
     { id: "field-deal-amount", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "amount", label: "金额", type: "currency", required: true, unique: false, isSystem: true, position: 1 },
     { id: "field-deal-close-date", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "closeDate", label: "预计成交日", type: "date", required: false, unique: false, isSystem: true, position: 2 },
     { id: "field-deal-company", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "companyId", label: "关联公司", type: "reference", required: false, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 3 },
@@ -368,8 +373,8 @@ export const seedData: CrmSnapshot = {
     }
   ],
   savedViews: [
-    { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "email", "phone", "companyId"], isDefault: true },
-    { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "domain", "industry"], isDefault: true },
+    { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "email", "phone", "companyId", "birthday", "gender"], isDefault: true },
+    { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "domain", "industry", "billingAddresses", "shippingAddresses"], isDefault: true },
     { id: "view-deals-default", workspaceId: defaultWorkspaceId, objectKey: "deals", name: "销售管道", columns: ["title", "amount", "closeDate", "companyId"], sort: { field: "amount", direction: "desc" }, isDefault: true },
     { id: "view-products-default", workspaceId: defaultWorkspaceId, objectKey: "products", name: "全部产品", columns: ["title", "mainImageUrl", "sku", "unitPrice", "unitPriceCurrency", "billingCycle", "active"], sort: { field: "title", direction: "asc" }, isDefault: true },
     { id: "view-quotes-default", workspaceId: defaultWorkspaceId, objectKey: "quotes", name: "全部报价", columns: ["title", "quoteNumber", "companyId", "contactId", "quoteCurrency", "paymentTerm", "totalAmount", "status"], sort: { field: "updatedAt", direction: "desc" }, isDefault: true },

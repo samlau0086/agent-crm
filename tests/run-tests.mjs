@@ -3250,17 +3250,17 @@ await run("audit logs require admin permission", () => {
 await run("csv import reports row-level errors", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
-  const result = store.importCsv(context, "contacts", "title,email,phone\nWang Min,wang@example.com,139\nNo Email,,138");
+  const result = store.importCsv(context, "contacts", "title,email,gender\nWang Min,wang@example.com,female\nBad Gender,bad-gender@example.com,unknown");
 
   assert.equal(result.created.length, 1);
-  assert.match(result.errors[0] ?? "", /Email|邮箱/);
+  assert.match(result.errors[0] ?? "", /Gender|性别|鎬у埆/);
 });
 
 await run("csv import writes a summary audit log", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
 
-  store.importCsv(context, "contacts", "title,email\nAudit Import,audit-import@example.com\nNo Email,");
+  store.importCsv(context, "contacts", "title,email,gender\nAudit Import,audit-import@example.com,female\nBad Gender,bad-audit@example.com,unknown");
   const logs = store.listAuditLogs(context);
 
   const importLog = logs.find((log) => log.action === "import" && log.entityType === "csv_import" && log.objectKey === "contacts");
@@ -3275,7 +3275,7 @@ await run("csv import jobs track status counts and audit logs", () => {
   const context = store.getContext("user-admin");
   const job = store.createCsvImportJob(context, {
     objectKey: "contacts",
-    csv: "title,email\nJob Import,job-import@example.com\nMissing Email,",
+    csv: "title,email,gender\nJob Import,job-import@example.com,female\nBad Gender,bad-job@example.com,unknown",
     strategy: "skip-invalid"
   });
 
@@ -3414,13 +3414,13 @@ await run("csv import jobs export issue rows as csv", () => {
   const context = store.getContext("user-admin");
   const job = store.createCsvImportJob(context, {
     objectKey: "contacts",
-    csv: "title,email,phone\nMissing Email,,13900000001\nDuplicate Lin,lin@example.com,13900000002\nFresh,fresh-issues@example.com,13900000003",
+    csv: "title,email,gender\nBad Gender,bad-issues@example.com,unknown\nDuplicate Lin,lin@example.com,male\nFresh,fresh-issues@example.com,female",
     strategy: "skip-invalid"
   });
 
   const csv = store.exportImportJobIssuesCsv(context, job.id);
-  assert.match(csv, /^rowNumber,status,issues,title,email,phone/m);
-  assert.match(csv, /Missing Email/);
+  assert.match(csv, /^rowNumber,status,issues,title,email,gender/m);
+  assert.match(csv, /Bad Gender/);
   assert.match(csv, /Duplicate Lin/);
   assert.match(csv, /conflicts with/);
   assert.doesNotMatch(csv, /fresh-issues@example\.com/);
@@ -5661,7 +5661,7 @@ await run("csv import all-or-nothing aborts when any row is invalid", () => {
   const result = store.importCsv(
     context,
     "contacts",
-    "title,email\nAtomic Good,atomic-good@example.com\nAtomic Bad,",
+    "title,email,gender\nAtomic Good,atomic-good@example.com,female\nAtomic Bad,atomic-bad@example.com,unknown",
     "all-or-nothing"
   );
 
@@ -5695,7 +5695,7 @@ await run("csv import preview reports mappings and row-level errors without crea
   const result = store.previewCsvImport(
     context,
     "contacts",
-    "title,email,unknown\nValid Contact,valid-preview@example.com,x\nNo Email,,y\nDuplicate,lin@example.com,z"
+    "title,email,gender,unknown\nValid Contact,valid-preview@example.com,female,x\nBad Gender,bad-preview@example.com,unknown,y\nDuplicate,lin@example.com,male,z"
   );
 
   assert.equal(result.totalRows, 3);
@@ -6088,7 +6088,8 @@ await run("csv import field guide exports validation metadata", () => {
 
   assert.match(contactsGuide, /^column,label,type,required,unique,defaultValue,allowedValues,referenceObject,exampleValue,notes/m);
   assert.match(contactsGuide, /title,名称,text,yes,no,,,/);
-  assert.match(contactsGuide, /email,邮箱,text,yes,yes/);
+  assert.match(contactsGuide, /email,邮箱,text,no,yes/);
+  assert.match(contactsGuide, /gender,性别,select,no,no/);
   assert.match(contactsGuide, /companyId,公司,reference,no,no,,,公司 \(companies\),record-id/);
   assert.match(companiesGuide, /industry,行业,select,no,no,,软件=software; 制造=manufacturing; 金融=finance,,software/);
   assert.throws(() => store.exportImportTemplateFieldGuideCsv(store.getContext("user-sales"), "contacts"), /crm\.import/);
