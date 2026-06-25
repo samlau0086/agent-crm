@@ -165,6 +165,10 @@ type TalkResponse = {
   generationMode?: "local" | "provider" | "provider_fallback";
   sources: Array<{ label: string; objectKey?: string; recordId?: string; messageId?: string; knowledgeArticleId?: string }>;
 };
+type TalkSuggestionResponse = {
+  completion: string;
+  generationMode?: "local" | "provider" | "provider_fallback";
+};
 type EmailAiSource = EmailAiSourceRef;
 const defaultEmailSyncSettings: EmailSyncSettings = {
   workspaceId: "",
@@ -7277,6 +7281,27 @@ function talkSuggestionMatchesInput(template: string, normalizedInput: string): 
   return inputTerms.some((term) => normalizedTemplate.includes(term));
 }
 
+function normalizeTalkInputSuggestion(input: string, candidate: string): string {
+  const completed = applyTalkInputSuggestion(input, candidate);
+  return completed.trim() && completed !== input ? completed : "";
+}
+
+function applyTalkInputSuggestion(input: string, candidate: string): string {
+  const trimmedCandidate = candidate.trim();
+  if (!trimmedCandidate) {
+    return input;
+  }
+  const trimmedInput = input.trim();
+  if (!trimmedInput) {
+    return trimmedCandidate;
+  }
+  if (trimmedCandidate.toLowerCase().startsWith(trimmedInput.toLowerCase())) {
+    return `${input}${trimmedCandidate.slice(trimmedInput.length)}`;
+  }
+  const separator = /[，。,.!?！？；;\s]$/.test(input) ? "" : "，";
+  return `${input}${separator}${trimmedCandidate}`;
+}
+
 function trimForLabel(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, Math.max(1, maxLength - 1))}…` : value;
 }
@@ -8862,14 +8887,69 @@ function TalkAboutThisPanel({
   const [sources, setSources] = useState<TalkResponse["sources"]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState("");
+  const [isSuggesting, setIsSuggesting] = useState(false);
   const targetKey = target.type === "record" ? `${target.objectKey}:${target.recordId}` : `email_thread:${target.threadId}`;
-  const suggestion = buildTalkInputSuggestion(target, question, messages);
+  const targetType = target.type;
+  const targetObjectKey = target.type === "record" ? target.objectKey : "";
+  const targetRecordId = target.type === "record" ? target.recordId : "";
+  const targetThreadId = target.type === "email_thread" ? target.threadId : "";
+  const shouldSuggest = isInputFocused || question.trim().length > 0;
+  const localSuggestion = shouldSuggest ? buildTalkInputSuggestion(target, question, messages) : "";
+  const suggestion = normalizeTalkInputSuggestion(question, aiSuggestion || localSuggestion);
 
   useEffect(() => {
     setMessages([]);
     setQuestion("");
     setSources([]);
+    setAiSuggestion("");
+    setIsInputFocused(false);
   }, [targetKey]);
+
+  useEffect(() => {
+    setAiSuggestion("");
+    if (disabled || !shouldSuggest) {
+      setIsSuggesting(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsSuggesting(true);
+      try {
+        const result = await fetchJson<TalkSuggestionResponse>("/api/ai/talk", {
+          method: "POST",
+          signal: controller.signal,
+          body: {
+            target:
+              targetType === "record"
+                ? { type: "record", objectKey: targetObjectKey, recordId: targetRecordId }
+                : { type: "email_thread", threadId: targetThreadId },
+            question,
+            history: messages.slice(-8),
+            mode: "suggestion"
+          }
+        });
+        if (!controller.signal.aborted) {
+          setAiSuggestion(result.completion ?? "");
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setAiSuggestion("");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsSuggesting(false);
+        }
+      }
+    }, question.trim() ? 400 : 650);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [disabled, shouldSuggest, targetType, targetObjectKey, targetRecordId, targetThreadId, target.label, question, messages]);
 
   async function sendMessage() {
     const trimmedQuestion = question.trim();
@@ -8970,10 +9050,12 @@ function TalkAboutThisPanel({
             data-testid="talk-about-this-input"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
+            onFocus={() => setIsInputFocused(true)}
+            onBlur={() => setIsInputFocused(false)}
             onKeyDown={(event) => {
               if (event.key === "Tab" && suggestion) {
                 event.preventDefault();
-                setQuestion(suggestion);
+                setQuestion(applyTalkInputSuggestion(question, suggestion));
                 return;
               }
               if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -8986,7 +9068,7 @@ function TalkAboutThisPanel({
           {suggestion ? (
             <div className="talk-suggestion" data-testid="talk-about-this-suggestion">
               <span>{suggestion}</span>
-              <kbd>Tab</kbd>
+              <kbd>{isSuggesting ? "AI..." : "Tab"}</kbd>
             </div>
           ) : null}
         </div>

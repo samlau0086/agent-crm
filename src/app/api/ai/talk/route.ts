@@ -3,7 +3,7 @@ import { requirePermission } from "@/lib/auth/rbac";
 import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
 import { aiTalkRequestSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
-import { generateAiTalkResponse, type AiTalkSource } from "@/lib/ai/talk";
+import { generateAiTalkResponse, generateAiTalkSuggestion, type AiTalkSource } from "@/lib/ai/talk";
 import type { Activity, CrmRecord, EmailMessage, EmailThread, FieldDefinition, KnowledgeArticle } from "@/lib/crm/types";
 
 export const dynamic = "force-dynamic";
@@ -21,15 +21,21 @@ export async function POST(request: NextRequest) {
         ? await buildRecordTalkContext(repository, context, body.target.objectKey, body.target.recordId, knowledgeArticles)
         : await buildEmailThreadTalkContext(repository, context, body.target.threadId, knowledgeArticles);
 
+    const input = {
+      question: body.question,
+      history: body.history,
+      ...talkContext
+    };
     return ok(
-      await generateAiTalkResponse(
-        {
-          question: body.question,
-          history: body.history,
-          ...talkContext
-        },
-        { config: providerConfig }
-      )
+      body.mode === "suggestion"
+        ? await generateAiTalkSuggestion(
+            {
+              ...input,
+              questionPrefix: body.question
+            },
+            { config: providerConfig }
+          )
+        : await generateAiTalkResponse(input, { config: providerConfig })
     );
   } catch (error) {
     return handleApiError(error, request);

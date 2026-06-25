@@ -614,10 +614,20 @@ export const aiTalkTargetSchema = z.discriminatedUnion("type", [
 export const aiTalkRequestSchema = z
   .object({
     target: aiTalkTargetSchema,
-    question: z.string().trim().min(1).max(2000),
+    question: z.string().trim().max(2000),
+    mode: z.enum(["chat", "suggestion"]).optional(),
     history: z.array(aiTalkMessageSchema).max(20).optional()
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode !== "suggestion" && value.question.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["question"],
+        message: "Talk question is required"
+      });
+    }
+  });
 
 export const emailAssistantContextSchema = z
   .object({

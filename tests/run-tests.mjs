@@ -1886,13 +1886,16 @@ await run("talk about this panel can chat and save transcript to rag knowledge",
 await run("talk about this input suggests context-aware completions", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
-  assert.match(source, /const suggestion = buildTalkInputSuggestion\(target, question, messages\)/);
+  assert.match(source, /const localSuggestion = shouldSuggest \? buildTalkInputSuggestion\(target, question, messages\) : ""/);
+  assert.match(source, /fetchJson<TalkSuggestionResponse>\("\/api\/ai\/talk"/);
+  assert.match(source, /mode: "suggestion"/);
   assert.match(source, /function buildTalkInputSuggestion\(target: TalkTarget, input: string, messages: TalkMessage\[\]\): string/);
+  assert.match(source, /function applyTalkInputSuggestion\(input: string, candidate: string\): string/);
   assert.match(source, /function talkSuggestionTemplates\(target: TalkTarget, messages: TalkMessage\[\]\): string\[\]/);
   assert.match(source, /target\.type === "email_thread"/);
   assert.match(source, /target\.objectKey === "deals"/);
   assert.match(source, /event\.key === "Tab" && suggestion/);
-  assert.match(source, /setQuestion\(suggestion\)/);
+  assert.match(source, /setQuestion\(applyTalkInputSuggestion\(question, suggestion\)\)/);
   assert.match(source, /data-testid="talk-about-this-suggestion"/);
   assert.match(styles, /\.talk-suggestion/);
   assert.match(styles, /\.talk-suggestion kbd/);
@@ -1908,9 +1911,14 @@ await run("talk about this api is guarded by ai permission and uses crm context"
   assert.match(route, /buildEmailThreadTalkContext/);
   assert.match(route, /repository\.listKnowledgeArticles\(context, true\)/);
   assert.match(route, /generateAiTalkResponse/);
+  assert.match(route, /body\.mode === "suggestion"/);
+  assert.match(route, /generateAiTalkSuggestion/);
   assert.match(schemas, /export const aiTalkRequestSchema/);
+  assert.match(schemas, /z\.enum\(\["chat", "suggestion"\]\)/);
   assert.match(schemas, /type: z\.literal\("record"\)/);
   assert.match(schemas, /type: z\.literal\("email_thread"\)/);
+  assert.match(talk, /generateAiTalkSuggestion/);
+  assert.match(talk, /buildTalkSuggestionPrompt/);
   assert.match(talk, /chat\/completions/);
   assert.match(talk, /generationMode: "local"/);
 });
