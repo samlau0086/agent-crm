@@ -73,6 +73,7 @@ import type {
   Role,
   SavedView,
   Team,
+  TalkMessage,
   User,
   CreatedWebhookEndpoint,
   WebhookDelivery,
@@ -84,6 +85,7 @@ import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/val
 import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
 
 type PrismaContext = PrismaClient;
+type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
 
 function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
   return (value ?? {}) as Record<string, unknown>;
@@ -477,6 +479,36 @@ function mapKnowledgeArticle(article: {
     createdById: article.createdById,
     createdAt: article.createdAt.toISOString(),
     updatedAt: article.updatedAt.toISOString()
+  };
+}
+
+function mapTalkMessage(message: {
+  id: string;
+  workspaceId: string;
+  targetType: string;
+  objectKey: string | null;
+  recordId: string | null;
+  threadId: string | null;
+  role: string;
+  content: string;
+  sources: Prisma.JsonValue | null;
+  knowledgeArticleId: string | null;
+  createdById: string;
+  createdAt: Date;
+}): TalkMessage {
+  return {
+    id: message.id,
+    workspaceId: message.workspaceId,
+    targetType: message.targetType === "email_thread" ? "email_thread" : "record",
+    objectKey: message.objectKey ?? undefined,
+    recordId: message.recordId ?? undefined,
+    threadId: message.threadId ?? undefined,
+    role: message.role === "assistant" ? "assistant" : "user",
+    content: message.content,
+    sources: normalizeTalkSources(message.sources),
+    knowledgeArticleId: message.knowledgeArticleId ?? undefined,
+    createdById: message.createdById,
+    createdAt: message.createdAt.toISOString()
   };
 }
 
@@ -904,6 +936,39 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
     })
     .filter((source): source is NonNullable<EmailThread["aiAnalysisSources"]>[number] => Boolean(source))
     .slice(0, 20);
+}
+
+function normalizeTalkSources(value: unknown): TalkMessage["sources"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const sources = value
+    .map((source) => {
+      if (!source || typeof source !== "object") {
+        return undefined;
+      }
+      const item = source as Record<string, unknown>;
+      const label = typeof item.label === "string" ? item.label.trim().slice(0, 200) : "";
+      if (!label) {
+        return undefined;
+      }
+      return {
+        label,
+        ...(typeof item.objectKey === "string" && item.objectKey.trim() ? { objectKey: item.objectKey.trim() } : {}),
+        ...(typeof item.recordId === "string" && item.recordId.trim() ? { recordId: item.recordId.trim() } : {}),
+        ...(typeof item.messageId === "string" && item.messageId.trim() ? { messageId: item.messageId.trim() } : {}),
+        ...(typeof item.knowledgeArticleId === "string" && item.knowledgeArticleId.trim() ? { knowledgeArticleId: item.knowledgeArticleId.trim() } : {})
+      };
+    })
+    .filter((source): source is NonNullable<TalkMessage["sources"]>[number] => Boolean(source))
+    .slice(0, 20);
+  return sources.length ? sources : undefined;
+}
+
+function talkMessageTargetWhere(target: TalkMessageTargetInput): Prisma.TalkMessageWhereInput {
+  return target.type === "record"
+    ? { targetType: "record", objectKey: target.objectKey, recordId: target.recordId }
+    : { targetType: "email_thread", threadId: target.threadId };
 }
 
 function normalizeEmailThreadCategory(value: unknown): EmailThread["category"] {
@@ -2253,6 +2318,74 @@ export class PrismaCrmRepository {
     await this.writeAuditLog(context, "update", "knowledge_article", article.id, {
       summary: `Disabled knowledge article ${article.title}`,
       details: { active: false }
+    });
+  }
+
+  async listTalkMessages(context: RequestContext, target: TalkMessageTargetInput): Promise<TalkMessage[]> {
+    requirePermission(context, "ai.use");
+    await this.assertTalkTargetAccess(context, target);
+    const messages = await this.db.talkMessage.findMany({
+      where: { workspaceId: context.workspaceId, ...talkMessageTargetWhere(target) },
+      orderBy: { createdAt: "asc" },
+      take: 200
+    });
+    return messages.map(mapTalkMessage);
+  }
+
+  async createTalkMessage(
+    context: RequestContext,
+    input: TalkMessageTargetInput & Pick<TalkMessage, "role" | "content"> & Partial<Pick<TalkMessage, "sources" | "knowledgeArticleId">>
+  ): Promise<TalkMessage> {
+    requirePermission(context, "ai.use");
+    await this.assertTalkTargetAccess(context, input);
+    if (input.knowledgeArticleId) {
+      await this.getKnowledgeArticle(context, input.knowledgeArticleId);
+    }
+    const message = await this.db.talkMessage.create({
+      data: {
+        workspaceId: context.workspaceId,
+        targetType: input.type,
+        objectKey: input.type === "record" ? input.objectKey : null,
+        recordId: input.type === "record" ? input.recordId : null,
+        threadId: input.type === "email_thread" ? input.threadId : null,
+        role: input.role === "assistant" ? "assistant" : "user",
+        content: normalizeRequiredText(input.content, "Talk message"),
+        sources: normalizeTalkSources(input.sources) ?? Prisma.JsonNull,
+        knowledgeArticleId: input.knowledgeArticleId ?? null,
+        createdById: context.user.id
+      }
+    });
+    return mapTalkMessage(message);
+  }
+
+  async markTalkMessageKnowledgeArticle(context: RequestContext, messageId: string, knowledgeArticleId: string): Promise<TalkMessage> {
+    requirePermission(context, "ai.use");
+    await this.getKnowledgeArticle(context, knowledgeArticleId);
+    const existing = await this.db.talkMessage.findFirst({ where: { id: messageId, workspaceId: context.workspaceId } });
+    if (!existing) {
+      throw new Error("Talk message not found");
+    }
+    const message = await this.db.talkMessage.update({
+      where: { id: existing.id },
+      data: { knowledgeArticleId }
+    });
+    await this.writeAuditLog(context, "update", "talk_message", message.id, {
+      summary: "Marked talk message as RAG knowledge",
+      details: { knowledgeArticleId }
+    });
+    return mapTalkMessage(message);
+  }
+
+  async deleteTalkMessage(context: RequestContext, messageId: string): Promise<void> {
+    requirePermission(context, "ai.use");
+    const existing = await this.db.talkMessage.findFirst({ where: { id: messageId, workspaceId: context.workspaceId } });
+    if (!existing) {
+      throw new Error("Talk message not found");
+    }
+    await this.db.talkMessage.delete({ where: { id: existing.id } });
+    await this.writeAuditLog(context, "delete", "talk_message", existing.id, {
+      summary: "Deleted talk message",
+      details: { role: existing.role, targetType: existing.targetType }
     });
   }
 
@@ -4959,6 +5092,14 @@ export class PrismaCrmRepository {
       where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: thread.id, userId: context.user.id } }
     });
     return mapEmailThread(thread, state);
+  }
+
+  private async assertTalkTargetAccess(context: RequestContext, target: TalkMessageTargetInput): Promise<void> {
+    if (target.type === "record") {
+      await this.getRecord(context, target.objectKey, target.recordId);
+      return;
+    }
+    await this.assertEmailThread(context, target.threadId);
   }
 
   private async emailThreadAccessWhere(context: RequestContext): Promise<Prisma.EmailThreadWhereInput> {

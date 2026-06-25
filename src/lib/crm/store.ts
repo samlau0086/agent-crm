@@ -59,6 +59,7 @@ import type {
   Role,
   SavedView,
   Team,
+  TalkMessage,
   User,
   WebhookDelivery,
   WebhookEndpoint,
@@ -153,6 +154,8 @@ function normalizeTeamName(input: string): string {
   }
   return name;
 }
+
+type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
 
 export class CrmStore {
   private data: CrmSnapshot;
@@ -1164,6 +1167,66 @@ export class CrmStore {
   deleteKnowledgeArticle(context: RequestContext, articleId: string): void {
     requirePermission(context, "crm.admin");
     this.updateKnowledgeArticle(context, articleId, { active: false });
+  }
+
+  listTalkMessages(context: RequestContext, target: TalkMessageTargetInput): TalkMessage[] {
+    requirePermission(context, "ai.use");
+    this.assertTalkTargetAccess(context, target);
+    return clone(
+      (this.data.talkMessages ?? [])
+        .filter((message) => message.workspaceId === context.workspaceId && talkMessageMatchesTarget(message, target))
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+        .slice(-200)
+    );
+  }
+
+  createTalkMessage(
+    context: RequestContext,
+    input: TalkMessageTargetInput & Pick<TalkMessage, "role" | "content"> & Partial<Pick<TalkMessage, "sources" | "knowledgeArticleId">>
+  ): TalkMessage {
+    requirePermission(context, "ai.use");
+    this.assertTalkTargetAccess(context, input);
+    if (input.knowledgeArticleId) {
+      this.getKnowledgeArticle(context, input.knowledgeArticleId);
+    }
+    const now = stamp();
+    const message: TalkMessage = {
+      id: createId("talk"),
+      workspaceId: context.workspaceId,
+      targetType: input.type,
+      objectKey: input.type === "record" ? input.objectKey : undefined,
+      recordId: input.type === "record" ? input.recordId : undefined,
+      threadId: input.type === "email_thread" ? input.threadId : undefined,
+      role: input.role,
+      content: normalizeRequiredText(input.content, "Talk message"),
+      sources: normalizeTalkSources(input.sources),
+      knowledgeArticleId: input.knowledgeArticleId,
+      createdById: context.user.id,
+      createdAt: now
+    };
+    (this.data.talkMessages ??= []).push(message);
+    return clone(message);
+  }
+
+  markTalkMessageKnowledgeArticle(context: RequestContext, messageId: string, knowledgeArticleId: string): TalkMessage {
+    requirePermission(context, "ai.use");
+    this.getKnowledgeArticle(context, knowledgeArticleId);
+    const message = (this.data.talkMessages ?? []).find((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
+    if (!message) {
+      throw new Error("Talk message not found");
+    }
+    message.knowledgeArticleId = knowledgeArticleId;
+    return clone(message);
+  }
+
+  deleteTalkMessage(context: RequestContext, messageId: string): void {
+    requirePermission(context, "ai.use");
+    const messages = this.data.talkMessages ?? [];
+    const index = messages.findIndex((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
+    if (index === -1) {
+      throw new Error("Talk message not found");
+    }
+    messages.splice(index, 1);
   }
 
   listMediaAssets(context: RequestContext): MediaAsset[] {
@@ -3190,6 +3253,14 @@ export class CrmStore {
     return thread;
   }
 
+  private assertTalkTargetAccess(context: RequestContext, target: TalkMessageTargetInput): void {
+    if (target.type === "record") {
+      this.getRecord(context, target.objectKey, target.recordId);
+      return;
+    }
+    this.assertEmailThread(context, target.threadId);
+  }
+
   private mergeEmailThreadState(context: RequestContext, thread: EmailThread): EmailThread {
     const state = (this.data.emailThreadStates ?? []).find(
       (candidate) => candidate.workspaceId === context.workspaceId && candidate.threadId === thread.id && candidate.userId === context.user.id
@@ -3402,6 +3473,24 @@ function normalizeRequiredText(value: string, label: string): string {
     throw new Error(`${label} is required`);
   }
   return normalized;
+}
+
+function talkMessageMatchesTarget(message: TalkMessage, target: TalkMessageTargetInput): boolean {
+  return target.type === "record"
+    ? message.targetType === "record" && message.objectKey === target.objectKey && message.recordId === target.recordId
+    : message.targetType === "email_thread" && message.threadId === target.threadId;
+}
+
+function normalizeTalkSources(sources: TalkMessage["sources"] = []): TalkMessage["sources"] {
+  return sources
+    .map((source) => ({
+      label: source.label.trim().slice(0, 200),
+      objectKey: source.objectKey?.trim() || undefined,
+      recordId: source.recordId?.trim() || undefined,
+      messageId: source.messageId?.trim() || undefined,
+      knowledgeArticleId: source.knowledgeArticleId?.trim() || undefined
+    }))
+    .filter((source) => source.label);
 }
 
 function normalizeEmailAddress(value: string): string {

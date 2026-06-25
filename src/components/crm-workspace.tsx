@@ -161,7 +161,14 @@ type TalkTarget =
 type TalkApiTarget =
   | { type: "record"; objectKey: string; recordId: string }
   | { type: "email_thread"; threadId: string };
-type TalkMessage = { role: "user" | "assistant"; content: string };
+type TalkMessage = {
+  id?: string;
+  role: "user" | "assistant";
+  content: string;
+  sources?: TalkResponse["sources"];
+  knowledgeArticleId?: string;
+  createdAt?: string;
+};
 type TalkResponse = {
   text: string;
   generationMode?: "local" | "provider" | "provider_fallback";
@@ -3885,6 +3892,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       disabled={isPending}
                       onOpenRecord={(source) => runAction(() => openTalkSourceRecord(source))}
                       onKnowledgeCreated={(article) => setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)])}
+                      onRequestConfirm={requestConfirm}
                       onShowToast={showToast}
                     />
                   </>
@@ -4127,6 +4135,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateSyncSettings={(patch) => runAction(() => updateEmailSyncSettingsPatch(patch))}
             onShowToast={showToast}
             onShowSuccess={showSuccess}
+            onRequestConfirm={requestConfirm}
             onRequestPrompt={requestPrompt}
             sidebarCollapsed={appSidebarCollapsed}
             onToggleAppSidebar={toggleAppSidebar}
@@ -4454,6 +4463,7 @@ function EmailWorkspace({
   onUpdateSyncSettings,
   onShowToast,
   onShowSuccess,
+  onRequestConfirm,
   onRequestPrompt,
   sidebarCollapsed,
   onToggleAppSidebar
@@ -4540,6 +4550,7 @@ function EmailWorkspace({
   onUpdateSyncSettings: (patch: Partial<Omit<EmailSyncSettings, "workspaceId" | "updatedAt">>) => void;
   onShowToast: (toast: ToastState) => void;
   onShowSuccess: (message: string) => void;
+  onRequestConfirm: (options: ConfirmDialogState) => Promise<boolean>;
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
   sidebarCollapsed: boolean;
   onToggleAppSidebar: () => void;
@@ -6488,6 +6499,7 @@ function EmailWorkspace({
                     disabled={disabled}
                     onOpenRecord={onOpenTalkSourceRecord}
                     onKnowledgeCreated={onKnowledgeArticleCreated}
+                    onRequestConfirm={onRequestConfirm}
                     onShowToast={onShowToast}
                   />
                   <div className="email-message-list">
@@ -7529,6 +7541,19 @@ function talkApiTarget(target: TalkTarget): TalkApiTarget {
   return target.type === "record"
     ? { type: "record", objectKey: target.objectKey, recordId: target.recordId }
     : { type: "email_thread", threadId: target.threadId };
+}
+
+function talkHistoryPayload(messages: TalkMessage[]): Array<Pick<TalkMessage, "role" | "content">> {
+  return messages.map((message) => ({ role: message.role, content: message.content }));
+}
+
+function talkMessagesUrl(target: TalkTarget): string {
+  const params = new URLSearchParams(
+    target.type === "record"
+      ? { type: "record", objectKey: target.objectKey, recordId: target.recordId }
+      : { type: "email_thread", threadId: target.threadId }
+  );
+  return `/api/ai/talk/messages?${params.toString()}`;
 }
 
 function buildTalkKnowledgeTags(target: TalkTarget): string[] {
@@ -9208,19 +9233,24 @@ function TalkAboutThisPanel({
   disabled,
   onKnowledgeCreated,
   onOpenRecord,
+  onRequestConfirm,
   onShowToast
 }: {
   target: TalkTarget;
   disabled: boolean;
   onKnowledgeCreated: (article: KnowledgeArticle) => void;
   onOpenRecord?: (source: { objectKey: string; recordId: string }) => void;
+  onRequestConfirm: (options: ConfirmDialogState) => Promise<boolean>;
   onShowToast: (toast: ToastState) => void;
 }) {
   const [messages, setMessages] = useState<TalkMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [sources, setSources] = useState<TalkResponse["sources"]>([]);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [savingMessageIndex, setSavingMessageIndex] = useState<number | null>(null);
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState("");
   const [isSuggesting, setIsSuggesting] = useState(false);
@@ -9229,9 +9259,18 @@ function TalkAboutThisPanel({
   const targetObjectKey = target.type === "record" ? target.objectKey : "";
   const targetRecordId = target.type === "record" ? target.recordId : "";
   const targetThreadId = target.type === "email_thread" ? target.threadId : "";
+  const talkMessagesRequestUrl = useMemo(
+    () => (targetType === "record" ? talkMessagesUrl({ type: "record", objectKey: targetObjectKey, recordId: targetRecordId, label: target.label }) : talkMessagesUrl({ type: "email_thread", threadId: targetThreadId, label: target.label })),
+    [targetType, targetObjectKey, targetRecordId, targetThreadId, target.label]
+  );
+  const onShowToastRef = useRef(onShowToast);
   const shouldSuggest = isInputFocused || question.trim().length > 0;
   const localSuggestion = shouldSuggest ? buildTalkInputSuggestion(target, question, messages) : "";
   const suggestion = normalizeTalkInputSuggestion(question, aiSuggestion || localSuggestion);
+
+  useEffect(() => {
+    onShowToastRef.current = onShowToast;
+  }, [onShowToast]);
 
   useEffect(() => {
     setMessages([]);
@@ -9239,7 +9278,36 @@ function TalkAboutThisPanel({
     setSources([]);
     setAiSuggestion("");
     setIsInputFocused(false);
+    setIsExpanded(false);
   }, [targetKey]);
+
+  useEffect(() => {
+    if (!isExpanded) {
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsLoadingMessages(true);
+    fetchJson<TalkMessage[]>(talkMessagesRequestUrl, { method: "GET", signal: controller.signal })
+      .then((loadedMessages) => {
+        if (!controller.signal.aborted) {
+          setMessages(loadedMessages);
+          setSources(loadedMessages.slice().reverse().find((message) => message.sources?.length)?.sources ?? []);
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          onShowToastRef.current({ intent: "error", message: error instanceof Error ? error.message : "加载讨论记录失败" });
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsLoadingMessages(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [isExpanded, talkMessagesRequestUrl]);
 
   useEffect(() => {
     setAiSuggestion("");
@@ -9261,7 +9329,7 @@ function TalkAboutThisPanel({
                 ? { type: "record", objectKey: targetObjectKey, recordId: targetRecordId }
                 : { type: "email_thread", threadId: targetThreadId },
             question,
-            history: messages.slice(-8),
+            history: talkHistoryPayload(messages.slice(-8)),
             mode: "suggestion"
           }
         });
@@ -9285,29 +9353,47 @@ function TalkAboutThisPanel({
     };
   }, [disabled, shouldSuggest, targetType, targetObjectKey, targetRecordId, targetThreadId, target.label, question, messages]);
 
+  async function persistTalkMessage(input: Pick<TalkMessage, "role" | "content"> & Partial<Pick<TalkMessage, "sources" | "knowledgeArticleId">>): Promise<TalkMessage> {
+    return fetchJson<TalkMessage>("/api/ai/talk/messages", {
+      method: "POST",
+      body: {
+        target: talkApiTarget(target),
+        role: input.role,
+        content: input.content,
+        sources: input.sources,
+        knowledgeArticleId: input.knowledgeArticleId
+      }
+    });
+  }
+
   async function sendMessage() {
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion) {
       return;
     }
 
-    const nextMessages: TalkMessage[] = [...messages, { role: "user", content: trimmedQuestion }];
+    const previousMessages = messages;
+    const pendingUserMessage: TalkMessage = { id: `pending-user-${Date.now()}`, role: "user", content: trimmedQuestion };
+    const nextMessages: TalkMessage[] = [...messages, pendingUserMessage];
     setMessages(nextMessages);
     setQuestion("");
     setIsSending(true);
     try {
+      const userMessage = await persistTalkMessage({ role: "user", content: trimmedQuestion });
+      setMessages((current) => current.map((message) => (message.id === pendingUserMessage.id ? userMessage : message)));
       const result = await fetchJson<TalkResponse>("/api/ai/talk", {
         method: "POST",
         body: {
           target: talkApiTarget(target),
           question: trimmedQuestion,
-          history: messages.slice(-12)
+          history: talkHistoryPayload(previousMessages.slice(-12))
         }
       });
-      setMessages([...nextMessages, { role: "assistant", content: result.text }]);
+      const assistantMessage = await persistTalkMessage({ role: "assistant", content: result.text, sources: result.sources ?? [] });
+      setMessages((current) => [...current.filter((message) => message.id !== pendingUserMessage.id && message.id !== userMessage.id), userMessage, assistantMessage]);
       setSources(result.sources ?? []);
     } catch (error) {
-      setMessages(messages);
+      setMessages(previousMessages);
       setQuestion(trimmedQuestion);
       onShowToast({ intent: "error", message: error instanceof Error ? error.message : "讨论请求失败" });
     } finally {
@@ -9326,11 +9412,18 @@ function TalkAboutThisPanel({
         method: "POST",
         body: {
           title: trimForLabel(`Talk: ${target.label} · ${message.role === "assistant" ? "AI" : "User"}`, 80),
-          body: buildTalkMessageKnowledgeBody(target, message, sources),
+          body: buildTalkMessageKnowledgeBody(target, message, message.sources ?? sources),
           tags: buildTalkKnowledgeTags(target),
           active: true
         }
       });
+      const updatedMessage = message.id
+        ? await fetchJson<TalkMessage>(`/api/ai/talk/messages/${message.id}`, {
+            method: "PATCH",
+            body: { knowledgeArticleId: article.id }
+          })
+        : { ...message, knowledgeArticleId: article.id };
+      setMessages((current) => current.map((candidate, candidateIndex) => (candidate.id === message.id || candidateIndex === index ? updatedMessage : candidate)));
       onKnowledgeCreated(article);
       onShowToast({ intent: "success", message: "这条消息已关联到 RAG 知识库" });
     } catch (error) {
@@ -9340,31 +9433,82 @@ function TalkAboutThisPanel({
     }
   }
 
+  async function deleteTalkMessage(message: TalkMessage, index: number) {
+    const confirmed = await onRequestConfirm({
+      title: "删除讨论消息",
+      message: "确认删除这条 Talk about this 消息？此操作不会删除已保存的 RAG 知识。",
+      confirmLabel: "删除",
+      danger: true
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingMessageId(message.id ?? `${index}`);
+    try {
+      if (message.id) {
+        await fetchJson<{ ok: true }>(`/api/ai/talk/messages/${message.id}`, { method: "DELETE" });
+      }
+      setMessages((current) => current.filter((candidate, candidateIndex) => !(candidate.id === message.id || (!message.id && candidateIndex === index))));
+      onShowToast({ intent: "success", message: "讨论消息已删除" });
+    } catch (error) {
+      onShowToast({ intent: "error", message: error instanceof Error ? error.message : "删除讨论消息失败" });
+    } finally {
+      setDeletingMessageId(null);
+    }
+  }
+
   return (
     <section className="ai-box talk-panel" data-testid="talk-about-this">
-      <div className="activity-meta">
-        <Bot size={16} />
-        Talk about this
-      </div>
+      <button className="talk-panel-header" data-testid="talk-about-this-toggle" type="button" onClick={() => setIsExpanded((current) => !current)}>
+        {isExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+        <span>
+          <Bot size={16} />
+          Talk about this
+        </span>
+        {messages.length ? <span className="badge">{messages.length} 条记录</span> : null}
+      </button>
       <div className="talk-target">
         <strong>{target.label}</strong>
         <span className="badge">{target.type === "record" ? target.objectKey : "email thread"}</span>
       </div>
+      {!isExpanded ? <div className="subtle">已折叠。展开后可查看历史讨论、继续提问或将单条消息保存为 RAG 知识。</div> : null}
+      {isExpanded ? (
+        <>
       <div className="talk-messages" data-testid="talk-about-this-messages">
-        {messages.length ? (
+        {isLoadingMessages ? (
+          <div className="empty-state">
+            <RefreshCw className="spin-icon" size={16} />
+            正在加载讨论记录
+          </div>
+        ) : messages.length ? (
           messages.map((message, index) => (
-            <div className={`talk-message ${message.role === "assistant" ? "assistant" : "user"}`} key={`${message.role}-${index}`}>
+            <div className={`talk-message ${message.role === "assistant" ? "assistant" : "user"}`} key={message.id ?? `${message.role}-${index}`}>
               <span>{message.role === "assistant" ? "AI" : "你"}</span>
               <div>{message.content}</div>
+              <div className="talk-message-meta">
+                {message.knowledgeArticleId ? <span className="badge">已加入 RAG 知识</span> : null}
+                {message.createdAt ? <span className="subtle">{formatDate(message.createdAt)}</span> : null}
+              </div>
               <button
                 className="secondary-button talk-message-rag-action"
                 data-testid={`talk-message-save-knowledge-${index}`}
                 type="button"
                 onClick={() => void saveMessageToKnowledge(message, index)}
-                disabled={disabled || savingMessageIndex === index}
+                disabled={disabled || savingMessageIndex === index || Boolean(message.knowledgeArticleId)}
               >
                 <Save className={savingMessageIndex === index ? "spin-icon" : undefined} size={14} />
-                关联到 RAG 知识
+                {message.knowledgeArticleId ? "已关联 RAG" : "关联到 RAG 知识"}
+              </button>
+              <button
+                className="secondary-button danger-button talk-message-delete-action"
+                data-testid={`talk-message-delete-${index}`}
+                type="button"
+                onClick={() => void deleteTalkMessage(message, index)}
+                disabled={disabled || deletingMessageId === (message.id ?? `${index}`)}
+              >
+                <Trash2 className={deletingMessageId === (message.id ?? `${index}`) ? "spin-icon" : undefined} size={14} />
+                删除
               </button>
             </div>
           ))
@@ -9424,6 +9568,8 @@ function TalkAboutThisPanel({
         </button>
       </div>
       <div className="subtle">仅生成讨论建议，不会直接修改 CRM 数据。将鼠标悬停到指定消息上，可把单条消息保存为 RAG 知识。</div>
+        </>
+      ) : null}
     </section>
   );
 }

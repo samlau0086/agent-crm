@@ -36,6 +36,7 @@ model Workspace {
   emailMessages       EmailMessage[]
   emailSignatures     EmailSignature[]
   knowledgeArticles   KnowledgeArticle[]
+  talkMessages        TalkMessage[]
   emailAiSettings     EmailAiSettings?
   emailSyncSettings   EmailSyncSettings?
   mediaAssets         MediaAsset[]
@@ -537,6 +538,27 @@ model KnowledgeArticle {
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
 
   @@index([workspaceId, active, updatedAt])
+  @@index([workspaceId, createdById, createdAt])
+}
+
+model TalkMessage {
+  id                 String    @id @default(cuid())
+  workspaceId        String
+  targetType         String
+  objectKey          String?
+  recordId           String?
+  threadId           String?
+  role               String
+  content            String
+  sources            Json?
+  knowledgeArticleId String?
+  createdById        String
+  createdAt          DateTime  @default(now())
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, targetType, objectKey, recordId, createdAt])
+  @@index([workspaceId, targetType, threadId, createdAt])
+  @@index([workspaceId, knowledgeArticleId])
   @@index([workspaceId, createdById, createdAt])
 }
 

@@ -337,6 +337,25 @@ export interface KnowledgeArticle {
   updatedAt: string;
 }
 
+export type TalkTargetRef =
+  | { type: "record"; objectKey: string; recordId: string }
+  | { type: "email_thread"; threadId: string };
+
+export interface TalkMessage {
+  id: string;
+  workspaceId: string;
+  targetType: TalkTargetRef["type"];
+  objectKey?: string;
+  recordId?: string;
+  threadId?: string;
+  role: "user" | "assistant";
+  content: string;
+  sources?: Array<{ label: string; objectKey?: string; recordId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  knowledgeArticleId?: string;
+  createdById: string;
+  createdAt: string;
+}
+
 export interface MediaAsset {
   id: string;
   workspaceId: string;
@@ -696,6 +715,7 @@ export interface CrmSnapshot {
   emailThreadStates: EmailThreadState[];
   emailMessages: EmailMessage[];
   knowledgeArticles: KnowledgeArticle[];
+  talkMessages?: TalkMessage[];
   emailAiSettings: EmailAiSettings[];
   emailSyncSettings?: EmailSyncSettings[];
   mediaAssets?: MediaAsset[];

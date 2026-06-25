@@ -2785,6 +2785,28 @@ button {
   background: #f8fbff;
 }
 
+.talk-panel-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.talk-panel-header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .talk-target {
   display: flex;
   flex-wrap: wrap;
@@ -2801,7 +2823,7 @@ button {
 
 .talk-message {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: start;
   padding: 8px;
@@ -2827,14 +2849,25 @@ button {
   background: #eff6ff;
 }
 
-.talk-message-rag-action {
+.talk-message-meta {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.talk-message-rag-action,
+.talk-message-delete-action {
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
 }
 
 .talk-message:hover .talk-message-rag-action,
-.talk-message:focus-within .talk-message-rag-action {
+.talk-message:focus-within .talk-message-rag-action,
+.talk-message:hover .talk-message-delete-action,
+.talk-message:focus-within .talk-message-delete-action {
   opacity: 1;
   pointer-events: auto;
 }

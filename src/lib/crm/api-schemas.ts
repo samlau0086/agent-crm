@@ -652,6 +652,35 @@ export const aiTalkRequestSchema = z
     }
   });
 
+export const talkMessageCreateSchema = z
+  .object({
+    target: aiTalkTargetSchema,
+    role: z.enum(["user", "assistant"]),
+    content: z.string().trim().min(1).max(4000),
+    sources: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().min(1).max(200),
+            objectKey: z.string().trim().regex(/^[a-z][a-z0-9_]*$/).optional(),
+            recordId: z.string().trim().min(1).max(120).optional(),
+            messageId: z.string().trim().min(1).max(120).optional(),
+            knowledgeArticleId: z.string().trim().min(1).max(120).optional()
+          })
+          .strict()
+      )
+      .max(20)
+      .optional(),
+    knowledgeArticleId: z.string().trim().min(1).max(120).optional()
+  })
+  .strict();
+
+export const talkMessageKnowledgePatchSchema = z
+  .object({
+    knowledgeArticleId: z.string().trim().min(1).max(120)
+  })
+  .strict();
+
 export const emailAssistantContextSchema = z
   .object({
     purpose: emailAssistantPurposeSchema,

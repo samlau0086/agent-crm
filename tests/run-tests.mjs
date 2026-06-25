@@ -1876,8 +1876,14 @@ await run("talk about this panel can chat and save transcript to rag knowledge",
   assert.match(source, /type TalkTarget =[\s\S]*type: "record"[\s\S]*type: "email_thread"/);
   assert.match(source, /function TalkAboutThisPanel/);
   assert.match(source, /data-testid="talk-about-this"/);
+  assert.match(source, /const \[isExpanded, setIsExpanded\] = useState\(false\)/);
+  assert.match(source, /data-testid="talk-about-this-toggle"/);
+  assert.match(source, /fetchJson<TalkMessage\[\]>\(talkMessagesRequestUrl, \{ method: "GET"/);
+  assert.match(source, /fetchJson<TalkMessage>\("\/api\/ai\/talk\/messages"/);
   assert.match(source, /fetchJson<TalkResponse>\("\/api\/ai\/talk"/);
   assert.match(source, /fetchJson<KnowledgeArticle>\("\/api\/knowledge\/articles"/);
+  assert.match(source, /fetchJson<TalkMessage>\(`\/api\/ai\/talk\/messages\/\$\{message\.id\}`/);
+  assert.match(source, /fetchJson<\{ ok: true \}>\(`\/api\/ai\/talk\/messages\/\$\{message\.id\}`/);
   assert.match(source, /buildTalkKnowledgeTags\(target\)/);
   assert.match(source, /\["talk", "rag", target\.objectKey, target\.recordId\]/);
   assert.match(source, /\["talk", "rag", "email_thread", target\.threadId\]/);
@@ -1896,6 +1902,8 @@ await run("talk about this input suggests context-aware completions", () => {
   assert.match(source, /function talkSuggestionTemplates\(target: TalkTarget, messages: TalkMessage\[\]\): string\[\]/);
   assert.match(source, /function buildTalkMessageKnowledgeBody\(target: TalkTarget, message: TalkMessage, sources: TalkResponse\["sources"\]\): string/);
   assert.match(source, /data-testid=\{`talk-message-save-knowledge-\$\{index\}`\}/);
+  assert.match(source, /data-testid=\{`talk-message-delete-\$\{index\}`\}/);
+  assert.match(source, /message\.knowledgeArticleId \? <span className="badge">/);
   assert.match(source, /saveMessageToKnowledge\(message, index\)/);
   assert.doesNotMatch(source, /data-testid="talk-about-this-save-knowledge"/);
   assert.match(source, /target\.type === "email_thread"/);
@@ -1910,6 +1918,8 @@ await run("talk about this input suggests context-aware completions", () => {
 
 await run("talk about this api is guarded by ai permission and uses crm context", () => {
   const route = readFileSync("src/app/api/ai/talk/route.ts", "utf8");
+  const messagesRoute = readFileSync("src/app/api/ai/talk/messages/route.ts", "utf8");
+  const messageRoute = readFileSync("src/app/api/ai/talk/messages/[id]/route.ts", "utf8");
   const schemas = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
   const talk = readFileSync("src/lib/ai/talk.ts", "utf8");
   assert.match(route, /requirePermission\(context, "ai\.use"\)/);
@@ -1920,6 +1930,12 @@ await run("talk about this api is guarded by ai permission and uses crm context"
   assert.match(route, /generateAiTalkResponse/);
   assert.match(route, /body\.mode === "suggestion"/);
   assert.match(route, /generateAiTalkSuggestion/);
+  assert.match(messagesRoute, /listTalkMessages\(context, target\)/);
+  assert.match(messagesRoute, /createTalkMessage\(context/);
+  assert.match(messageRoute, /markTalkMessageKnowledgeArticle\(context, params\.id, body\.knowledgeArticleId\)/);
+  assert.match(messageRoute, /deleteTalkMessage\(context, params\.id\)/);
+  assert.match(schemas, /export const talkMessageCreateSchema/);
+  assert.match(schemas, /export const talkMessageKnowledgePatchSchema/);
   assert.match(schemas, /export const aiTalkRequestSchema/);
   assert.match(schemas, /z\.enum\(\["chat", "suggestion"\]\)/);
   assert.match(schemas, /type: z\.literal\("record"\)/);
