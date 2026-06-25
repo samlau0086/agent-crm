@@ -811,18 +811,62 @@ function emailThreadSender(thread: EmailThread, activeAccounts: EmailAccount[]):
 }
 
 function emailThreadHasOutbound(messages: EmailMessage[]): boolean {
-  return messages.some((message) => message.direction === "outbound" || message.status === "sent" || message.status === "queued" || message.status === "sending");
+  return messages.some((message) => isEmailMessageInMailbox(message, "sent"));
 }
 
 function emailThreadHasScheduledSend(messages: EmailMessage[]): boolean {
-  return messages.some((message) => message.direction === "outbound" && (message.status === "queued" || message.status === "sending") && Boolean(message.scheduledSendAt));
+  return messages.some((message) => isEmailMessageInMailbox(message, "scheduled"));
 }
 
 function emailThreadNextScheduledSendAt(messages: EmailMessage[]): string | undefined {
   return messages
-    .filter((message) => message.direction === "outbound" && (message.status === "queued" || message.status === "sending") && message.scheduledSendAt)
+    .filter((message) => isEmailMessageInMailbox(message, "scheduled") && message.scheduledSendAt)
     .map((message) => message.scheduledSendAt!)
     .sort()[0];
+}
+
+function emailMessageTimeValue(message: EmailMessage): string {
+  return message.sentAt ?? message.receivedAt ?? message.scheduledSendAt ?? message.sendAttemptedAt ?? message.createdAt;
+}
+
+function isEmailMessageInMailbox(message: EmailMessage, mailbox: EmailMailboxKey): boolean {
+  if (mailbox === "sent") {
+    return (
+      message.direction === "outbound" &&
+      !message.scheduledSendAt &&
+      (message.status === "sent" || message.status === "sending" || message.status === "queued" || message.status === "failed")
+    );
+  }
+  if (mailbox === "scheduled") {
+    return message.direction === "outbound" && Boolean(message.scheduledSendAt) && (message.status === "queued" || message.status === "sending");
+  }
+  if (mailbox === "drafts") {
+    return message.status === "draft";
+  }
+  return false;
+}
+
+function getEmailThreadMailboxMessages(messages: EmailMessage[], mailbox: EmailMailboxKey): EmailMessage[] {
+  if (mailbox !== "sent" && mailbox !== "scheduled" && mailbox !== "drafts") {
+    return messages;
+  }
+  return messages.filter((message) => isEmailMessageInMailbox(message, mailbox));
+}
+
+function getEmailThreadDisplayMessage(messages: EmailMessage[], mailbox: EmailMailboxKey): EmailMessage | undefined {
+  const mailboxMessages = getEmailThreadMailboxMessages(messages, mailbox);
+  return [...mailboxMessages].sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))[0] ?? messages.at(-1);
+}
+
+function emailMessageParticipantLabel(message: EmailMessage | undefined, thread: EmailThread, activeAccounts: EmailAccount[]): string {
+  if (!message) {
+    return emailThreadSender(thread, activeAccounts);
+  }
+  if (message.direction === "outbound") {
+    const recipients = message.to.filter(Boolean);
+    return recipients.length ? `发给 ${recipients.join(", ")}` : "发给 未知收件人";
+  }
+  return message.from || emailThreadSender(thread, activeAccounts);
 }
 
 function emailThreadMatchesSearch(thread: EmailThread, messages: EmailMessage[], query: string): boolean {
@@ -4539,6 +4583,9 @@ function EmailWorkspace({
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const [externalImageThreadIds, setExternalImageThreadIds] = useState<Set<string>>(() => new Set());
+  const selectedMailboxMessages = selectedThread ? getEmailThreadMailboxMessages(selectedMessages, mailbox) : [];
+  const selectedDisplayedMessages = selectedMailboxMessages.length > 0 ? selectedMailboxMessages : selectedMessages;
+  const selectedDisplayMessage = getEmailThreadDisplayMessage(selectedMessages, mailbox);
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const selectedThreadIsRead = Boolean(selectedThreadState.read);
   const selectedThreadIsSnoozed = Boolean(selectedThreadState.snoozedUntil && new Date(selectedThreadState.snoozedUntil).getTime() > Date.now());
@@ -6144,10 +6191,13 @@ function EmailWorkspace({
                   const messages = messagesByThread[thread.id] ?? [];
                   const state = threadUiState[thread.id] ?? {};
                   const labels = getEmailThreadDisplayLabels(thread, state, messages);
-                  const snippet = repairEmailMojibake(messages.at(-1)?.bodyText || thread.summary || thread.aiAnalysis || "");
+                  const displayMessage = getEmailThreadDisplayMessage(messages, mailbox);
+                  const snippet = repairEmailMojibake(displayMessage?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
                   const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
                   const scheduledSendAt = emailThreadNextScheduledSendAt(messages);
+                  const rowSubject = displayMessage?.subject || thread.subject;
+                  const rowTime = displayMessage ? emailMessageTimeValue(displayMessage) : emailThreadTimeValue(thread);
                   return (
                     <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`} key={thread.id}>
                       <input
@@ -6181,8 +6231,8 @@ function EmailWorkspace({
                         <Tag size={15} />
                       </button>
                       <button className="gmail-thread-open" data-testid={`email-thread-row-${thread.id}`} type="button" onClick={() => openThreadDetail(thread.id)}>
-                        <span className="gmail-thread-sender">{emailThreadSender(thread, activeAccounts)}</span>
-                        <span className="gmail-thread-subject">{thread.subject}</span>
+                        <span className="gmail-thread-sender">{emailMessageParticipantLabel(displayMessage, thread, activeAccounts)}</span>
+                        <span className="gmail-thread-subject">{rowSubject}</span>
                         <span className="gmail-thread-snippet">{snippet}</span>
                         <span className="gmail-thread-labels">
                           {labels.map((label) => <span className="badge" key={label}>{label}</span>)}
@@ -6190,7 +6240,7 @@ function EmailWorkspace({
                           {scheduledSendAt ? <span className="badge"><CalendarClock size={12} /> {formatDate(scheduledSendAt)}</span> : null}
                         </span>
                       </button>
-                      <span className="gmail-thread-date">{formatDate(emailThreadTimeValue(thread))}</span>
+                      <span className="gmail-thread-date">{formatDate(rowTime)}</span>
                       <div className="gmail-row-actions">
                         {state.archived ? (
                           <button className="icon-button" aria-label="取消归档" type="button" onClick={() => performMailboxAction("unarchive", [thread.id])}><RotateCcw size={15} /></button>
@@ -6235,13 +6285,13 @@ function EmailWorkspace({
                   title="回复"
                   type="button"
                   onClick={() => {
-                    const message = selectedMessages.at(-1);
+                    const message = selectedDisplayedMessages.at(-1);
                     if (message) {
                       onReplyToMessage(message);
                       openComposePopup();
                     }
                   }}
-                  disabled={!selectedMessages.length}
+                  disabled={!selectedDisplayedMessages.length}
                 >
                   <Send size={16} />
                 </button>
@@ -6318,7 +6368,7 @@ function EmailWorkspace({
               {selectedThread ? (
                 <>
                   <div className="gmail-detail-header">
-                    <h2>{selectedThread.subject}</h2>
+                    <h2>{selectedDisplayMessage?.subject || selectedThread.subject}</h2>
                     <div className="toolbar">
                       <span className="badge">类别：{getEmailCategoryLabel((threadUiState[selectedThread.id]?.category ?? inferEmailThreadCategory(selectedThread, selectedMessages)) as EmailCategoryKey)}</span>
                       {threadUiState[selectedThread.id]?.starred ? <span className="badge">星标</span> : null}
@@ -6434,14 +6484,14 @@ function EmailWorkspace({
                     </details>
                   ) : null}
                   <TalkAboutThisPanel
-                    target={{ type: "email_thread", threadId: selectedThread.id, label: selectedThread.subject }}
+                    target={{ type: "email_thread", threadId: selectedThread.id, label: selectedDisplayMessage?.subject || selectedThread.subject }}
                     disabled={disabled}
                     onOpenRecord={onOpenTalkSourceRecord}
                     onKnowledgeCreated={onKnowledgeArticleCreated}
                     onShowToast={onShowToast}
                   />
                   <div className="email-message-list">
-                    {selectedMessages.map((message) => {
+                    {selectedDisplayedMessages.map((message) => {
                       const messageHasExternalImages = emailHtmlHasExternalImages(message.bodyHtml ?? "");
                       return (
                       <article className="email-message-card gmail-message-card" key={message.id}>
@@ -6576,7 +6626,7 @@ function EmailWorkspace({
                       </article>
                       );
                     })}
-                    {selectedMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
+                    {selectedDisplayedMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
                   </div>
                 </>
               ) : (

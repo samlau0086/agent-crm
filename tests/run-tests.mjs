@@ -1882,7 +1882,7 @@ await run("talk about this panel can chat and save transcript to rag knowledge",
   assert.match(source, /\["talk", "rag", target\.objectKey, target\.recordId\]/);
   assert.match(source, /\["talk", "rag", "email_thread", target\.threadId\]/);
   assert.match(source, /target=\{\{ type: "record", objectKey: selectedRecord\.objectKey, recordId: selectedRecord\.id, label: selectedRecord\.title \}\}/);
-  assert.match(source, /target=\{\{ type: "email_thread", threadId: selectedThread\.id, label: selectedThread\.subject \}\}/);
+  assert.match(source, /target=\{\{ type: "email_thread", threadId: selectedThread\.id, label: selectedDisplayMessage\?\.subject \|\| selectedThread\.subject \}\}/);
 });
 
 await run("talk about this input suggests context-aware completions", () => {
@@ -2111,7 +2111,7 @@ await run("email workspace previews html bodies in a sandboxed iframe", () => {
 
 await run("email workspace repairs list snippets after opening a thread", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
-  assert.match(source, /const snippet = repairEmailMojibake\(messages\.at\(-1\)\?\.bodyText \|\| thread\.summary \|\| thread\.aiAnalysis \|\| ""\)/);
+  assert.match(source, /const snippet = repairEmailMojibake\(displayMessage\?\.bodyText \|\| thread\.summary \|\| thread\.aiAnalysis \|\| ""\)/);
   assert.doesNotMatch(source, /const snippet = messages\.at\(-1\)\?\.bodyText \|\| thread\.summary \|\| thread\.aiAnalysis \|\| ""/);
 });
 
@@ -2420,6 +2420,10 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
   assert.match(workspace, /mailbox !== "sent" && mailbox !== "scheduled" && mailbox !== "drafts"/);
   assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
+  assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey\): EmailMessage \| undefined/);
+  assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(messages, mailbox\)/);
+  assert.match(workspace, /emailMessageParticipantLabel\(displayMessage, thread, activeAccounts\)/);
+  assert.match(workspace, /const selectedDisplayedMessages = selectedMailboxMessages\.length > 0 \? selectedMailboxMessages : selectedMessages/);
   assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);
   assert.match(workspace, /snoozedUntil: null/);
   assert.match(workspace, /aria-label="取消稍后提醒"/);
