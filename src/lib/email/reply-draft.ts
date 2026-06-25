@@ -2,6 +2,7 @@ import type { EmailAttachment, EmailMessage } from "@/lib/crm/types";
 
 export type EmailComposeReplyDraft = {
   accountId: string;
+  threadId?: string;
   recordId: string;
   to: string;
   cc: string;
@@ -23,7 +24,7 @@ export type EmailComposeReplyDraft = {
 };
 
 export type EmailReplyDraftInput = {
-  message: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "cc" | "subject" | "bodyText"> &
+  message: Pick<EmailMessage, "accountId" | "threadId" | "direction" | "from" | "to" | "cc" | "subject" | "bodyText"> &
     Partial<Pick<EmailMessage, "bodyHtml" | "sentAt" | "receivedAt" | "createdAt">>;
   accountEmail?: string;
   recordId?: string;
@@ -39,6 +40,7 @@ export function buildEmailReplyDraft(input: EmailReplyDraftInput): EmailComposeR
 
   return {
     accountId: input.message.accountId,
+    threadId: input.message.threadId,
     recordId: input.recordId ?? "",
     to: recipients.join(", "),
     cc: "",

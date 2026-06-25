@@ -1757,6 +1757,9 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.match(source, /selectedMailboxAccountId === allEmailAccountsKey[\s\S]*onSyncAllAccounts\(\)/);
   assert.match(source, /onSyncAccount\(selectedMailboxAccountId\)/);
   assert.match(source, /selectedAccountCanSend \? selectedMailboxAccountId : emailDraft\.accountId \|\| activeAccounts\[0\]\?\.id \|\| ""/);
+  assert.match(source, /if \(mailbox === "inbox"\) \{[\s\S]*message\.direction === "inbound" && message\.status === "received"/);
+  assert.match(source, /const hasInboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)\.length > 0/);
+  assert.match(source, /!isDeleted && !isArchived && !isSnoozed && \(!hasLoadedMessages \|\| hasInboxMessage\)/);
   assert.match(styles, /\.gmail-account-folder span \{/);
   assert.match(styles, /\.gmail-account-folder strong,/);
 });
@@ -2005,7 +2008,10 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /account\.status !== "disabled" && account\.sendEnabled && account\.connectionConfigured/);
   assert.match(source, /const linkedRecordId = emailDraft\.recordId \?\? ""/);
   assert.match(source, /recordId: emailDraft\.recordId \|\| undefined/);
-  assert.match(source, /skipAutoLink: !emailDraft\.recordId/);
+  assert.match(source, /threadId: emailDraft\.threadId \|\| undefined/);
+  assert.match(source, /skipAutoLink: !emailDraft\.threadId/);
+  const sendEmailBody = source.slice(source.indexOf("async function sendEmail()"), source.indexOf("async function retryEmailMessage"));
+  assert.doesNotMatch(sendEmailBody, /threadId: selectedEmailThreadId \|\| undefined/);
   assert.match(source, /const htmlParts = \[inlineImageResult\.bodyHtml, signatureHtml, originalHtml\]\.filter\(Boolean\)/);
   assert.match(source, /const textParts = \[bodyText, signatureText, originalText\]\.filter\(Boolean\)/);
   assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);
@@ -7457,31 +7463,37 @@ await run("email reply draft pre-fills recipients subject and linked record cons
     recordId: "contact-lin",
     message: {
       accountId: "email-account",
+      threadId: "thread-inbound-reply",
       direction: "inbound",
       from: "Buyer@Example.com",
       to: ["sales@example.com"],
       cc: ["sales@example.com", "manager@example.com"],
-      subject: "Deployment plan"
+      subject: "Deployment plan",
+      bodyText: "Can you send the deployment plan?"
     }
   });
   const outboundReply = buildEmailReplyDraft({
     accountEmail: "sales@example.com",
     message: {
       accountId: "email-account",
+      threadId: "thread-outbound-reply",
       direction: "outbound",
       from: "sales@example.com",
       to: ["buyer@example.com", "sales@example.com"],
       cc: ["manager@example.com"],
-      subject: "Re: Deployment plan"
+      subject: "Re: Deployment plan",
+      bodyText: "Here is the deployment plan."
     }
   });
 
   assert.equal(inboundReply.accountId, "email-account");
+  assert.equal(inboundReply.threadId, "thread-inbound-reply");
   assert.equal(inboundReply.recordId, "contact-lin");
   assert.equal(inboundReply.to, "buyer@example.com, manager@example.com");
   assert.equal(inboundReply.subject, "Re: Deployment plan");
   assert.equal(inboundReply.bodyText, "");
   assert.equal(outboundReply.to, "buyer@example.com, manager@example.com");
+  assert.equal(outboundReply.threadId, "thread-outbound-reply");
   assert.equal(outboundReply.subject, "Re: Deployment plan");
 });
 

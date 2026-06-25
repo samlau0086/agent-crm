@@ -837,6 +837,9 @@ function emailMessageTimeValue(message: EmailMessage): string {
 }
 
 function isEmailMessageInMailbox(message: EmailMessage, mailbox: EmailMailboxKey): boolean {
+  if (mailbox === "inbox") {
+    return message.direction === "inbound" && message.status === "received";
+  }
   if (mailbox === "sent") {
     return (
       message.direction === "outbound" &&
@@ -854,10 +857,13 @@ function isEmailMessageInMailbox(message: EmailMessage, mailbox: EmailMailboxKey
 }
 
 function getEmailThreadMailboxMessages(messages: EmailMessage[], mailbox: EmailMailboxKey): EmailMessage[] {
-  if (mailbox !== "sent" && mailbox !== "scheduled" && mailbox !== "drafts") {
+  if (mailbox === "all") {
     return messages;
   }
-  return messages.filter((message) => isEmailMessageInMailbox(message, mailbox));
+  if (mailbox === "inbox" || mailbox === "sent" || mailbox === "scheduled" || mailbox === "drafts") {
+    return messages.filter((message) => isEmailMessageInMailbox(message, mailbox));
+  }
+  return messages;
 }
 
 function getEmailThreadDisplayMessage(messages: EmailMessage[], mailbox: EmailMailboxKey): EmailMessage | undefined {
@@ -2469,6 +2475,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         cc: "",
         bcc: "",
         subject: "",
+        threadId: undefined,
         bodyText: "",
         attachments: []
       })
@@ -2653,7 +2660,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       method: "POST",
       body: {
         accountId: emailDraft.accountId,
-        threadId: selectedEmailThreadId || undefined,
+        threadId: emailDraft.threadId || undefined,
         recordId: emailDraft.recordId || undefined,
         to: splitEmailList(emailDraft.to),
         cc: splitEmailList(emailDraft.cc),
@@ -2665,7 +2672,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         scheduledSendAt: emailDraft.scheduledSendAt || undefined,
         trackingEnabled: emailDraft.trackingEnabled || undefined,
         groupSendMode: emailDraft.groupSendMode || undefined,
-        skipAutoLink: !emailDraft.recordId,
+        skipAutoLink: !emailDraft.threadId,
         attachments: preparedDraft.attachments?.length ? preparedDraft.attachments : undefined,
         aiAssisted: emailDraft.aiAssisted || undefined,
         aiPurpose: emailDraft.aiAssisted ? emailDraft.aiPurpose : undefined,
@@ -2692,6 +2699,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       cc: "",
       bcc: "",
       subject: "",
+      threadId: undefined,
       bodyText: "",
       bodyHtml: "",
       signatureId: "",
@@ -4743,6 +4751,8 @@ function EmailWorkspace({
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasScheduledSend(messages);
+      const hasLoadedMessages = messages.length > 0;
+      const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
       const matchesMailbox =
         mailbox === "trash"
           ? isDeleted
@@ -4762,7 +4772,7 @@ function EmailWorkspace({
                       ? hasDraft && !isDeleted
                       : mailbox === "all"
                         ? !isDeleted
-                        : !isDeleted && !isArchived && !isSnoozed;
+                        : !isDeleted && !isArchived && !isSnoozed && (!hasLoadedMessages || hasInboxMessage);
       const matchesCategory = mailbox === "inbox" || mailbox === "all" ? threadCategory === category : true;
       const matchesLabel = labelFilter ? displayLabels.includes(labelFilter.toLowerCase()) : true;
       return matchesMailbox && matchesCategory && matchesLabel && emailThreadMatchesSearch(thread, messages, searchQuery);
@@ -4780,7 +4790,9 @@ function EmailWorkspace({
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasScheduledSend(messages);
-      if (!isDeleted && !isArchived && !isSnoozed) counts.inbox += 1;
+      const hasLoadedMessages = messages.length > 0;
+      const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
+      if (!isDeleted && !isArchived && !isSnoozed && (!hasLoadedMessages || hasInboxMessage)) counts.inbox += 1;
       if (state.starred && !isDeleted) counts.starred += 1;
       if (isSnoozed && !isDeleted) counts.snoozed += 1;
       if (state.important && !isDeleted) counts.important += 1;
