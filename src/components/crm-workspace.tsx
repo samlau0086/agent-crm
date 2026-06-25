@@ -8,6 +8,7 @@ import {
   Bot,
   Building2,
   CalendarClock,
+  ChevronDown,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -4608,6 +4609,7 @@ function EmailWorkspace({
   const [category, setCategory] = useState<EmailCategoryKey>("primary");
   const [mailMode, setMailMode] = useState<EmailMailMode>("list");
   const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(allEmailAccountsKey);
+  const [mailboxAccountsCollapsed, setMailboxAccountsCollapsed] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
@@ -6070,10 +6072,18 @@ function EmailWorkspace({
             写邮件
           </button>
           <div className="gmail-label-block" data-testid="email-mailbox-account-switcher">
-            <div className="gmail-label-title">
+            <button
+              className="gmail-label-title gmail-label-toggle"
+              type="button"
+              aria-expanded={!mailboxAccountsCollapsed}
+              onClick={() => setMailboxAccountsCollapsed((current) => !current)}
+            >
               <span>邮箱账户</span>
-              <small>{accounts.length}</small>
-            </div>
+              <span className="gmail-label-title-meta">
+                <small>{accounts.length}</small>
+                {mailboxAccountsCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+              </span>
+            </button>
             <button
               className={`gmail-folder ${selectedMailboxAccountId === allEmailAccountsKey ? "active" : ""}`}
               data-testid="email-mailbox-account-all"
@@ -6084,23 +6094,27 @@ function EmailWorkspace({
               <span>全部邮箱</span>
               <small>{threads.filter((thread) => !(threadUiState[thread.id]?.deleted)).length || ""}</small>
             </button>
-            {accounts.map((account) => (
-              <button
-                className={`gmail-folder gmail-account-folder ${selectedMailboxAccountId === account.id ? "active" : ""}`}
-                data-testid={`email-mailbox-account-${account.id}`}
-                key={account.id}
-                type="button"
-                onClick={() => selectMailboxAccount(account.id)}
-              >
-                <Mail size={16} />
-                <span>
-                  <strong>{account.name}</strong>
-                  <em>{account.emailAddress}</em>
-                </span>
-                <small>{accountThreadCounts.get(account.id) || ""}</small>
-              </button>
-            ))}
-            {accounts.length === 0 ? <div className="subtle">还没有邮箱账户</div> : null}
+            {!mailboxAccountsCollapsed ? (
+              <div className="gmail-account-list">
+                {accounts.map((account) => (
+                  <button
+                    className={`gmail-folder gmail-account-folder ${selectedMailboxAccountId === account.id ? "active" : ""}`}
+                    data-testid={`email-mailbox-account-${account.id}`}
+                    key={account.id}
+                    type="button"
+                    onClick={() => selectMailboxAccount(account.id)}
+                  >
+                    <Mail size={16} />
+                    <span>
+                      <strong>{account.name}</strong>
+                      <em>{account.emailAddress}</em>
+                    </span>
+                    <small>{accountThreadCounts.get(account.id) || ""}</small>
+                  </button>
+                ))}
+                {accounts.length === 0 ? <div className="subtle">还没有邮箱账户</div> : null}
+              </div>
+            ) : null}
           </div>
           <nav className="gmail-folder-list" aria-label="邮箱">
             {emailMailboxMeta.map((item) => {

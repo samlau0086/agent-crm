@@ -1209,6 +1209,31 @@ button {
   font-weight: 700;
 }
 
+.gmail-label-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gmail-label-toggle:hover {
+  background: #e8eaed;
+  border-radius: 0 16px 16px 0;
+}
+
+.gmail-label-title-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #5f6368;
+}
+
+.gmail-label-title-meta svg {
+  color: #5f6368;
+}
+
 .gmail-main {
   min-width: 0;
 }

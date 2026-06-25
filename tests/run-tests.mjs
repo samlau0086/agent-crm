@@ -1748,11 +1748,14 @@ await run("email workspace supports multiple mailbox account filters", () => {
 
   assert.match(source, /const allEmailAccountsKey = "all"/);
   assert.match(source, /const \[selectedMailboxAccountId, setSelectedMailboxAccountId\] = useState<string>\(allEmailAccountsKey\)/);
+  assert.match(source, /const \[mailboxAccountsCollapsed, setMailboxAccountsCollapsed\] = useState\(true\)/);
   assert.match(source, /accountFilteredThreads = useMemo/);
   assert.match(source, /thread\.accountId === selectedMailboxAccountId/);
   assert.match(source, /data-testid="email-mailbox-account-switcher"/);
   assert.match(source, /data-testid="email-mailbox-account-all"/);
   assert.match(source, /data-testid=\{`email-mailbox-account-\$\{account\.id\}`\}/);
+  assert.match(source, /aria-expanded=\{!mailboxAccountsCollapsed\}/);
+  assert.match(source, /!mailboxAccountsCollapsed \? \([\s\S]*<div className="gmail-account-list">/);
   assert.match(source, /function syncCurrentMailboxAccount\(\)/);
   assert.match(source, /selectedMailboxAccountId === allEmailAccountsKey[\s\S]*onSyncAllAccounts\(\)/);
   assert.match(source, /onSyncAccount\(selectedMailboxAccountId\)/);
@@ -1764,6 +1767,8 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.doesNotMatch(source, /!hasLoadedMessages \|\| hasInboxMessage/);
   assert.match(styles, /\.gmail-account-folder span \{/);
   assert.match(styles, /\.gmail-account-folder strong,/);
+  assert.match(styles, /\.gmail-label-toggle \{/);
+  assert.match(styles, /\.gmail-label-title-meta \{/);
 });
 
 await run("email account settings separate inbound credentials from outbound services", () => {
