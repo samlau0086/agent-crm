@@ -2073,10 +2073,12 @@ await run("email workspace repairs list snippets after opening a thread", () => 
 
 await run("email trash permanent delete buttons use immediate confirm flow", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
-  assert.match(source, /async function runImmediateAction\(action: \(\) => Promise<void>\)/);
+  assert.match(source, /async function runImmediateAction<T>\(action: \(\) => Promise<T>\): Promise<T \| undefined>/);
   assert.match(source, /onDeleteThreads=\{\(threadIds\) => runImmediateAction\(\(\) => deleteEmailThreads\(threadIds\)\)\}/);
   assert.match(source, /async function permanentlyDeleteThreads\(threadIds: string\[\]\)/);
-  assert.match(source, /await onDeleteThreads\(ids\)/);
+  assert.match(source, /async function deleteEmailThreads\(threadIds: string\[\]\): Promise<boolean>/);
+  assert.match(source, /return false;[\s\S]*requestConfirm/);
+  assert.match(source, /const deleted = await onDeleteThreads\(ids\);[\s\S]*if \(!deleted\) \{[\s\S]*return;[\s\S]*\}/);
   assert.match(source, /data-testid="email-thread-bulk-permanent-delete"[\s\S]*permanentlyDeleteThreads\(selectedThreadIdsArray\)/);
   assert.match(source, /data-testid=\{`email-thread-row-permanent-delete-\$\{thread\.id\}`\}[\s\S]*permanentlyDeleteThreads\(\[thread\.id\]\)/);
   assert.match(source, /data-testid="email-thread-permanent-delete"[\s\S]*permanentlyDeleteThreads\(\[selectedThread\.id\]\)/);

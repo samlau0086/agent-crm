@@ -2489,10 +2489,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return thread;
   }
 
-  async function deleteEmailThreads(threadIds: string[]) {
+  async function deleteEmailThreads(threadIds: string[]): Promise<boolean> {
     const ids = Array.from(new Set(threadIds)).filter(Boolean);
     if (!ids.length) {
-      return;
+      return false;
     }
     const targetThreads = emailThreads.filter((candidate) => ids.includes(candidate.id));
     const thread = targetThreads[0];
@@ -2504,7 +2504,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         danger: true
       }))
     ) {
-      return;
+      return false;
     }
     await Promise.all(ids.map((threadId) => fetchJson(`/api/email/threads/${threadId}`, { method: "DELETE" })));
     setEmailThreads((current) => current.filter((candidate) => !ids.includes(candidate.id)));
@@ -2520,6 +2520,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     showSuccess(ids.length > 1 ? `已彻底删除 ${ids.length} 个邮件线程` : "邮件线程已彻底删除");
     router.refresh();
+    return true;
   }
 
   async function sendEmail() {
@@ -2975,13 +2976,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
-  async function runImmediateAction(action: () => Promise<void>) {
+  async function runImmediateAction<T>(action: () => Promise<T>): Promise<T | undefined> {
     setMessage(null);
     setError(null);
     try {
-      await action();
+      return await action();
     } catch (actionError) {
       showError(actionError instanceof Error ? actionError.message : "操作失败");
+      return undefined;
     }
   }
 
@@ -4318,7 +4320,7 @@ function EmailWorkspace({
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
-  onDeleteThreads: (threadIds: string[]) => Promise<void>;
+  onDeleteThreads: (threadIds: string[]) => Promise<boolean | undefined>;
   onCreateContactFromEmail: (threadId: string, emailAddress: string) => void;
   onLinkExistingContactFromEmail: (threadId: string, contactId: string, emailAddress: string) => void;
   onUnlinkContactEmailFromThread: (threadId: string, contactId: string, emailAddress: string) => void;
@@ -4926,7 +4928,10 @@ function EmailWorkspace({
     if (!ids.length) {
       return;
     }
-    await onDeleteThreads(ids);
+    const deleted = await onDeleteThreads(ids);
+    if (!deleted) {
+      return;
+    }
     setSelectedThreadIds((current) => {
       const next = new Set(current);
       ids.forEach((threadId) => next.delete(threadId));
