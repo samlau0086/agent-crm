@@ -5,6 +5,7 @@ import { MAX_EMAIL_ATTACHMENT_BYTES, normalizeEmailAttachmentBase64 } from "@/li
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import { repairEmailMojibake } from "@/lib/email/mojibake";
 import type { EmailSendInput } from "@/lib/email/provider";
+import { extractInboundMetadata } from "@/lib/email/tracking";
 
 export interface InboundEmail {
   externalMessageId?: string;
@@ -16,6 +17,7 @@ export interface InboundEmail {
   bodyHtml?: string;
   attachments?: EmailAttachment[];
   receivedAt?: string;
+  inboundMetadata?: ReturnType<typeof extractInboundMetadata>;
 }
 
 export interface MailConnectionTestResult {
@@ -570,7 +572,8 @@ export function parseRawEmailMessage(messageText: string): InboundEmail | undefi
     bodyText: bodyText.trim().slice(0, 20000),
     bodyHtml: bodyHtml?.trim().slice(0, 20000),
     attachments: parsedBody.attachments,
-    receivedAt: safeIsoDate(headers.date)
+    receivedAt: safeIsoDate(headers.date),
+    inboundMetadata: extractInboundMetadata(headers)
   };
 }
 

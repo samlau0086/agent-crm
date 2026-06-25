@@ -11,6 +11,7 @@ import { buildEmailAssistantContext, canRunEmailClassification, createDefaultEma
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { getEmailProviderCapability } from "@/lib/email/providers";
+import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } from "@/lib/email/tracking";
 import { mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
 import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
@@ -765,6 +766,29 @@ export class CrmStore {
     return clone(thread);
   }
 
+  listDueQueuedEmailMessagesForWorker(limit = 25): EmailMessage[] {
+    const now = Date.now();
+    return clone(
+      (this.data.emailMessages ?? [])
+        .filter((message) => message.direction === "outbound" && message.status === "queued")
+        .filter((message) => !message.scheduledSendAt || new Date(message.scheduledSendAt).getTime() <= now)
+        .sort((left, right) => (left.scheduledSendAt ?? left.createdAt).localeCompare(right.scheduledSendAt ?? right.createdAt))
+        .slice(0, Math.max(1, Math.min(100, Math.floor(limit))))
+    );
+  }
+
+  recordEmailTrackingEvent(
+    trackingId: string,
+    input: { type: "open" | "click"; ip?: string; userAgent?: string; url?: string; country?: string; timezone?: string }
+  ): EmailMessage | undefined {
+    const message = (this.data.emailMessages ?? []).find((candidate) => candidate.trackingEnabled && candidate.trackingId === trackingId.trim());
+    if (!message) {
+      return undefined;
+    }
+    message.trackingEvents = [...(message.trackingEvents ?? []), buildTrackingEvent(input.type, input)].slice(-200);
+    return clone(message);
+  }
+
   updateEmailMessageStatus(
     context: RequestContext,
     messageId: string,
@@ -789,6 +813,7 @@ export class CrmStore {
     }
     if (status === "sent") {
       message.sentAt = stamp();
+      delete message.scheduledSendAt;
     } else {
       delete message.sentAt;
     }
@@ -816,6 +841,10 @@ export class CrmStore {
     this.assertEmailThread(context, message.threadId);
     const staleBefore = emailSendClaimStaleBefore();
     const isClaimableSending = message.status === "sending" && isEmailSendClaimStale(message.sendAttemptedAt, staleBefore);
+    const scheduledAt = message.scheduledSendAt ? new Date(message.scheduledSendAt) : undefined;
+    if (scheduledAt && scheduledAt.getTime() > Date.now() && message.status === "queued") {
+      return { message: clone(message), claimed: false };
+    }
     if (message.direction !== "outbound" || (message.status !== "queued" && message.status !== "failed" && !isClaimableSending)) {
       return { message: clone(message), claimed: false };
     }
@@ -853,7 +882,7 @@ export class CrmStore {
   recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "sentAt" | "receivedAt" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
         recordId?: string;
       }
   ): EmailMessage {
@@ -906,6 +935,8 @@ export class CrmStore {
     if (input.aiAssisted && settings.requireSourceLinks && aiSources.length === 0) {
       throw new Error("AI assisted email requires at least one visible source");
     }
+    const trackingEnabled = input.direction === "outbound" && input.trackingEnabled === true;
+    const trackingId = trackingEnabled ? input.trackingId?.trim() || createEmailTrackingId() : undefined;
     const message: EmailMessage = {
       id: createId("email_message"),
       workspaceId: context.workspaceId,
@@ -919,7 +950,7 @@ export class CrmStore {
       bcc: input.bcc?.map(normalizeEmailAddress),
       subject: normalizeRequiredText(input.subject, "Email subject"),
       bodyText: normalizeRequiredText(input.bodyText, "Email body"),
-      bodyHtml: input.bodyHtml,
+      bodyHtml: trackingEnabled ? appendEmailTrackingHtml(input.bodyHtml, trackingId!) : input.bodyHtml,
       attachments: normalizeEmailAttachments(input.attachments),
       aiAssisted: input.aiAssisted || undefined,
       aiPurpose: input.aiPurpose,
@@ -930,8 +961,14 @@ export class CrmStore {
       clientRequestId: normalizedClientRequestId,
       failureReason: input.status === "failed" ? "Delivery failed" : undefined,
       sendAttemptedAt: input.sendAttemptedAt ?? (input.status === "sending" ? now : undefined),
+      scheduledSendAt: input.scheduledSendAt,
       sentAt: input.sentAt,
       receivedAt: input.receivedAt,
+      trackingEnabled: trackingEnabled || undefined,
+      trackingId,
+      trackingEvents: input.trackingEvents,
+      inboundMetadata: input.inboundMetadata,
+      groupSendMode: input.groupSendMode || undefined,
       createdById,
       createdAt: now
     };
@@ -968,7 +1005,7 @@ export class CrmStore {
   queueEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId">> & { recordId?: string }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string }
   ): EmailMessage {
     requirePermission(context, "crm.write");
     const account = this.assertEmailAccount(context, input.accountId);

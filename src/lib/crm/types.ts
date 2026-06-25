@@ -253,6 +253,24 @@ export interface EmailAttachment {
   externalUrl?: string;
 }
 
+export interface EmailTrackingEvent {
+  type: "open" | "click";
+  occurredAt: string;
+  ip?: string;
+  country?: string;
+  timezone?: string;
+  userAgent?: string;
+  url?: string;
+}
+
+export interface EmailInboundMetadata {
+  sourceIp?: string;
+  country?: string;
+  timezone?: string;
+  userAgent?: string;
+  receivedHeader?: string;
+}
+
 export interface EmailMessage {
   id: string;
   workspaceId: string;
@@ -281,8 +299,14 @@ export interface EmailMessage {
   clientRequestId?: string;
   failureReason?: string;
   sendAttemptedAt?: string;
+  scheduledSendAt?: string;
   sentAt?: string;
   receivedAt?: string;
+  trackingEnabled?: boolean;
+  trackingId?: string;
+  trackingEvents?: EmailTrackingEvent[];
+  inboundMetadata?: EmailInboundMetadata;
+  groupSendMode?: boolean;
   createdById?: string;
   createdAt: string;
 }

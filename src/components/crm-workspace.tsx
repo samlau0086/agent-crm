@@ -138,7 +138,7 @@ type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "q
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
 type EmailSettingsStep = "identity" | "inbound" | "outbound" | "review";
-type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "drafts" | "archived" | "trash" | "all";
+type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "scheduled" | "drafts" | "archived" | "trash" | "all";
 type EmailCategoryKey = "primary" | "promotions" | "social" | "updates";
 type EmailMailMode = "list" | "detail";
 type EmailThreadUiState = {
@@ -261,6 +261,9 @@ type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress
 };
 type EmailComposeDraft = EmailComposeReplyDraft & {
   clientRequestId: string;
+  scheduledSendAt?: string;
+  trackingEnabled?: boolean;
+  groupSendMode?: boolean;
 };
 type EmailSignatureOption = {
   id: string;
@@ -365,6 +368,7 @@ const emailMailboxMeta: Array<{ key: EmailMailboxKey; label: string; icon: Lucid
   { key: "snoozed", label: "稍后提醒", icon: Clock3 },
   { key: "important", label: "重要", icon: Tag },
   { key: "sent", label: "已发送", icon: Send },
+  { key: "scheduled", label: "待发送", icon: CalendarClock },
   { key: "drafts", label: "草稿", icon: Mail },
   { key: "archived", label: "归档", icon: Archive },
   { key: "trash", label: "已删除", icon: Trash2 },
@@ -532,6 +536,22 @@ function getDraftBodyText(draft: EmailComposeDraft): string {
 
 function hasEmailDraftBody(draft: EmailComposeDraft): boolean {
   return Boolean(getDraftBodyText(draft) || getDraftBodyHtml(draft).replace(/<[^>]+>/g, "").trim() || /<img\b/i.test(getDraftBodyHtml(draft)));
+}
+
+function toDatetimeLocalInputValue(value?: string): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return offsetDate.toISOString().slice(0, 16);
+}
+
+function fromDatetimeLocalInputValue(value: string): string {
+  return value ? new Date(value).toISOString() : "";
 }
 
 function buildReplyOriginalHtml(draft: EmailComposeDraft): string {
@@ -719,6 +739,9 @@ function buildEmailThreadLabels(thread: EmailThread, messages: EmailMessage[] = 
   if (messages.some((message) => message.status === "failed")) {
     labels.add("发送失败");
   }
+  if (emailThreadHasScheduledSend(messages)) {
+    labels.add("待发送");
+  }
   return Array.from(labels);
 }
 
@@ -741,6 +764,17 @@ function emailThreadSender(thread: EmailThread, activeAccounts: EmailAccount[]):
 
 function emailThreadHasOutbound(messages: EmailMessage[]): boolean {
   return messages.some((message) => message.direction === "outbound" || message.status === "sent" || message.status === "queued" || message.status === "sending");
+}
+
+function emailThreadHasScheduledSend(messages: EmailMessage[]): boolean {
+  return messages.some((message) => message.direction === "outbound" && (message.status === "queued" || message.status === "sending") && Boolean(message.scheduledSendAt));
+}
+
+function emailThreadNextScheduledSendAt(messages: EmailMessage[]): string | undefined {
+  return messages
+    .filter((message) => message.direction === "outbound" && (message.status === "queued" || message.status === "sending") && message.scheduledSendAt)
+    .map((message) => message.scheduledSendAt!)
+    .sort()[0];
 }
 
 function emailThreadMatchesSearch(thread: EmailThread, messages: EmailMessage[], query: string): boolean {
@@ -997,6 +1031,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     bodyHtml: "",
     signatureId: "",
     attachments: [],
+    scheduledSendAt: "",
+    trackingEnabled: false,
+    groupSendMode: false,
     aiAssisted: false
   });
   const [emailAiPurpose, setEmailAiPurpose] = useState<"draft" | "translate" | "context_analysis" | "summarize">("draft");
@@ -2464,7 +2501,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   async function sendEmail() {
     const preparedDraft = prepareEmailDraftForSend(emailDraft, emailAccounts);
-    const message = await fetchJson<EmailMessage>("/api/email/send", {
+    const result = await fetchJson<EmailMessage | { messages: EmailMessage[] }>("/api/email/send", {
       method: "POST",
       body: {
         accountId: emailDraft.accountId,
@@ -2477,6 +2514,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         bodyText: preparedDraft.bodyText,
         bodyHtml: preparedDraft.bodyHtml,
         clientRequestId: emailDraft.clientRequestId,
+        scheduledSendAt: emailDraft.scheduledSendAt || undefined,
+        trackingEnabled: emailDraft.trackingEnabled || undefined,
+        groupSendMode: emailDraft.groupSendMode || undefined,
         attachments: preparedDraft.attachments?.length ? preparedDraft.attachments : undefined,
         aiAssisted: emailDraft.aiAssisted || undefined,
         aiPurpose: emailDraft.aiAssisted ? emailDraft.aiPurpose : undefined,
@@ -2485,7 +2525,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         aiGeneratedAt: emailDraft.aiAssisted ? emailDraft.aiGeneratedAt : undefined
       }
     });
-    setEmailMessagesByThread((current) => ({ ...current, [message.threadId]: upsertEmailMessage(current[message.threadId] ?? [], message) }));
+    const messages = "messages" in result ? result.messages : [result];
+    const message = messages[0];
+    setEmailMessagesByThread((current) => {
+      const next = { ...current };
+      for (const item of messages) {
+        next[item.threadId] = upsertEmailMessage(next[item.threadId] ?? [], item);
+      }
+      return next;
+    });
     selectEmailThread(message.threadId);
     setEmailDraft((current) => ({
       ...current,
@@ -2502,13 +2550,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       replyOriginalFrom: undefined,
       replyOriginalSentAt: undefined,
       attachments: [],
+      scheduledSendAt: "",
+      trackingEnabled: false,
+      groupSendMode: false,
       aiAssisted: false,
       aiPurpose: undefined,
       aiSourceMessageId: undefined,
       aiSources: undefined,
       aiGeneratedAt: undefined
     }));
-    setMessage(formatEmailSendResultMessage(message));
+    setMessage(messages.length > 1 ? `已创建 ${messages.length} 封单显邮件${message.scheduledSendAt ? `，将在 ${formatDate(message.scheduledSendAt)} 发送` : ""}` : formatEmailSendResultMessage(message));
     router.refresh();
   }
 
@@ -4425,6 +4476,7 @@ function EmailWorkspace({
       const isDeleted = Boolean(state.deleted);
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
+      const hasScheduled = emailThreadHasScheduledSend(messages);
       const matchesMailbox =
         mailbox === "trash"
           ? isDeleted
@@ -4438,6 +4490,8 @@ function EmailWorkspace({
                   ? isSnoozed && !isDeleted
                   : mailbox === "sent"
                     ? emailThreadHasOutbound(messages) && !isDeleted
+                    : mailbox === "scheduled"
+                      ? hasScheduled && !isDeleted
                     : mailbox === "drafts"
                       ? hasDraft && !isDeleted
                       : mailbox === "all"
@@ -4459,11 +4513,13 @@ function EmailWorkspace({
       const isDeleted = Boolean(state.deleted);
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
+      const hasScheduled = emailThreadHasScheduledSend(messages);
       if (!isDeleted && !isArchived && !isSnoozed) counts.inbox += 1;
       if (state.starred && !isDeleted) counts.starred += 1;
       if (isSnoozed && !isDeleted) counts.snoozed += 1;
       if (state.important && !isDeleted) counts.important += 1;
       if (emailThreadHasOutbound(messages) && !isDeleted) counts.sent += 1;
+      if (hasScheduled && !isDeleted) counts.scheduled += 1;
       if (hasDraft && !isDeleted) counts.drafts += 1;
       if (isArchived && !isDeleted) counts.archived += 1;
       if (isDeleted) counts.trash += 1;
@@ -5763,6 +5819,7 @@ function EmailWorkspace({
                   const labels = getEmailThreadDisplayLabels(thread, state, messages);
                   const snippet = messages.at(-1)?.bodyText || thread.summary || thread.aiAnalysis || "";
                   const isRead = state.read ?? false;
+                  const scheduledSendAt = emailThreadNextScheduledSendAt(messages);
                   return (
                     <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"}`} key={thread.id}>
                       <input
@@ -5802,6 +5859,7 @@ function EmailWorkspace({
                         <span className="gmail-thread-labels">
                           {labels.map((label) => <span className="badge" key={label}>{label}</span>)}
                           {state.snoozedUntil ? <span className="badge">稍后 {formatDate(state.snoozedUntil)}</span> : null}
+                          {scheduledSendAt ? <span className="badge"><CalendarClock size={12} /> {formatDate(scheduledSendAt)}</span> : null}
                         </span>
                       </button>
                       <span className="gmail-thread-date">{formatDate(emailThreadTimeValue(thread))}</span>
@@ -5819,6 +5877,11 @@ function EmailWorkspace({
                         ) : (
                           <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
                         )}
+                        {labelFilter && (state.labels ?? thread.labels ?? []).includes(labelFilter) ? (
+                          <button className="icon-button" aria-label={`移除标签 ${labelFilter}`} title={`移除标签 ${labelFilter}`} type="button" onClick={() => removeEmailLabel(thread.id, labelFilter)}>
+                            <XCircle size={15} />
+                          </button>
+                        ) : null}
                         <button className="icon-button" aria-label="稍后提醒" type="button" onClick={() => performMailboxAction("snooze", [thread.id])}><Clock3 size={15} /></button>
                         <button className="icon-button" aria-label={isRead ? "标记未读" : "标记已读"} type="button" onClick={() => performMailboxAction(isRead ? "unread" : "read", [thread.id])}>{isRead ? <Mail size={15} /> : <MailOpen size={15} />}</button>
                       </div>
@@ -6000,6 +6063,38 @@ function EmailWorkspace({
                           </div>
                           <div className="activity-meta">{formatDate(message.createdAt)}</div>
                         </div>
+                        <div className="toolbar" style={{ marginTop: 8 }}>
+                          {message.scheduledSendAt && (message.status === "queued" || message.status === "sending") ? (
+                            <span className="badge"><CalendarClock size={12} /> 计划发送 {formatDate(message.scheduledSendAt)}</span>
+                          ) : null}
+                          {message.groupSendMode ? <span className="badge">群发单显</span> : null}
+                          {message.trackingEnabled ? <span className="badge">追踪已开启</span> : null}
+                          {message.inboundMetadata?.sourceIp ? (
+                            <span className="badge">
+                              来源 IP {message.inboundMetadata.sourceIp}
+                              {message.inboundMetadata.country ? ` · ${message.inboundMetadata.country}` : ""}
+                              {message.inboundMetadata.timezone ? ` · ${message.inboundMetadata.timezone}` : ""}
+                            </span>
+                          ) : null}
+                        </div>
+                        {message.trackingEvents?.length ? (
+                          <details className="email-tracking-events" data-testid={`email-tracking-events-${message.id}`}>
+                            <summary>追踪记录 {message.trackingEvents.length}</summary>
+                            <div className="email-tracking-event-list">
+                              {message.trackingEvents.slice().reverse().slice(0, 20).map((event, index) => (
+                                <div className="email-tracking-event" key={`${event.type}-${event.occurredAt}-${index}`}>
+                                  <strong>{event.type === "open" ? "打开" : "点击"}</strong>
+                                  <span>{formatDate(event.occurredAt)}</span>
+                                  {event.ip ? <span>{event.ip}</span> : null}
+                                  {event.country ? <span>{event.country}</span> : null}
+                                  {event.timezone ? <span>{event.timezone}</span> : null}
+                                  {event.url ? <span title={event.url}>{event.url}</span> : null}
+                                  {event.userAgent ? <span title={event.userAgent}>{event.userAgent}</span> : null}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        ) : null}
                         {message.aiAssisted ? <span className="badge">AI 辅助{message.aiPurpose ? ` · ${message.aiPurpose}` : ""}</span> : null}
                         {message.aiAssisted ? renderEmailAiSources(message.aiSources) : null}
                         {message.direction === "outbound" && message.status === "failed" ? (
@@ -6172,6 +6267,37 @@ function EmailWorkspace({
                       ))}
                     </select>
                   </label>
+                  <label>
+                    <span className="subtle">定时发送</span>
+                    <input
+                      className="input"
+                      data-testid="email-compose-scheduled-send-at"
+                      type="datetime-local"
+                      value={toDatetimeLocalInputValue(emailDraft.scheduledSendAt)}
+                      onChange={(event) => onEmailDraftChange({ ...emailDraft, scheduledSendAt: fromDatetimeLocalInputValue(event.target.value) })}
+                    />
+                  </label>
+                </div>
+                <div className="toolbar email-compose-options">
+                  <label className="checkbox-label">
+                    <input
+                      data-testid="email-compose-group-send"
+                      type="checkbox"
+                      checked={Boolean(emailDraft.groupSendMode)}
+                      onChange={(event) => onEmailDraftChange({ ...emailDraft, groupSendMode: event.target.checked })}
+                    />
+                    群发单显
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      data-testid="email-compose-tracking"
+                      type="checkbox"
+                      checked={Boolean(emailDraft.trackingEnabled)}
+                      onChange={(event) => onEmailDraftChange({ ...emailDraft, trackingEnabled: event.target.checked })}
+                    />
+                    跟踪打开/点击
+                  </label>
+                  {emailDraft.scheduledSendAt ? <span className="badge"><CalendarClock size={12} /> 将在 {formatDate(emailDraft.scheduledSendAt)} 发送</span> : null}
                 </div>
                 <div className="email-compose-ai-bar">
                   <Bot size={16} />
@@ -6274,8 +6400,8 @@ function EmailWorkspace({
             ) : null}
             <div className="toolbar" style={{ marginTop: 12 }}>
               <button className="primary-button" data-testid="email-send" type="button" onClick={sendEmailFromPopup} disabled={disabled || !emailDraft.accountId || !emailDraft.to.trim() || !emailDraft.subject.trim() || !hasEmailDraftBody(emailDraft)}>
-                <Send size={16} />
-                发送
+                {emailDraft.scheduledSendAt ? <CalendarClock size={16} /> : <Send size={16} />}
+                {emailDraft.scheduledSendAt ? "定时发送" : "发送"}
               </button>
             </div>
               </div>

@@ -1,6 +1,9 @@
 import type { EmailMessage } from "@/lib/crm/types";
 
-export function formatEmailSendResultMessage(message: Pick<EmailMessage, "status" | "subject" | "failureReason">): string {
+export function formatEmailSendResultMessage(message: Pick<EmailMessage, "status" | "subject" | "failureReason" | "scheduledSendAt">): string {
+  if (message.status === "queued" && message.scheduledSendAt) {
+    return `邮件已加入待发送 ${message.subject}，计划发送时间 ${new Date(message.scheduledSendAt).toLocaleString()}`;
+  }
   if (message.status === "queued") {
     return `邮件已加入发送队列 ${message.subject}`;
   }

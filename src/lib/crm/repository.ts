@@ -30,6 +30,7 @@ import {
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, normalizeEmailConnectionConfig } from "@/lib/email/connection-config";
 import { getEmailProviderCapability } from "@/lib/email/providers";
+import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } from "@/lib/email/tracking";
 import type {
   Activity,
   ApiKey,
@@ -374,8 +375,14 @@ function mapEmailMessage(message: {
   clientRequestId: string | null;
   failureReason: string | null;
   sendAttemptedAt: Date | null;
+  scheduledSendAt: Date | null;
   sentAt: Date | null;
   receivedAt: Date | null;
+  trackingEnabled: boolean;
+  trackingId: string | null;
+  trackingEvents: Prisma.JsonValue | null;
+  inboundMetadata: Prisma.JsonValue | null;
+  groupSendMode: boolean;
   createdById: string | null;
   createdAt: Date;
 }): EmailMessage {
@@ -407,8 +414,14 @@ function mapEmailMessage(message: {
     clientRequestId: message.clientRequestId ?? undefined,
     failureReason: message.failureReason ?? undefined,
     sendAttemptedAt: message.sendAttemptedAt?.toISOString(),
+    scheduledSendAt: message.scheduledSendAt?.toISOString(),
     sentAt: message.sentAt?.toISOString(),
     receivedAt: message.receivedAt?.toISOString(),
+    trackingEnabled: message.trackingEnabled || undefined,
+    trackingId: message.trackingId ?? undefined,
+    trackingEvents: normalizeEmailTrackingEvents(message.trackingEvents),
+    inboundMetadata: normalizeEmailInboundMetadata(message.inboundMetadata),
+    groupSendMode: message.groupSendMode || undefined,
     createdById: message.createdById ?? undefined,
     createdAt: message.createdAt.toISOString()
   };
@@ -793,6 +806,49 @@ function normalizeEmailAttachments(value: unknown): EmailAttachment[] | undefine
     })
     .filter((attachment): attachment is EmailAttachment => Boolean(attachment));
   return attachments.length ? attachments : undefined;
+}
+
+function normalizeEmailTrackingEvents(value: unknown): EmailMessage["trackingEvents"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const events = value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+      const event = item as Record<string, unknown>;
+      const type = event.type === "open" || event.type === "click" ? event.type : undefined;
+      const occurredAt = typeof event.occurredAt === "string" ? event.occurredAt : "";
+      if (!type || !occurredAt) {
+        return undefined;
+      }
+      return {
+        type,
+        occurredAt,
+        ...(typeof event.ip === "string" && event.ip.trim() ? { ip: event.ip.trim() } : {}),
+        ...(typeof event.country === "string" && event.country.trim() ? { country: event.country.trim() } : {}),
+        ...(typeof event.timezone === "string" && event.timezone.trim() ? { timezone: event.timezone.trim() } : {}),
+        ...(typeof event.userAgent === "string" && event.userAgent.trim() ? { userAgent: event.userAgent.trim() } : {}),
+        ...(typeof event.url === "string" && event.url.trim() ? { url: event.url.trim() } : {})
+      };
+    })
+    .filter((event): event is NonNullable<EmailMessage["trackingEvents"]>[number] => Boolean(event));
+  return events.length ? events : undefined;
+}
+
+function normalizeEmailInboundMetadata(value: unknown): EmailMessage["inboundMetadata"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  return {
+    ...(typeof input.sourceIp === "string" && input.sourceIp.trim() ? { sourceIp: input.sourceIp.trim() } : {}),
+    ...(typeof input.country === "string" && input.country.trim() ? { country: input.country.trim() } : {}),
+    ...(typeof input.timezone === "string" && input.timezone.trim() ? { timezone: input.timezone.trim() } : {}),
+    ...(typeof input.userAgent === "string" && input.userAgent.trim() ? { userAgent: input.userAgent.trim() } : {}),
+    ...(typeof input.receivedHeader === "string" && input.receivedHeader.trim() ? { receivedHeader: input.receivedHeader.trim().slice(0, 2000) } : {})
+  };
 }
 
 function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAnalysisSources"]> {
@@ -1506,7 +1562,7 @@ export class PrismaCrmRepository {
   async recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "sentAt" | "receivedAt" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
         recordId?: string;
     }
   ): Promise<EmailMessage> {
@@ -1581,6 +1637,9 @@ export class PrismaCrmRepository {
     const status = input.status ?? (input.direction === "inbound" ? "received" : "sent");
     const sentAt = input.sentAt ? new Date(input.sentAt) : status === "sent" ? new Date() : undefined;
     const receivedAt = input.receivedAt ? new Date(input.receivedAt) : status === "received" ? new Date() : undefined;
+    const scheduledSendAt = input.scheduledSendAt ? new Date(input.scheduledSendAt) : undefined;
+    const trackingEnabled = input.direction === "outbound" && input.trackingEnabled === true;
+    const trackingId = trackingEnabled ? input.trackingId?.trim() || createEmailTrackingId() : undefined;
     const attachments = normalizeEmailAttachments(input.attachments);
     let message: Awaited<ReturnType<typeof this.db.emailMessage.create>>;
     try {
@@ -1597,7 +1656,7 @@ export class PrismaCrmRepository {
           bccAddresses: uniqueEmails(input.bcc ?? []),
           subject: normalizeRequiredText(input.subject, "Email subject"),
           bodyText: normalizeRequiredText(input.bodyText, "Email body"),
-          bodyHtml: input.bodyHtml?.trim() || undefined,
+          bodyHtml: trackingEnabled ? appendEmailTrackingHtml(input.bodyHtml?.trim() || undefined, trackingId!) : input.bodyHtml?.trim() || undefined,
           attachments: attachments ? ((attachments as unknown) as Prisma.InputJsonValue) : Prisma.JsonNull,
           aiAssisted: input.aiAssisted ?? false,
           aiPurpose: input.aiPurpose,
@@ -1608,8 +1667,14 @@ export class PrismaCrmRepository {
           clientRequestId: normalizedClientRequestId,
           failureReason: status === "failed" ? "Delivery failed" : undefined,
           sendAttemptedAt: input.sendAttemptedAt ? new Date(input.sendAttemptedAt) : status === "sending" ? new Date() : undefined,
+          scheduledSendAt,
           sentAt,
           receivedAt,
+          trackingEnabled,
+          trackingId,
+          trackingEvents: input.trackingEvents ? ((normalizeEmailTrackingEvents(input.trackingEvents) as unknown) as Prisma.InputJsonValue) : Prisma.JsonNull,
+          inboundMetadata: input.inboundMetadata ? (normalizeEmailInboundMetadata(input.inboundMetadata) as Prisma.InputJsonValue) : Prisma.JsonNull,
+          groupSendMode: input.groupSendMode ?? false,
           createdById
         }
       });
@@ -1686,7 +1751,7 @@ export class PrismaCrmRepository {
   async sendEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId">> & { recordId?: string }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "trackingEnabled" | "trackingId" | "groupSendMode">> & { recordId?: string }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
@@ -1706,7 +1771,7 @@ export class PrismaCrmRepository {
   async queueEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId">> & { recordId?: string }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
@@ -1768,6 +1833,20 @@ export class PrismaCrmRepository {
     return messages.map(mapEmailMessage);
   }
 
+  async listDueQueuedEmailMessagesForWorker(limit = 25): Promise<EmailMessage[]> {
+    const now = new Date();
+    const messages = await this.db.emailMessage.findMany({
+      where: {
+        direction: "outbound",
+        status: "queued",
+        OR: [{ scheduledSendAt: null }, { scheduledSendAt: { lte: now } }]
+      },
+      orderBy: [{ scheduledSendAt: "asc" }, { createdAt: "asc" }],
+      take: normalizeIntegerLimit(limit, 1, 100)
+    });
+    return messages.map(mapEmailMessage);
+  }
+
   async updateEmailMessageStatus(
     context: RequestContext,
     messageId: string,
@@ -1783,6 +1862,7 @@ export class PrismaCrmRepository {
         status,
         sentAt: status === "sent" ? now : null,
         sendAttemptedAt: status === "sending" ? now : status === "queued" ? null : undefined,
+        scheduledSendAt: status === "sent" ? null : undefined,
         externalMessageId: options.externalMessageId?.trim() || undefined,
         failureReason:
           status === "failed"
@@ -1804,11 +1884,38 @@ export class PrismaCrmRepository {
     return mappedMessage;
   }
 
+  async recordEmailTrackingEvent(
+    trackingId: string,
+    input: { type: "open" | "click"; ip?: string; userAgent?: string; url?: string; country?: string; timezone?: string }
+  ): Promise<EmailMessage | undefined> {
+    const normalizedTrackingId = trackingId.trim();
+    if (!normalizedTrackingId) {
+      return undefined;
+    }
+    const existing = await this.db.emailMessage.findFirst({
+      where: { trackingId: normalizedTrackingId, trackingEnabled: true }
+    });
+    if (!existing) {
+      return undefined;
+    }
+    const events = normalizeEmailTrackingEvents(existing.trackingEvents) ?? [];
+    const nextEvents = [...events, buildTrackingEvent(input.type, input)].slice(-200);
+    const updated = await this.db.emailMessage.update({
+      where: { id: existing.id },
+      data: { trackingEvents: (nextEvents as unknown) as Prisma.InputJsonValue }
+    });
+    return mapEmailMessage(updated);
+  }
+
   async claimEmailMessageForSending(context: RequestContext, messageId: string): Promise<{ message: EmailMessage; claimed: boolean }> {
     requirePermission(context, "crm.write");
     const existing = await this.getEmailMessage(context, messageId);
     const staleBefore = emailSendClaimStaleBefore();
     const isClaimableSending = existing.status === "sending" && isEmailSendClaimStale(existing.sendAttemptedAt, staleBefore);
+    const scheduledAt = existing.scheduledSendAt ? new Date(existing.scheduledSendAt) : undefined;
+    if (scheduledAt && scheduledAt.getTime() > Date.now() && existing.status === "queued") {
+      return { message: existing, claimed: false };
+    }
     if (existing.direction !== "outbound" || (existing.status !== "queued" && existing.status !== "failed" && !isClaimableSending)) {
       return { message: existing, claimed: false };
     }
@@ -1818,11 +1925,18 @@ export class PrismaCrmRepository {
         id: existing.id,
         workspaceId: context.workspaceId,
         direction: "outbound",
-        OR: [
-          { status: { in: ["queued", "failed"] } },
+        AND: [
           {
-            status: "sending",
-            OR: [{ sendAttemptedAt: null }, { sendAttemptedAt: { lt: staleBefore } }]
+            OR: [
+              { status: { in: ["queued", "failed"] } },
+              {
+                status: "sending",
+                OR: [{ sendAttemptedAt: null }, { sendAttemptedAt: { lt: staleBefore } }]
+              }
+            ]
+          },
+          {
+            OR: [{ scheduledSendAt: null }, { scheduledSendAt: { lte: now } }, { status: { not: "queued" } }]
           }
         ]
       },

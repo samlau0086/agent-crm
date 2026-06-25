@@ -341,7 +341,8 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
           bodyHtml: message.bodyHtml,
           attachments: message.attachments,
           externalMessageId: message.externalMessageId,
-          receivedAt: message.receivedAt
+          receivedAt: message.receivedAt,
+          inboundMetadata: message.inboundMetadata
         });
         importedCount += 1;
       } catch (error) {

@@ -11,6 +11,7 @@ import { buildFailedJobEnvelope, getMaxJobAttempts } from "@/lib/jobs/worker-pol
 export interface JobWorkerResult {
   processed: boolean;
   jobType?: QueuedJobEnvelope["type"];
+  scheduledEmailSend?: boolean;
   requeued?: boolean;
   deadLettered?: boolean;
   error?: string;
@@ -25,7 +26,7 @@ export async function runQueuedJobOnce(repository: PrismaCrmRepository = getCrmR
   const queueName = getJobQueueName();
   const envelope = await dequeueJob<QueuedJobEnvelope>(queueName);
   if (!envelope) {
-    return { processed: false };
+    return processDueQueuedEmailSend(repository);
   }
 
   try {
@@ -44,6 +45,20 @@ export async function runQueuedJobOnce(repository: PrismaCrmRepository = getCrmR
     }
     return { processed: true, jobType: envelope.type, deadLettered: true, error: message };
   }
+}
+
+async function processDueQueuedEmailSend(repository: PrismaCrmRepository): Promise<JobWorkerResult> {
+  const dueMessages = await repository.listDueQueuedEmailMessagesForWorker(1);
+  const message = dueMessages[0];
+  if (!message?.createdById) {
+    return { processed: false };
+  }
+  const context = await getRequestContextByUserId(message.createdById);
+  if (context.workspaceId !== message.workspaceId) {
+    return { processed: false };
+  }
+  const emailMessage = await createEmailProviderAdapter(repository).sendQueued(context, message.id);
+  return { processed: true, jobType: "email_send", scheduledEmailSend: true, emailMessage };
 }
 
 export async function processQueuedJobEnvelope(
@@ -109,7 +124,7 @@ export function formatJobWorkerResult(result: JobWorkerResult): string | undefin
   }
   if (result.emailMessage) {
     const action = result.jobType === "email_translate" ? "translate" : "send";
-    return `Processed email ${action} ${result.emailMessage.id} with status ${result.emailMessage.status}`;
+    return `Processed email ${result.scheduledEmailSend ? "scheduled " : ""}${action} ${result.emailMessage.id} with status ${result.emailMessage.status}`;
   }
   if (result.emailThread) {
     const action = result.jobType === "email_analyze" ? "analyze" : result.jobType === "email_summarize" ? "summarize" : "thread";

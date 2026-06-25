@@ -1763,6 +1763,42 @@ button {
   overflow-wrap: anywhere;
 }
 
+.email-tracking-events {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+}
+
+.email-tracking-events summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.email-tracking-event-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.email-tracking-event {
+  display: grid;
+  grid-template-columns: 64px 150px repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.email-tracking-event span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .email-compose-grid {
   display: grid;
   gap: 10px;
@@ -1774,6 +1810,18 @@ button {
   gap: 8px;
   align-items: center;
   margin-top: 12px;
+}
+
+.email-compose-options {
+  margin-top: 10px;
+}
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .email-recipient-field {

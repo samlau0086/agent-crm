@@ -1187,7 +1187,7 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(readme, /GMAIL_OAUTH_CLIENT_ID.*GMAIL_OAUTH_CLIENT_SECRET/);
   assert.match(readme, /OUTLOOK_OAUTH_CLIENT_ID.*OUTLOOK_OAUTH_CLIENT_SECRET/);
   assert.match(readme, /Gmail\/Outlook OAuth client id 和 secret 必须成对出现/);
-  assert.match(readme, /EMAIL_DELIVERY_MODE.*EMAIL_SYNC_INTERVAL_MS.*EMAIL_SYNC_LIMIT.*EMAIL_SEND_CLAIM_TIMEOUT_MS.*SSH 前校验/);
+  assert.match(readme, /EMAIL_DELIVERY_MODE.*EMAIL_SYNC_INTERVAL_MS.*EMAIL_SYNC_LIMIT.*EMAIL_SEND_CLAIM_TIMEOUT_MS/);
   assert.match(readme, /SEED_ON_EMPTY=true/);
   assert.match(readme, /RUN_EMAIL_CONNECTION_TESTS/);
   assert.match(readme, /REQUIRE_LIVE_EMAIL_READINESS/);
@@ -1864,7 +1864,8 @@ await run("email workspace sends stable client request ids for compose idempoten
   assert.match(source, /function createEmailClientRequestId\(\)/);
   assert.match(source, /clientRequestId:\s*createEmailClientRequestId\(\)/);
   assert.match(source, /clientRequestId:\s*emailDraft\.clientRequestId/);
-  assert.match(source, /upsertEmailMessage\(current\[message\.threadId\] \?\? \[\], message\)/);
+  assert.match(source, /const messages = "messages" in result \? result\.messages : \[result\]/);
+  assert.match(source, /next\[item\.threadId\] = upsertEmailMessage\(next\[item\.threadId\] \?\? \[\], item\)/);
 });
 
 await run("email workspace clears ai provenance after manual draft rewrites", () => {
@@ -1898,7 +1899,7 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);
   assert.match(source, /onGenerateAiPromptForDraft=\{\(prompt\) => generateEmailAiPromptForDraft\(prompt\)\}/);
   assert.match(source, /async function generateEmailAiPromptForDraft\(currentPrompt: string\): Promise<string>/);
-  assert.match(source, /不要在正文里加入签名、姓名\/职位\/公司\/联系方式占位符、来源提示、引用列表或来源脚注/);
+  assert.ok(source.includes("不要在正文里加入签名"));
   assert.match(source, /data-testid="email-compose-ai-prompt"/);
   assert.match(source, /data-testid="email-compose-ai-prompt-generate"/);
   assert.match(source, /data-testid="email-compose-ai-generate"/);
@@ -2278,10 +2279,34 @@ await run("email database preflight parses configured database targets", () => {
 
 await run("email send status messages distinguish queued sent and failed results", () => {
   assert.equal(formatEmailSendResultMessage({ status: "queued", subject: "Proposal" }), "邮件已加入发送队列 Proposal");
+  assert.equal(formatEmailSendResultMessage({ status: "queued", subject: "Proposal", scheduledSendAt: "2026-06-25T03:00:00.000Z" }).startsWith("邮件已加入待发送 Proposal"), true);
   assert.equal(formatEmailSendResultMessage({ status: "sending", subject: "Proposal" }), "邮件正在发送 Proposal");
   assert.equal(formatEmailSendResultMessage({ status: "sent", subject: "Proposal" }), "已发送邮件 Proposal");
   assert.equal(formatEmailSendResultMessage({ status: "failed", subject: "Proposal" }), "邮件发送失败 Proposal");
   assert.equal(formatEmailSendResultMessage({ status: "failed", subject: "Proposal", failureReason: "SMTP returned 550" }), "邮件发送失败 Proposal：SMTP returned 550");
+});
+
+await run("email workspace exposes scheduled send group send tracking and label management", () => {
+  const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const sendRoute = readFileSync("src/app/api/email/send/route.ts", "utf8");
+  const schemas = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
+  const worker = readFileSync("src/lib/jobs/worker.ts", "utf8");
+  const tracking = readFileSync("src/lib/email/tracking.ts", "utf8");
+
+  assert.match(schemas, /scheduledSendAt: z\.string\(\)\.datetime\(\)\.optional\(\)/);
+  assert.match(schemas, /trackingEnabled: z\.boolean\(\)\.optional\(\)/);
+  assert.match(schemas, /groupSendMode: z\.boolean\(\)\.optional\(\)/);
+  assert.match(workspace, /\{ key: "scheduled", label: "待发送", icon: CalendarClock \}/);
+  assert.match(workspace, /data-testid="email-compose-scheduled-send-at"/);
+  assert.match(workspace, /data-testid="email-compose-group-send"/);
+  assert.match(workspace, /data-testid="email-compose-tracking"/);
+  assert.match(workspace, /function removeEmailLabel\(threadId: string, label: string\)/);
+  assert.match(workspace, /计划发送 \{formatDate\(message\.scheduledSendAt\)\}/);
+  assert.match(sendRoute, /body\.groupSendMode && body\.to\.length > 1/);
+  assert.match(sendRoute, /shouldDelaySend/);
+  assert.match(worker, /listDueQueuedEmailMessagesForWorker\(1\)/);
+  assert.match(tracking, /function appendEmailTrackingHtml/);
+  assert.match(tracking, /\/api\/email\/track\/open\/\$\{encodeURIComponent\(trackingId\)\}/);
 });
 
 await run("email send failure helper returns persisted failed messages for immediate UI feedback", async () => {

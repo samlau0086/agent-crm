@@ -12,6 +12,7 @@ const nextConfig = (phase) => ({
   },
   experimental: {
     typedRoutes: false,
+    serverComponentsExternalPackages: ["geoip-lite"],
     outputFileTracingExcludes: {
       "/*": [
         ".agents/**/*",

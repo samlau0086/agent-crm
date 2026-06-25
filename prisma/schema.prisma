@@ -476,8 +476,14 @@ model EmailMessage {
   clientRequestId String?
   failureReason     String?
   sendAttemptedAt   DateTime?
+  scheduledSendAt   DateTime?
   sentAt            DateTime?
   receivedAt        DateTime?
+  trackingEnabled   Boolean      @default(false)
+  trackingId        String?      @unique
+  trackingEvents    Json?
+  inboundMetadata   Json?
+  groupSendMode     Boolean      @default(false)
   createdById       String?
   createdAt         DateTime     @default(now())
   workspace         Workspace    @relation(fields: [workspaceId], references: [id])
@@ -489,6 +495,8 @@ model EmailMessage {
   @@index([workspaceId, accountId, createdAt])
   @@index([workspaceId, accountId, clientRequestId])
   @@index([workspaceId, status, sendAttemptedAt])
+  @@index([workspaceId, status, scheduledSendAt])
+  @@index([workspaceId, trackingId])
   @@index([workspaceId, direction, status, createdAt])
 }
 
