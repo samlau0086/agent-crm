@@ -1590,6 +1590,16 @@ await run("email thread contact linking is driven by sender email and can return
   assert.doesNotMatch(source, /data-testid="email-thread-record"/);
   assert.match(source, /const contactMethodsValueKey = "__contactMethods"/);
   assert.match(source, /const companyPrimaryContactValueKey = "__primaryContactId"/);
+  assert.match(source, /function QuickActionList/);
+  assert.match(source, /type QuickActionItem = \{/);
+  assert.match(source, /function ContactMethodsQuickActions/);
+  assert.match(source, /record-contact-quick-actions-\$\{record\.id\}/);
+  assert.match(source, /onComposeEmail\(value\)/);
+  assert.match(source, /secondaryAction: onFilterEmail[\s\S]*label: "筛选邮件"/);
+  assert.match(source, /href: `tel:\$\{normalizePhoneHref\(value\)\}`/);
+  assert.match(source, /https:\/\/wa\.me\/\$\{phone\}/);
+  assert.match(source, /function getQuickContactMethodsForRecord\(record: CrmRecord, records: CrmRecord\[\]\): ContactMethodDraft\[\]/);
+  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 \? \([\s\S]*<ContactMethodsQuickActions/);
   assert.match(source, /function ContactMethodsEditor/);
   assert.match(source, /data-testid=\{`\$\{testIdPrefix\}-add-\$\{type\}`\}/);
   assert.match(source, /patch\.primary === true[\s\S]*primary: method\.id === methodId/);
@@ -1603,6 +1613,10 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /composeOpenRequestKey=\{emailComposeOpenRequestKey\}/);
   assert.match(source, /onComposeClosed=\{\(\) => setEmailComposeOpenRequestKey\(""\)\}/);
   assert.match(source, /const handledComposeOpenRequestRef = useRef\(""\)/);
+  assert.match(styles, /\.quick-action-panel \{/);
+  assert.match(styles, /\.quick-action-grid \{/);
+  assert.match(styles, /\.quick-action-chip \{/);
+  assert.match(styles, /\.quick-action-secondary \{/);
   assert.match(source, /handledComposeOpenRequestRef\.current = composeOpenRequestKey/);
   assert.match(source, /setComposeOpen\(true\);[\s\S]*setComposeMinimized\(false\);/);
   assert.match(source, /function getThreadPrimarySenderEmail/);

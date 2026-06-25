@@ -25,6 +25,7 @@ import {
   Mail,
   MailOpen,
   Maximize2,
+  MessageCircle,
   Menu,
   Minus,
   MoreVertical,
@@ -32,6 +33,7 @@ import {
   Paperclip,
   Pencil,
   FileText,
+  Phone,
   RefreshCw,
   RotateCcw,
   Save,
@@ -1382,6 +1384,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   );
   const selectedCompanyPrimaryContact = useMemo(
     () => (selectedRecord?.objectKey === "companies" ? getCompanyPrimaryContact(selectedRecord, records) : undefined),
+    [records, selectedRecord]
+  );
+  const selectedRecordQuickContactMethods = useMemo(
+    () => (selectedRecord ? getQuickContactMethodsForRecord(selectedRecord, records) : []),
     [records, selectedRecord]
   );
   const openTasks = useMemo(
@@ -3629,6 +3635,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         </button>
                       )}
                     </div>
+
+                    {selectedRecordQuickContactMethods.length > 0 ? (
+                      <ContactMethodsQuickActions
+                        methods={selectedRecordQuickContactMethods}
+                        record={selectedRecord}
+                        onComposeEmail={(emailAddress) => composeEmailForRecord(selectedRecord, emailAddress)}
+                        onFilterEmail={(emailAddress) => setRecordEmailActivityFilter(emailAddress)}
+                      />
+                    ) : null}
 
                     {selectedRecord.objectKey === "companies" && (
                       <section style={{ marginTop: 16 }}>
@@ -10465,6 +10480,161 @@ const contactMethodTypeLabels: Record<ContactMethodType, string> = {
   other: "其他"
 };
 
+type QuickActionItem = {
+  id: string;
+  label: string;
+  value: string;
+  description?: string;
+  icon: LucideIcon;
+  href?: string;
+  external?: boolean;
+  badge?: string;
+  onClick?: () => void;
+  secondaryAction?: {
+    label: string;
+    onClick: () => void;
+  };
+};
+
+function QuickActionList({
+  title,
+  description,
+  items,
+  emptyMessage,
+  testId
+}: {
+  title: string;
+  description?: string;
+  items: QuickActionItem[];
+  emptyMessage?: string;
+  testId?: string;
+}) {
+  return (
+    <section className="quick-action-panel wide" data-testid={testId}>
+      <div className="stage-header">
+        <div>
+          <strong>{title}</strong>
+          {description ? <div className="subtle">{description}</div> : null}
+        </div>
+      </div>
+      {items.length ? (
+        <div className="quick-action-grid">
+          {items.map((item) => {
+            const Icon = item.icon;
+            const content = (
+              <>
+                <Icon size={16} />
+                <span className="quick-action-content">
+                  <strong>{item.label}</strong>
+                  <span>{item.value}</span>
+                  {item.description ? <em>{item.description}</em> : null}
+                </span>
+                {item.badge ? <span className="badge">{item.badge}</span> : null}
+              </>
+            );
+            return (
+              <div className="quick-action-chip" key={item.id}>
+                {item.href ? (
+                  <a className="quick-action-main" href={item.href} target={item.external ? "_blank" : undefined} rel={item.external ? "noreferrer" : undefined}>
+                    {content}
+                  </a>
+                ) : (
+                  <button className="quick-action-main" type="button" onClick={item.onClick} disabled={!item.onClick}>
+                    {content}
+                  </button>
+                )}
+                {item.secondaryAction ? (
+                  <button className="quick-action-secondary" type="button" onClick={item.secondaryAction.onClick}>
+                    {item.secondaryAction.label}
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty-state">{emptyMessage ?? "暂无可用快捷操作"}</div>
+      )}
+    </section>
+  );
+}
+
+function ContactMethodsQuickActions({
+  methods,
+  record,
+  onComposeEmail,
+  onFilterEmail
+}: {
+  methods: ContactMethodDraft[];
+  record: CrmRecord;
+  onComposeEmail: (emailAddress: string) => void;
+  onFilterEmail?: (emailAddress: string) => void;
+}) {
+  const items = normalizePrimaryContactMethods(methods)
+    .filter((method) => method.value.trim())
+    .map<QuickActionItem>((method) => {
+      const label = method.label?.trim() || contactMethodTypeLabels[method.type];
+      const value = method.value.trim();
+      const badge = method.primary ? "主联系方式" : undefined;
+      if (method.type === "email") {
+        return {
+          id: method.id,
+          label,
+          value,
+          icon: Mail,
+          badge,
+          onClick: () => onComposeEmail(value),
+          secondaryAction: onFilterEmail
+            ? {
+                label: "筛选邮件",
+                onClick: () => onFilterEmail(value)
+              }
+            : undefined
+        };
+      }
+      if (method.type === "mob" || method.type === "tel") {
+        return {
+          id: method.id,
+          label,
+          value,
+          icon: Phone,
+          href: `tel:${normalizePhoneHref(value)}`,
+          badge
+        };
+      }
+      if (method.type === "whatsapp") {
+        return {
+          id: method.id,
+          label,
+          value,
+          icon: MessageCircle,
+          href: buildContactMethodUrl(method.type, value),
+          external: true,
+          badge
+        };
+      }
+      return {
+        id: method.id,
+        label,
+        value,
+        icon: Link,
+        href: buildContactMethodUrl(method.type, value),
+        external: Boolean(buildContactMethodUrl(method.type, value)),
+        badge
+      };
+    });
+
+  return (
+    <QuickActionList
+      title="快捷联系方式"
+      description={`${record.title} 的可操作联系方式。点击邮箱可直接写邮件，电话和社媒会打开对应应用或页面。`}
+      items={items}
+      emptyMessage="还没有可用联系方式"
+      testId={`record-contact-quick-actions-${record.id}`}
+    />
+  );
+}
+
 function ContactMethodsEditor({
   testIdPrefix,
   value,
@@ -10919,6 +11089,89 @@ function getContactMethodEmails(record: CrmRecord): string[] {
 
 function getContactMethodPhone(methods: ContactMethodDraft[]): string {
   return methods.find((method) => method.type === "mob" || method.type === "tel" || method.type === "whatsapp")?.value ?? "";
+}
+
+function normalizePhoneHref(value: string): string {
+  return value.trim().replace(/[^\d+]/g, "");
+}
+
+function ensureExternalUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return `https://${trimmed.replace(/^@/, "")}`;
+}
+
+function socialHandle(value: string): string {
+  return value.trim().replace(/^@/, "").replace(/^https?:\/\/[^/]+\//i, "");
+}
+
+function buildContactMethodUrl(type: ContactMethodType, value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (type === "whatsapp") {
+    const phone = normalizePhoneHref(trimmed).replace(/^\+/, "");
+    return phone ? `https://wa.me/${phone}` : undefined;
+  }
+  if (type === "website") {
+    return ensureExternalUrl(trimmed);
+  }
+  if (type === "linkedin") {
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://www.linkedin.com/in/${socialHandle(trimmed)}`;
+  }
+  if (type === "instagram") {
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://www.instagram.com/${socialHandle(trimmed)}`;
+  }
+  if (type === "facebook") {
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://www.facebook.com/${socialHandle(trimmed)}`;
+  }
+  if (type === "x") {
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://x.com/${socialHandle(trimmed)}`;
+  }
+  if (type === "other" && /^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return undefined;
+}
+
+function dedupeContactMethods(methods: ContactMethodDraft[]): ContactMethodDraft[] {
+  const seen = new Set<string>();
+  return normalizePrimaryContactMethods(methods).filter((method) => {
+    const key = `${method.type}:${method.value.trim().toLowerCase()}`;
+    if (!method.value.trim() || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function getQuickContactMethodsForRecord(record: CrmRecord, records: CrmRecord[]): ContactMethodDraft[] {
+  if (record.objectKey === "contacts") {
+    return dedupeContactMethods(contactMethodsFromRecordData(record));
+  }
+  if (record.objectKey === "companies") {
+    const directMethods = contactMethodsFromRecordData(record);
+    const primaryContact = getCompanyPrimaryContact(record, records);
+    const primaryMethods = primaryContact ? contactMethodsFromRecordData(primaryContact).map((method) => ({ ...method, label: method.label || `主联系人 ${contactMethodTypeLabels[method.type]}` })) : [];
+    const relatedEmailMethods = getCompanyContactRecords(record, records).flatMap((contact) =>
+      getRecordEmailAddressesFromData(contact).map<ContactMethodDraft>((emailAddress) => ({
+        id: `company-contact-email-${contact.id}-${emailAddress}`,
+        type: "email",
+        value: emailAddress,
+        label: contact.id === primaryContact?.id ? "主联系人 Email" : `${contact.title} Email`,
+        primary: contact.id === primaryContact?.id
+      }))
+    );
+    return dedupeContactMethods([...primaryMethods, ...directMethods, ...relatedEmailMethods]);
+  }
+  return dedupeContactMethods(contactMethodsFromRecordData(record));
 }
 
 function buildInitialValues(fields: FieldDefinition[], objectKey?: string): Record<string, string> {

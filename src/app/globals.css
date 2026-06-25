@@ -2408,6 +2408,101 @@ button {
   background: white;
 }
 
+.quick-action-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.quick-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.quick-action-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.quick-action-main {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.quick-action-main:hover:not(:disabled),
+.quick-action-secondary:hover {
+  background: #eef2ff;
+}
+
+.quick-action-main:disabled {
+  cursor: default;
+}
+
+.quick-action-content {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.quick-action-content strong,
+.quick-action-content span,
+.quick-action-content em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-action-content strong {
+  font-size: 13px;
+}
+
+.quick-action-content span {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.quick-action-content em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.quick-action-secondary {
+  min-width: 82px;
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(92px, 1fr));
