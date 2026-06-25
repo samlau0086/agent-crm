@@ -2804,8 +2804,45 @@ button {
   background: #eff6ff;
 }
 
+.talk-input-wrap {
+  display: grid;
+  gap: 6px;
+}
+
 .talk-input {
   min-height: 78px;
+}
+
+.talk-suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px dashed #bfdbfe;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.talk-suggestion span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talk-suggestion kbd {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .email-thread-analysis {

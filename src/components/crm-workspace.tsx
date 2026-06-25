@@ -7220,6 +7220,63 @@ function buildTalkKnowledgeBody(target: TalkTarget, messages: TalkMessage[], sou
   return `${targetLines.join("\n")}\n\nTranscript:\n${transcript}\n\nSources:\n${sourceLines}`;
 }
 
+function buildTalkInputSuggestion(target: TalkTarget, input: string, messages: TalkMessage[]): string {
+  const trimmedInput = input.trim();
+  const normalizedInput = trimmedInput.toLowerCase();
+  const templates = talkSuggestionTemplates(target, messages);
+  const candidate =
+    templates.find((template) => template.toLowerCase().startsWith(normalizedInput) && template !== trimmedInput) ??
+    templates.find((template) => talkSuggestionMatchesInput(template, normalizedInput) && template !== trimmedInput) ??
+    (trimmedInput
+      ? `${trimmedInput}，并结合“${target.label}”的当前上下文给出可执行建议。`
+      : templates[0]);
+  return candidate && candidate !== trimmedInput ? candidate : "";
+}
+
+function talkSuggestionTemplates(target: TalkTarget, messages: TalkMessage[]): string[] {
+  const label = target.label;
+  const continuation = messages.length ? [`基于刚才的讨论，继续分析“${label}”还有哪些风险和下一步行动。`] : [];
+  if (target.type === "email_thread") {
+    return [
+      ...continuation,
+      `分析这封邮件“${label}”的客户意图、风险等级和建议下一步行动。`,
+      `判断这封邮件“${label}”是否值得回复，并说明原因。`,
+      `基于这封邮件和客户背景，帮我草拟一个简洁回复思路。`,
+      `提取这封邮件中适合沉淀到 RAG 知识库的要点。`
+    ];
+  }
+  const common = [
+    ...continuation,
+    `总结“${label}”当前背景、关键风险和下一步建议。`,
+    `围绕“${label}”列出需要销售跟进确认的问题。`
+  ];
+  if (target.objectKey === "contacts") {
+    return [...common, `分析联系人“${label}”最近沟通中的购买意图和跟进优先级。`, `为联系人“${label}”准备一封简洁的跟进邮件思路。`];
+  }
+  if (target.objectKey === "companies") {
+    return [...common, `分析公司“${label}”的决策链、主联系人和潜在机会。`, `为公司“${label}”制定下一轮销售跟进计划。`];
+  }
+  if (target.objectKey === "deals") {
+    return [...common, `分析交易“${label}”推进到下一阶段的阻碍和行动清单。`, `判断交易“${label}”的赢单概率，并说明需要补齐的信息。`];
+  }
+  if (target.objectKey === "products") {
+    return [...common, `分析产品“${label}”适合匹配哪些客户场景和销售话术。`, `为产品“${label}”整理报价或邮件中可使用的卖点。`];
+  }
+  if (target.objectKey === "quotes") {
+    return [...common, `检查报价“${label}”的产品、费用、付款条款和客户沟通风险。`, `为报价“${label}”准备一段发送给客户的说明思路。`];
+  }
+  return common;
+}
+
+function talkSuggestionMatchesInput(template: string, normalizedInput: string): boolean {
+  if (!normalizedInput) {
+    return true;
+  }
+  const inputTerms = normalizedInput.split(/[\s，。,.!?;；、]+/).filter((term) => term.length > 0);
+  const normalizedTemplate = template.toLowerCase();
+  return inputTerms.some((term) => normalizedTemplate.includes(term));
+}
+
 function trimForLabel(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, Math.max(1, maxLength - 1))}…` : value;
 }
@@ -8806,6 +8863,7 @@ function TalkAboutThisPanel({
   const [isSending, setIsSending] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const targetKey = target.type === "record" ? `${target.objectKey}:${target.recordId}` : `email_thread:${target.threadId}`;
+  const suggestion = buildTalkInputSuggestion(target, question, messages);
 
   useEffect(() => {
     setMessages([]);
@@ -8906,19 +8964,32 @@ function TalkAboutThisPanel({
       ) : null}
       <label>
         <span className="subtle">输入要讨论的问题</span>
-        <textarea
-          className="textarea talk-input"
-          data-testid="talk-about-this-input"
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-              event.preventDefault();
-              void sendMessage();
-            }
-          }}
-          placeholder="例如：这个客户下一步应该怎么跟进？这封邮件是否值得回复？"
-        />
+        <div className="talk-input-wrap">
+          <textarea
+            className="textarea talk-input"
+            data-testid="talk-about-this-input"
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Tab" && suggestion) {
+                event.preventDefault();
+                setQuestion(suggestion);
+                return;
+              }
+              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                event.preventDefault();
+                void sendMessage();
+              }
+            }}
+            placeholder="例如：这个客户下一步应该怎么跟进？这封邮件是否值得回复？"
+          />
+          {suggestion ? (
+            <div className="talk-suggestion" data-testid="talk-about-this-suggestion">
+              <span>{suggestion}</span>
+              <kbd>Tab</kbd>
+            </div>
+          ) : null}
+        </div>
       </label>
       <div className="toolbar">
         <button className="secondary-button" data-testid="talk-about-this-send" type="button" onClick={() => void sendMessage()} disabled={disabled || isSending || !question.trim()}>

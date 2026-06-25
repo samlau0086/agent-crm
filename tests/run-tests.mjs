@@ -1883,6 +1883,21 @@ await run("talk about this panel can chat and save transcript to rag knowledge",
   assert.match(source, /target=\{\{ type: "email_thread", threadId: selectedThread\.id, label: selectedThread\.subject \}\}/);
 });
 
+await run("talk about this input suggests context-aware completions", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  assert.match(source, /const suggestion = buildTalkInputSuggestion\(target, question, messages\)/);
+  assert.match(source, /function buildTalkInputSuggestion\(target: TalkTarget, input: string, messages: TalkMessage\[\]\): string/);
+  assert.match(source, /function talkSuggestionTemplates\(target: TalkTarget, messages: TalkMessage\[\]\): string\[\]/);
+  assert.match(source, /target\.type === "email_thread"/);
+  assert.match(source, /target\.objectKey === "deals"/);
+  assert.match(source, /event\.key === "Tab" && suggestion/);
+  assert.match(source, /setQuestion\(suggestion\)/);
+  assert.match(source, /data-testid="talk-about-this-suggestion"/);
+  assert.match(styles, /\.talk-suggestion/);
+  assert.match(styles, /\.talk-suggestion kbd/);
+});
+
 await run("talk about this api is guarded by ai permission and uses crm context", () => {
   const route = readFileSync("src/app/api/ai/talk/route.ts", "utf8");
   const schemas = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
