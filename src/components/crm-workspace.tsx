@@ -154,6 +154,7 @@ type EmailThreadUiState = {
   snoozedUntil?: string | null;
   starred?: boolean;
 };
+type EmailTrashDisplayMessageIds = Record<string, string>;
 type AiSource = { label: string; objectKey?: string; recordId?: string; activityId?: string };
 type AiResponse = { text: string; sources: AiSource[] };
 type TalkTarget =
@@ -867,7 +868,18 @@ function getEmailThreadMailboxMessages(messages: EmailMessage[], mailbox: EmailM
   return messages;
 }
 
-function getEmailThreadDisplayMessage(messages: EmailMessage[], mailbox: EmailMailboxKey): EmailMessage | undefined {
+function getEmailThreadDisplayMessage(messages: EmailMessage[], mailbox: EmailMailboxKey, preferredMessageId?: string): EmailMessage | undefined {
+  if (mailbox === "trash") {
+    const preferredMessage = preferredMessageId ? messages.find((message) => message.id === preferredMessageId) : undefined;
+    if (preferredMessage) {
+      return preferredMessage;
+    }
+    const inboxMessage = getEmailThreadMailboxMessages(messages, "inbox")
+      .sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))[0];
+    if (inboxMessage) {
+      return inboxMessage;
+    }
+  }
   const mailboxMessages = getEmailThreadMailboxMessages(messages, mailbox);
   return [...mailboxMessages].sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))[0] ?? messages.at(-1);
 }
@@ -4614,10 +4626,11 @@ function EmailWorkspace({
   const [labelFilter, setLabelFilter] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
+  const [trashDisplayMessageIds, setTrashDisplayMessageIds] = useState<EmailTrashDisplayMessageIds>({});
   const [externalImageThreadIds, setExternalImageThreadIds] = useState<Set<string>>(() => new Set());
   const selectedMailboxMessages = selectedThread ? getEmailThreadMailboxMessages(selectedMessages, mailbox) : [];
   const selectedDisplayedMessages = selectedMailboxMessages.length > 0 ? selectedMailboxMessages : selectedMessages;
-  const selectedDisplayMessage = getEmailThreadDisplayMessage(selectedMessages, mailbox);
+  const selectedDisplayMessage = getEmailThreadDisplayMessage(selectedMessages, mailbox, selectedThread ? trashDisplayMessageIds[selectedThread.id] : undefined);
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const selectedThreadIsRead = Boolean(selectedThreadState.read);
   const selectedThreadIsSnoozed = Boolean(selectedThreadState.snoozedUntil && new Date(selectedThreadState.snoozedUntil).getTime() > Date.now());
@@ -4724,7 +4737,7 @@ function EmailWorkspace({
     [selectedMailboxAccountId, threads]
   );
   useEffect(() => {
-    if (!["inbox", "all", "sent", "scheduled", "drafts"].includes(mailbox)) {
+    if (!["inbox", "all", "sent", "scheduled", "drafts", "trash"].includes(mailbox)) {
       return;
     }
     accountFilteredThreads
@@ -5136,6 +5149,17 @@ function EmailWorkspace({
       return;
     }
     let patchByThreadId = new Map<string, Partial<EmailThreadUiState>>();
+    const trashDisplayAnchors =
+      action === "delete"
+        ? new Map(
+            threadIds
+              .map((threadId) => {
+                const displayMessage = getEmailThreadDisplayMessage(messagesByThread[threadId] ?? [], mailbox);
+                return displayMessage?.id ? [threadId, displayMessage.id] as const : undefined;
+              })
+              .filter(Boolean) as Array<readonly [string, string]>
+          )
+        : new Map<string, string>();
     if (action === "archive") {
       patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { archived: true, deleted: false }]));
     } else if (action === "unarchive") {
@@ -5159,6 +5183,23 @@ function EmailWorkspace({
     for (const [threadId, patch] of patchByThreadId) {
       patchThreadUiState([threadId], patch);
       persistThreadState(threadId, patch);
+    }
+    if (action === "delete" && trashDisplayAnchors.size) {
+      setTrashDisplayMessageIds((current) => {
+        const next = { ...current };
+        trashDisplayAnchors.forEach((messageId, threadId) => {
+          next[threadId] = messageId;
+        });
+        return next;
+      });
+    } else if (action === "restore") {
+      setTrashDisplayMessageIds((current) => {
+        const next = { ...current };
+        threadIds.forEach((threadId) => {
+          delete next[threadId];
+        });
+        return next;
+      });
     }
     setSelectedThreadIds(new Set());
     if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "restore" || action === "unarchive" || action === "snooze" || action === "unsnooze")) {
@@ -6247,7 +6288,7 @@ function EmailWorkspace({
                   const messages = messagesByThread[thread.id] ?? [];
                   const state = threadUiState[thread.id] ?? {};
                   const labels = getEmailThreadDisplayLabels(thread, state, messages);
-                  const displayMessage = getEmailThreadDisplayMessage(messages, mailbox);
+                  const displayMessage = getEmailThreadDisplayMessage(messages, mailbox, trashDisplayMessageIds[thread.id]);
                   const snippet = repairEmailMojibake(displayMessage?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
                   const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());

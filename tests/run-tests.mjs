@@ -1764,7 +1764,7 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.match(source, /onSyncAccount\(selectedMailboxAccountId\)/);
   assert.match(source, /selectedAccountCanSend \? selectedMailboxAccountId : emailDraft\.accountId \|\| activeAccounts\[0\]\?\.id \|\| ""/);
   assert.match(source, /if \(mailbox === "inbox"\) \{[\s\S]*message\.direction === "inbound" && message\.status === "received"/);
-  assert.match(source, /\["inbox", "all", "sent", "scheduled", "drafts"\]\.includes\(mailbox\)/);
+  assert.match(source, /\["inbox", "all", "sent", "scheduled", "drafts", "trash"\]\.includes\(mailbox\)/);
   assert.match(source, /const hasInboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)\.length > 0/);
   assert.match(source, /!isDeleted && !isArchived && !isSnoozed && hasInboxMessage/);
   assert.doesNotMatch(source, /!hasLoadedMessages \|\| hasInboxMessage/);
@@ -2174,6 +2174,11 @@ await run("email workspace repairs list snippets after opening a thread", () => 
 
 await run("email trash permanent delete buttons use immediate confirm flow", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /const \[trashDisplayMessageIds, setTrashDisplayMessageIds\] = useState<EmailTrashDisplayMessageIds>\(\{\}\)/);
+  assert.match(source, /getEmailThreadDisplayMessage\(selectedMessages, mailbox, selectedThread \? trashDisplayMessageIds\[selectedThread\.id\] : undefined\)/);
+  assert.match(source, /getEmailThreadDisplayMessage\(messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
+  assert.match(source, /const trashDisplayAnchors =[\s\S]*action === "delete"[\s\S]*getEmailThreadDisplayMessage\(messagesByThread\[threadId\] \?\? \[\], mailbox\)/);
+  assert.match(source, /setTrashDisplayMessageIds\(\(current\) => \{[\s\S]*next\[threadId\] = messageId/);
   assert.match(source, /async function runImmediateAction<T>\(action: \(\) => Promise<T>\): Promise<T \| undefined>/);
   assert.match(source, /onDeleteThreads=\{\(threadIds\) => runImmediateAction\(\(\) => deleteEmailThreads\(threadIds\)\)\}/);
   assert.match(source, /async function permanentlyDeleteThreads\(threadIds: string\[\]\)/);
@@ -2475,10 +2480,12 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /计划发送 \{formatDate\(message\.scheduledSendAt\)\}/);
   assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
-  assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts"\]\.includes\(mailbox\)/);
+  assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts", "trash"\]\.includes\(mailbox\)/);
   assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
-  assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey\): EmailMessage \| undefined/);
-  assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(messages, mailbox\)/);
+  assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
+  assert.match(workspace, /if \(mailbox === "trash"\) \{[\s\S]*const preferredMessage = preferredMessageId \? messages\.find/);
+  assert.match(workspace, /const inboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)/);
+  assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
   assert.match(workspace, /emailMessageParticipantLabel\(displayMessage, thread, activeAccounts\)/);
   assert.match(workspace, /const selectedDisplayedMessages = selectedMailboxMessages\.length > 0 \? selectedMailboxMessages : selectedMessages/);
   assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);
