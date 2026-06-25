@@ -1408,6 +1408,53 @@ button {
   display: flex;
 }
 
+.gmail-thread-row.trash-row .gmail-row-actions {
+  display: flex;
+}
+
+.active-icon {
+  color: #f4b400;
+  fill: currentColor;
+}
+
+.toolbar-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.toolbar-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 156px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.toolbar-menu-panel button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolbar-menu-panel button:hover {
+  background: #f8fafc;
+}
+
 .gmail-detail-pane {
   padding-bottom: 18px;
 }

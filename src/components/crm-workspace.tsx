@@ -4358,8 +4358,10 @@ function EmailWorkspace({
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
+  const selectedThreadIsRead = Boolean(selectedThreadState.read);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
+  const [detailMoreOpen, setDetailMoreOpen] = useState(false);
   const [emailSettingsStep, setEmailSettingsStep] = useState<EmailSettingsStep>("identity");
   const [accountConnectionTests, setAccountConnectionTests] = useState<Record<string, { status: "testing" | "success" | "failed"; message: string; testedAt?: string }>>({});
   const [existingContactId, setExistingContactId] = useState("");
@@ -4841,7 +4843,7 @@ function EmailWorkspace({
       return;
     }
     if (action === "delete" && threadIds.some((threadId) => Boolean(threadUiState[threadId]?.deleted))) {
-      onDeleteThreads(threadIds);
+      void onDeleteThreads(threadIds);
       return;
     }
     let patchByThreadId = new Map<string, Partial<EmailThreadUiState>>();
@@ -5777,7 +5779,7 @@ function EmailWorkspace({
                     <button className="icon-button" aria-label="恢复" title="恢复" type="button" onClick={() => performMailboxAction("restore")} disabled={!selectedThreadIds.size}>
                       <RotateCcw size={16} />
                     </button>
-                    <button className="icon-button" data-testid="email-thread-bulk-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={() => onDeleteThreads(selectedThreadIdsArray)} disabled={!selectedThreadIds.size}>
+                    <button className="icon-button" data-testid="email-thread-bulk-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={(event) => { event.stopPropagation(); void onDeleteThreads(selectedThreadIdsArray); }} disabled={!selectedThreadIds.size}>
                       <Trash2 size={16} />
                     </button>
                   </>
@@ -5825,7 +5827,7 @@ function EmailWorkspace({
                   const isRead = state.read ?? false;
                   const scheduledSendAt = emailThreadNextScheduledSendAt(messages);
                   return (
-                    <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"}`} key={thread.id}>
+                    <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`} key={thread.id}>
                       <input
                         aria-label={`选择 ${thread.subject}`}
                         checked={selectedThreadIds.has(thread.id)}
@@ -5876,7 +5878,7 @@ function EmailWorkspace({
                         {state.deleted || mailbox === "trash" ? (
                           <>
                             <button className="icon-button" aria-label="恢复" type="button" onClick={() => performMailboxAction("restore", [thread.id])}><RotateCcw size={15} /></button>
-                            <button className="icon-button" data-testid={`email-thread-row-permanent-delete-${thread.id}`} aria-label="彻底删除" type="button" onClick={() => onDeleteThread(thread.id)}><Trash2 size={15} /></button>
+                            <button className="icon-button" data-testid={`email-thread-row-permanent-delete-${thread.id}`} aria-label="彻底删除" type="button" onClick={(event) => { event.stopPropagation(); void onDeleteThread(thread.id); }}><Trash2 size={15} /></button>
                           </>
                         ) : (
                           <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
@@ -5901,6 +5903,22 @@ function EmailWorkspace({
                 <button className="icon-button" aria-label="返回列表" type="button" onClick={() => setMailMode("list")}>
                   <ChevronLeft size={18} />
                 </button>
+                <button
+                  className="icon-button"
+                  aria-label="回复"
+                  title="回复"
+                  type="button"
+                  onClick={() => {
+                    const message = selectedMessages.at(-1);
+                    if (message) {
+                      onReplyToMessage(message);
+                      openComposePopup();
+                    }
+                  }}
+                  disabled={!selectedMessages.length}
+                >
+                  <Send size={16} />
+                </button>
                 {selectedThreadState.archived ? (
                   <button className="icon-button" aria-label="取消归档" title="取消归档" type="button" onClick={() => selectedThread && performMailboxAction("unarchive", [selectedThread.id])} disabled={!selectedThread}>
                     <RotateCcw size={16} />
@@ -5915,7 +5933,7 @@ function EmailWorkspace({
                     <button className="icon-button" data-testid="email-thread-restore" aria-label="恢复" title="恢复" type="button" onClick={() => selectedThread && performMailboxAction("restore", [selectedThread.id])} disabled={!selectedThread}>
                       <RotateCcw size={16} />
                     </button>
-                    <button className="icon-button" data-testid="email-thread-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={() => selectedThread && onDeleteThread(selectedThread.id)} disabled={!selectedThread}>
+                    <button className="icon-button" data-testid="email-thread-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={() => { if (selectedThread) void onDeleteThread(selectedThread.id); }} disabled={!selectedThread}>
                       <Trash2 size={16} />
                     </button>
                   </>
@@ -5927,18 +5945,43 @@ function EmailWorkspace({
                 <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => selectedThread && performMailboxAction("snooze", [selectedThread.id])} disabled={!selectedThread}>
                   <Clock3 size={16} />
                 </button>
-                <button className="icon-button" aria-label="标记未读" title="标记未读" type="button" onClick={() => selectedThread && performMailboxAction("unread", [selectedThread.id])} disabled={!selectedThread}>
-                  <Mail size={16} />
+                <button
+                  className="icon-button"
+                  aria-label={selectedThreadIsRead ? "标记未读" : "标记已读"}
+                  title={selectedThreadIsRead ? "标记未读" : "标记已读"}
+                  type="button"
+                  onClick={() => selectedThread && performMailboxAction(selectedThreadIsRead ? "unread" : "read", [selectedThread.id])}
+                  disabled={!selectedThread}
+                >
+                  {selectedThreadIsRead ? <Mail size={16} /> : <MailOpen size={16} />}
                 </button>
                 <button className="icon-button" aria-label="重要" title="重要" type="button" onClick={() => selectedThread && performMailboxAction("important", [selectedThread.id])} disabled={!selectedThread}>
-                  <Tag size={16} />
+                  <Star className={selectedThreadState.important ? "active-icon" : undefined} size={16} />
                 </button>
                 <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => { if (selectedThread) void promptAddEmailLabel([selectedThread.id]); }} disabled={!selectedThread}>
                   <Tag size={16} />
                 </button>
-                <button className="icon-button" aria-label="更多" type="button">
-                  <MoreVertical size={16} />
-                </button>
+                <div className="toolbar-menu">
+                  <button className="icon-button" aria-label="更多" title="更多" type="button" onClick={() => setDetailMoreOpen((current) => !current)} disabled={!selectedThread}>
+                    <MoreVertical size={16} />
+                  </button>
+                  {detailMoreOpen && selectedThread ? (
+                    <div className="toolbar-menu-panel">
+                      <button type="button" onClick={() => { setDetailMoreOpen(false); void onSummarizeThread(); }}>
+                        <Bot size={14} />
+                        刷新摘要
+                      </button>
+                      <button type="button" onClick={() => { setDetailMoreOpen(false); void onAnalyzeThread(); }}>
+                        <Bot size={14} />
+                        刷新分析
+                      </button>
+                      <button type="button" onClick={() => { setDetailMoreOpen(false); performMailboxAction("snooze", [selectedThread.id]); }}>
+                        <Clock3 size={14} />
+                        稍后提醒
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
               {selectedThread ? (
                 <>
@@ -5951,11 +5994,9 @@ function EmailWorkspace({
                       {getEmailThreadDisplayLabels(selectedThread, threadUiState[selectedThread.id] ?? {}, selectedMessages).map((label) => (
                         <span className="email-label-pill" key={label}>
                           {label}
-                          {(threadUiState[selectedThread.id]?.labels ?? selectedThread.labels ?? []).includes(label) ? (
-                            <button aria-label={`移除标签 ${label}`} type="button" onClick={() => removeEmailLabel(selectedThread.id, label)}>
-                              <XCircle size={12} />
-                            </button>
-                          ) : null}
+                          <button aria-label={`移除标签 ${label}`} title={`移除标签 ${label}`} type="button" onClick={() => removeEmailLabel(selectedThread.id, label)}>
+                            <XCircle size={12} />
+                          </button>
                         </span>
                       ))}
                       {selectedThread?.summaryUpdatedAt ? <span className="subtle">Summary {formatDate(selectedThread.summaryUpdatedAt)}</span> : null}

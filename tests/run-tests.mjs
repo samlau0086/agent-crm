@@ -1573,8 +1573,17 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /data-testid=\{`email-thread-row-permanent-delete-\$\{thread\.id\}`\}/);
   assert.match(source, /async function deleteEmailThreads\(threadIds: string\[\]\)/);
   assert.match(source, /确定彻底删除 \$\{targetThreads\.length\} 个邮件线程/);
+  assert.match(source, /event\.stopPropagation\(\); void onDeleteThreads\(selectedThreadIdsArray\)/);
+  assert.match(source, /event\.stopPropagation\(\); void onDeleteThread\(thread\.id\)/);
   assert.match(source, /action === "delete" && threadIds\.some\(\(threadId\) => Boolean\(threadUiState\[threadId\]\?\.deleted\)\)/);
   assert.match(source, /selectedThreadState\.deleted \|\| mailbox === "trash"/);
+  assert.match(source, /className=\{`gmail-thread-row \$\{selectedThreadId === thread\.id \? "selected" : ""\} \$\{isRead \? "" : "unread"\} \$\{mailbox === "trash" \? "trash-row" : ""\}`\}/);
+  assert.match(source, /aria-label="回复"[\s\S]*onReplyToMessage\(message\);[\s\S]*openComposePopup\(\)/);
+  assert.match(source, /aria-label=\{selectedThreadIsRead \? "标记未读" : "标记已读"\}/);
+  assert.match(source, /selectedThreadIsRead \? <Mail size=\{16\} \/> : <MailOpen size=\{16\} \/>/);
+  assert.match(source, /<Star className=\{selectedThreadState\.important \? "active-icon" : undefined\} size=\{16\} \/>/);
+  assert.match(source, /className="toolbar-menu-panel"/);
+  assert.match(source, /aria-label=\{`移除标签 \$\{label\}`\} title=\{`移除标签 \$\{label\}`\}/);
   assert.match(source, /performMailboxAction\(action: "archive" \| "unarchive" \| "delete" \| "restore"/);
   assert.doesNotMatch(source, /data-testid="email-thread-record"/);
   assert.match(source, /const contactMethodsValueKey = "__contactMethods"/);
