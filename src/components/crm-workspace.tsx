@@ -1142,6 +1142,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailWorkspaceView, setEmailWorkspaceView] = useState<EmailWorkspaceView>("mail");
   const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
   const [emailSyncSettings, setEmailSyncSettings] = useState<EmailSyncSettings>(props.emailSyncSettings ?? defaultEmailSyncSettings);
+  const [emailComposeOpenRequestKey, setEmailComposeOpenRequestKey] = useState("");
   const [emailAccountDraft, setEmailAccountDraft] = useState<EmailAccountDraft>(() => createEmptyEmailAccountDraft());
   const [emailSignatureDraft, setEmailSignatureDraft] = useState<EmailSignatureDraft>(() => createEmptyEmailSignatureDraft());
   const [emailDraft, setEmailDraft] = useState<EmailComposeDraft>({
@@ -1572,13 +1573,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       const accountId = current.accountId || props.emailAccounts[0]?.id || "";
       return accountId === current.accountId ? current : clearEmailDraftAiProvenance({ ...current, accountId });
     });
+    const preserveComposeDraft = Boolean(emailComposeOpenRequestKey && !routeEmailThreadId);
     const preferredThreadId = routeEmailThreadId || selectedEmailThreadId;
     const nextSelectedThreadId = props.emailThreads.some((thread) => thread.id === preferredThreadId) ? preferredThreadId : props.emailThreads[0]?.id ?? "";
-    if (nextSelectedThreadId !== selectedEmailThreadId) {
+    if (!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId) {
       setEmailDraft((current) => clearEmailDraftAiProvenance(current));
       setSelectedEmailThreadId(nextSelectedThreadId);
     }
-  }, [props.emailAccounts, props.emailAiSettings, props.emailSignatures, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
+  }, [emailComposeOpenRequestKey, props.emailAccounts, props.emailAiSettings, props.emailSignatures, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
 
   useEffect(() => {
     if (!routeEmailThreadId) {
@@ -2471,6 +2473,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         attachments: []
       })
     );
+    setEmailComposeOpenRequestKey(`record:${record.id}:${Date.now()}`);
     setEmailWorkspaceView("mail");
     navigateToWorkspace("email");
   }
@@ -4064,6 +4067,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             accountDraft={emailAccountDraft}
             signatureDraft={emailSignatureDraft}
             emailDraft={emailDraft}
+            composeOpenRequestKey={emailComposeOpenRequestKey}
             aiPurpose={emailAiPurpose}
             aiPrompt={emailAiPrompt}
             aiResult={emailAiResult}
@@ -4078,6 +4082,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onAccountDraftChange={setEmailAccountDraft}
             onSignatureDraftChange={setEmailSignatureDraft}
             onEmailDraftChange={setEmailDraft}
+            onComposeClosed={() => setEmailComposeOpenRequestKey("")}
             onKnowledgeDraftChange={setKnowledgeDraft}
             onUploadMediaAssets={uploadMediaAssets}
             onAiPurposeChange={setEmailAiPurpose}
@@ -4399,6 +4404,7 @@ function EmailWorkspace({
   accountDraft,
   signatureDraft,
   emailDraft,
+  composeOpenRequestKey,
   aiPurpose,
   aiPrompt,
   aiResult,
@@ -4413,6 +4419,7 @@ function EmailWorkspace({
   onAccountDraftChange,
   onSignatureDraftChange,
   onEmailDraftChange,
+  onComposeClosed,
   onKnowledgeDraftChange,
   onUploadMediaAssets,
   onAiPurposeChange,
@@ -4482,6 +4489,7 @@ function EmailWorkspace({
   accountDraft: EmailAccountDraft;
   signatureDraft: EmailSignatureDraft;
   emailDraft: EmailComposeDraft;
+  composeOpenRequestKey: string;
   aiPurpose: EmailAiGenerateResult["purpose"];
   aiPrompt: string;
   aiResult: EmailAiGenerateResult | null;
@@ -4496,6 +4504,7 @@ function EmailWorkspace({
   onAccountDraftChange: (draft: EmailAccountDraft) => void;
   onSignatureDraftChange: (draft: EmailSignatureDraft) => void;
   onEmailDraftChange: (draft: EmailComposeDraft) => void;
+  onComposeClosed: () => void;
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
   onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
   onAiPurposeChange: (purpose: EmailAiGenerateResult["purpose"]) => void;
@@ -4618,6 +4627,7 @@ function EmailWorkspace({
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [attachmentUploads, setAttachmentUploads] = useState<EmailAttachmentUploadItem[]>([]);
   const composeEditorRef = useRef<HTMLDivElement>(null);
+  const handledComposeOpenRequestRef = useRef("");
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
   const mediaLibraryUploadInputRef = useRef<HTMLInputElement>(null);
   const mediaReplaceInputRef = useRef<HTMLInputElement>(null);
@@ -4939,6 +4949,15 @@ function EmailWorkspace({
   }, [hasEmailDraftContent, view]);
 
   useEffect(() => {
+    if (!composeOpenRequestKey || handledComposeOpenRequestRef.current === composeOpenRequestKey) {
+      return;
+    }
+    handledComposeOpenRequestRef.current = composeOpenRequestKey;
+    setComposeOpen(true);
+    setComposeMinimized(false);
+  }, [composeOpenRequestKey]);
+
+  useEffect(() => {
     const editor = composeEditorRef.current;
     if (!editor || !composeOpen || composeMinimized || document.activeElement === editor) {
       return;
@@ -4979,6 +4998,7 @@ function EmailWorkspace({
   function closeComposePopup() {
     setComposeOpen(false);
     setComposeMinimized(false);
+    onComposeClosed();
   }
 
   function sendEmailFromPopup() {
@@ -6360,14 +6380,6 @@ function EmailWorkspace({
                   </button>
                   {detailMoreOpen && selectedThread ? (
                     <div className="toolbar-menu-panel">
-                      <button type="button" onClick={() => { setDetailMoreOpen(false); void onSummarizeThread(); }}>
-                        <Bot size={14} />
-                        刷新摘要
-                      </button>
-                      <button type="button" onClick={() => { setDetailMoreOpen(false); void onAnalyzeThread(); }}>
-                        <Bot size={14} />
-                        刷新分析
-                      </button>
                       <button type="button" onClick={() => { setDetailMoreOpen(false); performMailboxAction(selectedThreadIsSnoozed ? "unsnooze" : "snooze", [selectedThread.id]); }}>
                         {selectedThreadIsSnoozed ? <RotateCcw size={14} /> : <Clock3 size={14} />}
                         {selectedThreadIsSnoozed ? "取消稍后提醒" : "稍后提醒"}
@@ -6463,37 +6475,41 @@ function EmailWorkspace({
                         </div>
                       )}
                     </div>
-                    <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={onAnalyzeThread} disabled={disabled || !aiSettings.features.context_analysis}>
-                      <Bot size={16} />
-                      刷新分析
-                    </button>
-                    <button className="secondary-button" data-testid="email-thread-summarize" type="button" onClick={onSummarizeThread} disabled={disabled || !aiSettings.features.auto_summarize}>
-                      <Bot size={16} />
-                      刷新摘要
-                    </button>
                   </div>
-                  {selectedThread.summary ? (
-                    <div className="ai-box" data-testid="email-thread-summary">
+                  <div className="ai-box" data-testid="email-thread-summary">
+                    <div className="section-title-row">
                       <div className="activity-meta">Compact 摘要 {selectedThread.summaryUpdatedAt ? `(${formatDate(selectedThread.summaryUpdatedAt)})` : ""}</div>
-                      <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.summary}</div>
-                      <div className="toolbar" style={{ marginTop: 8 }}>
-                        <span className="badge">用于后续 AI 上下文</span>
-                        <span className="badge">减少长线程 token 消耗</span>
-                      </div>
+                      <button className="secondary-button" data-testid="email-thread-summarize" type="button" onClick={onSummarizeThread} disabled={disabled || !aiSettings.features.auto_summarize}>
+                        <Bot size={16} />
+                        刷新摘要
+                      </button>
                     </div>
-                  ) : null}
-                  {selectedThread.aiAnalysis ? (
-                    <details className="ai-box email-thread-analysis" data-testid="email-thread-analysis">
-                      <summary>
-                        <span>
-                          AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}
-                        </span>
-                        <strong>{getEmailAnalysisPreview(selectedThread.aiAnalysis)}</strong>
-                      </summary>
-                      <div className="email-thread-analysis-body">{formatEmailAnalysisForDisplay(selectedThread.aiAnalysis)}</div>
-                      {renderEmailAiSources(selectedThread.aiAnalysisSources)}
-                    </details>
-                  ) : null}
+                    {selectedThread.summary ? <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.summary}</div> : <div className="subtle">暂无摘要，点击刷新摘要生成 compact 上下文。</div>}
+                    <div className="toolbar" style={{ marginTop: 8 }}>
+                      <span className="badge">用于后续 AI 上下文</span>
+                      <span className="badge">减少长线程 token 消耗</span>
+                    </div>
+                  </div>
+                  <details className="ai-box email-thread-analysis" data-testid="email-thread-analysis" open={Boolean(selectedThread.aiAnalysis)}>
+                    <summary>
+                      <span>
+                        AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}
+                      </span>
+                      <strong>{selectedThread.aiAnalysis ? getEmailAnalysisPreview(selectedThread.aiAnalysis) : "暂无分析"}</strong>
+                      <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onAnalyzeThread(); }} disabled={disabled || !aiSettings.features.context_analysis}>
+                        <Bot size={16} />
+                        刷新分析
+                      </button>
+                    </summary>
+                    {selectedThread.aiAnalysis ? (
+                      <>
+                        <div className="email-thread-analysis-body">{formatEmailAnalysisForDisplay(selectedThread.aiAnalysis)}</div>
+                        {renderEmailAiSources(selectedThread.aiAnalysisSources)}
+                      </>
+                    ) : (
+                      <div className="subtle">暂无分析，点击刷新分析生成上下文建议。</div>
+                    )}
+                  </details>
                   <TalkAboutThisPanel
                     target={{ type: "email_thread", threadId: selectedThread.id, label: selectedDisplayMessage?.subject || selectedThread.subject }}
                     disabled={disabled}

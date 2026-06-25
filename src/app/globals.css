@@ -2781,6 +2781,13 @@ button {
   background: #eff6ff;
 }
 
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .talk-panel {
   background: #f8fbff;
 }
@@ -2919,7 +2926,7 @@ button {
 
 .email-thread-analysis summary {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: center;
   gap: 12px;
   cursor: pointer;

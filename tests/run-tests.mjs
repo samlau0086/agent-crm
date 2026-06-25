@@ -1528,6 +1528,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /const routeEmailThreadId = searchParams\.get\("emailThreadId"\) \?\? ""/);
   assert.match(source, /const \[selectedEmailThreadId, setSelectedEmailThreadId\] = useState\(routeEmailThreadId \|\| props\.emailThreads\[0\]\?\.id \|\| ""\)/);
   assert.match(source, /const \[emailDetailThreadId, setEmailDetailThreadId\] = useState\(routeEmailThreadId\)/);
+  assert.match(source, /const \[emailComposeOpenRequestKey, setEmailComposeOpenRequestKey\] = useState\(""\)/);
   assert.match(source, /const pendingRecordOpenRef = useRef<\{ objectKey: string; recordId: string; returnEmailThreadId: string \} \| null>\(null\)/);
   assert.match(source, /function openRecord\(record: CrmRecord, options: \{ returnEmailThreadId\?: string \} = \{\}\)/);
   assert.match(source, /new URLSearchParams\(\{ recordId: record\.id \}\)/);
@@ -1536,6 +1537,8 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /if \(routeRecordId\) \{[\s\S]*setSelectedRecordId\(routeRecordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /else if \(nextNav === "email"\) \{[\s\S]*if \(routeEmailThreadId\) \{[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*setEmailDetailThreadId\(routeEmailThreadId\)/);
   assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId/);
+  assert.match(source, /const preserveComposeDraft = Boolean\(emailComposeOpenRequestKey && !routeEmailThreadId\)/);
+  assert.match(source, /if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\)/);
   assert.match(source, /if \(!routeEmailThreadId\) \{[\s\S]*return;[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*fetchJson<EmailMessage\[\]>\(`\/api\/email\/threads\/\$\{routeEmailThreadId\}\/messages`/);
   assert.match(source, /pendingRecordOpen\?\.objectKey === route\.objectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
@@ -1596,6 +1599,12 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /data-testid="company-primary-contact-link"/);
   assert.match(source, /getRecordEmailAddressesForComposer\(selectedFields, selectedRecord, records\)/);
   assert.match(source, /getCompanyPrimaryContact\(record, records\)/);
+  assert.match(source, /setEmailComposeOpenRequestKey\(`record:\$\{record\.id\}:\$\{Date\.now\(\)\}`\)/);
+  assert.match(source, /composeOpenRequestKey=\{emailComposeOpenRequestKey\}/);
+  assert.match(source, /onComposeClosed=\{\(\) => setEmailComposeOpenRequestKey\(""\)\}/);
+  assert.match(source, /const handledComposeOpenRequestRef = useRef\(""\)/);
+  assert.match(source, /handledComposeOpenRequestRef\.current = composeOpenRequestKey/);
+  assert.match(source, /setComposeOpen\(true\);[\s\S]*setComposeMinimized\(false\);/);
   assert.match(source, /function getThreadPrimarySenderEmail/);
   assert.match(source, /function findContactByEmail/);
   assert.match(source, /function formatEmailContactLabel\(record: CrmRecord, fallbackEmail = ""\): string[\s\S]*`\$\{record\.title\}<\$\{emailAddress\}>`/);
@@ -1820,6 +1829,13 @@ await run("email workspace diagnostics display ai automation eligibility policy"
 await run("email workspace displays compact thread summary provenance", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /data-testid="email-thread-summary"/);
+  assert.match(source, /data-testid="email-thread-summary"[\s\S]*data-testid="email-thread-summarize"/);
+  assert.match(source, /aiSettings\.features\.auto_summarize/);
+  const actionStart = source.indexOf('className="email-thread-actions gmail-detail-actions"');
+  const summaryStart = source.indexOf('data-testid="email-thread-summary"');
+  const actionSection = source.slice(actionStart, summaryStart);
+  assert.doesNotMatch(actionSection, /data-testid="email-thread-summarize"/);
+  assert.doesNotMatch(actionSection, /data-testid="email-thread-analyze"/);
   assert.match(source, /selectedThread\?\.summaryUpdatedAt/);
   assert.match(source, /selectedThread\.summary/);
   assert.match(source, /用于后续 AI 上下文/);
@@ -1969,7 +1985,7 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /data-testid="email-compose-body"[\s\S]*onInput=\{updateComposeBodyFromEditor\}/);
   assert.match(source, /function updateComposeBodyFromEditor\(\)[\s\S]*clearEmailDraftAiProvenance\(\{[\s\S]*bodyHtml,[\s\S]*bodyText: stripHtmlToText\(bodyHtml\)/);
   assert.match(source, /const accountId = current\.accountId \|\| props\.emailAccounts\[0\]\?\.id \|\| "";\s*return accountId === current\.accountId \? current : clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId \}\);/);
-  assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId;\s*const nextSelectedThreadId = props\.emailThreads\.some\(\(thread\) => thread\.id === preferredThreadId\) \? preferredThreadId : props\.emailThreads\[0\]\?\.id \?\? "";\s*if \(nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
+  assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId;\s*const nextSelectedThreadId = props\.emailThreads\.some\(\(thread\) => thread\.id === preferredThreadId\) \? preferredThreadId : props\.emailThreads\[0\]\?\.id \?\? "";\s*if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
   assert.match(source, /setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId: account\.id \}\)\)/);
   assert.match(source, /function selectEmailThread\(threadId: string\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(threadId\);[\s\S]*\}/);
   assert.match(source, /clearEmailDraftAiProvenance\(\{ \.\.\.current, recordId: thread\.recordId \|\| "" \}\)/);
