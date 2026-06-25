@@ -2435,6 +2435,11 @@ button {
   background: white;
 }
 
+.quick-action-actions {
+  display: grid;
+  border-left: 1px solid var(--line);
+}
+
 .quick-action-main {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;
@@ -2494,13 +2499,17 @@ button {
   min-width: 82px;
   padding: 0 10px;
   border: 0;
-  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: transparent;
   color: var(--accent);
   font: inherit;
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.quick-action-secondary:last-child {
+  border-bottom: 0;
 }
 
 .metric-grid {

@@ -1134,7 +1134,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
-  const [contactMethodsEditing, setContactMethodsEditing] = useState(false);
+  const [contactMethodEditingId, setContactMethodEditingId] = useState("");
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -1590,7 +1590,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   useEffect(() => {
     setRecordEmailActivityFilter("");
-    setContactMethodsEditing(false);
+    setContactMethodEditingId("");
   }, [selectedRecord?.id]);
 
   useEffect(() => {
@@ -2009,7 +2009,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
     setRecords((current) => mergeRecords(current, [updatedRecord]));
     if (selectedRecord.objectKey === "contacts") {
-      setContactMethodsEditing(false);
+      setContactMethodEditingId("");
     }
     setMessage("记录已更新");
     router.refresh();
@@ -3707,10 +3707,19 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onChange={setEditValues}
                         />
                       ) : null}
-                      {selectedRecord.objectKey === "contacts" && (contactMethodsEditing || selectedRecordQuickContactMethods.length === 0) ? (
+                      {selectedRecord.objectKey === "contacts" && selectedRecordQuickContactMethods.length === 0 ? (
                         <ContactMethodsEditor
                           testIdPrefix="edit-contact-method"
                           value={editValues[contactMethodsValueKey] ?? ""}
+                          onChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
+                        />
+                      ) : null}
+                      {selectedRecord.objectKey === "contacts" && contactMethodEditingId ? (
+                        <ContactMethodSingleEditor
+                          testIdPrefix="edit-contact-method-single"
+                          value={editValues[contactMethodsValueKey] ?? ""}
+                          methodId={contactMethodEditingId}
+                          onCancel={() => setContactMethodEditingId("")}
                           onChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
                         />
                       ) : null}
@@ -3760,15 +3769,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </div>
 
                     {selectedRecordQuickContactMethods.length > 0 ? (
-                      <ContactMethodsQuickActions
-                        methods={selectedRecordQuickContactMethods}
-                        record={selectedRecord}
-                        onComposeEmail={(emailAddress) => composeEmailForRecord(selectedRecord, emailAddress)}
-                        onFilterEmail={(emailAddress) => setRecordEmailActivityFilter(emailAddress)}
-                        onStartWhatsApp={(method) => runAction(() => startWhatsAppFollowUp(selectedRecord, method))}
-                        onEdit={selectedRecord.objectKey === "contacts" ? () => setContactMethodsEditing((current) => !current) : undefined}
-                        editing={contactMethodsEditing}
-                      />
+                      <>
+                        <ContactMethodsQuickActions
+                          methods={selectedRecordQuickContactMethods}
+                          record={selectedRecord}
+                          onComposeEmail={(emailAddress) => composeEmailForRecord(selectedRecord, emailAddress)}
+                          onFilterEmail={(emailAddress) => setRecordEmailActivityFilter(emailAddress)}
+                          onStartWhatsApp={(method) => runAction(() => startWhatsAppFollowUp(selectedRecord, method))}
+                          onEditMethod={(methodId) => setContactMethodEditingId((current) => (current === methodId ? "" : methodId))}
+                          editingMethodId={contactMethodEditingId}
+                        />
+                      {selectedRecord.objectKey === "contacts" ? (
+                        <div className="toolbar" style={{ marginTop: 8 }}>
+                          <button className="secondary-button" type="button" onClick={() => setContactMethodEditingId(`method-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)}>
+                            <UserPlus size={16} />
+                            新增联系方式
+                          </button>
+                        </div>
+                      ) : null}
+                      </>
                     ) : null}
 
                     {selectedRecord.objectKey === "companies" && (
@@ -10616,16 +10635,10 @@ type QuickActionItem = {
   external?: boolean;
   badge?: string;
   onClick?: () => void;
-  secondaryAction?: {
+  secondaryActions?: Array<{
     label: string;
     onClick: () => void;
-  };
-};
-
-type QuickActionHeaderAction = {
-  label: string;
-  onClick: () => void;
-  icon?: LucideIcon;
+  }>;
 };
 
 function QuickActionList({
@@ -10633,15 +10646,13 @@ function QuickActionList({
   description,
   items,
   emptyMessage,
-  testId,
-  headerAction
+  testId
 }: {
   title: string;
   description?: string;
   items: QuickActionItem[];
   emptyMessage?: string;
   testId?: string;
-  headerAction?: QuickActionHeaderAction;
 }) {
   return (
     <section className="quick-action-panel wide" data-testid={testId}>
@@ -10650,12 +10661,6 @@ function QuickActionList({
           <strong>{title}</strong>
           {description ? <div className="subtle">{description}</div> : null}
         </div>
-        {headerAction ? (
-          <button className="secondary-button" type="button" onClick={headerAction.onClick}>
-            {headerAction.icon ? <headerAction.icon size={16} /> : null}
-            {headerAction.label}
-          </button>
-        ) : null}
       </div>
       {items.length ? (
         <div className="quick-action-grid">
@@ -10683,10 +10688,14 @@ function QuickActionList({
                     {content}
                   </button>
                 )}
-                {item.secondaryAction ? (
-                  <button className="quick-action-secondary" type="button" onClick={item.secondaryAction.onClick}>
-                    {item.secondaryAction.label}
-                  </button>
+                {item.secondaryActions?.length ? (
+                  <div className="quick-action-actions">
+                    {item.secondaryActions.map((action) => (
+                      <button className="quick-action-secondary" key={action.label} type="button" onClick={action.onClick}>
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
                 ) : null}
               </div>
             );
@@ -10705,16 +10714,16 @@ function ContactMethodsQuickActions({
   onComposeEmail,
   onFilterEmail,
   onStartWhatsApp,
-  onEdit,
-  editing
+  onEditMethod,
+  editingMethodId
 }: {
   methods: ContactMethodDraft[];
   record: CrmRecord;
   onComposeEmail: (emailAddress: string) => void;
   onFilterEmail?: (emailAddress: string) => void;
   onStartWhatsApp?: (method: ContactMethodDraft) => void;
-  onEdit?: () => void;
-  editing?: boolean;
+  onEditMethod?: (methodId: string) => void;
+  editingMethodId?: string;
 }) {
   const items = normalizePrimaryContactMethods(methods)
     .filter((method) => method.value.trim())
@@ -10722,6 +10731,12 @@ function ContactMethodsQuickActions({
       const label = method.label?.trim() || contactMethodTypeLabels[method.type];
       const value = method.value.trim();
       const badge = method.primary ? "主联系方式" : undefined;
+      const editAction = onEditMethod
+        ? {
+            label: editingMethodId === method.id ? "收起" : "编辑",
+            onClick: () => onEditMethod(method.id)
+          }
+        : undefined;
       if (method.type === "email") {
         return {
           id: method.id,
@@ -10730,12 +10745,15 @@ function ContactMethodsQuickActions({
           icon: Mail,
           badge,
           onClick: () => onComposeEmail(value),
-          secondaryAction: onFilterEmail
-            ? {
-                label: "筛选邮件",
-                onClick: () => onFilterEmail(value)
-              }
-            : undefined
+          secondaryActions: [
+            onFilterEmail
+              ? {
+                  label: "筛选邮件",
+                  onClick: () => onFilterEmail(value)
+                }
+              : undefined,
+            editAction
+          ].filter((action): action is NonNullable<typeof editAction> => Boolean(action))
         };
       }
       if (method.type === "mob" || method.type === "tel") {
@@ -10745,7 +10763,8 @@ function ContactMethodsQuickActions({
           value,
           icon: Phone,
           href: `tel:${normalizePhoneHref(value)}`,
-          badge
+          badge,
+          secondaryActions: editAction ? [editAction] : undefined
         };
       }
       if (method.type === "whatsapp") {
@@ -10758,7 +10777,8 @@ function ContactMethodsQuickActions({
           onClick: onStartWhatsApp ? () => onStartWhatsApp(method) : undefined,
           href: onStartWhatsApp ? undefined : whatsappUrl,
           external: Boolean(whatsappUrl),
-          badge
+          badge,
+          secondaryActions: editAction ? [editAction] : undefined
         };
       }
       return {
@@ -10768,7 +10788,8 @@ function ContactMethodsQuickActions({
         icon: Link,
         href: buildContactMethodUrl(method.type, value),
         external: Boolean(buildContactMethodUrl(method.type, value)),
-        badge
+        badge,
+        secondaryActions: editAction ? [editAction] : undefined
       };
     });
 
@@ -10779,7 +10800,6 @@ function ContactMethodsQuickActions({
       items={items}
       emptyMessage="还没有可用联系方式"
       testId={`record-contact-quick-actions-${record.id}`}
-      headerAction={onEdit ? { label: editing ? "收起编辑" : "编辑联系方式", onClick: onEdit, icon: Pencil } : undefined}
     />
   );
 }
@@ -10879,6 +10899,109 @@ function ContactMethodsEditor({
             </div>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function ContactMethodSingleEditor({
+  testIdPrefix,
+  value,
+  methodId,
+  onChange,
+  onCancel
+}: {
+  testIdPrefix: string;
+  value: string;
+  methodId: string;
+  onChange: (methods: ContactMethodDraft[]) => void;
+  onCancel: () => void;
+}) {
+  const methods = normalizeContactMethods(parseJsonValue(value));
+  const existingMethod = methods.find((candidate) => candidate.id === methodId);
+  const method = existingMethod ?? {
+    id: methodId,
+    type: "email" as ContactMethodType,
+    value: "",
+    label: contactMethodTypeLabels.email,
+    primary: methods.length === 0
+  };
+
+  function updateMethod(patch: Partial<ContactMethodDraft>) {
+    const hasExistingMethod = methods.some((candidate) => candidate.id === methodId);
+    const sourceMethods = hasExistingMethod ? methods : [...methods, method];
+    const next = sourceMethods.map((candidate) => {
+      if (patch.primary === true) {
+        return { ...candidate, ...(candidate.id === methodId ? patch : {}), primary: candidate.id === methodId };
+      }
+      return candidate.id === methodId ? { ...candidate, ...patch } : candidate;
+    });
+    onChange(normalizePrimaryContactMethods(next));
+  }
+
+  function removeMethod() {
+    onChange(normalizePrimaryContactMethods(methods.filter((candidate) => candidate.id !== methodId)));
+    onCancel();
+  }
+
+  return (
+    <section className="wide settings-card" data-testid={`${testIdPrefix}-editor-${methodId}`}>
+      <div className="stage-header">
+        <div>
+          <strong>编辑联系方式</strong>
+          <div className="subtle">仅编辑当前这一条联系方式。</div>
+        </div>
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          收起
+        </button>
+      </div>
+      <div className="form-grid" style={{ marginTop: 10 }}>
+        <label>
+          <span className="subtle">类型</span>
+          <select
+            className="select"
+            data-testid={`${testIdPrefix}-type`}
+            value={method.type}
+            onChange={(event) => updateMethod({ type: event.target.value as ContactMethodType })}
+          >
+            {Object.entries(contactMethodTypeLabels).map(([type, label]) => (
+              <option key={type} value={type}>{label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="subtle">值</span>
+          <input
+            className="input"
+            data-testid={`${testIdPrefix}-value`}
+            value={method.value}
+            onChange={(event) => updateMethod({ value: event.target.value })}
+            placeholder={method.type === "email" ? "name@example.com" : "联系方式"}
+          />
+        </label>
+        <label>
+          <span className="subtle">标签</span>
+          <input
+            className="input"
+            value={method.label ?? ""}
+            onChange={(event) => updateMethod({ label: event.target.value })}
+            placeholder="工作 / 私人 / 采购"
+          />
+        </label>
+        <label className="checkbox-row" style={{ alignSelf: "end" }}>
+          <input
+            checked={Boolean(method.primary)}
+            type="checkbox"
+            onChange={(event) => updateMethod({ primary: event.target.checked })}
+          />
+          主联系方式
+        </label>
+      </div>
+      <div className="toolbar" style={{ marginTop: 10 }}>
+        <button className="danger-button" type="button" onClick={removeMethod}>
+          <Trash2 size={16} />
+          删除这一条
+        </button>
       </div>
     </section>
   );
