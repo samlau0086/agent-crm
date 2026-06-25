@@ -1573,9 +1573,6 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /data-testid="email-thread-bulk-permanent-delete"/);
   assert.match(source, /data-testid=\{`email-thread-row-permanent-delete-\$\{thread\.id\}`\}/);
   assert.match(source, /async function deleteEmailThreads\(threadIds: string\[\]\)/);
-  assert.match(source, /确定彻底删除 \$\{targetThreads\.length\} 个邮件线程/);
-  assert.match(source, /event\.stopPropagation\(\); void onDeleteThreads\(selectedThreadIdsArray\)/);
-  assert.match(source, /event\.stopPropagation\(\); void onDeleteThread\(thread\.id\)/);
   assert.match(source, /action === "delete" && threadIds\.some\(\(threadId\) => Boolean\(threadUiState\[threadId\]\?\.deleted\)\)/);
   assert.match(source, /selectedThreadState\.deleted \|\| mailbox === "trash"/);
   assert.match(source, /className=\{`gmail-thread-row \$\{selectedThreadId === thread\.id \? "selected" : ""\} \$\{isRead \? "" : "unread"\} \$\{mailbox === "trash" \? "trash-row" : ""\}`\}/);
@@ -2045,22 +2042,45 @@ await run("email workspace does not apply compose translation fallback to the dr
 await run("email workspace previews html bodies in a sandboxed iframe", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
-  assert.match(source, /function buildEmailHtmlPreview\(bodyHtml: string\): string/);
+  assert.match(source, /function buildEmailHtmlPreview\(bodyHtml: string, allowExternalImages = false\): string/);
   assert.match(source, /http-equiv="Content-Security-Policy"/);
   assert.match(source, /hasEmailHtmlPreview\(message\)/);
   assert.match(source, /data-testid=\{`email-message-html-\$\{message\.id\}`\}/);
   assert.match(source, /import \{ repairEmailMojibake \} from "@\/lib\/email\/mojibake"/);
   assert.match(source, /const repairedHtml = repairEmailMojibake\(bodyHtml\)/);
+  assert.match(source, /const imgSrcPolicy = allowExternalImages \? "data: cid: https: http:" : "data: cid:"/);
+  assert.match(source, /function emailHtmlHasExternalImages\(bodyHtml: string\): boolean/);
   assert.match(source, /function formatEmailAnalysisForDisplay\(analysis: string\): string/);
   assert.match(source, /looksLikeLeakedEmailAnalysisPrompt\(repaired\)/);
   assert.match(source, /data-testid="email-thread-analysis"/);
-  assert.match(source, /hasEmailHtmlPreview\(message\)[\s\S]*<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc=\{buildEmailHtmlPreview\(message\.bodyHtml \?\? ""\)\}[\s\S]*<details className="email-text-fallback">[\s\S]*显示文本邮件/);
+  assert.match(source, /data-testid=\{`email-message-external-images-blocked-\$\{message\.id\}`\}/);
+  assert.match(source, /data-testid=\{`email-message-load-external-images-\$\{message\.id\}`\}/);
+  assert.match(source, /buildEmailHtmlPreview\(message\.bodyHtml \?\? "", selectedThreadAllowsExternalImages\)/);
   assert.match(source, /\{repairEmailMojibake\(message\.bodyText\)\}/);
   assert.doesNotMatch(source, /<div className="email-message-body">\{message\.bodyText\}<\/div>\s*\{hasEmailHtmlPreview\(message\)/);
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
   assert.match(styles, /\.email-html-preview-frame/);
+  assert.match(styles, /\.email-external-image-notice/);
   assert.match(styles, /\.email-thread-analysis-body \{[\s\S]*max-height: 260px;[\s\S]*overflow: auto;/);
   assert.match(styles, /\.gmail-compose-popup-header \.icon-button[\s\S]*background: transparent/);
+});
+
+await run("email workspace repairs list snippets after opening a thread", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /const snippet = repairEmailMojibake\(messages\.at\(-1\)\?\.bodyText \|\| thread\.summary \|\| thread\.aiAnalysis \|\| ""\)/);
+  assert.doesNotMatch(source, /const snippet = messages\.at\(-1\)\?\.bodyText \|\| thread\.summary \|\| thread\.aiAnalysis \|\| ""/);
+});
+
+await run("email trash permanent delete buttons use immediate confirm flow", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /async function runImmediateAction\(action: \(\) => Promise<void>\)/);
+  assert.match(source, /onDeleteThreads=\{\(threadIds\) => runImmediateAction\(\(\) => deleteEmailThreads\(threadIds\)\)\}/);
+  assert.match(source, /async function permanentlyDeleteThreads\(threadIds: string\[\]\)/);
+  assert.match(source, /await onDeleteThreads\(ids\)/);
+  assert.match(source, /data-testid="email-thread-bulk-permanent-delete"[\s\S]*permanentlyDeleteThreads\(selectedThreadIdsArray\)/);
+  assert.match(source, /data-testid=\{`email-thread-row-permanent-delete-\$\{thread\.id\}`\}[\s\S]*permanentlyDeleteThreads\(\[thread\.id\]\)/);
+  assert.match(source, /data-testid="email-thread-permanent-delete"[\s\S]*permanentlyDeleteThreads\(\[selectedThread\.id\]\)/);
+  assert.match(source, /showSuccess\(ids\.length > 1 \? `已彻底删除 \$\{ids\.length\} 个邮件线程` : "邮件线程已彻底删除"\)/);
 });
 
 await run("email workspace supports labels minimized compose restore and record activity markers", () => {

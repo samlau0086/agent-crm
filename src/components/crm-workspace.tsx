@@ -434,13 +434,14 @@ function upsertEmailMessage(messages: EmailMessage[], message: EmailMessage): Em
   return messages.map((candidate) => (candidate.id === message.id ? message : candidate));
 }
 
-function buildEmailHtmlPreview(bodyHtml: string): string {
+function buildEmailHtmlPreview(bodyHtml: string, allowExternalImages = false): string {
   const repairedHtml = repairEmailMojibake(bodyHtml);
+  const imgSrcPolicy = allowExternalImages ? "data: cid: https: http:" : "data: cid:";
   return [
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
     '<base target="_blank">',
-    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: cid:; style-src \'unsafe-inline\'; font-src data:;">',
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${imgSrcPolicy}; style-src 'unsafe-inline'; font-src data:;">`,
     "<style>html,body{margin:0;padding:12px;background:#fff;color:#111827;font:14px/1.5 Arial,sans-serif;overflow-wrap:anywhere;}table{max-width:100%;}img{max-width:100%;height:auto;}</style>",
     "</head><body>",
     repairedHtml,
@@ -450,6 +451,10 @@ function buildEmailHtmlPreview(bodyHtml: string): string {
 
 function hasEmailHtmlPreview(message: EmailMessage): boolean {
   return Boolean(message.bodyHtml?.trim());
+}
+
+function emailHtmlHasExternalImages(bodyHtml: string): boolean {
+  return /\s(?:src|srcset)\s*=\s*["']\s*https?:\/\//i.test(bodyHtml);
 }
 
 function escapeHtml(value: string): string {
@@ -2484,10 +2489,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return thread;
   }
 
-  async function deleteEmailThread(threadId: string) {
-    await deleteEmailThreads([threadId]);
-  }
-
   async function deleteEmailThreads(threadIds: string[]) {
     const ids = Array.from(new Set(threadIds)).filter(Boolean);
     if (!ids.length) {
@@ -2517,7 +2518,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (ids.includes(selectedEmailThreadId)) {
       selectEmailThread(emailThreads.find((candidate) => !ids.includes(candidate.id))?.id ?? "");
     }
-    setMessage(ids.length > 1 ? `已彻底删除 ${ids.length} 个邮件线程` : "邮件线程已彻底删除");
+    showSuccess(ids.length > 1 ? `已彻底删除 ${ids.length} 个邮件线程` : "邮件线程已彻底删除");
     router.refresh();
   }
 
@@ -2972,6 +2973,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         showError(actionError instanceof Error ? actionError.message : "操作失败");
       }
     });
+  }
+
+  async function runImmediateAction(action: () => Promise<void>) {
+    setMessage(null);
+    setError(null);
+    try {
+      await action();
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "操作失败");
+    }
   }
 
   function toggleAppSidebar() {
@@ -3912,8 +3923,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             }}
             onUpdateThread={(threadId, recordId) => runAction(() => updateEmailThread(threadId, recordId))}
             onUpdateThreadState={(threadId, patch) => updateEmailThreadState(threadId, patch)}
-            onDeleteThread={(threadId) => runAction(() => deleteEmailThread(threadId))}
-            onDeleteThreads={(threadIds) => runAction(() => deleteEmailThreads(threadIds))}
+            onDeleteThreads={(threadIds) => runImmediateAction(() => deleteEmailThreads(threadIds))}
             onCreateContactFromEmail={(threadId, emailAddress) => runAction(() => createContactFromEmail(threadId, emailAddress))}
             onLinkExistingContactFromEmail={(threadId, contactId, emailAddress) => runAction(() => linkExistingContactFromEmail(threadId, contactId, emailAddress))}
             onUnlinkContactEmailFromThread={(threadId, contactId, emailAddress) => runAction(() => unlinkContactEmailFromThread(threadId, contactId, emailAddress))}
@@ -4234,7 +4244,6 @@ function EmailWorkspace({
   onSelectThread,
   onUpdateThread,
   onUpdateThreadState,
-  onDeleteThread,
   onDeleteThreads,
   onCreateContactFromEmail,
   onLinkExistingContactFromEmail,
@@ -4309,8 +4318,7 @@ function EmailWorkspace({
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
-  onDeleteThread: (threadId: string) => void;
-  onDeleteThreads: (threadIds: string[]) => void;
+  onDeleteThreads: (threadIds: string[]) => Promise<void>;
   onCreateContactFromEmail: (threadId: string, emailAddress: string) => void;
   onLinkExistingContactFromEmail: (threadId: string, contactId: string, emailAddress: string) => void;
   onUnlinkContactEmailFromThread: (threadId: string, contactId: string, emailAddress: string) => void;
@@ -4393,8 +4401,10 @@ function EmailWorkspace({
   const [labelFilter, setLabelFilter] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
+  const [externalImageThreadIds, setExternalImageThreadIds] = useState<Set<string>>(() => new Set());
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const selectedThreadIsRead = Boolean(selectedThreadState.read);
+  const selectedThreadAllowsExternalImages = selectedThread ? externalImageThreadIds.has(selectedThread.id) : false;
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
   const [detailMoreOpen, setDetailMoreOpen] = useState(false);
@@ -4879,7 +4889,7 @@ function EmailWorkspace({
       return;
     }
     if (action === "delete" && threadIds.some((threadId) => Boolean(threadUiState[threadId]?.deleted))) {
-      void onDeleteThreads(threadIds);
+      void permanentlyDeleteThreads(threadIds);
       return;
     }
     let patchByThreadId = new Map<string, Partial<EmailThreadUiState>>();
@@ -4907,6 +4917,22 @@ function EmailWorkspace({
     }
     setSelectedThreadIds(new Set());
     if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "restore" || action === "unarchive" || action === "snooze")) {
+      setMailMode("list");
+    }
+  }
+
+  async function permanentlyDeleteThreads(threadIds: string[]) {
+    const ids = Array.from(new Set(threadIds)).filter(Boolean);
+    if (!ids.length) {
+      return;
+    }
+    await onDeleteThreads(ids);
+    setSelectedThreadIds((current) => {
+      const next = new Set(current);
+      ids.forEach((threadId) => next.delete(threadId));
+      return next;
+    });
+    if (ids.includes(selectedThreadId)) {
       setMailMode("list");
     }
   }
@@ -5815,7 +5841,7 @@ function EmailWorkspace({
                     <button className="icon-button" aria-label="恢复" title="恢复" type="button" onClick={() => performMailboxAction("restore")} disabled={!selectedThreadIds.size}>
                       <RotateCcw size={16} />
                     </button>
-                    <button className="icon-button" data-testid="email-thread-bulk-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={(event) => { event.stopPropagation(); void onDeleteThreads(selectedThreadIdsArray); }} disabled={!selectedThreadIds.size}>
+                    <button className="icon-button" data-testid="email-thread-bulk-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); void permanentlyDeleteThreads(selectedThreadIdsArray); }} disabled={!selectedThreadIds.size}>
                       <Trash2 size={16} />
                     </button>
                   </>
@@ -5859,7 +5885,7 @@ function EmailWorkspace({
                   const messages = messagesByThread[thread.id] ?? [];
                   const state = threadUiState[thread.id] ?? {};
                   const labels = getEmailThreadDisplayLabels(thread, state, messages);
-                  const snippet = messages.at(-1)?.bodyText || thread.summary || thread.aiAnalysis || "";
+                  const snippet = repairEmailMojibake(messages.at(-1)?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
                   const scheduledSendAt = emailThreadNextScheduledSendAt(messages);
                   return (
@@ -5914,7 +5940,7 @@ function EmailWorkspace({
                         {state.deleted || mailbox === "trash" ? (
                           <>
                             <button className="icon-button" aria-label="恢复" type="button" onClick={() => performMailboxAction("restore", [thread.id])}><RotateCcw size={15} /></button>
-                            <button className="icon-button" data-testid={`email-thread-row-permanent-delete-${thread.id}`} aria-label="彻底删除" type="button" onClick={(event) => { event.stopPropagation(); void onDeleteThread(thread.id); }}><Trash2 size={15} /></button>
+                            <button className="icon-button" data-testid={`email-thread-row-permanent-delete-${thread.id}`} aria-label="彻底删除" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); void permanentlyDeleteThreads([thread.id]); }}><Trash2 size={15} /></button>
                           </>
                         ) : (
                           <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
@@ -5969,7 +5995,7 @@ function EmailWorkspace({
                     <button className="icon-button" data-testid="email-thread-restore" aria-label="恢复" title="恢复" type="button" onClick={() => selectedThread && performMailboxAction("restore", [selectedThread.id])} disabled={!selectedThread}>
                       <RotateCcw size={16} />
                     </button>
-                    <button className="icon-button" data-testid="email-thread-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={() => { if (selectedThread) void onDeleteThread(selectedThread.id); }} disabled={!selectedThread}>
+                    <button className="icon-button" data-testid="email-thread-permanent-delete" aria-label="彻底删除" title="彻底删除" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (selectedThread) void permanentlyDeleteThreads([selectedThread.id]); }} disabled={!selectedThread}>
                       <Trash2 size={16} />
                     </button>
                   </>
@@ -6142,7 +6168,9 @@ function EmailWorkspace({
                     onShowToast={onShowToast}
                   />
                   <div className="email-message-list">
-                    {selectedMessages.map((message) => (
+                    {selectedMessages.map((message) => {
+                      const messageHasExternalImages = emailHtmlHasExternalImages(message.bodyHtml ?? "");
+                      return (
                       <article className="email-message-card gmail-message-card" key={message.id}>
                         <div className="email-message-header">
                           <div>
@@ -6196,7 +6224,28 @@ function EmailWorkspace({
                         ) : null}
                         {hasEmailHtmlPreview(message) ? (
                           <div className="email-html-preview">
-                            <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "")} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
+                            {messageHasExternalImages && !selectedThreadAllowsExternalImages ? (
+                              <div className="email-external-image-notice" data-testid={`email-message-external-images-blocked-${message.id}`}>
+                                <span>已阻止外部图片，避免泄露打开行为。</span>
+                                <button
+                                  className="secondary-button"
+                                  data-testid={`email-message-load-external-images-${message.id}`}
+                                  type="button"
+                                  onClick={() =>
+                                    selectedThread &&
+                                    setExternalImageThreadIds((current) => {
+                                      const next = new Set(current);
+                                      next.add(selectedThread.id);
+                                      return next;
+                                    })
+                                  }
+                                >
+                                  <ImageIcon size={14} />
+                                  加载外部图片
+                                </button>
+                              </div>
+                            ) : null}
+                            <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "", selectedThreadAllowsExternalImages)} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
                             <details className="email-text-fallback">
                               <summary>显示文本邮件</summary>
                               <div className="email-message-body">{repairEmailMojibake(message.bodyText)}</div>
@@ -6252,7 +6301,8 @@ function EmailWorkspace({
                           </button>
                         </div>
                       </article>
-                    ))}
+                      );
+                    })}
                     {selectedMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
                   </div>
                 </>

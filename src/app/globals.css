@@ -2282,6 +2282,21 @@ button {
   width: 100%;
 }
 
+.email-external-image-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .email-text-fallback {
   margin-top: 10px;
 }
