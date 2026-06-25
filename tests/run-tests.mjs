@@ -1620,11 +1620,17 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /data-testid="company-primary-contact-link"/);
   assert.match(source, /getRecordEmailAddressesForComposer\(selectedFields, selectedRecord, records\)/);
   assert.match(source, /getCompanyPrimaryContact\(record, records\)/);
+  assert.match(source, /const routeEmailCompose = searchParams\.get\("compose"\) === "1"/);
+  assert.match(source, /const handledRouteEmailComposeRef = useRef\(""\)/);
   assert.match(source, /const requestKey = `record:\$\{record\.id\}:\$\{Date\.now\(\)\}`/);
+  assert.match(source, /composeParams = new URLSearchParams\(\{[\s\S]*compose: "1"[\s\S]*composeRecordId: record\.id[\s\S]*to: emailAddress/);
+  assert.match(source, /router\.push\(`\$\{crmPathForNav\("email"\)\}\?\$\{composeParams\.toString\(\)\}`\)/);
   assert.match(source, /setEmailComposeOpenRequestKey\(""\)/);
   assert.match(source, /window\.setTimeout\(\(\) => setEmailComposeOpenRequestKey\(requestKey\), 0\)/);
+  assert.match(source, /function closeEmailComposeRequest\(\)/);
+  assert.match(source, /params\.delete\("compose"\)/);
   assert.match(source, /composeOpenRequestKey=\{emailComposeOpenRequestKey\}/);
-  assert.match(source, /onComposeClosed=\{\(\) => setEmailComposeOpenRequestKey\(""\)\}/);
+  assert.match(source, /onComposeClosed=\{closeEmailComposeRequest\}/);
   assert.match(source, /const handledComposeOpenRequestRef = useRef\(""\)/);
   assert.match(styles, /\.quick-action-panel \{/);
   assert.match(styles, /\.quick-action-grid \{/);

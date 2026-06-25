@@ -1110,6 +1110,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeRecordId = searchParams.get("recordId") ?? "";
   const routeReturnEmailThreadId = searchParams.get("returnEmailThreadId") ?? "";
   const routeEmailThreadId = searchParams.get("emailThreadId") ?? "";
+  const routeEmailCompose = searchParams.get("compose") === "1";
+  const routeEmailComposeTo = searchParams.get("to") ?? "";
+  const routeEmailComposeRecordId = searchParams.get("composeRecordId") ?? "";
+  const routeEmailComposeKey = searchParams.get("composeKey") ?? "";
   const routeMode = searchParams.get("mode") ?? "";
   const routeCompanyId = searchParams.get("companyId") ?? "";
   const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
@@ -1206,6 +1210,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const previousEditFormResetKey = useRef("");
   const pendingRecordOpenRef = useRef<{ objectKey: string; recordId: string; returnEmailThreadId: string } | null>(null);
   const pendingRecordCreateRef = useRef<{ objectKey: string; values: Record<string, string> } | null>(null);
+  const handledRouteEmailComposeRef = useRef("");
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const promptResolverRef = useRef<((value: string | null) => void) | null>(null);
 
@@ -1638,6 +1643,37 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       };
     }
   }, [emailMessagesByThread, routeEmailThreadId, selectedEmailThreadId]);
+
+  useEffect(() => {
+    if (activeNav !== "email" || !routeEmailCompose) {
+      return;
+    }
+    const composeRouteKey = `${routeEmailComposeKey || "route"}:${routeEmailComposeRecordId}:${routeEmailComposeTo}`;
+    if (handledRouteEmailComposeRef.current === composeRouteKey) {
+      return;
+    }
+    handledRouteEmailComposeRef.current = composeRouteKey;
+    setSelectedEmailThreadId("");
+    setEmailDetailThreadId("");
+    setEmailWorkspaceView("mail");
+    setEmailAiResult(null);
+    setEmailDraft((current) =>
+      clearEmailDraftAiProvenance({
+        ...current,
+        accountId: current.accountId || props.emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
+        recordId: routeEmailComposeRecordId || current.recordId,
+        to: routeEmailComposeTo || current.to,
+        cc: "",
+        bcc: "",
+        subject: "",
+        threadId: undefined,
+        bodyText: "",
+        bodyHtml: "",
+        attachments: []
+      })
+    );
+    setEmailComposeOpenRequestKey(composeRouteKey);
+  }, [activeNav, props.emailAccounts, routeEmailCompose, routeEmailComposeKey, routeEmailComposeRecordId, routeEmailComposeTo]);
 
   useEffect(() => {
     setSelectedImportPresetId((current) => (activeImportPresets.some((preset) => preset.id === current) ? current : ""));
@@ -2502,6 +2538,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   function composeEmailForRecord(record: CrmRecord, emailAddress: string) {
     const requestKey = `record:${record.id}:${Date.now()}`;
+    const composeParams = new URLSearchParams({
+      compose: "1",
+      composeRecordId: record.id,
+      to: emailAddress,
+      composeKey: requestKey
+    });
     setRecords((current) => mergeRecords(current, [record]));
     setSelectedRecordId(record.id);
     setSelectedEmailThreadId("");
@@ -2524,8 +2566,23 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       })
     );
     setEmailWorkspaceView("mail");
-    navigateToWorkspace("email");
+    setActiveNav("email");
+    router.push(`${crmPathForNav("email")}?${composeParams.toString()}`);
     window.setTimeout(() => setEmailComposeOpenRequestKey(requestKey), 0);
+  }
+
+  function closeEmailComposeRequest() {
+    setEmailComposeOpenRequestKey("");
+    if (!routeEmailCompose) {
+      return;
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("compose");
+    params.delete("composeRecordId");
+    params.delete("to");
+    params.delete("composeKey");
+    const nextQuery = params.toString();
+    router.replace(nextQuery ? `${crmPathForNav("email")}?${nextQuery}` : crmPathForNav("email"));
   }
 
   async function startWhatsAppFollowUp(record: CrmRecord, method: ContactMethodDraft) {
@@ -4189,7 +4246,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onAccountDraftChange={setEmailAccountDraft}
             onSignatureDraftChange={setEmailSignatureDraft}
             onEmailDraftChange={setEmailDraft}
-            onComposeClosed={() => setEmailComposeOpenRequestKey("")}
+            onComposeClosed={closeEmailComposeRequest}
             onKnowledgeDraftChange={setKnowledgeDraft}
             onUploadMediaAssets={uploadMediaAssets}
             onAiPurposeChange={setEmailAiPurpose}
