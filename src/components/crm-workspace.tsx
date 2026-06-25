@@ -770,6 +770,14 @@ function getEmailThreadDisplayLabels(thread: EmailThread, state: EmailThreadUiSt
   return Array.from(new Set([...(state.labels ?? thread.labels ?? []), ...buildEmailThreadLabels(thread, messages)]));
 }
 
+function getEmailThreadUserLabels(thread: EmailThread, state: EmailThreadUiState = {}): string[] {
+  return Array.from(new Set((state.labels ?? thread.labels ?? []).map((label) => label.trim()).filter(Boolean)));
+}
+
+function canSelectEmailAccountForSending(account: EmailAccount): boolean {
+  return account.status !== "disabled" && account.sendEnabled && account.connectionConfigured && getEmailProviderCapability(account.provider).supportsSend;
+}
+
 function getEmailCategoryLabel(categoryKey: EmailCategoryKey): string {
   return emailCategoryMeta.find((item) => item.key === categoryKey)?.label ?? categoryKey;
 }
@@ -2344,7 +2352,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailDraft((current) =>
       clearEmailDraftAiProvenance({
         ...current,
-        accountId: current.accountId || emailAccounts.find((account) => account.status === "active" && account.sendEnabled && account.connectionConfigured)?.id || "",
+        accountId: current.accountId || emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
         recordId: record.id,
         to: emailAddress,
         cc: "",
@@ -2534,7 +2542,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: {
         accountId: emailDraft.accountId,
         threadId: selectedEmailThreadId || undefined,
-        recordId: emailDraft.recordId || selectedRecord?.id,
+        recordId: emailDraft.recordId || undefined,
         to: splitEmailList(emailDraft.to),
         cc: splitEmailList(emailDraft.cc),
         bcc: splitEmailList(emailDraft.bcc),
@@ -2545,6 +2553,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         scheduledSendAt: emailDraft.scheduledSendAt || undefined,
         trackingEnabled: emailDraft.trackingEnabled || undefined,
         groupSendMode: emailDraft.groupSendMode || undefined,
+        skipAutoLink: !emailDraft.recordId,
         attachments: preparedDraft.attachments?.length ? preparedDraft.attachments : undefined,
         aiAssisted: emailDraft.aiAssisted || undefined,
         aiPurpose: emailDraft.aiAssisted ? emailDraft.aiPurpose : undefined,
@@ -3673,7 +3682,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         testIdPrefix="record-task"
                         users={props.users}
                         onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
-                        onDelete={(activity) => runAction(() => deleteTask(activity))}
+                        onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
                         onEdit={(activity) => {
                           navigateToWorkspace("tasks");
                           showToast({ intent: "info", message: `请在任务工作台中编辑“${activity.title}”。` });
@@ -3962,7 +3971,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
             onKnowledgeArticleCreated={(article) => setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)])}
             onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
-            onDeleteMediaAsset={(asset) => runAction(() => deleteMediaAsset(asset))}
+            onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
             onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
             onUpdateSyncSettings={(patch) => runAction(() => updateEmailSyncSettingsPatch(patch))}
@@ -3980,7 +3989,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             users={props.users}
             onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
             onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
-            onDelete={(activity) => runAction(() => deleteTask(activity))}
+            onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
             onCreateTask={(input) => runAction(() => createTaskFromCalendar(input))}
             onUpdateTask={(activity, draft) => runAction(() => updateTask(activity, draft))}
             onUploadMediaAssets={uploadMediaAssets}
@@ -4371,8 +4380,8 @@ function EmailWorkspace({
 }) {
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedMessages = selectedThread ? messagesByThread[selectedThread.id] ?? [] : [];
-  const activeAccounts = accounts.filter((account) => account.status === "active" && account.sendEnabled && account.connectionConfigured && getEmailProviderCapability(account.provider).supportsSend);
-  const linkedRecordId = emailDraft.recordId || selectedRecord?.id || selectedThread?.recordId || "";
+  const activeAccounts = accounts.filter(canSelectEmailAccountForSending);
+  const linkedRecordId = emailDraft.recordId ?? "";
   const selectedThreadRecordId = selectedThread?.recordId || "";
   const contactRecords = useMemo(() => records.filter((record) => record.objectKey === "contacts"), [records]);
   const contactByEmail = useMemo(() => {
@@ -4429,6 +4438,7 @@ function EmailWorkspace({
   const [attachmentUploads, setAttachmentUploads] = useState<EmailAttachmentUploadItem[]>([]);
   const composeEditorRef = useRef<HTMLDivElement>(null);
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
+  const mediaLibraryUploadInputRef = useRef<HTMLInputElement>(null);
   const mediaReplaceInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || hasEmailDraftBody(emailDraft) || emailDraft.attachments?.length || emailDraft.aiAssisted);
@@ -4669,10 +4679,11 @@ function EmailWorkspace({
       return;
     }
     const state = threadUiState[threadId] ?? {};
-    updateThreadLabels(threadId, (state.labels ?? thread.labels ?? []).filter((candidate) => candidate !== label));
+    updateThreadLabels(threadId, getEmailThreadUserLabels(thread, state).filter((candidate) => candidate.toLowerCase() !== label.toLowerCase()));
     if (labelFilter === label) {
       setLabelFilter("");
     }
+    onShowSuccess(`已移除标签：${label}`);
   }
 
   useEffect(() => {
@@ -5954,7 +5965,7 @@ function EmailWorkspace({
                         ) : (
                           <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
                         )}
-                        {labelFilter && (state.labels ?? thread.labels ?? []).includes(labelFilter) ? (
+                        {labelFilter && getEmailThreadUserLabels(thread, state).some((label) => label.toLowerCase() === labelFilter.toLowerCase()) ? (
                           <button className="icon-button" aria-label={`移除标签 ${labelFilter}`} title={`移除标签 ${labelFilter}`} type="button" onClick={() => removeEmailLabel(thread.id, labelFilter)}>
                             <XCircle size={15} />
                           </button>
@@ -6062,7 +6073,10 @@ function EmailWorkspace({
                       <span className="badge">类别：{getEmailCategoryLabel((threadUiState[selectedThread.id]?.category ?? inferEmailThreadCategory(selectedThread, selectedMessages)) as EmailCategoryKey)}</span>
                       {threadUiState[selectedThread.id]?.starred ? <span className="badge">星标</span> : null}
                       {threadUiState[selectedThread.id]?.important ? <span className="badge">重要</span> : null}
-                      {getEmailThreadDisplayLabels(selectedThread, threadUiState[selectedThread.id] ?? {}, selectedMessages).map((label) => (
+                      {buildEmailThreadLabels(selectedThread, selectedMessages).map((label) => (
+                        <span className="badge" key={label}>{label}</span>
+                      ))}
+                      {getEmailThreadUserLabels(selectedThread, threadUiState[selectedThread.id] ?? {}).map((label) => (
                         <span className="email-label-pill" key={label}>
                           {label}
                           <button aria-label={`移除标签 ${label}`} title={`移除标签 ${label}`} type="button" onClick={() => removeEmailLabel(selectedThread.id, label)}>
@@ -6569,10 +6583,21 @@ function EmailWorkspace({
                 </button>
               </div>
               <div className="toolbar">
-                <button className="secondary-button" type="button" onClick={() => composeInlineImageInputRef.current?.click()} disabled={disabled}>
+                <button className="secondary-button" type="button" onClick={() => mediaLibraryUploadInputRef.current?.click()} disabled={disabled}>
                   <ImageIcon size={16} />
                   上传图片
                 </button>
+                <input
+                  ref={mediaLibraryUploadInputRef}
+                  hidden
+                  accept="image/*"
+                  multiple
+                  type="file"
+                  onChange={(event) => {
+                    void onUploadMediaAssets(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
                 <input
                   ref={mediaReplaceInputRef}
                   hidden
@@ -6612,10 +6637,10 @@ function EmailWorkspace({
                         <div className="media-library-card-footer">
                           <span title={asset.name}>{asset.name}</span>
                           <div className="toolbar compact-toolbar">
-                            <button className="icon-button" aria-label={`编辑 ${asset.name}`} data-testid={`media-asset-edit-${asset.id}`} type="button" onClick={() => startEditingMediaAsset(asset)} disabled={disabled}>
+                            <button className="icon-button" aria-label={`编辑 ${asset.name}`} data-testid={`media-asset-edit-${asset.id}`} type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); startEditingMediaAsset(asset); }} disabled={disabled}>
                               <Pencil size={14} />
                             </button>
-                            <button className="icon-button danger-button" aria-label={`删除 ${asset.name}`} data-testid={`media-asset-delete-${asset.id}`} type="button" onClick={() => onDeleteMediaAsset(asset)} disabled={disabled}>
+                            <button className="icon-button danger-button" aria-label={`删除 ${asset.name}`} data-testid={`media-asset-delete-${asset.id}`} type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDeleteMediaAsset(asset); }} disabled={disabled}>
                               <Trash2 size={14} />
                             </button>
                           </div>
@@ -7222,6 +7247,15 @@ function buildTalkKnowledgeBody(target: TalkTarget, messages: TalkMessage[], sou
     ? sources.map((source) => `- ${source.label}${source.objectKey && source.recordId ? ` (${source.objectKey}/${source.recordId})` : ""}`).join("\n")
     : "No sources returned.";
   return `${targetLines.join("\n")}\n\nTranscript:\n${transcript}\n\nSources:\n${sourceLines}`;
+}
+
+function buildTalkMessageKnowledgeBody(target: TalkTarget, message: TalkMessage, sources: TalkResponse["sources"]): string {
+  const targetLines =
+    target.type === "record"
+      ? [`Target: ${target.objectKey}/${target.recordId}`, `Label: ${target.label}`]
+      : [`Target: email_thread/${target.threadId}`, `Label: ${target.label}`];
+  const sourceLines = sources.length ? sources.map((source) => `- ${source.label}`).join("\n") : "- current CRM context";
+  return `${targetLines.join("\n")}\n\nMessage (${message.role}):\n${message.content}\n\nSources:\n${sourceLines}`;
 }
 
 function buildTalkInputSuggestion(target: TalkTarget, input: string, messages: TalkMessage[]): string {
@@ -8886,7 +8920,7 @@ function TalkAboutThisPanel({
   const [question, setQuestion] = useState("");
   const [sources, setSources] = useState<TalkResponse["sources"]>([]);
   const [isSending, setIsSending] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [savingMessageIndex, setSavingMessageIndex] = useState<number | null>(null);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState("");
   const [isSuggesting, setIsSuggesting] = useState(false);
@@ -8981,28 +9015,28 @@ function TalkAboutThisPanel({
     }
   }
 
-  async function saveToKnowledge() {
-    if (messages.length === 0) {
+  async function saveMessageToKnowledge(message: TalkMessage, index: number) {
+    if (!message.content.trim()) {
       return;
     }
 
-    setIsSaving(true);
+    setSavingMessageIndex(index);
     try {
       const article = await fetchJson<KnowledgeArticle>("/api/knowledge/articles", {
         method: "POST",
         body: {
-          title: trimForLabel(`Talk: ${target.label}`, 80),
-          body: buildTalkKnowledgeBody(target, messages, sources),
+          title: trimForLabel(`Talk: ${target.label} · ${message.role === "assistant" ? "AI" : "User"}`, 80),
+          body: buildTalkMessageKnowledgeBody(target, message, sources),
           tags: buildTalkKnowledgeTags(target),
           active: true
         }
       });
       onKnowledgeCreated(article);
-      onShowToast({ intent: "success", message: "讨论内容已关联到 RAG 知识库" });
+      onShowToast({ intent: "success", message: "这条消息已关联到 RAG 知识库" });
     } catch (error) {
       onShowToast({ intent: "error", message: error instanceof Error ? error.message : "保存到知识库失败" });
     } finally {
-      setIsSaving(false);
+      setSavingMessageIndex(null);
     }
   }
 
@@ -9022,6 +9056,16 @@ function TalkAboutThisPanel({
             <div className={`talk-message ${message.role === "assistant" ? "assistant" : "user"}`} key={`${message.role}-${index}`}>
               <span>{message.role === "assistant" ? "AI" : "你"}</span>
               <div>{message.content}</div>
+              <button
+                className="secondary-button talk-message-rag-action"
+                data-testid={`talk-message-save-knowledge-${index}`}
+                type="button"
+                onClick={() => void saveMessageToKnowledge(message, index)}
+                disabled={disabled || savingMessageIndex === index}
+              >
+                <Save className={savingMessageIndex === index ? "spin-icon" : undefined} size={14} />
+                关联到 RAG 知识
+              </button>
             </div>
           ))
         ) : (
@@ -9078,12 +9122,8 @@ function TalkAboutThisPanel({
           <Bot className={isSending ? "spin-icon" : undefined} size={16} />
           发送
         </button>
-        <button className="secondary-button" data-testid="talk-about-this-save-knowledge" type="button" onClick={() => void saveToKnowledge()} disabled={disabled || isSaving || messages.length === 0}>
-          <Save className={isSaving ? "spin-icon" : undefined} size={16} />
-          关联到 RAG 知识
-        </button>
       </div>
-      <div className="subtle">仅生成讨论建议，不会直接修改 CRM 数据。保存后会作为知识库文章参与后续 RAG 检索。</div>
+      <div className="subtle">仅生成讨论建议，不会直接修改 CRM 数据。将鼠标悬停到指定消息上，可把单条消息保存为 RAG 知识。</div>
     </section>
   );
 }

@@ -31,6 +31,7 @@ export interface EmailSendInput {
   aiSources?: EmailMessage["aiSources"];
   aiGeneratedAt?: string;
   clientRequestId?: string;
+  skipAutoLink?: boolean;
 }
 
 export interface EmailSyncResult {
@@ -79,7 +80,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
 
   async send(context: RequestContext, input: EmailSendInput): Promise<EmailMessage> {
     const account = await this.repository.getEmailAccount(context, input.accountId);
-    if (!account.sendEnabled || account.status !== "active") {
+    if (!account.sendEnabled || account.status === "disabled") {
       throw new Error("Email account is not enabled for sending");
     }
     assertProviderSupports(account, "send");
@@ -104,7 +105,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     const claimedMessage = claim.message;
     const account = await this.repository.getEmailAccount(context, claimedMessage.accountId);
     try {
-      if (!account.sendEnabled || account.status !== "active") {
+      if (!account.sendEnabled || account.status === "disabled") {
         throw new Error("Email account is not enabled for sending");
       }
       assertProviderSupports(account, "send");

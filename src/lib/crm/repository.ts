@@ -1564,6 +1564,7 @@ export class PrismaCrmRepository {
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
       Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
         recordId?: string;
+        skipAutoLink?: boolean;
     }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
@@ -1598,13 +1599,13 @@ export class PrismaCrmRepository {
       }
     }
     const requestedRecord = input.recordId ? await this.assertVisibleRecord(context, input.recordId) : undefined;
-    const autoLinkedRecord = requestedRecord
+    const autoLinkedRecord = requestedRecord || input.skipAutoLink
       ? undefined
       : await this.findVisibleRecordByEmailParticipants(context, account.emailAddress, [input.from, ...input.to, ...(input.cc ?? [])]);
     const linkedRecordId = requestedRecord?.id ?? autoLinkedRecord?.id;
     const thread = input.threadId
         ? await this.assertEmailThread(context, input.threadId)
-      : (await this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], linkedRecordId)) ??
+      : (!input.skipAutoLink ? await this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], linkedRecordId) : undefined) ??
         mapEmailThread(
             await this.db.emailThread.create({
               data: {
@@ -1619,7 +1620,7 @@ export class PrismaCrmRepository {
     if (thread.accountId !== account.id) {
       throw new Error("Email thread does not belong to this account");
     }
-    const linkedRecord = requestedRecord ?? (thread.recordId ? await this.assertVisibleRecord(context, thread.recordId) : undefined) ?? autoLinkedRecord;
+    const linkedRecord = input.skipAutoLink ? requestedRecord : requestedRecord ?? (thread.recordId ? await this.assertVisibleRecord(context, thread.recordId) : undefined) ?? autoLinkedRecord;
     const aiSourceMessageId = input.aiSourceMessageId?.trim() || undefined;
     if (aiSourceMessageId) {
       await this.getEmailMessage(context, aiSourceMessageId);
@@ -1751,11 +1752,11 @@ export class PrismaCrmRepository {
   async sendEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "trackingEnabled" | "trackingId" | "groupSendMode">> & { recordId?: string }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "trackingEnabled" | "trackingId" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
-    if (!account.sendEnabled || account.status !== "active") {
+    if (!account.sendEnabled || account.status === "disabled") {
       throw new Error("Email account is not enabled for sending");
     }
 
@@ -1771,11 +1772,11 @@ export class PrismaCrmRepository {
   async queueEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
-    if (!account.sendEnabled || account.status !== "active") {
+    if (!account.sendEnabled || account.status === "disabled") {
       throw new Error("Email account is not enabled for sending");
     }
 

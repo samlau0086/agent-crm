@@ -443,6 +443,7 @@ export const emailSendSchema = z
     scheduledSendAt: z.string().datetime().optional(),
     trackingEnabled: z.boolean().optional(),
     groupSendMode: z.boolean().optional(),
+    skipAutoLink: z.boolean().optional(),
     clientRequestId: z.string().trim().min(8).max(120).regex(/^[A-Za-z0-9._:-]+$/).optional()
   })
   .strict()

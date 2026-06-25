@@ -2779,8 +2779,9 @@ button {
 
 .talk-message {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: start;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2802,6 +2803,18 @@ button {
 .talk-message.assistant {
   border-color: #bfdbfe;
   background: #eff6ff;
+}
+
+.talk-message-rag-action {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.talk-message:hover .talk-message-rag-action,
+.talk-message:focus-within .talk-message-rag-action {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .talk-input-wrap {

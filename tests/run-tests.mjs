@@ -1395,7 +1395,8 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
   assert.match(source, /onSyncAllAccounts/);
   assert.match(source, /account\.status === "active" && account\.syncEnabled && account\.connectionConfigured && capability\.supportsSync/);
   assert.match(source, /disabled=\{disabled \|\| !account\.syncEnabled \|\| !account\.connectionConfigured \|\| !capability\.supportsSync \|\| account\.status !== "active"\}/);
-  assert.match(source, /account\.status === "active" && account\.sendEnabled && account\.connectionConfigured && getEmailProviderCapability\(account\.provider\)\.supportsSend/);
+  assert.match(source, /function canSelectEmailAccountForSending\(account: EmailAccount\): boolean/);
+  assert.match(source, /account\.status !== "disabled" && account\.sendEnabled && account\.connectionConfigured/);
   assert.match(providerSource, /fetchRecentMailboxEmails\(config, syncLimit\)/);
   assert.doesNotMatch(providerSource, /fetchRecentImapEmails\(config, syncLimit\)/);
 });
@@ -1638,6 +1639,7 @@ await run("task workspace exposes todo completed archived and delete actions", (
   assert.match(source, /data-testid="task-tab-archived"/);
   assert.match(source, /body: \{ archivedAt: archived \? new Date\(\)\.toISOString\(\) : null \}/);
   assert.match(source, /method: "DELETE"/);
+  assert.match(source, /onDelete=\{\(activity\) => \{ void runImmediateAction\(\(\) => deleteTask\(activity\)\); \}\}/);
   assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-archive-\$\{activity\.id\}` : undefined\}/);
   assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-delete-\$\{activity\.id\}` : undefined\}/);
   assert.match(source, /activity\.completedAt \|\| activity\.archivedAt \|\| !activity\.dueAt/);
@@ -1892,6 +1894,10 @@ await run("talk about this input suggests context-aware completions", () => {
   assert.match(source, /function buildTalkInputSuggestion\(target: TalkTarget, input: string, messages: TalkMessage\[\]\): string/);
   assert.match(source, /function applyTalkInputSuggestion\(input: string, candidate: string\): string/);
   assert.match(source, /function talkSuggestionTemplates\(target: TalkTarget, messages: TalkMessage\[\]\): string\[\]/);
+  assert.match(source, /function buildTalkMessageKnowledgeBody\(target: TalkTarget, message: TalkMessage, sources: TalkResponse\["sources"\]\): string/);
+  assert.match(source, /data-testid=\{`talk-message-save-knowledge-\$\{index\}`\}/);
+  assert.match(source, /saveMessageToKnowledge\(message, index\)/);
+  assert.doesNotMatch(source, /data-testid="talk-about-this-save-knowledge"/);
   assert.match(source, /target\.type === "email_thread"/);
   assert.match(source, /target\.objectKey === "deals"/);
   assert.match(source, /event\.key === "Tab" && suggestion/);
@@ -1899,6 +1905,7 @@ await run("talk about this input suggests context-aware completions", () => {
   assert.match(source, /data-testid="talk-about-this-suggestion"/);
   assert.match(styles, /\.talk-suggestion/);
   assert.match(styles, /\.talk-suggestion kbd/);
+  assert.match(styles, /\.talk-message-rag-action/);
 });
 
 await run("talk about this api is guarded by ai permission and uses crm context", () => {
@@ -1958,6 +1965,11 @@ await run("email compose supports ai generation signatures rich text and attachm
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(source, /function prepareEmailDraftForSend\(draft: EmailComposeDraft, accounts: EmailAccount\[\]\): EmailComposeDraft/);
+  assert.match(source, /function canSelectEmailAccountForSending\(account: EmailAccount\): boolean/);
+  assert.match(source, /account\.status !== "disabled" && account\.sendEnabled && account\.connectionConfigured/);
+  assert.match(source, /const linkedRecordId = emailDraft\.recordId \?\? ""/);
+  assert.match(source, /recordId: emailDraft\.recordId \|\| undefined/);
+  assert.match(source, /skipAutoLink: !emailDraft\.recordId/);
   assert.match(source, /const htmlParts = \[inlineImageResult\.bodyHtml, signatureHtml, originalHtml\]\.filter\(Boolean\)/);
   assert.match(source, /const textParts = \[bodyText, signatureText, originalText\]\.filter\(Boolean\)/);
   assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);
@@ -2042,6 +2054,11 @@ await run("media library stores reusable images for product main images and emai
   assert.match(source, /function startEditingMediaAsset/);
   assert.match(source, /function saveMediaAssetName/);
   assert.match(source, /function replaceEditingMediaAsset/);
+  assert.match(source, /mediaLibraryUploadInputRef/);
+  assert.match(source, /onClick=\{\(\) => mediaLibraryUploadInputRef\.current\?\.click\(\)\}/);
+  assert.match(source, /onDeleteMediaAsset=\{\(asset\) => \{ void runImmediateAction\(\(\) => deleteMediaAsset\(asset\)\); \}\}/);
+  assert.match(source, /event\.stopPropagation\(\); startEditingMediaAsset\(asset\)/);
+  assert.match(source, /event\.stopPropagation\(\); onDeleteMediaAsset\(asset\)/);
   assert.match(styles, /\.media-library-grid/);
   assert.match(styles, /\.media-library-card/);
   assert.match(styles, /\.media-library-select/);
@@ -2113,8 +2130,12 @@ await run("email workspace supports labels minimized compose restore and record 
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(source, /const \[labelFilter, setLabelFilter\] = useState\(""\)/);
   assert.match(source, /function promptAddEmailLabel\(threadIds: string\[\]\)/);
+  assert.match(source, /function getEmailThreadUserLabels\(thread: EmailThread, state: EmailThreadUiState = \{\}\): string\[\]/);
+  assert.match(source, /updateThreadLabels\(threadId, getEmailThreadUserLabels\(thread, state\)\.filter/);
   assert.match(source, /data-testid="email-add-label"/);
   assert.match(source, /getEmailThreadDisplayLabels\(thread, state, messages\)/);
+  assert.match(source, /buildEmailThreadLabels\(selectedThread, selectedMessages\)\.map/);
+  assert.match(source, /getEmailThreadUserLabels\(selectedThread, threadUiState\[selectedThread\.id\] \?\? \{\}\)\.map/);
   assert.match(source, /recordEmailActivityFilter/);
   assert.match(source, /data-testid=\{`record-email-filter-\$\{selectedRecord\.id\}-\$\{sanitizeTestId\(emailAddress\)\}`\}/);
   assert.match(source, /record-email-thread-markers/);
@@ -7330,6 +7351,15 @@ await run("email messages auto-link to contacts by participant email unless expl
   });
   assert.equal(store.listEmailThreads(context, "deal-platform").some((thread) => thread.id === explicit.threadId), true);
   assert.equal(store.listEmailThreads(context, "contact-lin").some((thread) => thread.id === explicit.threadId), false);
+
+  const unlinked = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["lin@example.com"],
+    subject: "Do not link",
+    bodyText: "The user explicitly selected no linked record.",
+    skipAutoLink: true
+  });
+  assert.equal(store.listEmailThreads(context, "contact-lin").some((thread) => thread.id === unlinked.threadId), false);
 });
 
 await run("email messages without explicit thread id join matching conversation threads conservatively", () => {
@@ -7434,6 +7464,16 @@ await run("queued outbound email messages preserve cc and bcc recipients", () =>
   assert.deepEqual(message.bcc, ["archive@example.com"]);
   assert.equal(store.listEmailMessages(context, message.threadId)[0].cc?.[0], "manager@example.com");
   assert.equal(store.listEmailMessages(context, message.threadId)[0].bcc?.[0], "archive@example.com");
+
+  const errorAccount = store.markEmailAccountConnectionError(context, account.id, "Previous transient SMTP error");
+  assert.equal(errorAccount.status, "error");
+  const queuedAfterError = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer2@example.com"],
+    subject: "Retry after transient error",
+    bodyText: "The account is configured and not disabled, so it remains selectable for sending."
+  });
+  assert.equal(queuedAfterError.status, "queued");
 });
 
 await run("queued outbound email messages are idempotent by client request id", () => {
@@ -9253,6 +9293,7 @@ await run("email send sync and ai schemas validate bounded payloads", () => {
   );
   assert.equal(emailAiSettingsUpdateSchema.parse({ features: { auto_context_analysis: true } }).features.auto_context_analysis, true);
   assert.equal(emailAiGenerateSchema.parse({ purpose: "draft", recordId: "record-1", userPrompt: "short follow-up" }).purpose, "draft");
+  assert.equal(emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "Hello", bodyText: "Body", skipAutoLink: true }).skipAutoLink, true);
   assert.equal(emailAiGenerateSchema.parse({ purpose: "draft", sourceMessageId: "message-1" }).sourceMessageId, "message-1");
   assert.equal(emailAiGenerateSchema.parse({ purpose: "translate", threadId: "thread-1", sourceMessageId: "message-1", sourceText: "hola" }).sourceMessageId, "message-1");
   assert.equal(emailAiGenerateSchema.parse({ purpose: "context_analysis", threadId: "thread-1" }).threadId, "thread-1");

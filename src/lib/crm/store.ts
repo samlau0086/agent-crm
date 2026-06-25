@@ -884,6 +884,7 @@ export class CrmStore {
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
       Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
         recordId?: string;
+        skipAutoLink?: boolean;
       }
   ): EmailMessage {
     requirePermission(context, "crm.write");
@@ -917,10 +918,10 @@ export class CrmStore {
     }
     const now = stamp();
     const requestedRecordId = input.recordId ? this.assertVisibleRecordById(context, input.recordId).id : undefined;
-    const autoRecordId = requestedRecordId ?? this.findRecordIdByEmailParticipants(context, account.emailAddress, [input.from, ...input.to, ...(input.cc ?? [])]);
+    const autoRecordId = requestedRecordId ?? (input.skipAutoLink ? undefined : this.findRecordIdByEmailParticipants(context, account.emailAddress, [input.from, ...input.to, ...(input.cc ?? [])]));
     const thread = input.threadId
       ? this.assertEmailThread(context, input.threadId)
-      : this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], autoRecordId) ??
+      : (!input.skipAutoLink ? this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], autoRecordId) : undefined) ??
         this.createEmailThreadForMessage(context, account.id, { ...input, recordId: autoRecordId }, now);
     const aiSourceMessageId = input.aiSourceMessageId?.trim() || undefined;
     if (aiSourceMessageId) {
@@ -1005,11 +1006,11 @@ export class CrmStore {
   queueEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
   ): EmailMessage {
     requirePermission(context, "crm.write");
     const account = this.assertEmailAccount(context, input.accountId);
-    if (!account.sendEnabled || account.status !== "active") {
+    if (!account.sendEnabled || account.status === "disabled") {
       throw new Error("Email account is not enabled for sending");
     }
     return this.recordEmailMessage(context, {
