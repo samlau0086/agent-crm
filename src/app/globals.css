@@ -1209,29 +1209,45 @@ button {
   font-weight: 700;
 }
 
-.gmail-label-toggle {
-  width: 100%;
+.gmail-account-summary {
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 0;
+  padding: 0;
+}
+
+.gmail-account-summary-main {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  min-width: 0;
+  padding: 0 0 0 12px;
   border: 0;
   background: transparent;
+  color: inherit;
   font: inherit;
+  font-weight: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.gmail-label-toggle:hover {
-  background: #e8eaed;
-  border-radius: 0 16px 16px 0;
-}
-
-.gmail-label-title-meta {
+.gmail-account-summary-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  width: 32px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 0 16px 16px 0;
+  background: transparent;
   color: #5f6368;
+  cursor: pointer;
 }
 
-.gmail-label-title-meta svg {
-  color: #5f6368;
+.gmail-account-summary-main:hover,
+.gmail-account-summary-toggle:hover {
+  background: rgba(60, 64, 67, 0.08);
 }
 
 .gmail-main {

@@ -6072,28 +6072,27 @@ function EmailWorkspace({
             写邮件
           </button>
           <div className="gmail-label-block" data-testid="email-mailbox-account-switcher">
-            <button
-              className="gmail-label-title gmail-label-toggle"
-              type="button"
-              aria-expanded={!mailboxAccountsCollapsed}
-              onClick={() => setMailboxAccountsCollapsed((current) => !current)}
-            >
-              <span>邮箱账户</span>
-              <span className="gmail-label-title-meta">
-                <small>{accounts.length}</small>
+            <div className={`gmail-folder gmail-account-summary ${selectedMailboxAccountId === allEmailAccountsKey ? "active" : ""}`}>
+              <button
+                className="gmail-account-summary-main"
+                data-testid="email-mailbox-account-all"
+                type="button"
+                onClick={() => selectMailboxAccount(allEmailAccountsKey)}
+              >
+                <Inbox size={16} />
+                <span>全部邮箱</span>
+                <small>{threads.filter((thread) => !(threadUiState[thread.id]?.deleted)).length || ""}</small>
+              </button>
+              <button
+                className="gmail-account-summary-toggle"
+                type="button"
+                aria-label={mailboxAccountsCollapsed ? "展开邮箱账户" : "折叠邮箱账户"}
+                aria-expanded={!mailboxAccountsCollapsed}
+                onClick={() => setMailboxAccountsCollapsed((current) => !current)}
+              >
                 {mailboxAccountsCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-              </span>
-            </button>
-            <button
-              className={`gmail-folder ${selectedMailboxAccountId === allEmailAccountsKey ? "active" : ""}`}
-              data-testid="email-mailbox-account-all"
-              type="button"
-              onClick={() => selectMailboxAccount(allEmailAccountsKey)}
-            >
-              <Inbox size={16} />
-              <span>全部邮箱</span>
-              <small>{threads.filter((thread) => !(threadUiState[thread.id]?.deleted)).length || ""}</small>
-            </button>
+              </button>
+            </div>
             {!mailboxAccountsCollapsed ? (
               <div className="gmail-account-list">
                 {accounts.map((account) => (

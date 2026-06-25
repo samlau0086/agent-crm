@@ -1755,6 +1755,9 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.match(source, /data-testid="email-mailbox-account-all"/);
   assert.match(source, /data-testid=\{`email-mailbox-account-\$\{account\.id\}`\}/);
   assert.match(source, /aria-expanded=\{!mailboxAccountsCollapsed\}/);
+  assert.match(source, /aria-label=\{mailboxAccountsCollapsed \? "展开邮箱账户" : "折叠邮箱账户"\}/);
+  assert.match(source, /className="gmail-account-summary-main"[\s\S]*onClick=\{\(\) => selectMailboxAccount\(allEmailAccountsKey\)\}/);
+  assert.match(source, /className="gmail-account-summary-toggle"[\s\S]*onClick=\{\(\) => setMailboxAccountsCollapsed\(\(current\) => !current\)\}/);
   assert.match(source, /!mailboxAccountsCollapsed \? \([\s\S]*<div className="gmail-account-list">/);
   assert.match(source, /function syncCurrentMailboxAccount\(\)/);
   assert.match(source, /selectedMailboxAccountId === allEmailAccountsKey[\s\S]*onSyncAllAccounts\(\)/);
@@ -1767,8 +1770,9 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.doesNotMatch(source, /!hasLoadedMessages \|\| hasInboxMessage/);
   assert.match(styles, /\.gmail-account-folder span \{/);
   assert.match(styles, /\.gmail-account-folder strong,/);
-  assert.match(styles, /\.gmail-label-toggle \{/);
-  assert.match(styles, /\.gmail-label-title-meta \{/);
+  assert.match(styles, /\.gmail-account-summary \{/);
+  assert.match(styles, /\.gmail-account-summary-main \{/);
+  assert.match(styles, /\.gmail-account-summary-toggle \{/);
 });
 
 await run("email account settings separate inbound credentials from outbound services", () => {
