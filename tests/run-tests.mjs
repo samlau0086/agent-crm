@@ -1831,6 +1831,8 @@ await run("email workspace diagnostics display ai automation eligibility policy"
 
 await run("email workspace displays compact thread summary provenance", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  assert.match(source, /className="gmail-ai-summary-grid"[\s\S]*data-testid="email-thread-summary"[\s\S]*data-testid="email-thread-analysis"/);
   assert.match(source, /data-testid="email-thread-summary"/);
   assert.match(source, /data-testid="email-thread-summary"[\s\S]*data-testid="email-thread-summarize"/);
   assert.match(source, /aiSettings\.features\.auto_summarize/);
@@ -1841,6 +1843,10 @@ await run("email workspace displays compact thread summary provenance", () => {
   assert.doesNotMatch(actionSection, /data-testid="email-thread-analyze"/);
   assert.match(source, /selectedThread\?\.summaryUpdatedAt/);
   assert.match(source, /selectedThread\.summary/);
+  assert.match(styles, /\.gmail-ai-summary-grid \{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);[\s\S]*margin: 0 36px;/);
+  assert.match(styles, /\.email-message-list \{[\s\S]*margin: 12px 36px 0;/);
+  assert.match(styles, /\.gmail-detail-pane > \.talk-panel \{[\s\S]*margin: 12px 36px 0;/);
+  assert.match(styles, /\.gmail-ai-summary-grid \{[\s\S]*grid-template-columns: 1fr;[\s\S]*margin: 0 12px;/);
   assert.match(source, /用于后续 AI 上下文/);
   assert.match(source, /减少长线程 token 消耗/);
 });

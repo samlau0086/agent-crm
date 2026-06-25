@@ -1503,8 +1503,24 @@ button {
   margin: 0 72px 10px;
 }
 
+.gmail-ai-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 36px;
+}
+
+.gmail-ai-summary-grid .ai-box {
+  min-width: 0;
+  margin-top: 12px;
+}
+
+.gmail-detail-pane > .talk-panel {
+  margin: 12px 36px 0;
+}
+
 .gmail-message-card {
-  margin: 0 72px;
+  margin: 0;
   border-color: #edf0f3;
   background: #ffffff;
 }
@@ -1809,7 +1825,7 @@ button {
 .email-message-list {
   display: grid;
   gap: 10px;
-  margin-top: 12px;
+  margin: 12px 36px 0;
 }
 
 .email-message-card {
@@ -3080,6 +3096,17 @@ button {
     margin: 0;
     padding-right: 12px;
     padding-left: 12px;
+  }
+
+  .gmail-ai-summary-grid {
+    grid-template-columns: 1fr;
+    margin: 0 12px;
+  }
+
+  .email-message-list,
+  .gmail-detail-pane > .talk-panel {
+    margin-right: 12px;
+    margin-left: 12px;
   }
 
   .gmail-detail-actions {
