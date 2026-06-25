@@ -170,6 +170,24 @@ async function main() {
     });
   }
 
+  for (const signature of seedData.emailSignatures ?? []) {
+    await prisma.emailSignature.create({
+      data: {
+        id: signature.id,
+        workspaceId: signature.workspaceId,
+        accountId: signature.accountId,
+        name: signature.name,
+        bodyText: signature.bodyText,
+        bodyHtml: signature.bodyHtml,
+        isDefault: signature.isDefault,
+        active: signature.active,
+        createdById: signature.createdById,
+        createdAt: new Date(signature.createdAt),
+        updatedAt: new Date(signature.updatedAt)
+      }
+    });
+  }
+
   for (const article of seedData.knowledgeArticles) {
     await prisma.knowledgeArticle.create({
       data: {

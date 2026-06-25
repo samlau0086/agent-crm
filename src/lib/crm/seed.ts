@@ -320,6 +320,32 @@ export const seedData: CrmSnapshot = {
   webhooks: [],
   webhookDeliveries: [],
   emailAccounts: [],
+  emailSignatures: [
+    {
+      id: `email_signature_default_${defaultWorkspaceId}`,
+      workspaceId: defaultWorkspaceId,
+      name: "默认签名",
+      bodyText: "Best regards,\n{{senderEmail}}",
+      bodyHtml: "<p>Best regards,<br>{{senderEmail}}</p>",
+      isDefault: true,
+      active: true,
+      createdById: adminUserId,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: `email_signature_cn_sales_${defaultWorkspaceId}`,
+      workspaceId: defaultWorkspaceId,
+      name: "中文商务签名",
+      bodyText: "谢谢，\n{{senderEmail}}",
+      bodyHtml: "<p>谢谢，<br>{{senderEmail}}</p>",
+      isDefault: false,
+      active: true,
+      createdById: adminUserId,
+      createdAt: now,
+      updatedAt: now
+    }
+  ],
   emailThreads: [],
   emailThreadStates: [],
   emailMessages: [],

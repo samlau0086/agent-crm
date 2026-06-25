@@ -386,6 +386,28 @@ export const emailAccountUpdateSchema = z
     message: "connectionConfig and clearConnectionConfig cannot be used together"
   });
 
+export const emailSignatureCreateSchema = z
+  .object({
+    accountId: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional(),
+    name: labelSchema,
+    bodyText: z.string().trim().min(1).max(4000),
+    bodyHtml: optionalTextSchema,
+    isDefault: z.boolean().optional(),
+    active: z.boolean().optional()
+  })
+  .strict();
+
+export const emailSignatureUpdateSchema = z
+  .object({
+    accountId: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional(),
+    name: labelSchema.optional(),
+    bodyText: z.string().trim().min(1).max(4000).optional(),
+    bodyHtml: optionalTextSchema,
+    isDefault: z.boolean().optional(),
+    active: z.boolean().optional()
+  })
+  .strict();
+
 export const emailMessageCreateSchema = z
   .object({
     accountId: z.string().trim().min(1),

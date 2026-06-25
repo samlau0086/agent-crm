@@ -73,6 +73,7 @@ import type {
   EmailInboundConnectionConfig,
   EmailMessage,
   EmailOutboundServiceConfig,
+  EmailSignature,
   EmailThread,
   FieldDefinition,
   ImportJobQueueSummary,
@@ -122,6 +123,7 @@ interface CrmWorkspaceProps {
   apiKeys: ApiKey[];
   webhooks: WebhookEndpoint[];
   emailAccounts: EmailAccount[];
+  emailSignatures: EmailSignature[];
   emailThreads: EmailThread[];
   emailAiSettings: EmailAiSettings;
   emailSyncSettings?: EmailSyncSettings;
@@ -286,6 +288,15 @@ type EmailSignatureOption = {
   label: string;
   bodyText: string;
   bodyHtml: string;
+};
+type EmailSignatureDraft = {
+  editingSignatureId?: string;
+  accountId: string;
+  name: string;
+  bodyText: string;
+  bodyHtml: string;
+  isDefault: boolean;
+  active: boolean;
 };
 type EmailAttachmentUploadItem = {
   id: string;
@@ -522,29 +533,37 @@ function sanitizeComposeHtml(value: string): string {
   return template.innerHTML.trim();
 }
 
-function getEmailSignatureOptions(accounts: EmailAccount[], selectedAccountId: string): EmailSignatureOption[] {
+function getEmailSignatureOptions(signatures: EmailSignature[], accounts: EmailAccount[], selectedAccountId: string): EmailSignatureOption[] {
   const account = accounts.find((candidate) => candidate.id === selectedAccountId) ?? accounts[0];
   const sender = account?.emailAddress || "Sales team";
+  const availableSignatures = signatures
+    .filter((signature) => signature.active && (!signature.accountId || signature.accountId === selectedAccountId))
+    .sort((left, right) =>
+      Number(Boolean(right.accountId === selectedAccountId && right.isDefault)) - Number(Boolean(left.accountId === selectedAccountId && left.isDefault)) ||
+      Number(right.isDefault) - Number(left.isDefault) ||
+      left.name.localeCompare(right.name)
+    );
   return [
     { id: noEmailSignatureId, label: "不使用签名", bodyText: "", bodyHtml: "" },
-    {
-      id: "default",
-      label: "默认签名",
-      bodyText: `Best regards,\n${sender}`,
-      bodyHtml: `<p>Best regards,<br>${escapeHtml(sender)}</p>`
-    },
-    {
-      id: "cn-sales",
-      label: "中文商务签名",
-      bodyText: `谢谢，\n${sender}`,
-      bodyHtml: `<p>谢谢，<br>${escapeHtml(sender)}</p>`
-    }
+    ...availableSignatures.map((signature) => ({
+      id: signature.id,
+      label: `${signature.name}${signature.isDefault ? "（默认）" : ""}${signature.accountId ? "（账户）" : ""}`,
+      bodyText: renderEmailSignatureTemplate(signature.bodyText, sender),
+      bodyHtml: renderEmailSignatureTemplate(signature.bodyHtml || emailTextToHtml(signature.bodyText), sender)
+    }))
   ];
 }
 
-function getSelectedEmailSignature(draft: EmailComposeDraft, accounts: EmailAccount[]): EmailSignatureOption {
-  const options = getEmailSignatureOptions(accounts, draft.accountId);
-  return options.find((signature) => signature.id === (draft.signatureId || noEmailSignatureId)) ?? options[0];
+function renderEmailSignatureTemplate(value: string, senderEmail: string): string {
+  return value.replace(/\{\{\s*senderEmail\s*\}\}/g, senderEmail).replace(/\{\{\s*sender_email\s*\}\}/g, senderEmail);
+}
+
+function getSelectedEmailSignature(draft: EmailComposeDraft, signatures: EmailSignature[], accounts: EmailAccount[]): EmailSignatureOption {
+  const options = getEmailSignatureOptions(signatures, accounts, draft.accountId);
+  if (draft.signatureId === noEmailSignatureId) {
+    return options[0];
+  }
+  return options.find((signature) => signature.id === draft.signatureId) ?? options[1] ?? options[0];
 }
 
 function getDraftBodyHtml(draft: EmailComposeDraft): string {
@@ -595,8 +614,8 @@ function buildReplyOriginalText(draft: EmailComposeDraft): string {
   return [`On ${sentAt}, ${from} wrote:`, ...originalText.split("\n").map((line) => `> ${line}`)].join("\n");
 }
 
-function prepareEmailDraftForSend(draft: EmailComposeDraft, accounts: EmailAccount[]): EmailComposeDraft {
-  const signature = getSelectedEmailSignature(draft, accounts);
+function prepareEmailDraftForSend(draft: EmailComposeDraft, signatures: EmailSignature[], accounts: EmailAccount[]): EmailComposeDraft {
+  const signature = getSelectedEmailSignature(draft, signatures, accounts);
   const bodyHtml = getDraftBodyHtml(draft);
   const bodyText = getDraftBodyText(draft);
   const inlineImageResult = extractInlineImageAttachments(bodyHtml);
@@ -937,6 +956,30 @@ function createEmailAccountEditDraft(account: EmailAccount, config?: SanitizedEm
   });
 }
 
+function createEmptyEmailSignatureDraft(overrides: Partial<EmailSignatureDraft> = {}): EmailSignatureDraft {
+  return {
+    accountId: "",
+    name: "默认签名",
+    bodyText: "Best regards,\n{{senderEmail}}",
+    bodyHtml: "<p>Best regards,<br>{{senderEmail}}</p>",
+    isDefault: false,
+    active: true,
+    ...overrides
+  };
+}
+
+function createEmailSignatureEditDraft(signature: EmailSignature): EmailSignatureDraft {
+  return createEmptyEmailSignatureDraft({
+    editingSignatureId: signature.id,
+    accountId: signature.accountId ?? "",
+    name: signature.name,
+    bodyText: signature.bodyText,
+    bodyHtml: signature.bodyHtml ?? "",
+    isDefault: signature.isDefault,
+    active: signature.active
+  });
+}
+
 const emptyViewDraft: ViewDraft = {
   name: "新视图",
   columns: ["title"],
@@ -1040,6 +1083,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [importPresetName, setImportPresetName] = useState("");
   const [aiQuestion, setAiQuestion] = useState("本周有哪些高价值交易需要继续推进？");
   const [emailAccounts, setEmailAccounts] = useState<EmailAccount[]>(props.emailAccounts);
+  const [emailSignatures, setEmailSignatures] = useState<EmailSignature[]>(props.emailSignatures);
   const [emailThreads, setEmailThreads] = useState<EmailThread[]>(props.emailThreads);
   const [emailMessagesByThread, setEmailMessagesByThread] = useState<Record<string, EmailMessage[]>>({});
   const [selectedEmailThreadId, setSelectedEmailThreadId] = useState(routeEmailThreadId || props.emailThreads[0]?.id || "");
@@ -1048,6 +1092,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
   const [emailSyncSettings, setEmailSyncSettings] = useState<EmailSyncSettings>(props.emailSyncSettings ?? defaultEmailSyncSettings);
   const [emailAccountDraft, setEmailAccountDraft] = useState<EmailAccountDraft>(() => createEmptyEmailAccountDraft());
+  const [emailSignatureDraft, setEmailSignatureDraft] = useState<EmailSignatureDraft>(() => createEmptyEmailSignatureDraft());
   const [emailDraft, setEmailDraft] = useState<EmailComposeDraft>({
     clientRequestId: createEmailClientRequestId(),
     accountId: props.emailAccounts[0]?.id ?? "",
@@ -1466,6 +1511,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   useEffect(() => {
     setEmailAccounts(props.emailAccounts);
+    setEmailSignatures(props.emailSignatures);
     setEmailThreads(props.emailThreads);
     setEmailAiSettings(props.emailAiSettings);
     setEmailSyncSettings(props.emailSyncSettings ?? defaultEmailSyncSettings);
@@ -1481,7 +1527,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEmailDraft((current) => clearEmailDraftAiProvenance(current));
       setSelectedEmailThreadId(nextSelectedThreadId);
     }
-  }, [props.emailAccounts, props.emailAiSettings, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
+  }, [props.emailAccounts, props.emailAiSettings, props.emailSignatures, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
 
   useEffect(() => {
     if (!routeEmailThreadId) {
@@ -2536,7 +2582,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function sendEmail() {
-    const preparedDraft = prepareEmailDraftForSend(emailDraft, emailAccounts);
+    const preparedDraft = prepareEmailDraftForSend(emailDraft, emailSignatures, emailAccounts);
     const result = await fetchJson<EmailMessage | { messages: EmailMessage[] }>("/api/email/send", {
       method: "POST",
       body: {
@@ -2814,6 +2860,45 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     setEmailSyncSettings(settings);
     setMessage("邮件后台同步设置已更新");
+  }
+
+  async function saveEmailSignatureFromDraft() {
+    const body = {
+      accountId: emailSignatureDraft.accountId || null,
+      name: emailSignatureDraft.name,
+      bodyText: emailSignatureDraft.bodyText,
+      bodyHtml: emailSignatureDraft.bodyHtml || undefined,
+      isDefault: emailSignatureDraft.isDefault,
+      active: emailSignatureDraft.active
+    };
+    const signature = emailSignatureDraft.editingSignatureId
+      ? await fetchJson<EmailSignature>(`/api/email/signatures/${emailSignatureDraft.editingSignatureId}`, { method: "PATCH", body })
+      : await fetchJson<EmailSignature>("/api/email/signatures", { method: "POST", body });
+    setEmailSignatures((current) => [signature, ...current.filter((candidate) => candidate.id !== signature.id)].map((candidate) =>
+      signature.isDefault && (candidate.accountId ?? "") === (signature.accountId ?? "") && candidate.id !== signature.id
+        ? { ...candidate, isDefault: false }
+        : candidate
+    ));
+    setEmailSignatureDraft(createEmptyEmailSignatureDraft());
+    showSuccess(`邮件签名已${emailSignatureDraft.editingSignatureId ? "更新" : "创建"}：${signature.name}`);
+  }
+
+  async function deleteEmailSignature(signature: EmailSignature) {
+    if (
+      !(await requestConfirm({
+        title: "删除邮件签名",
+        message: `确定删除签名“${signature.name}”？已经发送的邮件不会受到影响。`,
+        confirmLabel: "删除",
+        danger: true
+      }))
+    ) {
+      return;
+    }
+    await fetchJson(`/api/email/signatures/${signature.id}`, { method: "DELETE" });
+    setEmailSignatures((current) => current.filter((candidate) => candidate.id !== signature.id));
+    setEmailSignatureDraft((current) => (current.editingSignatureId === signature.id ? createEmptyEmailSignatureDraft() : current));
+    setEmailDraft((current) => (current.signatureId === signature.id ? clearEmailDraftAiProvenance({ ...current, signatureId: noEmailSignatureId }) : current));
+    showSuccess(`邮件签名已删除：${signature.name}`);
   }
 
   async function refreshEmailDiagnostics() {
@@ -3901,6 +3986,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         {activeNav === "email" && (
           <EmailWorkspace
             accounts={emailAccounts}
+            signatures={emailSignatures}
             threads={emailThreads}
             messagesByThread={emailMessagesByThread}
             selectedThreadId={selectedEmailThreadId}
@@ -3911,6 +3997,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             aiSettings={emailAiSettings}
             syncSettings={emailSyncSettings}
             accountDraft={emailAccountDraft}
+            signatureDraft={emailSignatureDraft}
             emailDraft={emailDraft}
             aiPurpose={emailAiPurpose}
             aiPrompt={emailAiPrompt}
@@ -3924,6 +4011,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             canManageEmailSettings={canManageEmailSettings}
             canManageAiSettings={canManageAiSettings}
             onAccountDraftChange={setEmailAccountDraft}
+            onSignatureDraftChange={setEmailSignatureDraft}
             onEmailDraftChange={setEmailDraft}
             onKnowledgeDraftChange={setKnowledgeDraft}
             onUploadMediaAssets={uploadMediaAssets}
@@ -3955,6 +4043,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUpdateAccount={(accountId, patch) => runAction(() => updateEmailAccount(accountId, patch))}
             onUpdateAccountFromDraft={() => runAction(updateEmailAccountFromDraft)}
             onResetAccountDraft={() => setEmailAccountDraft(createEmptyEmailAccountDraft())}
+            onSaveSignature={() => runAction(saveEmailSignatureFromDraft)}
+            onEditSignature={(signature) => setEmailSignatureDraft(createEmailSignatureEditDraft(signature))}
+            onDeleteSignature={(signature) => runAction(() => deleteEmailSignature(signature))}
+            onResetSignatureDraft={() => setEmailSignatureDraft(createEmptyEmailSignatureDraft())}
             onSend={() => runAction(sendEmail)}
             onReplyToMessage={replyToEmailMessage}
             onRetryMessage={(messageId) => runAction(() => retryEmailMessage(messageId))}
@@ -4227,6 +4319,7 @@ function Dashboard({
 
 function EmailWorkspace({
   accounts,
+  signatures,
   threads,
   messagesByThread,
   selectedThreadId,
@@ -4237,6 +4330,7 @@ function EmailWorkspace({
   aiSettings,
   syncSettings,
   accountDraft,
+  signatureDraft,
   emailDraft,
   aiPurpose,
   aiPrompt,
@@ -4250,6 +4344,7 @@ function EmailWorkspace({
   canManageEmailSettings,
   canManageAiSettings,
   onAccountDraftChange,
+  onSignatureDraftChange,
   onEmailDraftChange,
   onKnowledgeDraftChange,
   onUploadMediaAssets,
@@ -4274,6 +4369,10 @@ function EmailWorkspace({
   onUpdateAccount,
   onUpdateAccountFromDraft,
   onResetAccountDraft,
+  onSaveSignature,
+  onEditSignature,
+  onDeleteSignature,
+  onResetSignatureDraft,
   onSend,
   onReplyToMessage,
   onRetryMessage,
@@ -4301,6 +4400,7 @@ function EmailWorkspace({
   onToggleAppSidebar
 }: {
   accounts: EmailAccount[];
+  signatures: EmailSignature[];
   threads: EmailThread[];
   messagesByThread: Record<string, EmailMessage[]>;
   selectedThreadId: string;
@@ -4311,6 +4411,7 @@ function EmailWorkspace({
   aiSettings: EmailAiSettings;
   syncSettings: EmailSyncSettings;
   accountDraft: EmailAccountDraft;
+  signatureDraft: EmailSignatureDraft;
   emailDraft: EmailComposeDraft;
   aiPurpose: EmailAiGenerateResult["purpose"];
   aiPrompt: string;
@@ -4324,6 +4425,7 @@ function EmailWorkspace({
   canManageEmailSettings: boolean;
   canManageAiSettings: boolean;
   onAccountDraftChange: (draft: EmailAccountDraft) => void;
+  onSignatureDraftChange: (draft: EmailSignatureDraft) => void;
   onEmailDraftChange: (draft: EmailComposeDraft) => void;
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
   onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
@@ -4348,6 +4450,10 @@ function EmailWorkspace({
   onUpdateAccount: (accountId: string, patch: EmailAccountUpdatePatch) => void;
   onUpdateAccountFromDraft: () => void;
   onResetAccountDraft: () => void;
+  onSaveSignature: () => void;
+  onEditSignature: (signature: EmailSignature) => void;
+  onDeleteSignature: (signature: EmailSignature) => void;
+  onResetSignatureDraft: () => void;
   onSend: () => void;
   onReplyToMessage: (message: EmailMessage) => void;
   onRetryMessage: (messageId: string) => void;
@@ -4442,8 +4548,8 @@ function EmailWorkspace({
   const mediaReplaceInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || hasEmailDraftBody(emailDraft) || emailDraft.attachments?.length || emailDraft.aiAssisted);
-  const signatureOptions = useMemo(() => getEmailSignatureOptions(accounts, emailDraft.accountId), [accounts, emailDraft.accountId]);
-  const selectedSignature = signatureOptions.find((signature) => signature.id === (emailDraft.signatureId || noEmailSignatureId)) ?? signatureOptions[0];
+  const signatureOptions = useMemo(() => getEmailSignatureOptions(signatures, accounts, emailDraft.accountId), [accounts, emailDraft.accountId, signatures]);
+  const selectedSignature = getSelectedEmailSignature(emailDraft, signatures, accounts);
   const draftEditorHtml = getDraftBodyHtml(emailDraft);
   const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
     onUpdateAiSettings({
@@ -5637,6 +5743,102 @@ function EmailWorkspace({
     );
   }
 
+  function renderEmailSignatureSettingsPanel() {
+    const signaturePreviewSender =
+      accounts.find((account) => account.id === signatureDraft.accountId)?.emailAddress ||
+      accounts.find(canSelectEmailAccountForSending)?.emailAddress ||
+      "sales@example.com";
+    const previewHtml = renderEmailSignatureTemplate(signatureDraft.bodyHtml.trim() || emailTextToHtml(signatureDraft.bodyText), signaturePreviewSender);
+    return (
+      <section className="section email-signature-settings-panel" data-testid="email-signature-settings-panel">
+        <div className="settings-panel-header">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>邮件签名</h2>
+            <div className="subtle">可创建多个签名，支持全局签名或绑定到指定发件账户。发送时才会追加到正文。</div>
+          </div>
+          <span className="badge">{signatures.length} 个签名</span>
+        </div>
+        <div className="email-signature-settings-grid">
+          <div className="settings-list">
+            {signatures.map((signature) => {
+              const account = signature.accountId ? accounts.find((candidate) => candidate.id === signature.accountId) : undefined;
+              return (
+                <div className="settings-item" key={signature.id}>
+                  <div className="toolbar between">
+                    <strong>{signature.name}</strong>
+                    <div className="toolbar compact-toolbar">
+                      {signature.isDefault ? <span className="badge">默认</span> : null}
+                      <span className={signature.active ? "badge" : "danger-badge"}>{signature.active ? "启用" : "停用"}</span>
+                    </div>
+                  </div>
+                  <div className="subtle">{account ? `账户：${account.emailAddress}` : "全局签名"}</div>
+                  <div className="subtle signature-snippet">{signature.bodyText}</div>
+                  <div className="toolbar compact-toolbar" style={{ marginTop: 8 }}>
+                    <button className="secondary-button" type="button" onClick={() => onEditSignature(signature)} disabled={disabled}>
+                      <Pencil size={14} />
+                      编辑
+                    </button>
+                    <button className="danger-button" type="button" onClick={() => onDeleteSignature(signature)} disabled={disabled}>
+                      <Trash2 size={14} />
+                      删除
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {signatures.length === 0 ? <div className="empty-state">还没有邮件签名</div> : null}
+          </div>
+          <div className="email-signature-editor">
+            <div className="form-grid">
+              <label>
+                <span className="subtle">签名名称</span>
+                <input className="input" data-testid="email-signature-name" value={signatureDraft.name} onChange={(event) => onSignatureDraftChange({ ...signatureDraft, name: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">适用账户</span>
+                <select className="select" data-testid="email-signature-account" value={signatureDraft.accountId} onChange={(event) => onSignatureDraftChange({ ...signatureDraft, accountId: event.target.value })}>
+                  <option value="">全局签名</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>{account.emailAddress}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="settings-toggle">
+                <input type="checkbox" checked={signatureDraft.active} onChange={(event) => onSignatureDraftChange({ ...signatureDraft, active: event.target.checked })} />
+                启用签名
+              </label>
+              <label className="settings-toggle">
+                <input type="checkbox" checked={signatureDraft.isDefault} onChange={(event) => onSignatureDraftChange({ ...signatureDraft, isDefault: event.target.checked })} />
+                设为默认签名
+              </label>
+              <label className="wide">
+                <span className="subtle">文本签名</span>
+                <textarea className="textarea" data-testid="email-signature-body-text" value={signatureDraft.bodyText} onChange={(event) => onSignatureDraftChange({ ...signatureDraft, bodyText: event.target.value })} />
+              </label>
+              <label className="wide">
+                <span className="subtle">HTML 签名</span>
+                <textarea className="textarea" data-testid="email-signature-body-html" value={signatureDraft.bodyHtml} onChange={(event) => onSignatureDraftChange({ ...signatureDraft, bodyHtml: event.target.value })} />
+              </label>
+            </div>
+            <div className="email-signature-preview" data-testid="email-signature-settings-preview">
+              <span className="subtle">预览。可使用 <code>{"{{senderEmail}}"}</code> 作为发件邮箱占位符。</span>
+              <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(previewHtml)} title="签名设置预览" />
+            </div>
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+              <button className="secondary-button" type="button" onClick={onResetSignatureDraft} disabled={disabled}>
+                取消
+              </button>
+              <button className="primary-button" data-testid="email-signature-save" type="button" onClick={onSaveSignature} disabled={disabled || !signatureDraft.name.trim() || !signatureDraft.bodyText.trim()}>
+                <Save size={16} />
+                {signatureDraft.editingSignatureId ? "保存签名" : "创建签名"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div className={`email-workspace ${view === "mail" ? "mail-view" : ""}`}>
       {view !== "mail" ? (
@@ -5709,6 +5911,7 @@ function EmailWorkspace({
                     下一步
                   </button>
                 </div>
+                {renderEmailSignatureSettingsPanel()}
               </>
             ) : (
               <div className="empty-state">当前账号没有邮箱设置权限</div>
@@ -6422,7 +6625,7 @@ function EmailWorkspace({
                   </label>
                   <label>
                     <span className="subtle">签名</span>
-                    <select className="select" data-testid="email-compose-signature" value={emailDraft.signatureId || noEmailSignatureId} onChange={(event) => onEmailDraftChange({ ...emailDraft, signatureId: event.target.value })}>
+                    <select className="select" data-testid="email-compose-signature" value={selectedSignature.id} onChange={(event) => onEmailDraftChange({ ...emailDraft, signatureId: event.target.value })}>
                       {signatureOptions.map((signature) => (
                         <option key={signature.id} value={signature.id}>{signature.label}</option>
                       ))}

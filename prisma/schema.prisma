@@ -34,6 +34,7 @@ model Workspace {
   emailThreads        EmailThread[]
   emailThreadStates   EmailThreadState[]
   emailMessages       EmailMessage[]
+  emailSignatures     EmailSignature[]
   knowledgeArticles   KnowledgeArticle[]
   emailAiSettings     EmailAiSettings?
   emailSyncSettings   EmailSyncSettings?
@@ -60,6 +61,7 @@ model User {
   apiKeys             ApiKey[]
   webhooksCreated     WebhookEndpoint[]
   emailThreadStates   EmailThreadState[]
+  emailSignaturesCreated EmailSignature[]
   mediaAssetsCreated  MediaAsset[]
 
   @@unique([workspaceId, email])
@@ -388,10 +390,32 @@ model EmailAccount {
   workspace     Workspace      @relation(fields: [workspaceId], references: [id])
   threads       EmailThread[]
   messages      EmailMessage[]
+  signatures    EmailSignature[]
 
   @@unique([workspaceId, emailAddress])
   @@index([workspaceId, status])
   @@index([workspaceId, provider])
+  @@index([workspaceId, createdById])
+}
+
+model EmailSignature {
+  id          String        @id @default(cuid())
+  workspaceId String
+  accountId   String?
+  name        String
+  bodyText    String
+  bodyHtml    String?
+  isDefault   Boolean       @default(false)
+  active      Boolean       @default(true)
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account     EmailAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  createdBy   User          @relation(fields: [createdById], references: [id])
+
+  @@index([workspaceId, accountId, active])
+  @@index([workspaceId, isDefault])
   @@index([workspaceId, createdById])
 }
 

@@ -41,6 +41,7 @@ import type {
   AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
+  EmailSignature,
   EmailThread,
   EmailThreadState,
   FieldDefinition,
@@ -579,6 +580,87 @@ export class CrmStore {
     this.writeAuditLog(context, "delete", "email_account", account.id, {
       summary: `Deleted email account ${account.emailAddress}`,
       details: { provider: account.provider }
+    });
+  }
+
+  listEmailSignatures(context: RequestContext): EmailSignature[] {
+    requirePermission(context, "crm.read");
+    this.ensureDefaultEmailSignatures(context);
+    return clone(
+      (this.data.emailSignatures ?? [])
+        .filter((signature) => signature.workspaceId === context.workspaceId)
+        .sort((left, right) =>
+          Number(right.active) - Number(left.active) ||
+          Number(right.isDefault) - Number(left.isDefault) ||
+          left.name.localeCompare(right.name) ||
+          left.createdAt.localeCompare(right.createdAt)
+        )
+    );
+  }
+
+  createEmailSignature(
+    context: RequestContext,
+    input: Pick<EmailSignature, "name" | "bodyText"> & Partial<Pick<EmailSignature, "bodyHtml" | "isDefault" | "active">> & { accountId?: string | null }
+  ): EmailSignature {
+    requirePermission(context, "crm.admin");
+    const now = stamp();
+    const accountId = this.normalizeEmailSignatureAccountId(context, input.accountId);
+    if (input.isDefault) {
+      this.clearDefaultEmailSignatures(context.workspaceId, accountId);
+    }
+    const signature: EmailSignature = {
+      id: createId("email_signature"),
+      workspaceId: context.workspaceId,
+      accountId: accountId ?? undefined,
+      name: normalizeRequiredText(input.name, "Email signature name"),
+      bodyText: normalizeRequiredText(input.bodyText, "Email signature body"),
+      bodyHtml: input.bodyHtml?.trim() || undefined,
+      isDefault: input.isDefault ?? false,
+      active: input.active ?? true,
+      createdById: context.user.id,
+      createdAt: now,
+      updatedAt: now
+    };
+    (this.data.emailSignatures ??= []).push(signature);
+    this.writeAuditLog(context, "create", "email_signature", signature.id, {
+      summary: `Created email signature ${signature.name}`,
+      details: { accountId: signature.accountId, isDefault: signature.isDefault, active: signature.active }
+    });
+    return clone(signature);
+  }
+
+  updateEmailSignature(
+    context: RequestContext,
+    signatureId: string,
+    patch: Partial<Pick<EmailSignature, "name" | "bodyText" | "bodyHtml" | "isDefault" | "active">> & { accountId?: string | null }
+  ): EmailSignature {
+    requirePermission(context, "crm.admin");
+    const signature = this.assertEmailSignature(context, signatureId);
+    const accountId = patch.accountId !== undefined ? this.normalizeEmailSignatureAccountId(context, patch.accountId) : signature.accountId ?? null;
+    if (patch.isDefault === true || (patch.isDefault === undefined && signature.isDefault && accountId !== (signature.accountId ?? null))) {
+      this.clearDefaultEmailSignatures(context.workspaceId, accountId, signature.id);
+    }
+    signature.accountId = accountId ?? undefined;
+    if (patch.name !== undefined) signature.name = normalizeRequiredText(patch.name, "Email signature name");
+    if (patch.bodyText !== undefined) signature.bodyText = normalizeRequiredText(patch.bodyText, "Email signature body");
+    if (patch.bodyHtml !== undefined) signature.bodyHtml = patch.bodyHtml.trim() || undefined;
+    if (patch.isDefault !== undefined) signature.isDefault = patch.isDefault;
+    if (patch.active !== undefined) signature.active = patch.active;
+    signature.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_signature", signature.id, {
+      summary: `Updated email signature ${signature.name}`,
+      details: { accountId: signature.accountId, isDefault: signature.isDefault, active: signature.active }
+    });
+    return clone(signature);
+  }
+
+  deleteEmailSignature(context: RequestContext, signatureId: string): void {
+    requirePermission(context, "crm.admin");
+    const signature = this.assertEmailSignature(context, signatureId);
+    this.data.emailSignatures = (this.data.emailSignatures ?? []).filter((candidate) => candidate.id !== signature.id);
+    this.writeAuditLog(context, "delete", "email_signature", signature.id, {
+      summary: `Deleted email signature ${signature.name}`,
+      details: { accountId: signature.accountId, isDefault: signature.isDefault }
     });
   }
 
@@ -3013,6 +3095,71 @@ export class CrmStore {
     };
     this.data.emailSyncSettings.push(created);
     return created;
+  }
+
+  private ensureDefaultEmailSignatures(context: RequestContext): void {
+    const signatures = (this.data.emailSignatures ??= []);
+    if (signatures.some((signature) => signature.workspaceId === context.workspaceId)) {
+      return;
+    }
+    const now = stamp();
+    signatures.push(
+      {
+        id: `email_signature_default_${context.workspaceId}`,
+        workspaceId: context.workspaceId,
+        name: "默认签名",
+        bodyText: "Best regards,\n{{senderEmail}}",
+        bodyHtml: "<p>Best regards,<br>{{senderEmail}}</p>",
+        isDefault: true,
+        active: true,
+        createdById: context.user.id,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: `email_signature_cn_sales_${context.workspaceId}`,
+        workspaceId: context.workspaceId,
+        name: "中文商务签名",
+        bodyText: "谢谢，\n{{senderEmail}}",
+        bodyHtml: "<p>谢谢，<br>{{senderEmail}}</p>",
+        isDefault: false,
+        active: true,
+        createdById: context.user.id,
+        createdAt: now,
+        updatedAt: now
+      }
+    );
+  }
+
+  private clearDefaultEmailSignatures(workspaceId: string, accountId: string | null, exceptSignatureId?: string): void {
+    for (const signature of this.data.emailSignatures ?? []) {
+      if (
+        signature.workspaceId === workspaceId &&
+        (signature.accountId ?? null) === accountId &&
+        signature.isDefault &&
+        signature.id !== exceptSignatureId
+      ) {
+        signature.isDefault = false;
+        signature.updatedAt = stamp();
+      }
+    }
+  }
+
+  private normalizeEmailSignatureAccountId(context: RequestContext, accountId?: string | null): string | null {
+    const normalized = accountId?.trim();
+    if (!normalized) {
+      return null;
+    }
+    this.assertEmailAccount(context, normalized);
+    return normalized;
+  }
+
+  private assertEmailSignature(context: RequestContext, signatureId: string): EmailSignature {
+    const signature = (this.data.emailSignatures ?? []).find((candidate) => candidate.id === signatureId && candidate.workspaceId === context.workspaceId);
+    if (!signature) {
+      throw new Error("Email signature not found");
+    }
+    return signature;
   }
 
   private assertEmailAccount(context: RequestContext, accountId: string): EmailAccount {

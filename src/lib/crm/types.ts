@@ -138,6 +138,20 @@ export interface EmailAccount {
   updatedAt: string;
 }
 
+export interface EmailSignature {
+  id: string;
+  workspaceId: string;
+  accountId?: string;
+  name: string;
+  bodyText: string;
+  bodyHtml?: string;
+  isDefault: boolean;
+  active: boolean;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface EmailConnectionConfig {
   inbound?: EmailInboundConnectionConfig;
   outboundServices?: EmailOutboundServiceConfig[];
@@ -677,6 +691,7 @@ export interface CrmSnapshot {
   webhooks: WebhookEndpoint[];
   webhookDeliveries: WebhookDelivery[];
   emailAccounts: EmailAccount[];
+  emailSignatures?: EmailSignature[];
   emailThreads: EmailThread[];
   emailThreadStates: EmailThreadState[];
   emailMessages: EmailMessage[];

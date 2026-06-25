@@ -1964,7 +1964,11 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
 await run("email compose supports ai generation signatures rich text and attachment modal", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
-  assert.match(source, /function prepareEmailDraftForSend\(draft: EmailComposeDraft, accounts: EmailAccount\[\]\): EmailComposeDraft/);
+  assert.match(source, /function prepareEmailDraftForSend\(draft: EmailComposeDraft, signatures: EmailSignature\[\], accounts: EmailAccount\[\]\): EmailComposeDraft/);
+  assert.match(source, /function getEmailSignatureOptions\(signatures: EmailSignature\[\], accounts: EmailAccount\[\], selectedAccountId: string\): EmailSignatureOption\[\]/);
+  assert.match(source, /function renderEmailSignatureTemplate\(value: string, senderEmail: string\): string/);
+  assert.match(source, /data-testid="email-signature-settings-panel"/);
+  assert.match(source, /data-testid="email-signature-save"/);
   assert.match(source, /function canSelectEmailAccountForSending\(account: EmailAccount\): boolean/);
   assert.match(source, /account\.status !== "disabled" && account\.sendEnabled && account\.connectionConfigured/);
   assert.match(source, /const linkedRecordId = emailDraft\.recordId \?\? ""/);

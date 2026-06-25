@@ -55,6 +55,7 @@ import type {
   AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
+  EmailSignature,
   EmailThreadState,
   EmailThread,
   FieldDefinition,
@@ -258,6 +259,34 @@ function mapEmailAccount(account: {
     lastSyncedAt: account.lastSyncedAt?.toISOString(),
     createdAt: account.createdAt.toISOString(),
     updatedAt: account.updatedAt.toISOString()
+  };
+}
+
+function mapEmailSignature(signature: {
+  id: string;
+  workspaceId: string;
+  accountId: string | null;
+  name: string;
+  bodyText: string;
+  bodyHtml: string | null;
+  isDefault: boolean;
+  active: boolean;
+  createdById: string;
+  createdAt: Date;
+  updatedAt: Date;
+}): EmailSignature {
+  return {
+    id: signature.id,
+    workspaceId: signature.workspaceId,
+    accountId: signature.accountId ?? undefined,
+    name: signature.name,
+    bodyText: signature.bodyText,
+    bodyHtml: signature.bodyHtml ?? undefined,
+    isDefault: signature.isDefault,
+    active: signature.active,
+    createdById: signature.createdById,
+    createdAt: signature.createdAt.toISOString(),
+    updatedAt: signature.updatedAt.toISOString()
   };
 }
 
@@ -1408,6 +1437,83 @@ export class PrismaCrmRepository {
     await this.writeAuditLog(context, "delete", "email_account", existing.id, {
       summary: `Deleted email account ${existing.emailAddress}`,
       details: { provider: existing.provider }
+    });
+  }
+
+  async listEmailSignatures(context: RequestContext): Promise<EmailSignature[]> {
+    requirePermission(context, "crm.read");
+    await this.ensureDefaultEmailSignatures(context);
+    const signatures = await this.db.emailSignature.findMany({
+      where: { workspaceId: context.workspaceId },
+      orderBy: [{ active: "desc" }, { isDefault: "desc" }, { name: "asc" }, { createdAt: "asc" }]
+    });
+    return signatures.map(mapEmailSignature);
+  }
+
+  async createEmailSignature(
+    context: RequestContext,
+    input: Pick<EmailSignature, "name" | "bodyText"> & Partial<Pick<EmailSignature, "bodyHtml" | "isDefault" | "active">> & { accountId?: string | null }
+  ): Promise<EmailSignature> {
+    requirePermission(context, "crm.admin");
+    const accountId = await this.normalizeEmailSignatureAccountId(context, input.accountId);
+    if (input.isDefault) {
+      await this.clearDefaultEmailSignatures(context.workspaceId, accountId);
+    }
+    const signature = await this.db.emailSignature.create({
+      data: {
+        workspaceId: context.workspaceId,
+        accountId,
+        name: normalizeRequiredText(input.name, "Email signature name"),
+        bodyText: normalizeRequiredText(input.bodyText, "Email signature body"),
+        bodyHtml: input.bodyHtml?.trim() || null,
+        isDefault: input.isDefault ?? false,
+        active: input.active ?? true,
+        createdById: context.user.id
+      }
+    });
+    await this.writeAuditLog(context, "create", "email_signature", signature.id, {
+      summary: `Created email signature ${signature.name}`,
+      details: { accountId: signature.accountId, isDefault: signature.isDefault, active: signature.active }
+    });
+    return mapEmailSignature(signature);
+  }
+
+  async updateEmailSignature(
+    context: RequestContext,
+    signatureId: string,
+    patch: Partial<Pick<EmailSignature, "name" | "bodyText" | "bodyHtml" | "isDefault" | "active">> & { accountId?: string | null }
+  ): Promise<EmailSignature> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.assertEmailSignature(context, signatureId);
+    const accountId = patch.accountId !== undefined ? await this.normalizeEmailSignatureAccountId(context, patch.accountId) : existing.accountId ?? null;
+    if (patch.isDefault === true || (patch.isDefault === undefined && existing.isDefault && accountId !== (existing.accountId ?? null))) {
+      await this.clearDefaultEmailSignatures(context.workspaceId, accountId, existing.id);
+    }
+    const signature = await this.db.emailSignature.update({
+      where: { id: existing.id },
+      data: {
+        accountId,
+        name: patch.name !== undefined ? normalizeRequiredText(patch.name, "Email signature name") : undefined,
+        bodyText: patch.bodyText !== undefined ? normalizeRequiredText(patch.bodyText, "Email signature body") : undefined,
+        bodyHtml: patch.bodyHtml !== undefined ? patch.bodyHtml.trim() || null : undefined,
+        isDefault: patch.isDefault,
+        active: patch.active
+      }
+    });
+    await this.writeAuditLog(context, "update", "email_signature", signature.id, {
+      summary: `Updated email signature ${signature.name}`,
+      details: { accountId: signature.accountId, isDefault: signature.isDefault, active: signature.active }
+    });
+    return mapEmailSignature(signature);
+  }
+
+  async deleteEmailSignature(context: RequestContext, signatureId: string): Promise<void> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.assertEmailSignature(context, signatureId);
+    await this.db.emailSignature.delete({ where: { id: existing.id } });
+    await this.writeAuditLog(context, "delete", "email_signature", existing.id, {
+      summary: `Deleted email signature ${existing.name}`,
+      details: { accountId: existing.accountId, isDefault: existing.isDefault }
     });
   }
 
@@ -4741,6 +4847,71 @@ export class PrismaCrmRepository {
       }
     });
     return mapEmailSyncSettings(created);
+  }
+
+  private async ensureDefaultEmailSignatures(context: RequestContext): Promise<void> {
+    const count = await this.db.emailSignature.count({ where: { workspaceId: context.workspaceId } });
+    if (count > 0) {
+      return;
+    }
+    await this.db.emailSignature.createMany({
+      data: [
+        {
+          id: `email_signature_default_${context.workspaceId}`,
+          workspaceId: context.workspaceId,
+          accountId: null,
+          name: "默认签名",
+          bodyText: "Best regards,\n{{senderEmail}}",
+          bodyHtml: "<p>Best regards,<br>{{senderEmail}}</p>",
+          isDefault: true,
+          active: true,
+          createdById: context.user.id
+        },
+        {
+          id: `email_signature_cn_sales_${context.workspaceId}`,
+          workspaceId: context.workspaceId,
+          accountId: null,
+          name: "中文商务签名",
+          bodyText: "谢谢，\n{{senderEmail}}",
+          bodyHtml: "<p>谢谢，<br>{{senderEmail}}</p>",
+          isDefault: false,
+          active: true,
+          createdById: context.user.id
+        }
+      ],
+      skipDuplicates: true
+    });
+  }
+
+  private async clearDefaultEmailSignatures(workspaceId: string, accountId: string | null, exceptSignatureId?: string): Promise<void> {
+    await this.db.emailSignature.updateMany({
+      where: {
+        workspaceId,
+        accountId,
+        isDefault: true,
+        ...(exceptSignatureId ? { id: { not: exceptSignatureId } } : {})
+      },
+      data: { isDefault: false }
+    });
+  }
+
+  private async normalizeEmailSignatureAccountId(context: RequestContext, accountId?: string | null): Promise<string | null> {
+    const normalized = accountId?.trim();
+    if (!normalized) {
+      return null;
+    }
+    await this.assertEmailAccount(context, normalized);
+    return normalized;
+  }
+
+  private async assertEmailSignature(context: RequestContext, signatureId: string): Promise<EmailSignature> {
+    const signature = await this.db.emailSignature.findFirst({
+      where: { id: signatureId, workspaceId: context.workspaceId }
+    });
+    if (!signature) {
+      throw new Error("Email signature not found");
+    }
+    return mapEmailSignature(signature);
   }
 
   private async assertEmailAccount(context: RequestContext, accountId: string): Promise<EmailAccount> {
