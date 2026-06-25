@@ -1758,8 +1758,10 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.match(source, /onSyncAccount\(selectedMailboxAccountId\)/);
   assert.match(source, /selectedAccountCanSend \? selectedMailboxAccountId : emailDraft\.accountId \|\| activeAccounts\[0\]\?\.id \|\| ""/);
   assert.match(source, /if \(mailbox === "inbox"\) \{[\s\S]*message\.direction === "inbound" && message\.status === "received"/);
+  assert.match(source, /\["inbox", "all", "sent", "scheduled", "drafts"\]\.includes\(mailbox\)/);
   assert.match(source, /const hasInboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)\.length > 0/);
-  assert.match(source, /!isDeleted && !isArchived && !isSnoozed && \(!hasLoadedMessages \|\| hasInboxMessage\)/);
+  assert.match(source, /!isDeleted && !isArchived && !isSnoozed && hasInboxMessage/);
+  assert.doesNotMatch(source, /!hasLoadedMessages \|\| hasInboxMessage/);
   assert.match(styles, /\.gmail-account-folder span \{/);
   assert.match(styles, /\.gmail-account-folder strong,/);
 });
@@ -2016,6 +2018,8 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /recordId: emailDraft\.recordId \|\| undefined/);
   assert.match(source, /threadId: emailDraft\.threadId \|\| undefined/);
   assert.match(source, /skipAutoLink: !emailDraft\.threadId/);
+  assert.match(source, /const sentThreadIds = Array\.from\(new Set\(messages\.map\(\(item\) => item\.threadId\)\.filter\(Boolean\)\)\)/);
+  assert.match(source, /Promise\.all\(sentThreadIds\.map\(\(threadId\) => updateEmailThreadState\(threadId, \{ read: true \}\)\)\)/);
   const sendEmailBody = source.slice(source.indexOf("async function sendEmail()"), source.indexOf("async function retryEmailMessage"));
   assert.doesNotMatch(sendEmailBody, /threadId: selectedEmailThreadId \|\| undefined/);
   assert.match(source, /const htmlParts = \[inlineImageResult\.bodyHtml, signatureHtml, originalHtml\]\.filter\(Boolean\)/);
@@ -2462,7 +2466,7 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /计划发送 \{formatDate\(message\.scheduledSendAt\)\}/);
   assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
-  assert.match(workspace, /mailbox !== "sent" && mailbox !== "scheduled" && mailbox !== "drafts"/);
+  assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts"\]\.includes\(mailbox\)/);
   assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
   assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey\): EmailMessage \| undefined/);
   assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(messages, mailbox\)/);

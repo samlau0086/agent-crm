@@ -2683,6 +2683,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     const messages = "messages" in result ? result.messages : [result];
     const message = messages[0];
+    const sentThreadIds = Array.from(new Set(messages.map((item) => item.threadId).filter(Boolean)));
     setEmailMessagesByThread((current) => {
       const next = { ...current };
       for (const item of messages) {
@@ -2691,6 +2692,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return next;
     });
     await refreshEmailThreadsByIds(messages.map((item) => item.threadId));
+    await Promise.all(sentThreadIds.map((threadId) => updateEmailThreadState(threadId, { read: true })));
     selectEmailThread(message.threadId);
     setEmailDraft((current) => ({
       ...current,
@@ -4720,7 +4722,7 @@ function EmailWorkspace({
     [selectedMailboxAccountId, threads]
   );
   useEffect(() => {
-    if (mailbox !== "sent" && mailbox !== "scheduled" && mailbox !== "drafts") {
+    if (!["inbox", "all", "sent", "scheduled", "drafts"].includes(mailbox)) {
       return;
     }
     accountFilteredThreads
@@ -4751,7 +4753,6 @@ function EmailWorkspace({
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasScheduledSend(messages);
-      const hasLoadedMessages = messages.length > 0;
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
       const matchesMailbox =
         mailbox === "trash"
@@ -4772,7 +4773,7 @@ function EmailWorkspace({
                       ? hasDraft && !isDeleted
                       : mailbox === "all"
                         ? !isDeleted
-                        : !isDeleted && !isArchived && !isSnoozed && (!hasLoadedMessages || hasInboxMessage);
+                        : !isDeleted && !isArchived && !isSnoozed && hasInboxMessage;
       const matchesCategory = mailbox === "inbox" || mailbox === "all" ? threadCategory === category : true;
       const matchesLabel = labelFilter ? displayLabels.includes(labelFilter.toLowerCase()) : true;
       return matchesMailbox && matchesCategory && matchesLabel && emailThreadMatchesSearch(thread, messages, searchQuery);
@@ -4790,9 +4791,8 @@ function EmailWorkspace({
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasScheduledSend(messages);
-      const hasLoadedMessages = messages.length > 0;
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
-      if (!isDeleted && !isArchived && !isSnoozed && (!hasLoadedMessages || hasInboxMessage)) counts.inbox += 1;
+      if (!isDeleted && !isArchived && !isSnoozed && hasInboxMessage) counts.inbox += 1;
       if (state.starred && !isDeleted) counts.starred += 1;
       if (isSnoozed && !isDeleted) counts.snoozed += 1;
       if (state.important && !isDeleted) counts.important += 1;
