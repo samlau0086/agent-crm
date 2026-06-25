@@ -20,6 +20,7 @@ import { describePermission, permissionCatalog } from "../src/lib/auth/permissio
 import { crmPathForNav, resolveCrmRoute } from "../src/lib/crm/navigation.ts";
 import {
   activityUpdateSchema,
+  aiTalkRequestSchema,
   csvImportSchema,
   emailAccountCreateSchema,
   emailAccountUpdateSchema,
@@ -1869,6 +1870,37 @@ await run("email workspace can edit existing knowledge articles for ai context",
   assert.match(source, /data-testid="knowledge-edit"/);
   assert.match(source, /onKnowledgeDraftChange\(\{ editingArticleId: article\.id, title: article\.title, body: article\.body, tags: article\.tags\.join\(", "\), active: article\.active \}\)/);
   assert.match(source, /data-testid="knowledge-edit-cancel"/);
+});
+
+await run("talk about this panel can chat and save transcript to rag knowledge", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /type TalkTarget =[\s\S]*type: "record"[\s\S]*type: "email_thread"/);
+  assert.match(source, /function TalkAboutThisPanel/);
+  assert.match(source, /data-testid="talk-about-this"/);
+  assert.match(source, /fetchJson<TalkResponse>\("\/api\/ai\/talk"/);
+  assert.match(source, /fetchJson<KnowledgeArticle>\("\/api\/knowledge\/articles"/);
+  assert.match(source, /buildTalkKnowledgeTags\(target\)/);
+  assert.match(source, /\["talk", "rag", target\.objectKey, target\.recordId\]/);
+  assert.match(source, /\["talk", "rag", "email_thread", target\.threadId\]/);
+  assert.match(source, /target=\{\{ type: "record", objectKey: selectedRecord\.objectKey, recordId: selectedRecord\.id, label: selectedRecord\.title \}\}/);
+  assert.match(source, /target=\{\{ type: "email_thread", threadId: selectedThread\.id, label: selectedThread\.subject \}\}/);
+});
+
+await run("talk about this api is guarded by ai permission and uses crm context", () => {
+  const route = readFileSync("src/app/api/ai/talk/route.ts", "utf8");
+  const schemas = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
+  const talk = readFileSync("src/lib/ai/talk.ts", "utf8");
+  assert.match(route, /requirePermission\(context, "ai\.use"\)/);
+  assert.match(route, /parseJson\(request, aiTalkRequestSchema\)/);
+  assert.match(route, /buildRecordTalkContext/);
+  assert.match(route, /buildEmailThreadTalkContext/);
+  assert.match(route, /repository\.listKnowledgeArticles\(context, true\)/);
+  assert.match(route, /generateAiTalkResponse/);
+  assert.match(schemas, /export const aiTalkRequestSchema/);
+  assert.match(schemas, /type: z\.literal\("record"\)/);
+  assert.match(schemas, /type: z\.literal\("email_thread"\)/);
+  assert.match(talk, /chat\/completions/);
+  assert.match(talk, /generationMode: "local"/);
 });
 
 await run("email workspace sends stable client request ids for compose idempotency", () => {
@@ -9197,6 +9229,23 @@ await run("email send sync and ai schemas validate bounded payloads", () => {
   assert.equal(aiSettingsPatch.maxKnowledgeArticles, 4);
   assert.equal(aiSettingsPatch.maxContextChars, 12000);
   assert.throws(() => emailAiSettingsUpdateSchema.parse({ maxContextChars: 999 }), z.ZodError);
+  assert.equal(
+    aiTalkRequestSchema.parse({
+      target: { type: "record", objectKey: "contacts", recordId: "contact-1" },
+      question: "What should we do next?",
+      history: [{ role: "assistant", content: "Use the CRM context." }]
+    }).target.type,
+    "record"
+  );
+  assert.equal(
+    aiTalkRequestSchema.parse({
+      target: { type: "email_thread", threadId: "thread-1" },
+      question: "Summarize the risk."
+    }).target.type,
+    "email_thread"
+  );
+  assert.throws(() => aiTalkRequestSchema.parse({ target: { type: "record", objectKey: "Contacts", recordId: "contact-1" }, question: "bad object key" }), z.ZodError);
+  assert.throws(() => aiTalkRequestSchema.parse({ target: { type: "email_thread" }, question: "missing thread" }), z.ZodError);
   assert.equal(emailAccountUpdateSchema.parse({ status: "disabled", syncEnabled: false, sendEnabled: false }).status, "disabled");
   assert.equal(
     emailAccountUpdateSchema.parse({

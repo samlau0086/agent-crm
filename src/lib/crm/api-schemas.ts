@@ -588,6 +588,37 @@ export const emailSyncSettingsUpdateSchema = z
   })
   .strict();
 
+export const aiTalkMessageSchema = z
+  .object({
+    role: z.enum(["user", "assistant"]),
+    content: z.string().trim().min(1).max(4000)
+  })
+  .strict();
+
+export const aiTalkTargetSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("record"),
+      objectKey: z.string().trim().regex(/^[a-z][a-z0-9_]*$/),
+      recordId: z.string().trim().min(1).max(120)
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("email_thread"),
+      threadId: z.string().trim().min(1).max(120)
+    })
+    .strict()
+]);
+
+export const aiTalkRequestSchema = z
+  .object({
+    target: aiTalkTargetSchema,
+    question: z.string().trim().min(1).max(2000),
+    history: z.array(aiTalkMessageSchema).max(20).optional()
+  })
+  .strict();
+
 export const emailAssistantContextSchema = z
   .object({
     purpose: emailAssistantPurposeSchema,

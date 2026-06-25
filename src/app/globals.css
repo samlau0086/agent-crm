@@ -2744,6 +2744,55 @@ button {
   background: #eff6ff;
 }
 
+.talk-panel {
+  background: #f8fbff;
+}
+
+.talk-target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.talk-messages {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.talk-message {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.talk-message span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.talk-message div {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.talk-message.assistant {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.talk-input {
+  min-height: 78px;
+}
+
 .email-thread-analysis {
   display: block;
 }

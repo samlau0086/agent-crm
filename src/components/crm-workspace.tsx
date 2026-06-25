@@ -153,6 +153,18 @@ type EmailThreadUiState = {
 };
 type AiSource = { label: string; objectKey?: string; recordId?: string; activityId?: string };
 type AiResponse = { text: string; sources: AiSource[] };
+type TalkTarget =
+  | { type: "record"; objectKey: string; recordId: string; label: string }
+  | { type: "email_thread"; threadId: string; label: string };
+type TalkApiTarget =
+  | { type: "record"; objectKey: string; recordId: string }
+  | { type: "email_thread"; threadId: string };
+type TalkMessage = { role: "user" | "assistant"; content: string };
+type TalkResponse = {
+  text: string;
+  generationMode?: "local" | "provider" | "provider_fallback";
+  sources: Array<{ label: string; objectKey?: string; recordId?: string; messageId?: string; knowledgeArticleId?: string }>;
+};
 type EmailAiSource = EmailAiSourceRef;
 const defaultEmailSyncSettings: EmailSyncSettings = {
   workspaceId: "",
@@ -1739,6 +1751,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setSelectedRecordId(record.id);
     setRecordReturnEmailThreadId(options.returnEmailThreadId ?? "");
     setRecordPanelMode("detail");
+  }
+
+  async function openTalkSourceRecord(source: { objectKey: string; recordId: string }) {
+    const existingRecord = records.find((record) => record.id === source.recordId && record.objectKey === source.objectKey);
+    if (existingRecord) {
+      openRecord(existingRecord);
+      return;
+    }
+    const fetchedRecord = await fetchJson<CrmRecord>(`/api/records/${source.objectKey}/${source.recordId}`, { method: "GET" });
+    openRecord(fetchedRecord);
   }
 
   function startCreateContactForCompany(company: CrmRecord) {
@@ -3689,6 +3711,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onOpenRecord={openRecord}
                       />
                     )}
+
+                    <TalkAboutThisPanel
+                      target={{ type: "record", objectKey: selectedRecord.objectKey, recordId: selectedRecord.id, label: selectedRecord.title }}
+                      disabled={isPending}
+                      onOpenRecord={(source) => runAction(() => openTalkSourceRecord(source))}
+                      onKnowledgeCreated={(article) => setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)])}
+                      onShowToast={showToast}
+                    />
                   </>
                 ) : (
                   <div className="empty-state">请先从左侧列表选择一条记录</div>
@@ -3888,6 +3918,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onLinkExistingContactFromEmail={(threadId, contactId, emailAddress) => runAction(() => linkExistingContactFromEmail(threadId, contactId, emailAddress))}
             onUnlinkContactEmailFromThread={(threadId, contactId, emailAddress) => runAction(() => unlinkContactEmailFromThread(threadId, contactId, emailAddress))}
             onOpenEmailContact={(threadId, contact) => openEmailContact(threadId, contact)}
+            onOpenTalkSourceRecord={(source) => runAction(() => openTalkSourceRecord(source))}
             onCreateAccount={() => runAction(createEmailAccount)}
             onStartOAuth={() => runAction(startEmailOAuth)}
             onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
@@ -3913,6 +3944,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onTestAllConnections={() => runAction(testAllEmailConnections)}
             onCreateKnowledgeArticle={() => runAction(createKnowledgeArticle)}
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
+            onKnowledgeArticleCreated={(article) => setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)])}
             onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
             onDeleteMediaAsset={(asset) => runAction(() => deleteMediaAsset(asset))}
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
@@ -4208,6 +4240,7 @@ function EmailWorkspace({
   onLinkExistingContactFromEmail,
   onUnlinkContactEmailFromThread,
   onOpenEmailContact,
+  onOpenTalkSourceRecord,
   onCreateAccount,
   onStartOAuth,
   onSyncAccount,
@@ -4231,6 +4264,7 @@ function EmailWorkspace({
   onTestAllConnections,
   onCreateKnowledgeArticle,
   onUpdateKnowledgeArticle,
+  onKnowledgeArticleCreated,
   onUpdateMediaAsset,
   onDeleteMediaAsset,
   onToggleAiFeature,
@@ -4281,6 +4315,7 @@ function EmailWorkspace({
   onLinkExistingContactFromEmail: (threadId: string, contactId: string, emailAddress: string) => void;
   onUnlinkContactEmailFromThread: (threadId: string, contactId: string, emailAddress: string) => void;
   onOpenEmailContact: (threadId: string, contact: CrmRecord) => void;
+  onOpenTalkSourceRecord: (source: { objectKey: string; recordId: string }) => void;
   onCreateAccount: () => void;
   onStartOAuth: () => void;
   onSyncAccount: (accountId: string) => void;
@@ -4304,6 +4339,7 @@ function EmailWorkspace({
   onTestAllConnections: () => void;
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
+  onKnowledgeArticleCreated: (article: KnowledgeArticle) => void;
   onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
   onDeleteMediaAsset: (asset: MediaAsset) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
@@ -6098,6 +6134,13 @@ function EmailWorkspace({
                       {renderEmailAiSources(selectedThread.aiAnalysisSources)}
                     </details>
                   ) : null}
+                  <TalkAboutThisPanel
+                    target={{ type: "email_thread", threadId: selectedThread.id, label: selectedThread.subject }}
+                    disabled={disabled}
+                    onOpenRecord={onOpenTalkSourceRecord}
+                    onKnowledgeCreated={onKnowledgeArticleCreated}
+                    onShowToast={onShowToast}
+                  />
                   <div className="email-message-list">
                     {selectedMessages.map((message) => (
                       <article className="email-message-card gmail-message-card" key={message.id}>
@@ -7096,6 +7139,34 @@ function recordReferencesId(value: unknown, recordId: string): boolean {
     return [candidate.id, candidate.recordId, candidate.value].some((item) => recordReferencesId(item, recordId));
   }
   return false;
+}
+
+function talkApiTarget(target: TalkTarget): TalkApiTarget {
+  return target.type === "record"
+    ? { type: "record", objectKey: target.objectKey, recordId: target.recordId }
+    : { type: "email_thread", threadId: target.threadId };
+}
+
+function buildTalkKnowledgeTags(target: TalkTarget): string[] {
+  return target.type === "record"
+    ? ["talk", "rag", target.objectKey, target.recordId]
+    : ["talk", "rag", "email_thread", target.threadId];
+}
+
+function buildTalkKnowledgeBody(target: TalkTarget, messages: TalkMessage[], sources: TalkResponse["sources"]): string {
+  const targetLines =
+    target.type === "record"
+      ? [`Target type: record`, `Object: ${target.objectKey}`, `Record ID: ${target.recordId}`, `Record: ${target.label}`]
+      : [`Target type: email_thread`, `Thread ID: ${target.threadId}`, `Thread: ${target.label}`];
+  const transcript = messages.map((message) => `${message.role === "assistant" ? "AI" : "User"}: ${message.content}`).join("\n\n");
+  const sourceLines = sources.length
+    ? sources.map((source) => `- ${source.label}${source.objectKey && source.recordId ? ` (${source.objectKey}/${source.recordId})` : ""}`).join("\n")
+    : "No sources returned.";
+  return `${targetLines.join("\n")}\n\nTranscript:\n${transcript}\n\nSources:\n${sourceLines}`;
+}
+
+function trimForLabel(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, Math.max(1, maxLength - 1))}…` : value;
 }
 
 function looksLikeEmail(value: string): boolean {
@@ -8657,6 +8728,154 @@ function AiAssistant({
         </div>
       )}
       <div className="subtle">AI 不会直接修改记录，只提供基于 CRM 数据的只读建议和查询入口。</div>
+    </section>
+  );
+}
+
+function TalkAboutThisPanel({
+  target,
+  disabled,
+  onKnowledgeCreated,
+  onOpenRecord,
+  onShowToast
+}: {
+  target: TalkTarget;
+  disabled: boolean;
+  onKnowledgeCreated: (article: KnowledgeArticle) => void;
+  onOpenRecord?: (source: { objectKey: string; recordId: string }) => void;
+  onShowToast: (toast: ToastState) => void;
+}) {
+  const [messages, setMessages] = useState<TalkMessage[]>([]);
+  const [question, setQuestion] = useState("");
+  const [sources, setSources] = useState<TalkResponse["sources"]>([]);
+  const [isSending, setIsSending] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const targetKey = target.type === "record" ? `${target.objectKey}:${target.recordId}` : `email_thread:${target.threadId}`;
+
+  useEffect(() => {
+    setMessages([]);
+    setQuestion("");
+    setSources([]);
+  }, [targetKey]);
+
+  async function sendMessage() {
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion) {
+      return;
+    }
+
+    const nextMessages: TalkMessage[] = [...messages, { role: "user", content: trimmedQuestion }];
+    setMessages(nextMessages);
+    setQuestion("");
+    setIsSending(true);
+    try {
+      const result = await fetchJson<TalkResponse>("/api/ai/talk", {
+        method: "POST",
+        body: {
+          target: talkApiTarget(target),
+          question: trimmedQuestion,
+          history: messages.slice(-12)
+        }
+      });
+      setMessages([...nextMessages, { role: "assistant", content: result.text }]);
+      setSources(result.sources ?? []);
+    } catch (error) {
+      setMessages(messages);
+      setQuestion(trimmedQuestion);
+      onShowToast({ intent: "error", message: error instanceof Error ? error.message : "讨论请求失败" });
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  async function saveToKnowledge() {
+    if (messages.length === 0) {
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const article = await fetchJson<KnowledgeArticle>("/api/knowledge/articles", {
+        method: "POST",
+        body: {
+          title: trimForLabel(`Talk: ${target.label}`, 80),
+          body: buildTalkKnowledgeBody(target, messages, sources),
+          tags: buildTalkKnowledgeTags(target),
+          active: true
+        }
+      });
+      onKnowledgeCreated(article);
+      onShowToast({ intent: "success", message: "讨论内容已关联到 RAG 知识库" });
+    } catch (error) {
+      onShowToast({ intent: "error", message: error instanceof Error ? error.message : "保存到知识库失败" });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <section className="ai-box talk-panel" data-testid="talk-about-this">
+      <div className="activity-meta">
+        <Bot size={16} />
+        Talk about this
+      </div>
+      <div className="talk-target">
+        <strong>{target.label}</strong>
+        <span className="badge">{target.type === "record" ? target.objectKey : "email thread"}</span>
+      </div>
+      <div className="talk-messages" data-testid="talk-about-this-messages">
+        {messages.length ? (
+          messages.map((message, index) => (
+            <div className={`talk-message ${message.role === "assistant" ? "assistant" : "user"}`} key={`${message.role}-${index}`}>
+              <span>{message.role === "assistant" ? "AI" : "你"}</span>
+              <div>{message.content}</div>
+            </div>
+          ))
+        ) : (
+          <div className="empty-state">可以围绕这条记录讨论背景、风险、下一步、邮件回复或报价策略。</div>
+        )}
+      </div>
+      {sources.length ? (
+        <div className="toolbar compact-toolbar">
+          {sources.map((source) =>
+            source.objectKey && source.recordId ? (
+              <button className="secondary-button" key={`${source.objectKey}-${source.recordId}`} type="button" onClick={() => onOpenRecord?.({ objectKey: source.objectKey!, recordId: source.recordId! })}>
+                <Link size={14} />
+                {source.label}
+              </button>
+            ) : (
+              <span className="badge" key={`${source.messageId ?? source.knowledgeArticleId ?? source.label}`}>{source.label}</span>
+            )
+          )}
+        </div>
+      ) : null}
+      <label>
+        <span className="subtle">输入要讨论的问题</span>
+        <textarea
+          className="textarea talk-input"
+          data-testid="talk-about-this-input"
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+              event.preventDefault();
+              void sendMessage();
+            }
+          }}
+          placeholder="例如：这个客户下一步应该怎么跟进？这封邮件是否值得回复？"
+        />
+      </label>
+      <div className="toolbar">
+        <button className="secondary-button" data-testid="talk-about-this-send" type="button" onClick={() => void sendMessage()} disabled={disabled || isSending || !question.trim()}>
+          <Bot className={isSending ? "spin-icon" : undefined} size={16} />
+          发送
+        </button>
+        <button className="secondary-button" data-testid="talk-about-this-save-knowledge" type="button" onClick={() => void saveToKnowledge()} disabled={disabled || isSaving || messages.length === 0}>
+          <Save className={isSaving ? "spin-icon" : undefined} size={16} />
+          关联到 RAG 知识
+        </button>
+      </div>
+      <div className="subtle">仅生成讨论建议，不会直接修改 CRM 数据。保存后会作为知识库文章参与后续 RAG 检索。</div>
     </section>
   );
 }
