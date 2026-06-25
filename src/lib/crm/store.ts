@@ -1078,6 +1078,46 @@ export class CrmStore {
     return clone(asset);
   }
 
+  updateMediaAsset(context: RequestContext, assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>): MediaAsset {
+    requirePermission(context, "crm.write");
+    const asset = (this.data.mediaAssets ?? []).find((candidate) => candidate.id === assetId && candidate.workspaceId === context.workspaceId);
+    if (!asset) {
+      throw new Error("Media asset not found");
+    }
+    if (patch.name !== undefined) {
+      asset.name = normalizeRequiredText(patch.name, "Media name");
+    }
+    if (patch.contentType !== undefined) {
+      asset.contentType = patch.contentType;
+    }
+    if (patch.size !== undefined) {
+      asset.size = patch.size;
+    }
+    if (patch.contentBase64 !== undefined) {
+      asset.contentBase64 = patch.contentBase64;
+    }
+    asset.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "media_asset", asset.id, {
+      summary: `Updated media asset ${asset.name}`,
+      details: { contentType: asset.contentType, size: asset.size }
+    });
+    return clone(asset);
+  }
+
+  deleteMediaAsset(context: RequestContext, assetId: string): void {
+    requirePermission(context, "crm.write");
+    const assets = this.data.mediaAssets ?? [];
+    const index = assets.findIndex((candidate) => candidate.id === assetId && candidate.workspaceId === context.workspaceId);
+    if (index === -1) {
+      throw new Error("Media asset not found");
+    }
+    const [asset] = assets.splice(index, 1);
+    this.writeAuditLog(context, "delete", "media_asset", asset.id, {
+      summary: `Deleted media asset ${asset.name}`,
+      details: { contentType: asset.contentType, size: asset.size }
+    });
+  }
+
   getEmailAiSettings(context: RequestContext): EmailAiSettings {
     requirePermission(context, "crm.read");
     return publicEmailAiSettings(this.ensureEmailAiSettings(context.workspaceId));

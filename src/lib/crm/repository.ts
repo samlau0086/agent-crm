@@ -2067,6 +2067,49 @@ export class PrismaCrmRepository {
     return mapMediaAsset(asset);
   }
 
+  async updateMediaAsset(
+    context: RequestContext,
+    assetId: string,
+    patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>
+  ): Promise<MediaAsset> {
+    requirePermission(context, "crm.write");
+    const existing = await this.db.mediaAsset.findFirst({
+      where: { id: assetId, workspaceId: context.workspaceId }
+    });
+    if (!existing) {
+      throw new Error("Media asset not found");
+    }
+    const asset = await this.db.mediaAsset.update({
+      where: { id: assetId },
+      data: {
+        name: patch.name !== undefined ? normalizeRequiredText(patch.name, "Media name") : undefined,
+        contentType: patch.contentType,
+        size: patch.size,
+        contentBase64: patch.contentBase64
+      }
+    });
+    await this.writeAuditLog(context, "update", "media_asset", asset.id, {
+      summary: `Updated media asset ${asset.name}`,
+      details: { contentType: asset.contentType, size: asset.size }
+    });
+    return mapMediaAsset(asset);
+  }
+
+  async deleteMediaAsset(context: RequestContext, assetId: string): Promise<void> {
+    requirePermission(context, "crm.write");
+    const existing = await this.db.mediaAsset.findFirst({
+      where: { id: assetId, workspaceId: context.workspaceId }
+    });
+    if (!existing) {
+      throw new Error("Media asset not found");
+    }
+    await this.db.mediaAsset.delete({ where: { id: assetId } });
+    await this.writeAuditLog(context, "delete", "media_asset", existing.id, {
+      summary: `Deleted media asset ${existing.name}`,
+      details: { contentType: existing.contentType, size: existing.size }
+    });
+  }
+
   async getEmailAiSettings(context: RequestContext): Promise<EmailAiSettings> {
     requirePermission(context, "crm.read");
     return this.ensureEmailAiSettings(context.workspaceId);

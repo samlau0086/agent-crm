@@ -651,17 +651,29 @@ export const knowledgeArticleCreateSchema = z
 
 export const knowledgeArticleUpdateSchema = knowledgeArticleCreateSchema.partial().strict();
 
-export const mediaAssetCreateSchema = z
-  .object({
-    name: labelSchema.max(200),
-    contentType: imageContentTypeSchema,
-    size: z.number().int().min(1).max(MAX_MEDIA_ASSET_BYTES),
-    contentBase64: z.string().trim().min(1).refine(isValidEmailAttachmentBase64, {
-      message: "contentBase64 must be valid base64"
-    })
+const mediaAssetPayloadSchema = z.object({
+  name: labelSchema.max(200),
+  contentType: imageContentTypeSchema,
+  size: z.number().int().min(1).max(MAX_MEDIA_ASSET_BYTES),
+  contentBase64: z.string().trim().min(1).refine(isValidEmailAttachmentBase64, {
+    message: "contentBase64 must be valid base64"
   })
+});
+
+export const mediaAssetCreateSchema = mediaAssetPayloadSchema
   .strict()
   .refine((value) => Buffer.from(value.contentBase64, "base64").length <= MAX_MEDIA_ASSET_BYTES, {
+    path: ["contentBase64"],
+    message: `Media asset must be at most ${MAX_MEDIA_ASSET_BYTES} bytes`
+  });
+
+export const mediaAssetUpdateSchema = mediaAssetPayloadSchema
+  .partial()
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one media asset field is required"
+  })
+  .refine((value) => !value.contentBase64 || Buffer.from(value.contentBase64, "base64").length <= MAX_MEDIA_ASSET_BYTES, {
     path: ["contentBase64"],
     message: `Media asset must be at most ${MAX_MEDIA_ASSET_BYTES} bytes`
   });

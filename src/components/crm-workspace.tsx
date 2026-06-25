@@ -2864,6 +2864,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return createdAssets;
   }
 
+  async function updateMediaAsset(assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) {
+    const updated = await fetchJson<MediaAsset>(`/api/media-assets/${assetId}`, {
+      method: "PATCH",
+      body: patch
+    });
+    setMediaAssets((current) => mergeMediaAssets([updated], current.filter((asset) => asset.id !== updated.id)));
+    showSuccess(`媒体图片已更新：${updated.name}`);
+  }
+
+  async function deleteMediaAsset(asset: MediaAsset) {
+    if (
+      !(await requestConfirm({
+        title: "删除媒体图片",
+        message: `确定从媒体库删除“${asset.name}”？已经使用该图片的记录不会自动清空。`,
+        confirmLabel: "删除",
+        danger: true
+      }))
+    ) {
+      return;
+    }
+    await fetchJson(`/api/media-assets/${asset.id}`, { method: "DELETE" });
+    setMediaAssets((current) => current.filter((candidate) => candidate.id !== asset.id));
+    showSuccess(`媒体图片已删除：${asset.name}`);
+  }
+
   function runAction(action: () => Promise<void>) {
     setMessage(null);
     setError(null);
@@ -3837,6 +3862,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onTestAllConnections={() => runAction(testAllEmailConnections)}
             onCreateKnowledgeArticle={() => runAction(createKnowledgeArticle)}
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
+            onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+            onDeleteMediaAsset={(asset) => runAction(() => deleteMediaAsset(asset))}
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
             onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
             onUpdateSyncSettings={(patch) => runAction(() => updateEmailSyncSettingsPatch(patch))}
@@ -4153,6 +4180,8 @@ function EmailWorkspace({
   onTestAllConnections,
   onCreateKnowledgeArticle,
   onUpdateKnowledgeArticle,
+  onUpdateMediaAsset,
+  onDeleteMediaAsset,
   onToggleAiFeature,
   onUpdateAiSettings,
   onUpdateSyncSettings,
@@ -4224,6 +4253,8 @@ function EmailWorkspace({
   onTestAllConnections: () => void;
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
   onToggleAiFeature: (feature: keyof EmailAiSettings["features"], enabled: boolean) => void;
   onUpdateAiSettings: (
     patch: Partial<Pick<EmailAiSettings, "defaultLocale" | "requireSourceLinks" | "maxHistoryMessages" | "maxKnowledgeArticles" | "maxContextChars" | "agents">> & {
@@ -4287,10 +4318,13 @@ function EmailWorkspace({
   const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+  const [editingMediaAssetId, setEditingMediaAssetId] = useState("");
+  const [mediaAssetNameDraft, setMediaAssetNameDraft] = useState("");
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [attachmentUploads, setAttachmentUploads] = useState<EmailAttachmentUploadItem[]>([]);
   const composeEditorRef = useRef<HTMLDivElement>(null);
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
+  const mediaReplaceInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || hasEmailDraftBody(emailDraft) || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const signatureOptions = useMemo(() => getEmailSignatureOptions(accounts, emailDraft.accountId), [accounts, emailDraft.accountId]);
@@ -4704,6 +4738,46 @@ function EmailWorkspace({
     );
     updateComposeBodyFromEditor();
     setMediaLibraryOpen(false);
+  }
+
+  function startEditingMediaAsset(asset: MediaAsset) {
+    setEditingMediaAssetId(asset.id);
+    setMediaAssetNameDraft(asset.name);
+  }
+
+  function saveMediaAssetName(asset: MediaAsset) {
+    const nextName = mediaAssetNameDraft.trim();
+    if (!nextName) {
+      onShowToast({ intent: "error", message: "请输入图片名称。" });
+      return;
+    }
+    onUpdateMediaAsset(asset.id, { name: nextName });
+    setEditingMediaAssetId("");
+    setMediaAssetNameDraft("");
+  }
+
+  async function replaceEditingMediaAsset(files: FileList | null) {
+    const asset = mediaAssets.find((candidate) => candidate.id === editingMediaAssetId);
+    const file = files?.[0];
+    if (!asset || !file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      onShowToast({ intent: "error", message: "请选择图片文件。" });
+      return;
+    }
+    if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
+      onShowToast({ intent: "error", message: `${file.name} 超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}。` });
+      return;
+    }
+    onUpdateMediaAsset(asset.id, {
+      name: mediaAssetNameDraft.trim() || file.name,
+      contentType: file.type || "image/png",
+      size: file.size,
+      contentBase64: await readFileAsBase64(file)
+    });
+    setEditingMediaAssetId("");
+    setMediaAssetNameDraft("");
   }
 
   function performMailboxAction(action: "archive" | "unarchive" | "delete" | "restore" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
@@ -6226,14 +6300,55 @@ function EmailWorkspace({
                   <ImageIcon size={16} />
                   上传图片
                 </button>
+                <input
+                  ref={mediaReplaceInputRef}
+                  hidden
+                  accept="image/*"
+                  type="file"
+                  onChange={(event) => {
+                    void replaceEditingMediaAsset(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
               </div>
               {mediaAssets.length ? (
                 <div className="media-library-grid">
                   {mediaAssets.map((asset) => (
-                    <button key={asset.id} type="button" onClick={() => insertMediaAssetInline(asset)}>
-                      <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
-                      <span>{asset.name}</span>
-                    </button>
+                    <div className="media-library-card" key={asset.id}>
+                      <button className="media-library-select" type="button" onClick={() => insertMediaAssetInline(asset)}>
+                        <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
+                      </button>
+                      {editingMediaAssetId === asset.id ? (
+                        <div className="media-library-edit">
+                          <input className="input" data-testid={`media-asset-name-${asset.id}`} value={mediaAssetNameDraft} onChange={(event) => setMediaAssetNameDraft(event.target.value)} />
+                          <div className="toolbar compact-toolbar">
+                            <button className="secondary-button" type="button" onClick={() => saveMediaAssetName(asset)} disabled={disabled || !mediaAssetNameDraft.trim()}>
+                              <Save size={14} />
+                              保存
+                            </button>
+                            <button className="secondary-button" type="button" onClick={() => mediaReplaceInputRef.current?.click()} disabled={disabled}>
+                              <Upload size={14} />
+                              替换
+                            </button>
+                            <button className="secondary-button" type="button" onClick={() => setEditingMediaAssetId("")}>
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="media-library-card-footer">
+                          <span title={asset.name}>{asset.name}</span>
+                          <div className="toolbar compact-toolbar">
+                            <button className="icon-button" aria-label={`编辑 ${asset.name}`} data-testid={`media-asset-edit-${asset.id}`} type="button" onClick={() => startEditingMediaAsset(asset)} disabled={disabled}>
+                              <Pencil size={14} />
+                            </button>
+                            <button className="icon-button danger-button" aria-label={`删除 ${asset.name}`} data-testid={`media-asset-delete-${asset.id}`} type="button" onClick={() => onDeleteMediaAsset(asset)} disabled={disabled}>
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               ) : (

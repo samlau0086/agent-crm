@@ -1989,7 +1989,7 @@ button {
 }
 
 .media-picker-strip button,
-.media-library-grid button {
+.media-library-select {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2004,7 +2004,7 @@ button {
 }
 
 .media-picker-strip img,
-.media-library-grid img {
+.media-library-select img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -2025,15 +2025,31 @@ button {
   gap: 10px;
 }
 
-.media-library-grid button {
+.media-library-card {
   display: grid;
-  grid-template-rows: 108px auto;
-  gap: 6px;
-  padding: 6px;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.media-library-select {
+  display: grid;
+  height: 112px;
+  padding: 0;
   text-align: left;
 }
 
-.media-library-grid span {
+.media-library-card-footer,
+.media-library-edit {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.media-library-card-footer span {
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
