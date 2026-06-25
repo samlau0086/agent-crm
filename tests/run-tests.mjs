@@ -1570,8 +1570,11 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /data-testid="email-thread-restore"/);
   assert.match(source, /data-testid="email-thread-permanent-delete"/);
   assert.match(source, /data-testid="email-thread-bulk-permanent-delete"/);
+  assert.match(source, /data-testid=\{`email-thread-row-permanent-delete-\$\{thread\.id\}`\}/);
   assert.match(source, /async function deleteEmailThreads\(threadIds: string\[\]\)/);
   assert.match(source, /确定彻底删除 \$\{targetThreads\.length\} 个邮件线程/);
+  assert.match(source, /action === "delete" && threadIds\.some\(\(threadId\) => Boolean\(threadUiState\[threadId\]\?\.deleted\)\)/);
+  assert.match(source, /selectedThreadState\.deleted \|\| mailbox === "trash"/);
   assert.match(source, /performMailboxAction\(action: "archive" \| "unarchive" \| "delete" \| "restore"/);
   assert.doesNotMatch(source, /data-testid="email-thread-record"/);
   assert.match(source, /const contactMethodsValueKey = "__contactMethods"/);

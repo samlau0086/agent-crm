@@ -4840,6 +4840,10 @@ function EmailWorkspace({
     if (!threadIds.length) {
       return;
     }
+    if (action === "delete" && threadIds.some((threadId) => Boolean(threadUiState[threadId]?.deleted))) {
+      onDeleteThreads(threadIds);
+      return;
+    }
     let patchByThreadId = new Map<string, Partial<EmailThreadUiState>>();
     if (action === "archive") {
       patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { archived: true, deleted: false }]));
@@ -5869,10 +5873,10 @@ function EmailWorkspace({
                         ) : (
                           <button className="icon-button" aria-label="归档" type="button" onClick={() => performMailboxAction("archive", [thread.id])}><Archive size={15} /></button>
                         )}
-                        {state.deleted ? (
+                        {state.deleted || mailbox === "trash" ? (
                           <>
                             <button className="icon-button" aria-label="恢复" type="button" onClick={() => performMailboxAction("restore", [thread.id])}><RotateCcw size={15} /></button>
-                            <button className="icon-button" aria-label="彻底删除" type="button" onClick={() => onDeleteThread(thread.id)}><Trash2 size={15} /></button>
+                            <button className="icon-button" data-testid={`email-thread-row-permanent-delete-${thread.id}`} aria-label="彻底删除" type="button" onClick={() => onDeleteThread(thread.id)}><Trash2 size={15} /></button>
                           </>
                         ) : (
                           <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
@@ -5906,7 +5910,7 @@ function EmailWorkspace({
                     <Archive size={16} />
                   </button>
                 )}
-                {selectedThreadState.deleted ? (
+                {selectedThreadState.deleted || mailbox === "trash" ? (
                   <>
                     <button className="icon-button" data-testid="email-thread-restore" aria-label="恢复" title="恢复" type="button" onClick={() => selectedThread && performMailboxAction("restore", [selectedThread.id])} disabled={!selectedThread}>
                       <RotateCcw size={16} />
