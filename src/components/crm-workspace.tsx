@@ -150,7 +150,7 @@ type EmailThreadUiState = {
   important?: boolean;
   labels?: string[];
   read?: boolean;
-  snoozedUntil?: string;
+  snoozedUntil?: string | null;
   starred?: boolean;
 };
 type AiSource = { label: string; objectKey?: string; recordId?: string; activityId?: string };
@@ -2375,6 +2375,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailMessagesByThread((current) => ({ ...current, [threadId]: messages }));
   }
 
+  async function refreshEmailThreadsByIds(threadIds: string[]): Promise<EmailThread[]> {
+    const uniqueThreadIds = Array.from(new Set(threadIds.filter(Boolean)));
+    if (!uniqueThreadIds.length) {
+      return [];
+    }
+    const fetchedThreads = await Promise.all(
+      uniqueThreadIds.map((threadId) => fetchJson<EmailThread>(`/api/email/threads/${threadId}`, { method: "GET" }))
+    );
+    setEmailThreads((current) => mergeEmailThreads(current, fetchedThreads));
+    return fetchedThreads;
+  }
+
   async function openEmailThread(threadId: string) {
     const nextEmailThreadPath = `${crmPathForNav("email")}?emailThreadId=${encodeURIComponent(threadId)}`;
     selectEmailThread(threadId);
@@ -2617,6 +2629,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
       return next;
     });
+    await refreshEmailThreadsByIds(messages.map((item) => item.threadId));
     selectEmailThread(message.threadId);
     setEmailDraft((current) => ({
       ...current,
@@ -4018,6 +4031,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onAiPurposeChange={setEmailAiPurpose}
             onAiPromptChange={setEmailAiPrompt}
             onViewChange={setEmailWorkspaceView}
+            onLoadThreadMessages={(threadId) => loadEmailMessages(threadId)}
             onSelectThread={(threadId) => {
               selectEmailThread(threadId);
               if (!emailMessagesByThread[threadId]) {
@@ -4351,6 +4365,7 @@ function EmailWorkspace({
   onAiPurposeChange,
   onAiPromptChange,
   onViewChange,
+  onLoadThreadMessages,
   onSelectThread,
   onUpdateThread,
   onUpdateThreadState,
@@ -4432,6 +4447,7 @@ function EmailWorkspace({
   onAiPurposeChange: (purpose: EmailAiGenerateResult["purpose"]) => void;
   onAiPromptChange: (prompt: string) => void;
   onViewChange: (view: EmailWorkspaceView) => void;
+  onLoadThreadMessages: (threadId: string) => Promise<void>;
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
@@ -4525,6 +4541,7 @@ function EmailWorkspace({
   const [externalImageThreadIds, setExternalImageThreadIds] = useState<Set<string>>(() => new Set());
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const selectedThreadIsRead = Boolean(selectedThreadState.read);
+  const selectedThreadIsSnoozed = Boolean(selectedThreadState.snoozedUntil && new Date(selectedThreadState.snoozedUntil).getTime() > Date.now());
   const selectedThreadAllowsExternalImages = selectedThread ? externalImageThreadIds.has(selectedThread.id) : false;
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
@@ -4626,6 +4643,17 @@ function EmailWorkspace({
     () => (selectedMailboxAccountId === allEmailAccountsKey ? threads : threads.filter((thread) => thread.accountId === selectedMailboxAccountId)),
     [selectedMailboxAccountId, threads]
   );
+  useEffect(() => {
+    if (mailbox !== "sent" && mailbox !== "scheduled" && mailbox !== "drafts") {
+      return;
+    }
+    accountFilteredThreads
+      .filter((thread) => !messagesByThread[thread.id])
+      .slice(0, 50)
+      .forEach((thread) => {
+        void onLoadThreadMessages(thread.id);
+      });
+  }, [accountFilteredThreads, mailbox, messagesByThread, onLoadThreadMessages]);
   const selectedMailboxAccount = selectedMailboxAccountId === allEmailAccountsKey ? undefined : accounts.find((account) => account.id === selectedMailboxAccountId);
   const selectedMailboxAccountCanSync =
     selectedMailboxAccountId === allEmailAccountsKey ||
@@ -5007,7 +5035,7 @@ function EmailWorkspace({
     setMediaAssetNameDraft("");
   }
 
-  function performMailboxAction(action: "archive" | "unarchive" | "delete" | "restore" | "read" | "unread" | "snooze" | "important", threadIds = selectedThreadIdsArray) {
+  function performMailboxAction(action: "archive" | "unarchive" | "delete" | "restore" | "read" | "unread" | "snooze" | "unsnooze" | "important", threadIds = selectedThreadIdsArray) {
     if (!threadIds.length) {
       return;
     }
@@ -5031,6 +5059,8 @@ function EmailWorkspace({
     } else if (action === "snooze") {
       const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { snoozedUntil: tomorrow, archived: false, deleted: false }]));
+    } else if (action === "unsnooze") {
+      patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { snoozedUntil: null }]));
     } else {
       patchByThreadId = new Map(threadIds.map((threadId) => [threadId, { important: !(threadUiState[threadId]?.important ?? false) }]));
     }
@@ -5039,7 +5069,7 @@ function EmailWorkspace({
       persistThreadState(threadId, patch);
     }
     setSelectedThreadIds(new Set());
-    if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "restore" || action === "unarchive" || action === "snooze")) {
+    if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "restore" || action === "unarchive" || action === "snooze" || action === "unsnooze")) {
       setMailMode("list");
     }
   }
@@ -6073,9 +6103,15 @@ function EmailWorkspace({
                     <Trash2 size={16} />
                   </button>
                 )}
-                <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => performMailboxAction("snooze")} disabled={!selectedThreadIds.size}>
-                  <Clock3 size={16} />
-                </button>
+                {mailbox === "snoozed" ? (
+                  <button className="icon-button" aria-label="取消稍后提醒" title="取消稍后提醒" type="button" onClick={() => performMailboxAction("unsnooze")} disabled={!selectedThreadIds.size}>
+                    <RotateCcw size={16} />
+                  </button>
+                ) : (
+                  <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => performMailboxAction("snooze")} disabled={!selectedThreadIds.size}>
+                    <Clock3 size={16} />
+                  </button>
+                )}
                 <button className="icon-button" aria-label="标记已读" title="标记已读" type="button" onClick={() => performMailboxAction("read")} disabled={!selectedThreadIds.size}>
                   <MailOpen size={16} />
                 </button>
@@ -6110,6 +6146,7 @@ function EmailWorkspace({
                   const labels = getEmailThreadDisplayLabels(thread, state, messages);
                   const snippet = repairEmailMojibake(messages.at(-1)?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
+                  const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
                   const scheduledSendAt = emailThreadNextScheduledSendAt(messages);
                   return (
                     <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`} key={thread.id}>
@@ -6149,7 +6186,7 @@ function EmailWorkspace({
                         <span className="gmail-thread-snippet">{snippet}</span>
                         <span className="gmail-thread-labels">
                           {labels.map((label) => <span className="badge" key={label}>{label}</span>)}
-                          {state.snoozedUntil ? <span className="badge">稍后 {formatDate(state.snoozedUntil)}</span> : null}
+                          {isSnoozed && state.snoozedUntil ? <span className="badge">稍后 {formatDate(state.snoozedUntil)}</span> : null}
                           {scheduledSendAt ? <span className="badge"><CalendarClock size={12} /> {formatDate(scheduledSendAt)}</span> : null}
                         </span>
                       </button>
@@ -6173,7 +6210,11 @@ function EmailWorkspace({
                             <XCircle size={15} />
                           </button>
                         ) : null}
-                        <button className="icon-button" aria-label="稍后提醒" type="button" onClick={() => performMailboxAction("snooze", [thread.id])}><Clock3 size={15} /></button>
+                        {isSnoozed ? (
+                          <button className="icon-button" aria-label="取消稍后提醒" title="取消稍后提醒" type="button" onClick={() => performMailboxAction("unsnooze", [thread.id])}><RotateCcw size={15} /></button>
+                        ) : (
+                          <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => performMailboxAction("snooze", [thread.id])}><Clock3 size={15} /></button>
+                        )}
                         <button className="icon-button" aria-label={isRead ? "标记未读" : "标记已读"} type="button" onClick={() => performMailboxAction(isRead ? "unread" : "read", [thread.id])}>{isRead ? <Mail size={15} /> : <MailOpen size={15} />}</button>
                       </div>
                     </article>
@@ -6227,9 +6268,15 @@ function EmailWorkspace({
                     <Trash2 size={16} />
                   </button>
                 )}
-                <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => selectedThread && performMailboxAction("snooze", [selectedThread.id])} disabled={!selectedThread}>
-                  <Clock3 size={16} />
-                </button>
+                {selectedThreadIsSnoozed ? (
+                  <button className="icon-button" aria-label="取消稍后提醒" title="取消稍后提醒" type="button" onClick={() => selectedThread && performMailboxAction("unsnooze", [selectedThread.id])} disabled={!selectedThread}>
+                    <RotateCcw size={16} />
+                  </button>
+                ) : (
+                  <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => selectedThread && performMailboxAction("snooze", [selectedThread.id])} disabled={!selectedThread}>
+                    <Clock3 size={16} />
+                  </button>
+                )}
                 <button
                   className="icon-button"
                   aria-label={selectedThreadIsRead ? "标记未读" : "标记已读"}
@@ -6260,9 +6307,9 @@ function EmailWorkspace({
                         <Bot size={14} />
                         刷新分析
                       </button>
-                      <button type="button" onClick={() => { setDetailMoreOpen(false); performMailboxAction("snooze", [selectedThread.id]); }}>
-                        <Clock3 size={14} />
-                        稍后提醒
+                      <button type="button" onClick={() => { setDetailMoreOpen(false); performMailboxAction(selectedThreadIsSnoozed ? "unsnooze" : "snooze", [selectedThread.id]); }}>
+                        {selectedThreadIsSnoozed ? <RotateCcw size={14} /> : <Clock3 size={14} />}
+                        {selectedThreadIsSnoozed ? "取消稍后提醒" : "稍后提醒"}
                       </button>
                     </div>
                   ) : null}
@@ -10910,6 +10957,11 @@ function mergeEmailAccounts(current: EmailAccount[], updated: EmailAccount[]): E
   const merged = current.map((account) => updates.get(account.id) ?? account);
   const currentIds = new Set(current.map((account) => account.id));
   return [...merged, ...updated.filter((account) => !currentIds.has(account.id))];
+}
+
+function mergeEmailThreads(current: EmailThread[], updated: EmailThread[]): EmailThread[] {
+  const threads = [...new Map([...current, ...updated].map((thread) => [thread.id, thread])).values()];
+  return threads.sort((left, right) => new Date(emailThreadTimeValue(right)).getTime() - new Date(emailThreadTimeValue(left)).getTime());
 }
 
 function mergeMediaAssets(...groups: Array<Array<MediaAsset | null | undefined> | null | undefined>): MediaAsset[] {

@@ -2416,6 +2416,13 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /data-testid="email-compose-tracking"/);
   assert.match(workspace, /function removeEmailLabel\(threadId: string, label: string\)/);
   assert.match(workspace, /计划发送 \{formatDate\(message\.scheduledSendAt\)\}/);
+  assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);
+  assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
+  assert.match(workspace, /mailbox !== "sent" && mailbox !== "scheduled" && mailbox !== "drafts"/);
+  assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
+  assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);
+  assert.match(workspace, /snoozedUntil: null/);
+  assert.match(workspace, /aria-label="取消稍后提醒"/);
   assert.match(sendRoute, /body\.groupSendMode && body\.to\.length > 1/);
   assert.match(sendRoute, /shouldDelaySend/);
   assert.match(worker, /listDueQueuedEmailMessagesForWorker\(1\)/);
