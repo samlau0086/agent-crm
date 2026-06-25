@@ -1130,6 +1130,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
+  const [contactMethodsEditing, setContactMethodsEditing] = useState(false);
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -1584,6 +1585,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   useEffect(() => {
     setRecordEmailActivityFilter("");
+    setContactMethodsEditing(false);
   }, [selectedRecord?.id]);
 
   useEffect(() => {
@@ -1959,7 +1961,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
 
-    await fetchJson(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
+    const updatedRecord = await fetchJson<CrmRecord>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
       method: "PATCH",
       body: {
         title: editTitle.trim(),
@@ -1969,6 +1971,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     });
 
+    setRecords((current) => mergeRecords(current, [updatedRecord]));
+    if (selectedRecord.objectKey === "contacts") {
+      setContactMethodsEditing(false);
+    }
     setMessage("记录已更新");
     router.refresh();
   }
@@ -1994,12 +2000,27 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  async function createRecordActivity(input: {
+    recordId: string;
+    type: Activity["type"];
+    title: string;
+    body?: string;
+    dueAt?: string;
+  }) {
+    const created = await fetchJson<Activity>("/api/activities", {
+      method: "POST",
+      body: input
+    });
+    setActivities((current) => mergeActivities(current, [created]));
+    return created;
+  }
+
   async function submitCreateActivity() {
     if (!selectedRecord) {
       return;
     }
 
-    await postJson("/api/activities", {
+    await createRecordActivity({
       recordId: selectedRecord.id,
       type: activityType,
       title: activityTitle.trim(),
@@ -2480,11 +2501,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   function composeEmailForRecord(record: CrmRecord, emailAddress: string) {
+    const requestKey = `record:${record.id}:${Date.now()}`;
     setRecords((current) => mergeRecords(current, [record]));
     setSelectedRecordId(record.id);
     setSelectedEmailThreadId("");
     setEmailDetailThreadId("");
     setEmailAiResult(null);
+    setEmailComposeOpenRequestKey("");
     setEmailDraft((current) =>
       clearEmailDraftAiProvenance({
         ...current,
@@ -2496,12 +2519,55 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         subject: "",
         threadId: undefined,
         bodyText: "",
+        bodyHtml: "",
         attachments: []
       })
     );
-    setEmailComposeOpenRequestKey(`record:${record.id}:${Date.now()}`);
     setEmailWorkspaceView("mail");
     navigateToWorkspace("email");
+    window.setTimeout(() => setEmailComposeOpenRequestKey(requestKey), 0);
+  }
+
+  async function startWhatsAppFollowUp(record: CrmRecord, method: ContactMethodDraft) {
+    const whatsappUrl = buildContactMethodUrl("whatsapp", method.value);
+    if (!whatsappUrl) {
+      showError("WhatsApp 联系方式无效");
+      return;
+    }
+    const prompt = await requestPrompt({
+      title: "生成 WhatsApp 跟进消息",
+      message: `输入希望 AI 生成的初始联系目标。联系人：${record.title} · ${method.value}`,
+      placeholder: "例如：简短介绍我们能提供的产品，并询问采购计划。",
+      confirmLabel: "生成并打开 WhatsApp",
+      defaultValue: ""
+    });
+    const trimmedPrompt = prompt?.trim();
+    if (!trimmedPrompt) {
+      return;
+    }
+    const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
+      method: "POST",
+      body: {
+        purpose: "draft",
+        recordId: record.id,
+        userPrompt: [
+          "Generate one concise WhatsApp opening message for sales follow-up.",
+          "Do not include email subject, greeting blocks, signature, source notes, or placeholders.",
+          `User instruction: ${trimmedPrompt}`
+        ].join("\n"),
+        sourceText: buildWhatsAppAiSourceText(record, method, trimmedPrompt)
+      }
+    });
+    const messageText = (result.enabled ? result.text : trimmedPrompt).trim();
+    await createRecordActivity({
+      recordId: record.id,
+      type: "note",
+      title: `WhatsApp 跟进：${record.title}`,
+      body: [`Prompt: ${trimmedPrompt}`, messageText ? `AI 初始消息:\n${messageText}` : ""].filter(Boolean).join("\n\n")
+    });
+    const separator = whatsappUrl.includes("?") ? "&" : "?";
+    window.open(`${whatsappUrl}${separator}text=${encodeURIComponent(messageText || trimmedPrompt)}`, "_blank", "noreferrer");
+    showSuccess("已生成 WhatsApp 初始消息，并记录到活动时间线");
   }
 
   function selectEmailThread(threadId: string) {
@@ -3584,7 +3650,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onChange={setEditValues}
                         />
                       ) : null}
-                      {selectedRecord.objectKey === "contacts" ? (
+                      {selectedRecord.objectKey === "contacts" && (contactMethodsEditing || selectedRecordQuickContactMethods.length === 0) ? (
                         <ContactMethodsEditor
                           testIdPrefix="edit-contact-method"
                           value={editValues[contactMethodsValueKey] ?? ""}
@@ -3642,6 +3708,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         record={selectedRecord}
                         onComposeEmail={(emailAddress) => composeEmailForRecord(selectedRecord, emailAddress)}
                         onFilterEmail={(emailAddress) => setRecordEmailActivityFilter(emailAddress)}
+                        onStartWhatsApp={(method) => runAction(() => startWhatsAppFollowUp(selectedRecord, method))}
+                        onEdit={selectedRecord.objectKey === "contacts" ? () => setContactMethodsEditing((current) => !current) : undefined}
+                        editing={contactMethodsEditing}
                       />
                     ) : null}
 
@@ -10496,18 +10565,26 @@ type QuickActionItem = {
   };
 };
 
+type QuickActionHeaderAction = {
+  label: string;
+  onClick: () => void;
+  icon?: LucideIcon;
+};
+
 function QuickActionList({
   title,
   description,
   items,
   emptyMessage,
-  testId
+  testId,
+  headerAction
 }: {
   title: string;
   description?: string;
   items: QuickActionItem[];
   emptyMessage?: string;
   testId?: string;
+  headerAction?: QuickActionHeaderAction;
 }) {
   return (
     <section className="quick-action-panel wide" data-testid={testId}>
@@ -10516,6 +10593,12 @@ function QuickActionList({
           <strong>{title}</strong>
           {description ? <div className="subtle">{description}</div> : null}
         </div>
+        {headerAction ? (
+          <button className="secondary-button" type="button" onClick={headerAction.onClick}>
+            {headerAction.icon ? <headerAction.icon size={16} /> : null}
+            {headerAction.label}
+          </button>
+        ) : null}
       </div>
       {items.length ? (
         <div className="quick-action-grid">
@@ -10563,12 +10646,18 @@ function ContactMethodsQuickActions({
   methods,
   record,
   onComposeEmail,
-  onFilterEmail
+  onFilterEmail,
+  onStartWhatsApp,
+  onEdit,
+  editing
 }: {
   methods: ContactMethodDraft[];
   record: CrmRecord;
   onComposeEmail: (emailAddress: string) => void;
   onFilterEmail?: (emailAddress: string) => void;
+  onStartWhatsApp?: (method: ContactMethodDraft) => void;
+  onEdit?: () => void;
+  editing?: boolean;
 }) {
   const items = normalizePrimaryContactMethods(methods)
     .filter((method) => method.value.trim())
@@ -10603,13 +10692,15 @@ function ContactMethodsQuickActions({
         };
       }
       if (method.type === "whatsapp") {
+        const whatsappUrl = buildContactMethodUrl(method.type, value);
         return {
           id: method.id,
           label,
           value,
           icon: MessageCircle,
-          href: buildContactMethodUrl(method.type, value),
-          external: true,
+          onClick: onStartWhatsApp ? () => onStartWhatsApp(method) : undefined,
+          href: onStartWhatsApp ? undefined : whatsappUrl,
+          external: Boolean(whatsappUrl),
           badge
         };
       }
@@ -10631,6 +10722,7 @@ function ContactMethodsQuickActions({
       items={items}
       emptyMessage="还没有可用联系方式"
       testId={`record-contact-quick-actions-${record.id}`}
+      headerAction={onEdit ? { label: editing ? "收起编辑" : "编辑联系方式", onClick: onEdit, icon: Pencil } : undefined}
     />
   );
 }
@@ -11138,6 +11230,17 @@ function buildContactMethodUrl(type: ContactMethodType, value: string): string |
     return trimmed;
   }
   return undefined;
+}
+
+function buildWhatsAppAiSourceText(record: CrmRecord, method: ContactMethodDraft, prompt: string): string {
+  const data = record.data && typeof record.data === "object" ? record.data : {};
+  return [
+    `CRM record: ${record.title}`,
+    `Object: ${record.objectKey}`,
+    `WhatsApp: ${method.value}`,
+    `Prompt: ${prompt}`,
+    `Record data: ${JSON.stringify(data).slice(0, 3000)}`
+  ].join("\n");
 }
 
 function dedupeContactMethods(methods: ContactMethodDraft[]): ContactMethodDraft[] {
