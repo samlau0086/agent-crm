@@ -1606,6 +1606,20 @@ await run("workspace and settings use friendly feedback instead of browser dialo
   assert.match(sourceWithUi, /<RefreshCw className=\{[^}]*spin-icon/);
 });
 
+await run("record workspace refresh cannot leave create locked behind global pending", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+
+  assert.match(source, /const recordListRequestTimeoutMs = 15_000/);
+  assert.match(source, /const routeRefreshTimeoutMs = 10_000/);
+  assert.match(source, /const recordListRequestSeq = useRef\(0\)/);
+  assert.match(source, /const \[isRouteRefreshPending, startRouteRefreshTransition\] = useTransition\(\)/);
+  assert.match(source, /controller\.abort\(\);\s*\}, recordListRequestTimeoutMs\)/);
+  assert.match(source, /recordListRequestSeq\.current === requestSeq[\s\S]*setIsRecordListLoading\(false\)/);
+  assert.match(source, /onClick=\{refreshRoute\}/);
+  assert.match(source, /className=\{isRouteRefreshing \|\| isRouteRefreshPending \? "spin-icon" : undefined\}/);
+  assert.doesNotMatch(source, /data-testid=\{`open-create-record-\$\{activeObject\.key\}`\}[\s\S]{0,260}disabled=\{isPending\}/);
+});
+
 await run("workspace supports deal pipeline drag and email sidebar collapse", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");

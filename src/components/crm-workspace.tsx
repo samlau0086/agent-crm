@@ -140,6 +140,9 @@ interface CrmWorkspaceProps {
   importJobQueueSummary?: ImportJobQueueSummary;
 }
 
+const recordListRequestTimeoutMs = 15_000;
+const routeRefreshTimeoutMs = 10_000;
+
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
@@ -1261,14 +1264,38 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [promptValue, setPromptValue] = useState("");
   const [isHydrated, setIsHydrated] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const [isRouteRefreshPending, startRouteRefreshTransition] = useTransition();
+  const [isRouteRefreshing, setIsRouteRefreshing] = useState(false);
   const previousCreateFormResetKey = useRef("");
   const previousViewDraftResetKey = useRef("");
   const previousEditFormResetKey = useRef("");
+  const recordListRequestSeq = useRef(0);
+  const routeRefreshTimeoutRef = useRef<number | null>(null);
   const pendingRecordOpenRef = useRef<{ objectKey: string; recordId: string; returnEmailThreadId: string } | null>(null);
   const pendingRecordCreateRef = useRef<{ objectKey: string; values: Record<string, string> } | null>(null);
   const handledRouteEmailComposeRef = useRef("");
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const promptResolverRef = useRef<((value: string | null) => void) | null>(null);
+
+  useEffect(() => {
+    if (isRouteRefreshPending || !isRouteRefreshing) {
+      return;
+    }
+
+    if (routeRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(routeRefreshTimeoutRef.current);
+      routeRefreshTimeoutRef.current = null;
+    }
+    setIsRouteRefreshing(false);
+  }, [isRouteRefreshPending, isRouteRefreshing]);
+
+  useEffect(() => {
+    return () => {
+      if (routeRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(routeRefreshTimeoutRef.current);
+      }
+    };
+  }, []);
 
   function showToast(nextToast: ToastState) {
     setToast(nextToast);
@@ -1776,10 +1803,19 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   useEffect(() => {
     if (!activeObject) {
+      recordListRequestSeq.current += 1;
+      setIsRecordListLoading(false);
       return undefined;
     }
 
     const controller = new AbortController();
+    const requestSeq = recordListRequestSeq.current + 1;
+    recordListRequestSeq.current = requestSeq;
+    let didTimeout = false;
+    const timeoutId = window.setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, recordListRequestTimeoutMs);
     setIsRecordListLoading(true);
 
     fetchJson<RecordListResult>(
@@ -1817,23 +1853,35 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             })
           )
         );
+        if (recordListRequestSeq.current !== requestSeq) {
+          return;
+        }
         setRecordList(result);
         setRecordListObjectKey(activeObject.key);
         setRecords((current) => mergeRecords(current, result.records, ...referenceLists.map((list) => list.records)));
       })
       .catch((listError) => {
         if (listError instanceof DOMException && listError.name === "AbortError") {
+          if (didTimeout && recordListRequestSeq.current === requestSeq) {
+            setError("列表刷新超时，请稍后重试。");
+          }
           return;
         }
-        setError(listError instanceof Error ? listError.message : "列表加载失败");
+        if (recordListRequestSeq.current === requestSeq) {
+          setError(listError instanceof Error ? listError.message : "列表加载失败");
+        }
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
+        window.clearTimeout(timeoutId);
+        if (recordListRequestSeq.current === requestSeq) {
           setIsRecordListLoading(false);
         }
       });
 
-    return () => controller.abort();
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [activeObject, effectiveView, props.fields, props.relations, query, recordCursor, recordListFields, recordPage]);
 
   useEffect(() => {
@@ -3426,6 +3474,22 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
+  function refreshRoute() {
+    setMessage(null);
+    setError(null);
+    setIsRouteRefreshing(true);
+    if (routeRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(routeRefreshTimeoutRef.current);
+    }
+    routeRefreshTimeoutRef.current = window.setTimeout(() => {
+      setIsRouteRefreshing(false);
+      routeRefreshTimeoutRef.current = null;
+    }, routeRefreshTimeoutMs);
+    startRouteRefreshTransition(() => {
+      router.refresh();
+    });
+  }
+
   async function runImmediateAction<T>(action: () => Promise<T>): Promise<T | undefined> {
     setMessage(null);
     setError(null);
@@ -3512,8 +3576,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             </div>
           </div>
           <div className="toolbar">
-            <button className="secondary-button" type="button" onClick={() => router.refresh()}>
-              <RefreshCw className={isPending ? "spin-icon" : undefined} size={16} />
+            <button className="secondary-button" type="button" onClick={refreshRoute}>
+              <RefreshCw className={isRouteRefreshing || isRouteRefreshPending ? "spin-icon" : undefined} size={16} />
               刷新
             </button>
             {showRecordWorkspace && activeObject ? (
@@ -3599,7 +3663,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   data-testid={`open-create-record-${activeObject.key}`}
                   type="button"
                   onClick={() => setRecordPanelMode("create")}
-                  disabled={isPending}
                 >
                   <UserRound size={16} />
                   新建
