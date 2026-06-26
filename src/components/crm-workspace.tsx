@@ -1145,10 +1145,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [editOwnerId, setEditOwnerId] = useState("");
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [dealCloseReason, setDealCloseReason] = useState("");
-  const [activityType, setActivityType] = useState<Activity["type"]>("note");
-  const [activityTitle, setActivityTitle] = useState("");
-  const [activityBody, setActivityBody] = useState("");
-  const [activityDueAt, setActivityDueAt] = useState("");
   const [importCsv, setImportCsv] = useState("title,email,phone\n王敏,wang@example.com,+86 139 0000 0000");
   const [importStrategy, setImportStrategy] = useState<CsvImportStrategy>("skip-invalid");
   const [importMapping, setImportMapping] = useState<CsvImportMapping>({});
@@ -1368,6 +1364,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   );
   const selectedNotes = useMemo(
     () => selectedActivities.filter((activity) => activity.type === "note"),
+    [selectedActivities]
+  );
+  const selectedCalls = useMemo(
+    () => selectedActivities.filter((activity) => activity.type === "call"),
+    [selectedActivities]
+  );
+  const selectedMeetings = useMemo(
+    () => selectedActivities.filter((activity) => activity.type === "meeting"),
     [selectedActivities]
   );
   const selectedRecordEmailAddresses = useMemo(
@@ -1863,10 +1867,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEditOwnerId("");
       setEditValues({});
       setDealCloseReason("");
-      setActivityType("note");
-      setActivityTitle("");
-      setActivityBody("");
-      setActivityDueAt("");
       return;
     }
 
@@ -1878,10 +1878,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditOwnerId(selectedRecord.ownerId ?? props.contextUser.id);
     setEditValues(buildRecordValues(selectedFields, selectedRecord));
     setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
-    setActivityType("note");
-    setActivityTitle("");
-    setActivityBody("");
-    setActivityDueAt("");
   }, [props.contextUser.id, selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
   function navigateToWorkspace(navKey: NavKey, objectKey?: string) {
@@ -2054,27 +2050,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     setActivities((current) => mergeActivities(current, [created]));
     return created;
-  }
-
-  async function submitCreateActivity() {
-    if (!selectedRecord) {
-      return;
-    }
-
-    await createRecordActivity({
-      recordId: selectedRecord.id,
-      type: activityType,
-      title: activityTitle.trim(),
-      body: activityBody.trim() || undefined,
-      dueAt: activityType === "task" && activityDueAt ? activityDueAt : undefined
-    });
-
-    setMessage(`已添加${activityType === "task" ? "任务" : "活动"}`);
-    setActivityType("note");
-    setActivityTitle("");
-    setActivityBody("");
-    setActivityDueAt("");
-    router.refresh();
   }
 
   async function submitImportPreview() {
@@ -3965,49 +3940,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
                     <section style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
-                        记录活动
-                      </div>
-                      <div className="form-grid">
-                        <label>
-                          <span className="subtle">类型</span>
-                          <select className="select" data-testid="activity-type" value={activityType} onChange={(event) => setActivityType(event.target.value as Activity["type"])}>
-                            <option value="note">备注</option>
-                            <option value="call">电话</option>
-                            <option value="meeting">会议</option>
-                            <option value="task">任务</option>
-                          </select>
-                        </label>
-                        {activityType === "task" && (
-                          <label>
-                            <span className="subtle">截止日期</span>
-                            <input className="input" data-testid="activity-due-at" type="date" value={activityDueAt} onChange={(event) => setActivityDueAt(event.target.value)} />
-                          </label>
-                        )}
-                        <label className="wide">
-                          <span className="subtle">标题</span>
-                          <input className="input" data-testid="activity-title" value={activityTitle} onChange={(event) => setActivityTitle(event.target.value)} />
-                        </label>
-                        <label className="wide">
-                          <span className="subtle">内容</span>
-                          <textarea className="textarea" data-testid="activity-body" value={activityBody} onChange={(event) => setActivityBody(event.target.value)} />
-                        </label>
-                      </div>
-                      <div className="toolbar" style={{ marginTop: 12 }}>
-                        <button
-                          className="secondary-button"
-                          data-testid="activity-submit"
-                          type="button"
-                          onClick={() => runAction(submitCreateActivity)}
-                          disabled={isPending || !activityTitle.trim() || (activityType === "task" && !activityDueAt)}
-                        >
-                          <Save size={16} />
-                          添加活动
-                        </button>
-                      </div>
-                    </section>
-
-                    <section style={{ marginTop: 16 }}>
-                      <div className="property-name" style={{ marginBottom: 8 }}>
                         关联记录
                       </div>
                       {relatedRecords.length > 0 ? (
@@ -4035,6 +3967,22 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         任务
                       </div>
+                      <RecordActivityComposer
+                        type="task"
+                        submitLabel="添加任务"
+                        titlePlaceholder="例如：跟进报价确认"
+                        bodyPlaceholder="任务说明、需要准备的资料或下一步动作"
+                        dateLabel="截止日期"
+                        isPending={isPending}
+                        testIdPrefix="record-task"
+                        onSubmit={(input) =>
+                          runAction(async () => {
+                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                            setMessage("已添加任务");
+                            router.refresh();
+                          })
+                        }
+                      />
                       <TaskList
                         activities={selectedTasks}
                         emptyMessage="暂无任务"
@@ -4055,6 +4003,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         备注
                       </div>
+                      <RecordActivityComposer
+                        type="note"
+                        submitLabel="添加备注"
+                        titlePlaceholder="例如：客户偏好 / 背景补充"
+                        bodyPlaceholder="记录沟通背景、需求、风险或内部观察"
+                        isPending={isPending}
+                        testIdPrefix="record-note"
+                        onSubmit={(input) =>
+                          runAction(async () => {
+                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                            setMessage("已添加备注");
+                            router.refresh();
+                          })
+                        }
+                      />
                       <ActivityList
                         activities={selectedNotes}
                         emptyMessage="暂无备注"
@@ -4063,6 +4026,71 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           <>
                             <ActivityIcon size={15} />
                             {formatDate(activity.createdAt)}
+                          </>
+                        )}
+                      />
+                    </section>
+
+                    <section style={{ marginTop: 16 }}>
+                      <div className="property-name" style={{ marginBottom: 8 }}>
+                        电话
+                      </div>
+                      <RecordActivityComposer
+                        type="call"
+                        submitLabel="添加电话记录"
+                        titlePlaceholder="例如：电话确认预算"
+                        bodyPlaceholder="记录电话结论、异议、承诺事项"
+                        isPending={isPending}
+                        testIdPrefix="record-call"
+                        onSubmit={(input) =>
+                          runAction(async () => {
+                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                            setMessage("已添加电话记录");
+                            router.refresh();
+                          })
+                        }
+                      />
+                      <ActivityList
+                        activities={selectedCalls}
+                        emptyMessage="暂无电话记录"
+                        testIdPrefix="record-call"
+                        renderMeta={(activity) => (
+                          <>
+                            <Phone size={15} />
+                            {formatDate(activity.createdAt)}
+                          </>
+                        )}
+                      />
+                    </section>
+
+                    <section style={{ marginTop: 16 }}>
+                      <div className="property-name" style={{ marginBottom: 8 }}>
+                        会议
+                      </div>
+                      <RecordActivityComposer
+                        type="meeting"
+                        submitLabel="添加会议记录"
+                        titlePlaceholder="例如：产品演示会议"
+                        bodyPlaceholder="记录会议结论、参会人、待办事项"
+                        dateLabel="会议日期"
+                        isPending={isPending}
+                        testIdPrefix="record-meeting"
+                        onSubmit={(input) =>
+                          runAction(async () => {
+                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                            setMessage("已添加会议记录");
+                            router.refresh();
+                          })
+                        }
+                      />
+                      <ActivityList
+                        activities={selectedMeetings}
+                        emptyMessage="暂无会议记录"
+                        testIdPrefix="record-meeting"
+                        renderMeta={(activity) => (
+                          <>
+                            <CalendarClock size={15} />
+                            {activity.dueAt ? formatDate(activity.dueAt) : formatDate(activity.createdAt)}
                           </>
                         )}
                       />
@@ -8721,6 +8749,83 @@ function ActivityTimeline({ activities, records }: { activities: Activity[]; rec
         )}
       />
     </section>
+  );
+}
+
+type RecordActivityComposerInput = {
+  type: Activity["type"];
+  title: string;
+  body?: string;
+  dueAt?: string;
+};
+
+function RecordActivityComposer({
+  type,
+  submitLabel,
+  titlePlaceholder,
+  bodyPlaceholder,
+  dateLabel,
+  isPending,
+  testIdPrefix,
+  onSubmit
+}: {
+  type: Activity["type"];
+  submitLabel: string;
+  titlePlaceholder: string;
+  bodyPlaceholder: string;
+  dateLabel?: string;
+  isPending: boolean;
+  testIdPrefix: string;
+  onSubmit: (input: RecordActivityComposerInput) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [dueAt, setDueAt] = useState("");
+  const requiresDueAt = type === "task";
+  const showsDueAt = Boolean(dateLabel);
+  const canSubmit = Boolean(title.trim()) && (!requiresDueAt || Boolean(dueAt));
+
+  function submit() {
+    if (!canSubmit) {
+      return;
+    }
+
+    onSubmit({
+      type,
+      title: title.trim(),
+      body: body.trim() || undefined,
+      dueAt: showsDueAt && dueAt ? dueAt : undefined
+    });
+    setTitle("");
+    setBody("");
+    setDueAt("");
+  }
+
+  return (
+    <div className="record-activity-composer" data-testid={`${testIdPrefix}-composer`}>
+      <div className="form-grid">
+        {showsDueAt ? (
+          <label>
+            <span className="subtle">{dateLabel}</span>
+            <input className="input" data-testid={`${testIdPrefix}-due-at`} type="date" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
+          </label>
+        ) : null}
+        <label className={showsDueAt ? "" : "wide"}>
+          <span className="subtle">标题</span>
+          <input className="input" data-testid={`${testIdPrefix}-title`} value={title} onChange={(event) => setTitle(event.target.value)} placeholder={titlePlaceholder} />
+        </label>
+        <label className="wide">
+          <span className="subtle">内容</span>
+          <textarea className="textarea" data-testid={`${testIdPrefix}-body`} value={body} onChange={(event) => setBody(event.target.value)} placeholder={bodyPlaceholder} />
+        </label>
+      </div>
+      <div className="toolbar" style={{ marginTop: 10 }}>
+        <button className="secondary-button" data-testid={`${testIdPrefix}-submit`} type="button" onClick={submit} disabled={isPending || !canSubmit}>
+          <Save size={16} />
+          {submitLabel}
+        </button>
+      </div>
+    </div>
   );
 }
 
