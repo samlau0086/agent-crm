@@ -718,6 +718,17 @@ await run("list query pagination accepts only positive integers and caps page si
   assert.equal(cappedAuditQuery.pageSize, 200);
 });
 
+await run("record list query parses keyset cursor and projected fields", () => {
+  const query = parseRecordListQuery({
+    nextUrl: new URL("http://local.test/api/records/contacts?keyset=1&cursor=abc123&fields=title,email,phone,bad-field,%20&pageSize=25")
+  });
+
+  assert.equal(query.keyset, true);
+  assert.equal(query.cursor, "abc123");
+  assert.deepEqual(query.fields, ["title", "email", "phone"]);
+  assert.equal(query.pageSize, 25);
+});
+
 await run("audit action labels are readable Chinese text", () => {
   assert.equal(formatAuditAction("create"), "创建");
   assert.equal(formatAuditAction("update"), "更新");
@@ -1234,6 +1245,27 @@ await run("performance phase one adds indexed CRM record query paths", () => {
   assert.match(repository, /function recordSearchSql\(objectKey: string, search: string\): Prisma\.Sql/);
   assert.match(repository, /if \(objectKey === "contacts"\)[\s\S]*"data"->>'contactMethods'/);
   assert.match(repository, /if \(objectKey === "companies"\)[\s\S]*"data"->>'domain'/);
+});
+
+await run("performance phase two adds cursor pagination remote lookup and explain tooling", () => {
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+  const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+  const explainScript = readFileSync("scripts/crm-explain-analyze.ts", "utf8");
+
+  assert.match(repository, /canUseKeysetPagination\(normalizedQuery\)/);
+  assert.match(repository, /findRecordsKeysetPage\(whereSql, normalizedQuery, pageSize\)/);
+  assert.match(repository, /encodeRecordCursor\(lastRow\.updatedAt, lastRow\.id\)/);
+  assert.match(repository, /recordDataProjectionSql\(fields\?: string\[\]\)/);
+  assert.match(repository, /listRecordsForCsvConflictCandidates/);
+  assert.doesNotMatch(repository, /const existing = await this\.listRecordsForValidation\(context, objectKey\);[\s\S]{0,220}const errors: string\[\] = \[\];/);
+  assert.match(workspace, /const \[recordCursorStack, setRecordCursorStack\] = useState<string\[\]>\(\[""\]\)/);
+  assert.match(workspace, /fields: recordListFields[\s\S]*keyset: true/);
+  assert.match(workspace, /setRemoteCandidates\(result\.records\)/);
+  assert.match(workspace, /paginationMode === "keyset"/);
+  assert.equal(packageJson.scripts["db:explain:crm"], "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/crm-explain-analyze.ts");
+  assert.match(explainScript, /EXPLAIN \(ANALYZE, BUFFERS, FORMAT TEXT\)/);
+  assert.match(explainScript, /contacts by companyId/);
 });
 
 await run("service health payload exposes email readiness summary", async () => {

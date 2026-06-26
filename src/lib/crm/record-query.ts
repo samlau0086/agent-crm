@@ -14,7 +14,10 @@ export function parseRecordListQuery(request: NextRequest): RecordListQuery {
     pageSize: parsePageSizeParam(searchParams.get("pageSize"), RECORD_MAX_PAGE_SIZE),
     q: searchParams.get("q")?.trim() || searchParams.get("search")?.trim() || undefined,
     filters: parseFilters(searchParams.get("filters")),
-    sort: sortField ? ({ field: sortField, direction: sortDirection } satisfies RecordSort) : undefined
+    sort: sortField ? ({ field: sortField, direction: sortDirection } satisfies RecordSort) : undefined,
+    cursor: normalizeCursor(searchParams.get("cursor")),
+    keyset: searchParams.get("keyset") === "1" || searchParams.get("pagination") === "keyset",
+    fields: parseFields(searchParams.get("fields"))
   };
 }
 
@@ -36,4 +39,21 @@ function parseFilters(value: string | null): RecordFilter[] | undefined {
   }
 
   return result.data satisfies RecordFilter[];
+}
+
+function normalizeCursor(value: string | null): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function parseFields(value: string | null): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const fields = value
+    .split(",")
+    .map((field) => field.trim())
+    .filter((field) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field));
+  return fields.length > 0 ? Array.from(new Set(fields)) : undefined;
 }

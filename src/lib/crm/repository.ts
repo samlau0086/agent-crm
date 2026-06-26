@@ -3328,6 +3328,20 @@ export class PrismaCrmRepository {
     const pageSize = normalizePageSize(query.pageSize, { defaultSize: RECORD_DEFAULT_PAGE_SIZE, maxSize: RECORD_MAX_PAGE_SIZE });
     const normalizedQuery = normalizeRecordListQuery(query, page, pageSize);
     const whereSql = await this.recordQuerySql(context, objectKey, normalizedQuery);
+    if (canUseKeysetPagination(normalizedQuery)) {
+      const keysetPage = await this.findRecordsKeysetPage(whereSql, normalizedQuery, pageSize);
+      return {
+        records: keysetPage.records,
+        total: -1,
+        page,
+        pageSize,
+        pageCount: keysetPage.nextCursor ? page + 1 : page,
+        nextCursor: keysetPage.nextCursor,
+        paginationMode: "keyset",
+        query: normalizedQuery
+      };
+    }
+
     const countRows = await this.db.$queryRaw<Array<{ total: string | number | bigint }>>(Prisma.sql`
       SELECT COUNT(*) AS total
       FROM "CrmRecord"
@@ -3345,6 +3359,7 @@ export class PrismaCrmRepository {
       page: safePage,
       pageSize,
       pageCount,
+      paginationMode: "offset",
       query: normalizeRecordListQuery(query, safePage, pageSize)
     };
   }
@@ -4445,35 +4460,64 @@ export class PrismaCrmRepository {
     const normalizedMapping = normalizeCsvImportMapping(mapping);
     const fields = await this.listFieldDefinitions(context, objectKey);
     assertCsvImportMappingTargets(fields, normalizedMapping);
-    const existing = await this.listRecordsForValidation(context, objectKey);
     const errors: string[] = [];
     const previewRows: CsvImportPreview["rows"] = [];
     const draftRecords: CrmRecord[] = [];
     const conflicts: CsvImportConflict[] = [];
     let creatableRows = 0;
-
-    for (const [index, row] of rows.entries()) {
+    const preparedRows = rows.map((row, index) => {
       const rowNumber = index + 2;
       const rowErrors: string[] = [];
-      const rowConflicts: CsvImportConflict[] = [];
       let title = "";
+      let data: Record<string, unknown> | undefined;
+      const mappedRow = applyCsvImportMapping(row, normalizedMapping);
 
       try {
-        const mappedRow = applyCsvImportMapping(row, normalizedMapping);
         title = String(mappedRow.title ?? mappedRow.name ?? "").trim();
         if (!title) {
           throw new Error("Missing title or name column");
         }
-        const data = coerceRow(mappedRow, fields);
-        rowConflicts.push(...findCsvImportConflicts(rowNumber, fields, data, existing));
+        data = coerceRow(mappedRow, fields);
+      } catch (error) {
+        rowErrors.push(error instanceof Error ? error.message : "Import failed");
+      }
+
+      return { row, rowNumber, title, data, rowErrors, mappedRow };
+    });
+    const existing = await this.listRecordsForCsvConflictCandidates(
+      context,
+      objectKey,
+      fields,
+      preparedRows.map((row) => row.data).filter((data): data is Record<string, unknown> => Boolean(data))
+    );
+
+    for (const preparedRow of preparedRows) {
+      const rowConflicts: CsvImportConflict[] = [];
+      const rowErrors = [...preparedRow.rowErrors];
+
+      try {
+        if (!preparedRow.data) {
+          errors.push(...rowErrors.map((item) => `Row ${preparedRow.rowNumber}: ${item}`));
+          previewRows.push({
+            rowNumber: preparedRow.rowNumber,
+            title: preparedRow.title,
+            status: "error",
+            errors: rowErrors,
+            conflicts: rowConflicts,
+            values: preparedRow.mappedRow
+          });
+          continue;
+        }
+        const data = preparedRow.data;
+        rowConflicts.push(...findCsvImportConflicts(preparedRow.rowNumber, fields, data, existing));
         validateRecordPayload(fields, data, draftRecords);
         await this.assertRecordReferences(context, fields, data, true);
         if (rowConflicts.length === 0) {
           draftRecords.push({
-            id: `csv-row-${rowNumber}`,
+            id: `csv-row-${preparedRow.rowNumber}`,
             workspaceId: context.workspaceId,
             objectKey,
-            title,
+            title: preparedRow.title,
             ownerId: context.user.id,
             data,
             createdAt: new Date().toISOString(),
@@ -4485,16 +4529,16 @@ export class PrismaCrmRepository {
         rowErrors.push(error instanceof Error ? error.message : "Import failed");
       }
 
-      errors.push(...rowErrors.map((item) => `Row ${rowNumber}: ${item}`));
+      errors.push(...rowErrors.map((item) => `Row ${preparedRow.rowNumber}: ${item}`));
       errors.push(...rowConflicts.map((conflict) => formatCsvImportConflict(conflict)));
       conflicts.push(...rowConflicts);
       previewRows.push({
-        rowNumber,
-        title,
+        rowNumber: preparedRow.rowNumber,
+        title: preparedRow.title,
         status: rowErrors.length > 0 ? "error" : rowConflicts.length > 0 ? "conflict" : "ready",
         errors: rowErrors,
         conflicts: rowConflicts,
-        values: applyCsvImportMapping(row, normalizedMapping)
+        values: preparedRow.mappedRow
       });
     }
 
@@ -4592,6 +4636,48 @@ export class PrismaCrmRepository {
     `);
 
     return records.map(mapRecord);
+  }
+
+  private async listRecordsForCsvConflictCandidates(
+    context: RequestContext,
+    objectKey: string,
+    fields: FieldDefinition[],
+    rowsData: Array<Record<string, unknown>>
+  ): Promise<CrmRecord[]> {
+    const uniqueFields = fields.filter((field) => field.unique);
+    if (uniqueFields.length === 0 || rowsData.length === 0) {
+      return [];
+    }
+
+    const recordsById = new Map<string, CrmRecord>();
+    for (const field of uniqueFields) {
+      const values = Array.from(
+        new Set(
+          rowsData
+            .map((data) => data[field.key])
+            .filter((value) => !isBlankValue(value))
+            .map(normalizeGovernedValue)
+        )
+      );
+      for (const chunk of chunkArray(values, 500)) {
+        if (chunk.length === 0) {
+          continue;
+        }
+        const column = recordJsonTextSql(field.key);
+        const records = await this.db.$queryRaw<Parameters<typeof mapRecord>[0][]>(Prisma.sql`
+          SELECT "id", "workspaceId", "objectKey", "title", "stageKey", "ownerId", "data", "createdAt", "updatedAt"
+          FROM "CrmRecord"
+          WHERE "workspaceId" = ${context.workspaceId}
+            AND "objectKey" = ${objectKey}
+            AND lower(${column}) IN (${Prisma.join(chunk)})
+        `);
+        for (const record of records.map(mapRecord)) {
+          recordsById.set(record.id, record);
+        }
+      }
+    }
+
+    return [...recordsById.values()];
   }
 
   private async assertRelationCanBeDeleted(context: RequestContext, relation: RelationDefinition): Promise<void> {
@@ -4808,8 +4894,50 @@ export class PrismaCrmRepository {
     }
 
     const order = new Map(rows.map((row, index) => [row.id, index]));
-    const records = await this.db.crmRecord.findMany({ where: { id: { in: rows.map((row) => row.id) } } });
+    const records = await this.findRecordsByIds(rows.map((row) => row.id), query.fields);
     return records.map(mapRecord).sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+  }
+
+  private async findRecordsKeysetPage(whereSql: Prisma.Sql, query: RecordListQuery, take: number): Promise<{ records: CrmRecord[]; nextCursor?: string }> {
+    const cursor = decodeRecordCursor(query.cursor);
+    const cursorSql = cursor
+      ? Prisma.sql`AND ("updatedAt" < ${cursor.updatedAt} OR ("updatedAt" = ${cursor.updatedAt} AND "id" > ${cursor.id}))`
+      : Prisma.empty;
+    const rows = await this.db.$queryRaw<Array<{ id: string; updatedAt: Date }>>(Prisma.sql`
+      SELECT "id", "updatedAt"
+      FROM "CrmRecord"
+      WHERE ${whereSql}
+        ${cursorSql}
+      ORDER BY "updatedAt" DESC, "id" ASC
+      LIMIT ${take + 1}
+    `);
+    const visibleRows = rows.slice(0, take);
+    if (visibleRows.length === 0) {
+      return { records: [] };
+    }
+
+    const order = new Map(visibleRows.map((row, index) => [row.id, index]));
+    const records = (await this.findRecordsByIds(visibleRows.map((row) => row.id), query.fields))
+      .map(mapRecord)
+      .sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+    const lastRow = visibleRows[visibleRows.length - 1];
+    return {
+      records,
+      nextCursor: rows.length > take ? encodeRecordCursor(lastRow.updatedAt, lastRow.id) : undefined
+    };
+  }
+
+  private async findRecordsByIds(ids: string[], fields?: string[]): Promise<Parameters<typeof mapRecord>[0][]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const dataSql = recordDataProjectionSql(fields);
+    return this.db.$queryRaw<Parameters<typeof mapRecord>[0][]>(Prisma.sql`
+      SELECT "id", "workspaceId", "objectKey", "title", "stageKey", "ownerId", ${dataSql} AS "data", "createdAt", "updatedAt"
+      FROM "CrmRecord"
+      WHERE "id" IN (${Prisma.join(ids)})
+    `);
   }
 
   private async visibleActivityWhere(context: RequestContext): Promise<Prisma.ActivityWhereInput> {
@@ -5487,6 +5615,50 @@ function recordJsonTextSql(field: string): Prisma.Sql {
   }
 }
 
+function recordDataProjectionSql(fields?: string[]): Prisma.Sql {
+  const projectedFields = normalizeProjectedRecordFields(fields).filter((field) => field !== "title");
+  if (projectedFields.length === 0) {
+    return Prisma.sql`"data"`;
+  }
+
+  const entries = projectedFields.flatMap((field) => [Prisma.sql`${field}`, Prisma.sql`"data"->${field}`]);
+  return Prisma.sql`jsonb_strip_nulls(jsonb_build_object(${Prisma.join(entries)}))`;
+}
+
+function normalizeProjectedRecordFields(fields?: string[]): string[] {
+  if (!fields?.length) {
+    return [];
+  }
+  return Array.from(new Set(fields.filter((field) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field))));
+}
+
+function canUseKeysetPagination(query: RecordListQuery): boolean {
+  if (!query.keyset && !query.cursor) {
+    return false;
+  }
+  return !query.sort || (query.sort.field === "updatedAt" && query.sort.direction === "desc");
+}
+
+function encodeRecordCursor(updatedAt: Date, id: string): string {
+  return Buffer.from(JSON.stringify({ updatedAt: updatedAt.toISOString(), id }), "utf8").toString("base64url");
+}
+
+function decodeRecordCursor(cursor?: string): { updatedAt: Date; id: string } | undefined {
+  if (!cursor) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as { updatedAt?: unknown; id?: unknown };
+    const updatedAt = typeof parsed.updatedAt === "string" ? new Date(parsed.updatedAt) : undefined;
+    if (!updatedAt || Number.isNaN(updatedAt.getTime()) || typeof parsed.id !== "string" || !parsed.id) {
+      return undefined;
+    }
+    return { updatedAt, id: parsed.id };
+  } catch {
+    return undefined;
+  }
+}
+
 function recordOrderBySql(sort: RecordListQuery["sort"]): Prisma.Sql {
   if (!sort?.field) {
     return Prisma.sql`"updatedAt" DESC, "id" ASC`;
@@ -5518,7 +5690,10 @@ function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize
     pageSize,
     q: query.q?.trim() || undefined,
     filters: query.filters?.filter((filter) => filter.field && filter.value.trim()),
-    sort: query.sort?.field ? query.sort : undefined
+    sort: query.sort?.field ? query.sort : undefined,
+    cursor: query.cursor?.trim() || undefined,
+    keyset: Boolean(query.keyset || query.cursor),
+    fields: normalizeProjectedRecordFields(query.fields)
   };
 }
 
@@ -5528,6 +5703,14 @@ function isBlankValue(value: unknown): boolean {
 
 function normalizeGovernedValue(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : JSON.stringify(value);
+}
+
+function chunkArray<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function normalizeCsvImportMapping(mapping?: CsvImportMapping): CsvImportMapping | undefined {

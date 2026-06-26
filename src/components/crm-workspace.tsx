@@ -1127,6 +1127,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [selectedRecordId, setSelectedRecordId] = useState(routeRecordId || props.initialRecordList.records[0]?.id || props.records[0]?.id || "");
   const [selectedViewId, setSelectedViewId] = useState("");
   const [recordPage, setRecordPage] = useState(1);
+  const [recordCursorStack, setRecordCursorStack] = useState<string[]>([""]);
   const [recordListObjectKey, setRecordListObjectKey] = useState(props.initialObjectKey);
   const [recordList, setRecordList] = useState<RecordListResult>(() => props.initialRecordList);
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
@@ -1328,6 +1329,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       })
       .filter((column): column is TableColumn => Boolean(column));
   }, [effectiveView.columns, objectFields]);
+  const recordListFields = useMemo(() => {
+    const mediaField = activeObject?.key === "contacts" ? "avatarUrl" : activeObject?.key === "companies" ? "logoUrl" : undefined;
+    return Array.from(new Set(["title", ...(mediaField ? [mediaField] : []), ...visibleTableColumns.map((column) => column.key)]));
+  }, [activeObject?.key, visibleTableColumns]);
+  const recordCursor = recordCursorStack[recordPage - 1] ?? "";
   const filteredRecords = objectRecords;
   const exportRecordsUrl = activeObject ? buildRecordListUrl(activeObject.key, effectiveView, query, 1, `/api/records/${activeObject.key}/export`, 200) : "#";
   const importTemplateUrl = activeObject ? `/api/imports/templates/${activeObject.key}` : "#";
@@ -1587,6 +1593,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   useEffect(() => {
     setRecordPage(1);
+    setRecordCursorStack([""]);
   }, [activeObjectKey, query, selectedViewId, viewDraft.filterField, viewDraft.filterOperator, viewDraft.filterValue, viewDraft.sortField, viewDraft.sortDirection]);
 
   useEffect(() => {
@@ -1721,18 +1728,36 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const controller = new AbortController();
     setIsRecordListLoading(true);
 
-    fetchJson<RecordListResult>(buildRecordListUrl(activeObject.key, effectiveView, query, recordPage), {
+    fetchJson<RecordListResult>(
+      buildRecordListUrl(activeObject.key, effectiveView, query, recordPage, `/api/records/${activeObject.key}`, 50, {
+        cursor: recordCursor,
+        fields: recordListFields,
+        keyset: true
+      }),
+      {
       method: "GET",
       signal: controller.signal
-    })
+      }
+    )
       .then(async (result) => {
         if (!Array.isArray(result.records)) {
           throw new Error("Record list response is invalid");
         }
+        const nextCursor = result.nextCursor;
+        if (result.paginationMode === "keyset" && nextCursor) {
+          setRecordCursorStack((current) => {
+            if (current[recordPage] === nextCursor) {
+              return current;
+            }
+            const next = current.slice(0, recordPage);
+            next[recordPage] = nextCursor;
+            return next;
+          });
+        }
         const referenceObjectKeys = getReferenceObjectKeysForObject(props.fields, activeObject.key, props.relations);
         const referenceLists = await Promise.all(
           [...referenceObjectKeys].map((objectKey) =>
-            fetchJson<RecordListResult>(buildRecordListUrl(objectKey, emptySavedView(objectKey), "", 1), {
+            fetchJson<RecordListResult>(buildRecordListUrl(objectKey, emptySavedView(objectKey), "", 1, `/api/records/${objectKey}`, 20, { fields: ["title"], keyset: true }), {
               method: "GET",
               signal: controller.signal
             })
@@ -1755,7 +1780,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       });
 
     return () => controller.abort();
-  }, [activeObject, effectiveView, props.fields, props.relations, query, recordPage]);
+  }, [activeObject, effectiveView, props.fields, props.relations, query, recordCursor, recordListFields, recordPage]);
 
   useEffect(() => {
     if (previousViewDraftResetKey.current === viewDraftResetKey) {
@@ -3528,7 +3553,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               </div>
               <div className="list-tools" style={{ paddingTop: 0 }}>
                 <span className="subtle">
-                  {isRecordListLoading ? "列表加载中..." : `显示 ${filteredRecords.length} / ${recordList.total} 条`}
+                  {isRecordListLoading
+                    ? "列表加载中..."
+                    : recordList.paginationMode === "keyset"
+                      ? `显示 ${filteredRecords.length} 条 · 第 ${recordList.page} 页`
+                      : `显示 ${filteredRecords.length} / ${recordList.total} 条`}
                 </span>
                 <div className="toolbar">
                   <button
@@ -3541,13 +3570,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     上一页
                   </button>
                   <span className="subtle">
-                    {recordList.page} / {recordList.pageCount}
+                    {recordList.paginationMode === "keyset" ? `第 ${recordList.page} 页` : `${recordList.page} / ${recordList.pageCount}`}
                   </span>
                   <button
                     className="secondary-button"
                     type="button"
-                    onClick={() => setRecordPage((current) => Math.min(recordList.pageCount, current + 1))}
-                    disabled={isRecordListLoading || recordList.page >= recordList.pageCount}
+                    onClick={() => setRecordPage((current) => current + 1)}
+                    disabled={isRecordListLoading || (recordList.paginationMode === "keyset" ? !recordList.nextCursor : recordList.page >= recordList.pageCount)}
                   >
                     下一页
                     <ChevronRight size={16} />
@@ -10465,12 +10494,18 @@ function ReferenceFieldInput({
     const timeoutId = window.setTimeout(() => {
       setIsSearching(true);
       setSearchError(null);
-      fetchJson<RecordListResult>(buildRecordListUrl(referencedObjectKey, emptySavedView(referencedObjectKey), search, 1, `/api/records/${referencedObjectKey}`, 20), {
+      fetchJson<RecordListResult>(
+        buildRecordListUrl(referencedObjectKey, emptySavedView(referencedObjectKey), search, 1, `/api/records/${referencedObjectKey}`, 20, {
+          fields: ["title"],
+          keyset: true
+        }),
+        {
         method: "GET",
         signal: controller.signal
-      })
+        }
+      )
         .then((result) => {
-          setRemoteCandidates((current) => mergeRecords(current, result.records));
+          setRemoteCandidates(result.records);
           onRecordsLoaded?.(result.records);
         })
         .catch((error) => {
@@ -10517,9 +10552,7 @@ function ReferenceFieldInput({
   }, [candidates, onRecordsLoaded, referencedObjectKey, value]);
 
   const normalizedSearch = search.trim().toLowerCase();
-  const visibleCandidates = normalizedSearch
-    ? candidates.filter((candidate) => `${candidate.title} ${candidate.id}`.toLowerCase().includes(normalizedSearch))
-    : candidates;
+  const visibleCandidates = normalizedSearch ? remoteCandidates.filter((candidate) => candidate.objectKey === referencedObjectKey) : candidates;
   const selectedRecord = candidates.find((candidate) => candidate.id === value);
 
   return (
@@ -10758,12 +10791,18 @@ function QuoteProductSearchDropdown({
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => {
       setIsSearching(true);
-      fetchJson<RecordListResult>(buildRecordListUrl("products", emptySavedView("products"), search, 1, "/api/records/products", 20), {
+      fetchJson<RecordListResult>(
+        buildRecordListUrl("products", emptySavedView("products"), search, 1, "/api/records/products", 20, {
+          fields: ["title", "sku", "unitPrice", "unitPriceCurrency", "mainImageUrl"],
+          keyset: true
+        }),
+        {
         method: "GET",
         signal: controller.signal
-      })
+        }
+      )
         .then((result) => {
-          setRemoteCandidates((current) => mergeRecords(current, result.records));
+          setRemoteCandidates(result.records);
           onRecordsLoaded?.(result.records);
         })
         .catch((error) => {
@@ -10786,9 +10825,7 @@ function QuoteProductSearchDropdown({
   }, [onRecordsLoaded, search]);
 
   const normalizedSearch = search.trim().toLowerCase();
-  const visibleCandidates = normalizedSearch
-    ? candidates.filter((candidate) => `${candidate.title} ${candidate.data.sku ?? ""}`.toLowerCase().includes(normalizedSearch))
-    : candidates;
+  const visibleCandidates = normalizedSearch ? remoteCandidates.filter((candidate) => candidate.objectKey === "products") : candidates;
   const selectedRecord = candidates.find((candidate) => candidate.id === value);
 
   return (
@@ -12330,12 +12367,29 @@ function emptySavedView(objectKey: string): SavedView {
   };
 }
 
-function buildRecordListUrl(objectKey: string, view: SavedView, query: string, page: number, path = `/api/records/${objectKey}`, pageSize = 50): string {
+function buildRecordListUrl(
+  objectKey: string,
+  view: SavedView,
+  query: string,
+  page: number,
+  path = `/api/records/${objectKey}`,
+  pageSize = 50,
+  options: { cursor?: string; fields?: string[]; keyset?: boolean } = {}
+): string {
   const params = new URLSearchParams({
     page: String(page),
     pageSize: String(pageSize)
   });
 
+  if (options.keyset) {
+    params.set("keyset", "1");
+  }
+  if (options.cursor) {
+    params.set("cursor", options.cursor);
+  }
+  if (options.fields?.length) {
+    params.set("fields", Array.from(new Set(options.fields)).join(","));
+  }
   if (query.trim()) {
     params.set("q", query.trim());
   }

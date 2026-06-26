@@ -3962,7 +3962,10 @@ function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize
     pageSize,
     q: query.q?.trim() || undefined,
     filters: query.filters?.filter((filter) => filter.field && filter.value.trim()),
-    sort: query.sort?.field ? query.sort : undefined
+    sort: query.sort?.field ? query.sort : undefined,
+    cursor: query.cursor?.trim() || undefined,
+    keyset: Boolean(query.keyset || query.cursor),
+    fields: query.fields?.filter((field) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field))
   };
 }
 

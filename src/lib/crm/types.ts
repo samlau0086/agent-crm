@@ -504,6 +504,9 @@ export interface RecordListQuery {
   q?: string;
   filters?: RecordFilter[];
   sort?: RecordSort;
+  cursor?: string;
+  keyset?: boolean;
+  fields?: string[];
 }
 
 export interface RecordListResult {
@@ -512,6 +515,8 @@ export interface RecordListResult {
   page: number;
   pageSize: number;
   pageCount: number;
+  nextCursor?: string;
+  paginationMode?: "offset" | "keyset";
   query: RecordListQuery;
 }
 
