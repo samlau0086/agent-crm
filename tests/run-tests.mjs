@@ -1699,6 +1699,7 @@ await run("record create and detail panels render full width in the main content
   assert.match(source, /recordActivityComposerType === "meeting" \? \([\s\S]*<RecordActivityComposer[\s\S]*type="meeting"/);
   assert.match(source, /onToggle=\{\(\) => setRecordActivityComposerType\(\(current\) => \(current === "task" \? "" : "task"\)\)\}/);
   assert.match(source, /setRecordActivityComposerType\(""\);[\s\S]*setMessage\("已添加任务"\)/);
+  assert.match(source, /<div className="record-activity-grid">[\s\S]*<section className="record-activity-card">[\s\S]*title="任务"[\s\S]*title="备注"[\s\S]*title="电话"[\s\S]*title="会议"[\s\S]*<\/div>/);
   assert.match(source, /type="task"[\s\S]*testIdPrefix="record-task"/);
   assert.match(source, /type="note"[\s\S]*testIdPrefix="record-note"/);
   assert.match(source, /type="call"[\s\S]*testIdPrefix="record-call"/);
@@ -1710,6 +1711,9 @@ await run("record create and detail panels render full width in the main content
   assert.match(styles, /\.record-drawer \{[\s\S]*order: -1;[\s\S]*position: static;[\s\S]*max-height: none;[\s\S]*overflow: visible;/);
   assert.match(styles, /\.record-drawer \.drawer-header \{\s*position: static;/);
   assert.match(styles, /\.record-panel-header \{[\s\S]*justify-content: flex-start;/);
+  assert.match(styles, /\.record-activity-grid \{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(styles, /\.record-activity-card \{/);
+  assert.match(styles, /@media \(max-width: 760px\) \{[\s\S]*\.record-activity-grid \{[\s\S]*grid-template-columns: 1fr;/);
   assert.match(styles, /\.record-section-header \{/);
   assert.match(styles, /\.record-activity-composer \{/);
   assert.doesNotMatch(styles, /\.workspace-grid\.has-drawer \{[\s\S]{0,120}minmax\(360px, 440px\)/);

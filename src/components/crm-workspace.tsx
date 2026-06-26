@@ -3966,162 +3966,164 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       )}
                     </section>
 
-                    <section style={{ marginTop: 16 }}>
-                      <RecordSectionHeader
-                        title="任务"
-                        addLabel="添加任务"
-                        isOpen={recordActivityComposerType === "task"}
-                        onToggle={() => setRecordActivityComposerType((current) => (current === "task" ? "" : "task"))}
-                      />
-                      {recordActivityComposerType === "task" ? (
-                        <RecordActivityComposer
-                          type="task"
-                          submitLabel="添加任务"
-                          titlePlaceholder="例如：跟进报价确认"
-                          bodyPlaceholder="任务说明、需要准备的资料或下一步动作"
-                          dateLabel="截止日期"
-                          isPending={isPending}
+                    <div className="record-activity-grid">
+                      <section className="record-activity-card">
+                        <RecordSectionHeader
+                          title="任务"
+                          addLabel="添加任务"
+                          isOpen={recordActivityComposerType === "task"}
+                          onToggle={() => setRecordActivityComposerType((current) => (current === "task" ? "" : "task"))}
+                        />
+                        {recordActivityComposerType === "task" ? (
+                          <RecordActivityComposer
+                            type="task"
+                            submitLabel="添加任务"
+                            titlePlaceholder="例如：跟进报价确认"
+                            bodyPlaceholder="任务说明、需要准备的资料或下一步动作"
+                            dateLabel="截止日期"
+                            isPending={isPending}
+                            testIdPrefix="record-task"
+                            onSubmit={(input) =>
+                              runAction(async () => {
+                                await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                                setRecordActivityComposerType("");
+                                setMessage("已添加任务");
+                                router.refresh();
+                              })
+                            }
+                          />
+                        ) : null}
+                        <TaskList
+                          activities={selectedTasks}
+                          emptyMessage="暂无任务"
+                          mediaAssets={mediaAssets}
                           testIdPrefix="record-task"
-                          onSubmit={(input) =>
-                            runAction(async () => {
-                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                              setRecordActivityComposerType("");
-                              setMessage("已添加任务");
-                              router.refresh();
-                            })
-                          }
+                          users={props.users}
+                          onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
+                          onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
+                          onEdit={(activity) => {
+                            navigateToWorkspace("tasks");
+                            showToast({ intent: "info", message: `请在任务工作台中编辑“${activity.title}”。` });
+                          }}
+                          onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
                         />
-                      ) : null}
-                      <TaskList
-                        activities={selectedTasks}
-                        emptyMessage="暂无任务"
-                        mediaAssets={mediaAssets}
-                        testIdPrefix="record-task"
-                        users={props.users}
-                        onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
-                        onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
-                        onEdit={(activity) => {
-                          navigateToWorkspace("tasks");
-                          showToast({ intent: "info", message: `请在任务工作台中编辑“${activity.title}”。` });
-                        }}
-                        onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
-                      />
-                    </section>
+                      </section>
 
-                    <section style={{ marginTop: 16 }}>
-                      <RecordSectionHeader
-                        title="备注"
-                        addLabel="添加备注"
-                        isOpen={recordActivityComposerType === "note"}
-                        onToggle={() => setRecordActivityComposerType((current) => (current === "note" ? "" : "note"))}
-                      />
-                      {recordActivityComposerType === "note" ? (
-                        <RecordActivityComposer
-                          type="note"
-                          submitLabel="添加备注"
-                          titlePlaceholder="例如：客户偏好 / 背景补充"
-                          bodyPlaceholder="记录沟通背景、需求、风险或内部观察"
-                          isPending={isPending}
+                      <section className="record-activity-card">
+                        <RecordSectionHeader
+                          title="备注"
+                          addLabel="添加备注"
+                          isOpen={recordActivityComposerType === "note"}
+                          onToggle={() => setRecordActivityComposerType((current) => (current === "note" ? "" : "note"))}
+                        />
+                        {recordActivityComposerType === "note" ? (
+                          <RecordActivityComposer
+                            type="note"
+                            submitLabel="添加备注"
+                            titlePlaceholder="例如：客户偏好 / 背景补充"
+                            bodyPlaceholder="记录沟通背景、需求、风险或内部观察"
+                            isPending={isPending}
+                            testIdPrefix="record-note"
+                            onSubmit={(input) =>
+                              runAction(async () => {
+                                await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                                setRecordActivityComposerType("");
+                                setMessage("已添加备注");
+                                router.refresh();
+                              })
+                            }
+                          />
+                        ) : null}
+                        <ActivityList
+                          activities={selectedNotes}
+                          emptyMessage="暂无备注"
                           testIdPrefix="record-note"
-                          onSubmit={(input) =>
-                            runAction(async () => {
-                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                              setRecordActivityComposerType("");
-                              setMessage("已添加备注");
-                              router.refresh();
-                            })
-                          }
+                          renderMeta={(activity) => (
+                            <>
+                              <ActivityIcon size={15} />
+                              {formatDate(activity.createdAt)}
+                            </>
+                          )}
                         />
-                      ) : null}
-                      <ActivityList
-                        activities={selectedNotes}
-                        emptyMessage="暂无备注"
-                        testIdPrefix="record-note"
-                        renderMeta={(activity) => (
-                          <>
-                            <ActivityIcon size={15} />
-                            {formatDate(activity.createdAt)}
-                          </>
-                        )}
-                      />
-                    </section>
+                      </section>
 
-                    <section style={{ marginTop: 16 }}>
-                      <RecordSectionHeader
-                        title="电话"
-                        addLabel="添加电话记录"
-                        isOpen={recordActivityComposerType === "call"}
-                        onToggle={() => setRecordActivityComposerType((current) => (current === "call" ? "" : "call"))}
-                      />
-                      {recordActivityComposerType === "call" ? (
-                        <RecordActivityComposer
-                          type="call"
-                          submitLabel="添加电话记录"
-                          titlePlaceholder="例如：电话确认预算"
-                          bodyPlaceholder="记录电话结论、异议、承诺事项"
-                          isPending={isPending}
+                      <section className="record-activity-card">
+                        <RecordSectionHeader
+                          title="电话"
+                          addLabel="添加电话记录"
+                          isOpen={recordActivityComposerType === "call"}
+                          onToggle={() => setRecordActivityComposerType((current) => (current === "call" ? "" : "call"))}
+                        />
+                        {recordActivityComposerType === "call" ? (
+                          <RecordActivityComposer
+                            type="call"
+                            submitLabel="添加电话记录"
+                            titlePlaceholder="例如：电话确认预算"
+                            bodyPlaceholder="记录电话结论、异议、承诺事项"
+                            isPending={isPending}
+                            testIdPrefix="record-call"
+                            onSubmit={(input) =>
+                              runAction(async () => {
+                                await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                                setRecordActivityComposerType("");
+                                setMessage("已添加电话记录");
+                                router.refresh();
+                              })
+                            }
+                          />
+                        ) : null}
+                        <ActivityList
+                          activities={selectedCalls}
+                          emptyMessage="暂无电话记录"
                           testIdPrefix="record-call"
-                          onSubmit={(input) =>
-                            runAction(async () => {
-                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                              setRecordActivityComposerType("");
-                              setMessage("已添加电话记录");
-                              router.refresh();
-                            })
-                          }
+                          renderMeta={(activity) => (
+                            <>
+                              <Phone size={15} />
+                              {formatDate(activity.createdAt)}
+                            </>
+                          )}
                         />
-                      ) : null}
-                      <ActivityList
-                        activities={selectedCalls}
-                        emptyMessage="暂无电话记录"
-                        testIdPrefix="record-call"
-                        renderMeta={(activity) => (
-                          <>
-                            <Phone size={15} />
-                            {formatDate(activity.createdAt)}
-                          </>
-                        )}
-                      />
-                    </section>
+                      </section>
 
-                    <section style={{ marginTop: 16 }}>
-                      <RecordSectionHeader
-                        title="会议"
-                        addLabel="添加会议记录"
-                        isOpen={recordActivityComposerType === "meeting"}
-                        onToggle={() => setRecordActivityComposerType((current) => (current === "meeting" ? "" : "meeting"))}
-                      />
-                      {recordActivityComposerType === "meeting" ? (
-                        <RecordActivityComposer
-                          type="meeting"
-                          submitLabel="添加会议记录"
-                          titlePlaceholder="例如：产品演示会议"
-                          bodyPlaceholder="记录会议结论、参会人、待办事项"
-                          dateLabel="会议日期"
-                          isPending={isPending}
-                          testIdPrefix="record-meeting"
-                          onSubmit={(input) =>
-                            runAction(async () => {
-                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                              setRecordActivityComposerType("");
-                              setMessage("已添加会议记录");
-                              router.refresh();
-                            })
-                          }
+                      <section className="record-activity-card">
+                        <RecordSectionHeader
+                          title="会议"
+                          addLabel="添加会议记录"
+                          isOpen={recordActivityComposerType === "meeting"}
+                          onToggle={() => setRecordActivityComposerType((current) => (current === "meeting" ? "" : "meeting"))}
                         />
-                      ) : null}
-                      <ActivityList
-                        activities={selectedMeetings}
-                        emptyMessage="暂无会议记录"
-                        testIdPrefix="record-meeting"
-                        renderMeta={(activity) => (
-                          <>
-                            <CalendarClock size={15} />
-                            {activity.dueAt ? formatDate(activity.dueAt) : formatDate(activity.createdAt)}
-                          </>
-                        )}
-                      />
-                    </section>
+                        {recordActivityComposerType === "meeting" ? (
+                          <RecordActivityComposer
+                            type="meeting"
+                            submitLabel="添加会议记录"
+                            titlePlaceholder="例如：产品演示会议"
+                            bodyPlaceholder="记录会议结论、参会人、待办事项"
+                            dateLabel="会议日期"
+                            isPending={isPending}
+                            testIdPrefix="record-meeting"
+                            onSubmit={(input) =>
+                              runAction(async () => {
+                                await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                                setRecordActivityComposerType("");
+                                setMessage("已添加会议记录");
+                                router.refresh();
+                              })
+                            }
+                          />
+                        ) : null}
+                        <ActivityList
+                          activities={selectedMeetings}
+                          emptyMessage="暂无会议记录"
+                          testIdPrefix="record-meeting"
+                          renderMeta={(activity) => (
+                            <>
+                              <CalendarClock size={15} />
+                              {activity.dueAt ? formatDate(activity.dueAt) : formatDate(activity.createdAt)}
+                            </>
+                          )}
+                        />
+                      </section>
+                    </div>
 
                     <section style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
