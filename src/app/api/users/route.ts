@@ -2,7 +2,7 @@
 export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 
 const optionalIdSchema = z
@@ -21,7 +21,7 @@ const createUserSchema = z
   })
   .strict();
 
-export async function GET(request: NextRequest) {
+async function getApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     return ok(await getCrmRepository().getUsers(context));
@@ -30,7 +30,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST(request: NextRequest) {
+export const GET = withApiMetrics("GET /api/users", getApiMetricsHandler);
+
+async function postApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, createUserSchema);
@@ -39,3 +41,5 @@ export async function POST(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/users", postApiMetricsHandler);

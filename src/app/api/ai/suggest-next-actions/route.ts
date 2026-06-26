@@ -2,12 +2,12 @@
 export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { requirePermission } from "@/lib/auth/rbac";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { createAiProvider } from "@/lib/ai/provider";
 import { aiRecordRequestSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 
-export async function POST(request: NextRequest) {
+async function postApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     requirePermission(context, "ai.use");
@@ -20,3 +20,5 @@ export async function POST(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/ai/suggest-next-actions", postApiMetricsHandler);

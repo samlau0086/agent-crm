@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { hashPassword } from "@/lib/auth/password";
 import { hashPasswordSetupToken } from "@/lib/auth/password-setup";
-import { errorResponse } from "@/lib/api";
+import { errorResponse, withApiMetrics } from "@/lib/api";
 import { ApiError } from "@/lib/api-error";
 import { parseFormBody, parseJsonBody } from "@/lib/api-validation";
 import { prisma } from "@/lib/db";
@@ -18,7 +18,7 @@ const setPasswordJsonSchema = z
   })
   .strict();
 
-export async function POST(request: Request) {
+async function postApiMetricsHandler(request: Request) {
   const origin = getAppBaseUrl(request);
   let input: Awaited<ReturnType<typeof parsePasswordInput>>;
   try {
@@ -77,6 +77,8 @@ export async function POST(request: Request) {
   }
   return NextResponse.redirect(appUrl("/login?password=updated", request), { status: 303 });
 }
+
+export const POST = withApiMetrics("POST /api/auth/set-password", postApiMetricsHandler);
 
 async function parsePasswordInput(request: Request): Promise<{
   kind: "form" | "json";

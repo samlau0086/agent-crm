@@ -1,7 +1,7 @@
 
 export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { recordWriteSchema } from "@/lib/crm/api-schemas";
 import { parseRecordListQuery } from "@/lib/crm/record-query";
 import { getCrmRepository } from "@/lib/crm/repository";
@@ -10,7 +10,7 @@ interface RouteParams {
   params: { objectKey: string };
 }
 
-export async function GET(request: NextRequest, { params }: RouteParams) {
+async function getRecords(request: NextRequest, { params }: RouteParams) {
   try {
     const context = await getRequestContext(request);
     return ok(await getCrmRepository().queryRecords(context, params.objectKey, parseRecordListQuery(request)));
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 }
 
-export async function POST(request: NextRequest, { params }: RouteParams) {
+async function createRecord(request: NextRequest, { params }: RouteParams) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, recordWriteSchema);
@@ -35,3 +35,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     return handleApiError(error, request);
   }
 }
+
+export const GET = withApiMetrics("GET /api/records/[objectKey]", getRecords);
+export const POST = withApiMetrics("POST /api/records/[objectKey]", createRecord);

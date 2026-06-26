@@ -2,11 +2,12 @@ import type { NextRequest } from "next/server";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { extractRequestGeo, extractRequestIp } from "@/lib/email/tracking";
 
+import { withApiMetrics } from "@/lib/api";
 export const dynamic = "force-dynamic";
 
 const transparentPixel = Buffer.from("R0lGODlhAQABAPAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==", "base64");
 
-export async function GET(request: NextRequest, { params }: { params: { trackingId: string } }) {
+async function getApiMetricsHandler(request: NextRequest, { params }: { params: { trackingId: string } }) {
   const geo = extractRequestGeo(request.headers);
   await getCrmRepository().recordEmailTrackingEvent(params.trackingId, {
     type: "open",
@@ -22,3 +23,5 @@ export async function GET(request: NextRequest, { params }: { params: { tracking
     }
   });
 }
+
+export const GET = withApiMetrics("GET /api/email/track/open/[trackingId]", getApiMetricsHandler);

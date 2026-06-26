@@ -1,11 +1,11 @@
 
 export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { fieldDefinitionCreateSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 
-export async function GET(request: NextRequest) {
+async function getApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const objectKey = request.nextUrl.searchParams.get("objectKey") ?? undefined;
@@ -15,7 +15,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST(request: NextRequest) {
+export const GET = withApiMetrics("GET /api/field-definitions", getApiMetricsHandler);
+
+async function postApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, fieldDefinitionCreateSchema);
@@ -24,3 +26,5 @@ export async function POST(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/field-definitions", postApiMetricsHandler);

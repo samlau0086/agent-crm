@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getRequestContext, handleApiError, ok } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { appUrl } from "@/lib/security/app-origin";
@@ -9,7 +9,7 @@ import { buildOAuthEmailConnectedRedirectUrl, buildOAuthEmailErrorRedirectUrl, c
 
 
 export const dynamic = "force-dynamic";
-export async function GET(request: NextRequest) {
+async function getApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const error = request.nextUrl.searchParams.get("error");
@@ -57,3 +57,5 @@ export async function GET(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const GET = withApiMetrics("GET /api/email/oauth/callback", getApiMetricsHandler);

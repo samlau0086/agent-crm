@@ -71,6 +71,7 @@ import { buildImportJobObservability } from "../src/lib/crm/import-observability
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
 import { parseRecordListQuery } from "../src/lib/crm/record-query.ts";
 import { getBackupFile, listBackupFiles, resolveBackupFilePath } from "../src/lib/ops/backups.ts";
+import { getDatabaseObservabilitySnapshot, listRecentApiRequestMetrics, recordApiRequestMetric } from "../src/lib/ops/observability.ts";
 import { assertValidFieldDefinition, validateRecordPayload } from "../src/lib/crm/validation.ts";
 import { compareRecords, findRelatedRecords, matchesSavedView } from "../src/lib/crm/views.ts";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, signWebhookPayload } from "../src/lib/integrations/webhook.ts";
@@ -1268,6 +1269,85 @@ await run("performance phase two adds cursor pagination remote lookup and explai
   assert.match(explainScript, /contacts by companyId/);
 });
 
+await run("observability adds postgres slow query api timing and database snapshots", async () => {
+  const compose = readFileSync("docker-compose.yml", "utf8");
+  const vpsCompose = readFileSync("deploy/docker-compose.vps.yml", "utf8");
+  const migration = readFileSync("prisma/migrations/20260626120000_observability_pg_stat_statements/migration.sql", "utf8");
+  const api = readFileSync("src/lib/api.ts", "utf8");
+  const db = readFileSync("src/lib/db.ts", "utf8");
+  const route = readFileSync("src/app/api/admin/observability/db/route.ts", "utf8");
+  const recordsRoute = readFileSync("src/app/api/records/[objectKey]/route.ts", "utf8");
+  const emailThreadsRoute = readFileSync("src/app/api/email/threads/route.ts", "utf8");
+  const emailSendRoute = readFileSync("src/app/api/email/send/route.ts", "utf8");
+  const healthRoute = readFileSync("src/app/api/health/route.ts", "utf8");
+
+  for (const content of [compose, vpsCompose]) {
+    assert.match(content, /shared_preload_libraries=pg_stat_statements/);
+    assert.match(content, /pg_stat_statements\.track=all/);
+    assert.match(content, /log_min_duration_statement=500/);
+    assert.match(content, /log_lock_waits=on/);
+    assert.match(content, /log_temp_files=10485760/);
+  }
+  assert.match(migration, /CREATE EXTENSION IF NOT EXISTS pg_stat_statements/);
+
+  assert.match(api, /export function withApiMetrics/);
+  assert.match(api, /event: "api_request"/);
+  assert.match(api, /recordApiRequestMetric\(metric\)/);
+  assert.match(db, /event: "db_slow_query"/);
+  assert.match(db, /DB_SLOW_QUERY_MS/);
+  assert.match(route, /requirePermission\(context, "crm.admin"\)/);
+  assert.match(route, /getDatabaseObservabilitySnapshot\(prisma\)/);
+  assert.match(route, /withApiMetrics\("GET \/api\/admin\/observability\/db"/);
+  assert.match(recordsRoute, /withApiMetrics\("GET \/api\/records\/\[objectKey\]"/);
+  assert.match(recordsRoute, /withApiMetrics\("POST \/api\/records\/\[objectKey\]"/);
+  assert.match(emailThreadsRoute, /withApiMetrics\("GET \/api\/email\/threads"/);
+  assert.match(emailSendRoute, /withApiMetrics\("POST \/api\/email\/send"/);
+  assert.match(healthRoute, /withApiMetrics\("GET \/api\/health"/);
+
+  recordApiRequestMetric({ route: "GET /api/one", method: "GET", path: "/api/one", status: 200, durationMs: 10, recordedAt: "2026-01-01T00:00:00.000Z" }, 3);
+  recordApiRequestMetric({ route: "GET /api/two", method: "GET", path: "/api/two", status: 200, durationMs: 20, recordedAt: "2026-01-01T00:00:01.000Z" }, 3);
+  recordApiRequestMetric({ route: "GET /api/three", method: "GET", path: "/api/three", status: 503, durationMs: 30, recordedAt: "2026-01-01T00:00:02.000Z" }, 3);
+  recordApiRequestMetric({ route: "GET /api/four", method: "GET", path: "/api/four", status: 200, durationMs: 40, recordedAt: "2026-01-01T00:00:03.000Z" }, 3);
+  assert.deepEqual(listRecentApiRequestMetrics(2).map((item) => item.route), ["GET /api/four", "GET /api/three"]);
+
+  const fakePrisma = {
+    async $queryRaw(strings, ...values) {
+      const sql = Array.isArray(strings) ? strings.join("?") : String(strings);
+      if (sql.includes("GROUP BY COALESCE")) {
+        return [{ state: "active", count: 2n }, { state: "idle", count: 3n }];
+      }
+      if (sql.includes("count(*) AS total")) {
+        return [{ total: 5n, active: 2n, idle: 3n, idle_in_transaction: 0n, waiting: 1n }];
+      }
+      if (sql.includes("pg_settings")) {
+        return [{ setting: "100" }];
+      }
+      if (sql.includes("pg_extension")) {
+        return [{ exists: true }];
+      }
+      if (sql.includes("pg_stat_statements")) {
+        assert.equal(values[0], 5);
+        return [{
+          query: "SELECT  *  FROM  \"CrmRecord\"  WHERE  id = $1",
+          calls: 4n,
+          total_exec_time: 123.456,
+          mean_exec_time: 30.864,
+          max_exec_time: 55.5,
+          rows: 4n
+        }];
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    }
+  };
+  const snapshot = await getDatabaseObservabilitySnapshot(fakePrisma, { apiMetricLimit: 1, slowQueryLimit: 5 });
+  assert.equal(snapshot.connectionPool.total, 5);
+  assert.equal(snapshot.connectionPool.waiting, 1);
+  assert.equal(snapshot.connectionPool.usagePercent, 5);
+  assert.equal(snapshot.pgStatStatements.enabled, true);
+  assert.equal(snapshot.pgStatStatements.topSlowQueries[0].meanExecTimeMs, 30.86);
+  assert.equal(snapshot.recentApiRequests[0].route, "GET /api/four");
+});
+
 await run("service health payload exposes email readiness summary", async () => {
   const email = await checkEmailSubsystemDiagnostics({
     env: {
@@ -1733,7 +1813,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(repository, /async deleteEmailThread\(context: RequestContext, threadId: string\): Promise<void>/);
   assert.match(store, /find\(\(record\) => emails\.some\(\(email\) => recordDataHasEmail\(record\.data, email\)\)\)\?\.id/);
   assert.match(store, /deleteEmailThread\(context: RequestContext, threadId: string\): void/);
-  assert.match(threadRoute, /export async function DELETE/);
+  assert.match(threadRoute, /export const DELETE = withApiMetrics\("DELETE \/api\/email\/threads\/\[id\]"/);
   assert.match(threadRoute, /deleteEmailThread\(context, params\.id\)/);
 });
 
@@ -1793,7 +1873,7 @@ await run("task workspace exposes todo completed archived and delete actions", (
   assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-archive-\$\{activity\.id\}` : undefined\}/);
   assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-delete-\$\{activity\.id\}` : undefined\}/);
   assert.match(source, /activity\.completedAt \|\| activity\.archivedAt \|\| !activity\.dueAt/);
-  assert.match(route, /export async function DELETE/);
+  assert.match(route, /export const DELETE = withApiMetrics\("DELETE \/api\/activities\/\[id\]"/);
   assert.match(route, /deleteActivity\(context, params\.id\)/);
 });
 
@@ -2254,8 +2334,8 @@ await run("media library stores reusable images for product main images and emai
   assert.match(types, /export interface MediaAsset/);
   assert.match(route, /mediaAssetCreateSchema/);
   assert.match(itemRoute, /mediaAssetUpdateSchema/);
-  assert.match(itemRoute, /export async function PATCH/);
-  assert.match(itemRoute, /export async function DELETE/);
+  assert.match(itemRoute, /export const PATCH = withApiMetrics\("PATCH \/api\/media-assets\/\[id\]"/);
+  assert.match(itemRoute, /export const DELETE = withApiMetrics\("DELETE \/api\/media-assets\/\[id\]"/);
   assert.match(apiSchemas, /export const mediaAssetUpdateSchema/);
   assert.match(repository, /async updateMediaAsset/);
   assert.match(repository, /async deleteMediaAsset/);

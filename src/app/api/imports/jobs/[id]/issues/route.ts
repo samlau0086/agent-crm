@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError } from "@/lib/api";
+import { getRequestContext, handleApiError, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 
 
 export const dynamic = "force-dynamic";
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function getApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     const csv = await getCrmRepository().exportImportJobIssuesCsv(context, params.id);
@@ -18,3 +18,5 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     return handleApiError(error, request);
   }
 }
+
+export const GET = withApiMetrics("GET /api/imports/jobs/[id]/issues", getApiMetricsHandler);

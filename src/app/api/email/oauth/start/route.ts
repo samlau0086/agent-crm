@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { emailOAuthStartSchema } from "@/lib/crm/api-schemas";
 import { requirePermission } from "@/lib/auth/rbac";
 import { appUrl } from "@/lib/security/app-origin";
@@ -7,7 +7,7 @@ import { buildOAuthAuthorizationUrl, createEmailOAuthState } from "@/lib/email/o
 
 
 export const dynamic = "force-dynamic";
-export async function POST(request: NextRequest) {
+async function postApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     requirePermission(context, "crm.admin");
@@ -33,3 +33,5 @@ export async function POST(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/email/oauth/start", postApiMetricsHandler);

@@ -1,11 +1,11 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { knowledgeArticleUpdateSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function getApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     return ok(await getCrmRepository().getKnowledgeArticle(context, params.id));
@@ -14,7 +14,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export const GET = withApiMetrics("GET /api/knowledge/articles/[id]", getApiMetricsHandler);
+
+async function patchApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, knowledgeArticleUpdateSchema);
@@ -24,7 +26,9 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export const PATCH = withApiMetrics("PATCH /api/knowledge/articles/[id]", patchApiMetricsHandler);
+
+async function deleteApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     await getCrmRepository().deleteKnowledgeArticle(context, params.id);
@@ -33,3 +37,5 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     return handleApiError(error, request);
   }
 }
+
+export const DELETE = withApiMetrics("DELETE /api/knowledge/articles/[id]", deleteApiMetricsHandler);

@@ -1,12 +1,12 @@
 import type { NextRequest } from "next/server";
 import { requirePermission } from "@/lib/auth/rbac";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { talkMessageKnowledgePatchSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 
 export const dynamic = "force-dynamic";
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+async function patchApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     requirePermission(context, "ai.use");
@@ -17,7 +17,9 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export const PATCH = withApiMetrics("PATCH /api/ai/talk/messages/[id]", patchApiMetricsHandler);
+
+async function deleteApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     requirePermission(context, "ai.use");
@@ -27,3 +29,5 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     return handleApiError(error, request);
   }
 }
+
+export const DELETE = withApiMetrics("DELETE /api/ai/talk/messages/[id]", deleteApiMetricsHandler);

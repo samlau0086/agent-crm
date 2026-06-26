@@ -2,7 +2,7 @@
 export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 
 const optionalIdSchema = z
@@ -25,7 +25,7 @@ interface RouteParams {
   params: { id: string };
 }
 
-export async function PATCH(request: NextRequest, { params }: RouteParams) {
+async function patchApiMetricsHandler(request: NextRequest, { params }: RouteParams) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, updateUserSchema);
@@ -34,3 +34,5 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     return handleApiError(error, request);
   }
 }
+
+export const PATCH = withApiMetrics("PATCH /api/users/[id]", patchApiMetricsHandler);

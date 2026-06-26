@@ -1,12 +1,12 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { importJobActionSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 
 
 export const dynamic = "force-dynamic";
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function getApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     return ok(await getCrmRepository().getImportJob(context, params.id));
@@ -15,7 +15,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export const GET = withApiMetrics("GET /api/imports/jobs/[id]", getApiMetricsHandler);
+
+async function patchApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, importJobActionSchema);
@@ -35,3 +37,5 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     return handleApiError(error, request);
   }
 }
+
+export const PATCH = withApiMetrics("PATCH /api/imports/jobs/[id]", patchApiMetricsHandler);

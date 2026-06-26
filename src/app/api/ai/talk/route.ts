@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requirePermission } from "@/lib/auth/rbac";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { aiTalkRequestSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { generateAiTalkResponse, generateAiTalkSuggestion, type AiTalkSource } from "@/lib/ai/talk";
@@ -8,7 +8,7 @@ import type { Activity, CrmRecord, EmailMessage, EmailThread, FieldDefinition, K
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: NextRequest) {
+async function postApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     requirePermission(context, "ai.use");
@@ -41,6 +41,8 @@ export async function POST(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/ai/talk", postApiMetricsHandler);
 
 async function buildRecordTalkContext(
   repository: ReturnType<typeof getCrmRepository>,

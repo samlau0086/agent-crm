@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 
 
 export const dynamic = "force-dynamic";
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+async function postApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     return ok(await getCrmRepository().testWebhook(context, params.id), { status: 201 });
@@ -12,3 +12,5 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/webhooks/[id]/test", postApiMetricsHandler);

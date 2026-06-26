@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { clearFailedLogin, getLoginClientIp, isLoginRateLimited, recordFailedLogin } from "@/lib/auth/login-rate-limit";
 import { createUserSession, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS } from "@/lib/auth/session";
 import { verifyPassword } from "@/lib/auth/password";
-import { errorResponse } from "@/lib/api";
+import { errorResponse, withApiMetrics } from "@/lib/api";
 import { ApiError } from "@/lib/api-error";
 import { parseFormBody } from "@/lib/api-validation";
 import { prisma } from "@/lib/db";
@@ -10,7 +10,7 @@ import { appUrl, getAppBaseUrl } from "@/lib/security/app-origin";
 
 
 export const dynamic = "force-dynamic";
-export async function POST(request: Request) {
+async function postApiMetricsHandler(request: Request) {
   let formData: FormData;
   try {
     formData = await parseFormBody(request);
@@ -52,6 +52,8 @@ export async function POST(request: Request) {
   });
   return response;
 }
+
+export const POST = withApiMetrics("POST /api/auth/login", postApiMetricsHandler);
 
 function loginRateLimitResponse(request: Request, origin: string, retryAfterSeconds = 60) {
   if (request.headers.get("accept")?.includes("text/html")) {

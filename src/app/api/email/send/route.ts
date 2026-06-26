@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { emailSendSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { getFailedEmailSendResultOrThrow } from "@/lib/email/send-failure";
@@ -9,7 +9,7 @@ import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 
 
 export const dynamic = "force-dynamic";
-export async function POST(request: NextRequest) {
+async function sendEmail(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, emailSendSchema);
@@ -61,3 +61,5 @@ export async function POST(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/email/send", sendEmail);

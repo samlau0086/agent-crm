@@ -159,6 +159,20 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg16
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - log_lock_waits=on
+      - -c
+      - deadlock_timeout=1s
+      - -c
+      - log_temp_files=10485760
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ai_agent_crm}
       POSTGRES_USER: ${POSTGRES_USER:-crm}

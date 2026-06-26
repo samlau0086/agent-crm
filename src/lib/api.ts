@@ -9,6 +9,7 @@ import { getSessionUserId, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { getCrmRepository, getRequestContextByApiKeyToken, getRequestContextByUserId } from "@/lib/crm/repository";
 import type { RequestContext } from "@/lib/crm/types";
 import { parseJsonBody, parseOptionalJsonBody } from "@/lib/api-validation";
+import { recordApiRequestMetric } from "@/lib/ops/observability";
 
 export { ApiError } from "@/lib/api-error";
 
@@ -75,6 +76,42 @@ export function errorResponse(status: number, code: ApiErrorCode | string, messa
     },
     { status }
   );
+}
+
+export function withApiMetrics<TArgs extends unknown[]>(
+  route: string,
+  handler: (...args: TArgs) => Response | Promise<Response>
+): (...args: TArgs) => Promise<Response> {
+  return async (...args: TArgs): Promise<Response> => {
+    const startedAt = performance.now();
+    const request = getRequestFromArgs(args);
+    const method = request?.method ?? route.split(" ", 1)[0] ?? "UNKNOWN";
+    const path = request ? new URL(request.url).pathname : route.replace(/^[A-Z]+\s+/, "");
+    let status = 500;
+
+    try {
+      const response = await handler(...args);
+      status = response.status;
+      return response;
+    } finally {
+      const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+      const metric = {
+        route,
+        method,
+        path,
+        status,
+        durationMs,
+        recordedAt: new Date().toISOString()
+      };
+      recordApiRequestMetric(metric);
+      console.log(JSON.stringify({ level: "info", event: "api_request", ...metric }));
+    }
+  };
+}
+
+function getRequestFromArgs(args: unknown[]): Request | undefined {
+  const candidate = args[0];
+  return candidate instanceof Request ? candidate : undefined;
 }
 
 export async function handleApiError(error: unknown, request?: NextRequest | Request): Promise<NextResponse<ApiErrorPayload>> {

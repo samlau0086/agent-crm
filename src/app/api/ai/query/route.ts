@@ -2,7 +2,7 @@
 export const dynamic = "force-dynamic";
 ﻿import type { NextRequest } from "next/server";
 import { requirePermission } from "@/lib/auth/rbac";
-import { getRequestContext, handleApiError, ok, parseJson } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { createAiProvider } from "@/lib/ai/provider";
 import { buildAiQueryPlan } from "@/lib/ai/query-planner";
 import { assertReadOnlyAiQuestion } from "@/lib/ai/query-guard";
@@ -12,7 +12,7 @@ import { getCrmRepository } from "@/lib/crm/repository";
 const AI_QUERY_MAX_OBJECTS = 4;
 const AI_QUERY_PAGE_SIZE = 25;
 
-export async function POST(request: NextRequest) {
+async function postApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     requirePermission(context, "ai.use");
@@ -42,3 +42,5 @@ export async function POST(request: NextRequest) {
     return handleApiError(error, request);
   }
 }
+
+export const POST = withApiMetrics("POST /api/ai/query", postApiMetricsHandler);

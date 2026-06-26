@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requirePermission } from "@/lib/auth/rbac";
-import { getRequestContext, handleApiError, ok } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { normalizeEmailConnectionConfig } from "@/lib/email/connection-config";
 import type { EmailConnectionConfig, EmailInboundConnectionConfig, EmailOutboundServiceConfig } from "@/lib/crm/types";
@@ -20,7 +20,7 @@ export type SanitizedEmailConnectionConfig = {
   defaultOutboundServiceId?: string;
 };
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function getApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     requirePermission(context, "crm.admin");
@@ -30,6 +30,8 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     return handleApiError(error, request);
   }
 }
+
+export const GET = withApiMetrics("GET /api/email/accounts/[id]/connection-config", getApiMetricsHandler);
 
 function sanitizeEmailConnectionConfig(config: EmailConnectionConfig): SanitizedEmailConnectionConfig {
   const normalized = normalizeEmailConnectionConfig(config);

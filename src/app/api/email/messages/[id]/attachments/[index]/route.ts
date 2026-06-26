@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError } from "@/lib/api";
+import { getRequestContext, handleApiError, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { buildEmailAttachmentResponse } from "@/lib/email/attachment-response";
 import { downloadOAuthAttachment } from "@/lib/email/oauth-api";
@@ -11,7 +11,7 @@ interface RouteParams {
   params: { id: string; index: string };
 }
 
-export async function GET(request: NextRequest, { params }: RouteParams) {
+async function getApiMetricsHandler(request: NextRequest, { params }: RouteParams) {
   try {
     const context = await getRequestContext(request);
     const repository = getCrmRepository();
@@ -46,3 +46,5 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     return handleApiError(error, request);
   }
 }
+
+export const GET = withApiMetrics("GET /api/email/messages/[id]/attachments/[index]", getApiMetricsHandler);

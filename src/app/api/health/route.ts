@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { withApiMetrics } from "@/lib/api";
 import { checkEmailSubsystemDiagnostics } from "@/lib/email/diagnostics";
 import { checkJobHealth, toSafeDatabaseHealthError } from "@/lib/ops/health";
 import { buildServiceHealthPayload } from "@/lib/ops/service-health";
+import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+async function getHealth() {
   const checkedAt = new Date().toISOString();
   let database: "ok" | "error" = "ok";
   const errors: string[] = [];
@@ -41,3 +42,5 @@ export async function GET() {
     { status: payload.ok ? 200 : 503 }
   );
 }
+
+export const GET = withApiMetrics("GET /api/health", getHealth);

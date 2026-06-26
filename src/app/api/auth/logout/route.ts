@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { SESSION_COOKIE_NAME, destroyUserSession } from "@/lib/auth/session";
 
 
+import { withApiMetrics } from "@/lib/api";
 export const dynamic = "force-dynamic";
-export async function POST(request: Request) {
+async function postApiMetricsHandler(request: Request) {
   const token = request.headers.get("cookie")
     ?.split(";")
     .map((part) => part.trim())
@@ -23,3 +24,5 @@ export async function POST(request: Request) {
   });
   return response;
 }
+
+export const POST = withApiMetrics("POST /api/auth/logout", postApiMetricsHandler);

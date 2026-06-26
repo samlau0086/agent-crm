@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { getRequestContext, handleApiError, ok } from "@/lib/api";
+import { getRequestContext, handleApiError, ok, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import type { WebhookDeliveryStatus } from "@/lib/crm/types";
 import { webhookEvents, type WebhookEvent } from "@/lib/integrations/webhook";
@@ -8,7 +8,7 @@ import { webhookEvents, type WebhookEvent } from "@/lib/integrations/webhook";
 export const dynamic = "force-dynamic";
 const deliveryStatuses = new Set<WebhookDeliveryStatus>(["pending", "success", "failed"]);
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+async function getApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     const searchParams = request.nextUrl.searchParams;
@@ -27,3 +27,5 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     return handleApiError(error, request);
   }
 }
+
+export const GET = withApiMetrics("GET /api/webhooks/[id]/deliveries", getApiMetricsHandler);
