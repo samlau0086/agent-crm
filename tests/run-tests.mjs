@@ -1590,10 +1590,9 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /if \(!routeEmailThreadId\) \{[\s\S]*return;[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*fetchJson<EmailMessage\[\]>\(`\/api\/email\/threads\/\$\{routeEmailThreadId\}\/messages`/);
   assert.match(source, /pendingRecordOpen\?\.objectKey === route\.objectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
-  assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*const nextEmailThreadPath = `\$\{crmPathForNav\("email"\)\}\?emailThreadId=\$\{encodeURIComponent\(threadId\)\}`[\s\S]*selectEmailThread\(threadId\)[\s\S]*setEmailDetailThreadId\(threadId\)[\s\S]*router\.push\(nextEmailThreadPath\)[\s\S]*await loadEmailMessages\(threadId\)/);
+  assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*const nextEmailThreadPath = buildEmailRoutePath\(\{ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, search: routeEmailSearch, mailMode: "detail", threadId \}\)[\s\S]*selectEmailThread\(threadId\)[\s\S]*setEmailDetailThreadId\(threadId\)[\s\S]*router\.push\(nextEmailThreadPath\)[\s\S]*await loadEmailMessages\(threadId\)/);
   assert.match(source, /if \(!detailThreadId\) \{[\s\S]*return;[\s\S]*const thread = threads\.find\(\(candidate\) => candidate\.id === detailThreadId\)/);
-  assert.match(source, /setCategory\(\(current\) => \(current === nextCategory \? current : nextCategory\)\)/);
-  assert.match(source, /setMailMode\(\(current\) => \(current === "detail" \? current : "detail"\)\)/);
+  assert.match(source, /setMailMode\(\(current\) => \{[\s\S]*const nextMode = routeEmailThreadIdToMode\(detailThreadId, routeMailMode\)[\s\S]*return current === nextMode \? current : nextMode/);
   assert.match(source, /function startCreateContactForCompany\(company: CrmRecord\)/);
   assert.match(source, /onOpenEmailContact=\{\(threadId, contact\) => openEmailContact\(threadId, contact\)\}/);
   assert.match(source, /data-testid="email-thread-contact-link"/);
@@ -1889,7 +1888,7 @@ await run("email workspace supports multiple mailbox account filters", () => {
   const styles = readFileSync("src/app/globals.css", "utf8");
 
   assert.match(source, /const allEmailAccountsKey = "all"/);
-  assert.match(source, /const \[selectedMailboxAccountId, setSelectedMailboxAccountId\] = useState<string>\(allEmailAccountsKey\)/);
+  assert.match(source, /const \[selectedMailboxAccountId, setSelectedMailboxAccountId\] = useState<string>\(routeAccountId\)/);
   assert.match(source, /const \[mailboxAccountsCollapsed, setMailboxAccountsCollapsed\] = useState\(true\)/);
   assert.match(source, /accountFilteredThreads = useMemo/);
   assert.match(source, /thread\.accountId === selectedMailboxAccountId/);
@@ -1915,6 +1914,24 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.match(styles, /\.gmail-account-summary \{/);
   assert.match(styles, /\.gmail-account-summary-main \{/);
   assert.match(styles, /\.gmail-account-summary-toggle \{/);
+});
+
+await run("email mailbox location is URL based and survives refresh", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+
+  assert.match(source, /const routeEmailMailbox = normalizeEmailMailboxKey\(searchParams\.get\("mailbox"\)\)/);
+  assert.match(source, /const routeEmailCategory = normalizeEmailCategoryKey\(searchParams\.get\("category"\)\)/);
+  assert.match(source, /const routeEmailMode = normalizeEmailMailMode\(searchParams\.get\("mailMode"\)\)/);
+  assert.match(source, /const routeEmailAccountId = searchParams\.get\("accountId"\) \?\? allEmailAccountsKey/);
+  assert.match(source, /const routeEmailSearch = searchParams\.get\("mailSearch"\) \?\? ""/);
+  assert.match(source, /function buildEmailRoutePath\(patch: EmailRoutePatch\)/);
+  assert.match(source, /params\.set\("mailbox", patch\.mailbox \?\? "inbox"\)/);
+  assert.match(source, /params\.set\("mailMode", "detail"\)[\s\S]*params\.set\("emailThreadId", patch\.threadId\)/);
+  assert.match(source, /onRouteChange=\{\(patch\) => \{[\s\S]*const nextPath = buildEmailRoutePath\(patch\)[\s\S]*router\.push\(nextPath\)/);
+  assert.match(source, /const applyEmailRoute = useCallback\(\(patch: EmailRoutePatch\) => \{[\s\S]*onRouteChange\(\{[\s\S]*mailbox: nextMailbox[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId/);
+  assert.match(source, /onClick=\{\(\) => \{ applyEmailRoute\(\{ mailbox: item\.key, mailMode: "list", threadId: "" \}\)/);
+  assert.match(source, /function openThreadDetail\(threadId: string\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId \}\)/);
+  assert.match(source, /aria-label="返回列表"[\s\S]*onClick=\{\(\) => applyEmailRoute\(\{ mailMode: "list", threadId: "" \}\)\}/);
 });
 
 await run("email account settings separate inbound credentials from outbound services", () => {
@@ -2336,7 +2353,7 @@ await run("email trash permanent delete buttons use immediate confirm flow", () 
 await run("email workspace supports labels minimized compose restore and record activity markers", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
-  assert.match(source, /const \[labelFilter, setLabelFilter\] = useState\(""\)/);
+  assert.match(source, /const \[labelFilter, setLabelFilter\] = useState\(routeLabel\)/);
   assert.match(source, /function promptAddEmailLabel\(threadIds: string\[\]\)/);
   assert.match(source, /function getEmailThreadUserLabels\(thread: EmailThread, state: EmailThreadUiState = \{\}\): string\[\]/);
   assert.match(source, /updateThreadLabels\(threadId, getEmailThreadUserLabels\(thread, state\)\.filter/);

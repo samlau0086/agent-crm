@@ -147,6 +147,15 @@ type EmailSettingsStep = "identity" | "inbound" | "outbound" | "review";
 type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "scheduled" | "drafts" | "archived" | "trash" | "all";
 type EmailCategoryKey = "primary" | "promotions" | "social" | "updates";
 type EmailMailMode = "list" | "detail";
+type EmailRoutePatch = {
+  accountId?: string;
+  category?: EmailCategoryKey;
+  label?: string;
+  mailbox?: EmailMailboxKey;
+  mailMode?: EmailMailMode;
+  search?: string;
+  threadId?: string;
+};
 type EmailThreadUiState = {
   archived?: boolean;
   category?: EmailCategoryKey;
@@ -420,6 +429,45 @@ const emailCategoryMeta: Array<{ key: EmailCategoryKey; label: string; icon: Luc
   { key: "updates", label: "更新", icon: CalendarClock, keywords: ["update", "notification", "report", "receipt", "invoice", "ticket", "github", "alert", "提醒", "账单", "报告"] }
 ];
 const allEmailAccountsKey = "all";
+
+function normalizeEmailMailboxKey(value: string | null): EmailMailboxKey {
+  return emailMailboxMeta.some((item) => item.key === value) ? (value as EmailMailboxKey) : "inbox";
+}
+
+function normalizeEmailCategoryKey(value: string | null): EmailCategoryKey {
+  return emailCategoryMeta.some((item) => item.key === value) ? (value as EmailCategoryKey) : "primary";
+}
+
+function normalizeEmailMailMode(value: string | null): EmailMailMode {
+  return value === "detail" ? "detail" : "list";
+}
+
+function routeEmailThreadIdToMode(threadId: string, mode: EmailMailMode): EmailMailMode {
+  return threadId ? "detail" : mode;
+}
+
+function buildEmailRoutePath(patch: EmailRoutePatch): string {
+  const params = new URLSearchParams();
+  params.set("mailbox", patch.mailbox ?? "inbox");
+  if (patch.category && (patch.mailbox === "inbox" || patch.mailbox === "all")) {
+    params.set("category", patch.category);
+  }
+  if (patch.accountId && patch.accountId !== allEmailAccountsKey) {
+    params.set("accountId", patch.accountId);
+  }
+  if (patch.label) {
+    params.set("label", patch.label);
+  }
+  if (patch.search) {
+    params.set("mailSearch", patch.search);
+  }
+  if (patch.mailMode === "detail" && patch.threadId) {
+    params.set("mailMode", "detail");
+    params.set("emailThreadId", patch.threadId);
+  }
+  const query = params.toString();
+  return query ? `${crmPathForNav("email")}?${query}` : crmPathForNav("email");
+}
 const noEmailSignatureId = "none";
 const inlineImageContentIdPrefix = "inline-image-";
 
@@ -1111,6 +1159,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeRecordId = searchParams.get("recordId") ?? "";
   const routeReturnEmailThreadId = searchParams.get("returnEmailThreadId") ?? "";
   const routeEmailThreadId = searchParams.get("emailThreadId") ?? "";
+  const routeEmailMailbox = normalizeEmailMailboxKey(searchParams.get("mailbox"));
+  const routeEmailCategory = normalizeEmailCategoryKey(searchParams.get("category"));
+  const routeEmailMode = normalizeEmailMailMode(searchParams.get("mailMode"));
+  const routeEmailAccountId = searchParams.get("accountId") ?? allEmailAccountsKey;
+  const routeEmailLabel = searchParams.get("label") ?? "";
+  const routeEmailSearch = searchParams.get("mailSearch") ?? "";
   const routeEmailCompose = searchParams.get("compose") === "1";
   const routeEmailComposeTo = searchParams.get("to") ?? "";
   const routeEmailComposeRecordId = searchParams.get("composeRecordId") ?? "";
@@ -2602,7 +2656,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function openEmailThread(threadId: string) {
-    const nextEmailThreadPath = `${crmPathForNav("email")}?emailThreadId=${encodeURIComponent(threadId)}`;
+    const nextEmailThreadPath = buildEmailRoutePath({ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, search: routeEmailSearch, mailMode: "detail", threadId });
     selectEmailThread(threadId);
     setEmailDetailThreadId(threadId);
     setEmailWorkspaceView("mail");
@@ -4436,6 +4490,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             messagesByThread={emailMessagesByThread}
             selectedThreadId={selectedEmailThreadId}
             detailThreadId={emailDetailThreadId}
+            routeMailbox={routeEmailMailbox}
+            routeCategory={routeEmailCategory}
+            routeMailMode={routeEmailMode}
+            routeAccountId={routeEmailAccountId}
+            routeLabel={routeEmailLabel}
+            routeSearch={routeEmailSearch}
             view={emailWorkspaceView}
             selectedRecord={selectedRecord}
             records={records}
@@ -4465,6 +4525,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onAiPurposeChange={setEmailAiPurpose}
             onAiPromptChange={setEmailAiPrompt}
             onViewChange={setEmailWorkspaceView}
+            onRouteChange={(patch) => {
+              const nextPath = buildEmailRoutePath(patch);
+              if (`${pathname}?${searchParams.toString()}` !== nextPath) {
+                router.push(nextPath);
+              }
+            }}
             onLoadThreadMessages={(threadId) => loadEmailMessages(threadId)}
             onSelectThread={(threadId) => {
               selectEmailThread(threadId);
@@ -4773,6 +4839,12 @@ function EmailWorkspace({
   messagesByThread,
   selectedThreadId,
   detailThreadId,
+  routeMailbox,
+  routeCategory,
+  routeMailMode,
+  routeAccountId,
+  routeLabel,
+  routeSearch,
   view,
   selectedRecord,
   records,
@@ -4802,6 +4874,7 @@ function EmailWorkspace({
   onAiPurposeChange,
   onAiPromptChange,
   onViewChange,
+  onRouteChange,
   onLoadThreadMessages,
   onSelectThread,
   onUpdateThread,
@@ -4858,6 +4931,12 @@ function EmailWorkspace({
   messagesByThread: Record<string, EmailMessage[]>;
   selectedThreadId: string;
   detailThreadId: string;
+  routeMailbox: EmailMailboxKey;
+  routeCategory: EmailCategoryKey;
+  routeMailMode: EmailMailMode;
+  routeAccountId: string;
+  routeLabel: string;
+  routeSearch: string;
   view: EmailWorkspaceView;
   selectedRecord?: CrmRecord;
   records: CrmRecord[];
@@ -4887,6 +4966,7 @@ function EmailWorkspace({
   onAiPurposeChange: (purpose: EmailAiGenerateResult["purpose"]) => void;
   onAiPromptChange: (prompt: string) => void;
   onViewChange: (view: EmailWorkspaceView) => void;
+  onRouteChange: (patch: EmailRoutePatch) => void;
   onLoadThreadMessages: (threadId: string) => Promise<void>;
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
@@ -4971,13 +5051,13 @@ function EmailWorkspace({
   const selectedEmailAiPurposeEnabled = isEmailAiPurposeEnabled(aiSettings.features, aiPurpose);
   const enabledEmailAiAutomationCount = [aiSettings.features.auto_translate, aiSettings.features.auto_context_analysis, aiSettings.features.auto_summarize].filter(Boolean).length;
   const activeKnowledgeArticleCount = knowledgeArticles.filter((article) => article.active).length;
-  const [mailbox, setMailbox] = useState<EmailMailboxKey>("inbox");
-  const [category, setCategory] = useState<EmailCategoryKey>("primary");
-  const [mailMode, setMailMode] = useState<EmailMailMode>("list");
-  const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(allEmailAccountsKey);
+  const [mailbox, setMailbox] = useState<EmailMailboxKey>(routeMailbox);
+  const [category, setCategory] = useState<EmailCategoryKey>(routeCategory);
+  const [mailMode, setMailMode] = useState<EmailMailMode>(routeEmailThreadIdToMode(detailThreadId, routeMailMode));
+  const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(routeAccountId);
   const [mailboxAccountsCollapsed, setMailboxAccountsCollapsed] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [labelFilter, setLabelFilter] = useState("");
+  const [searchQuery, setSearchQuery] = useState(routeSearch);
+  const [labelFilter, setLabelFilter] = useState(routeLabel);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const [trashDisplayMessageIds, setTrashDisplayMessageIds] = useState<EmailTrashDisplayMessageIds>({});
@@ -5221,6 +5301,32 @@ function EmailWorkspace({
     });
   }, [onUpdateThreadState]);
 
+  const applyEmailRoute = useCallback((patch: EmailRoutePatch) => {
+    const nextMailbox = patch.mailbox ?? mailbox;
+    const nextCategory = patch.category ?? category;
+    const nextMode = patch.mailMode ?? mailMode;
+    const nextAccountId = patch.accountId ?? selectedMailboxAccountId;
+    const nextLabel = patch.label ?? labelFilter;
+    const nextSearch = patch.search ?? searchQuery;
+    const nextThreadId = patch.threadId ?? (nextMode === "detail" ? selectedThreadId : "");
+
+    setMailbox(nextMailbox);
+    setCategory(nextCategory);
+    setMailMode(nextMode);
+    setSelectedMailboxAccountId(nextAccountId);
+    setLabelFilter(nextLabel);
+    setSearchQuery(nextSearch);
+    onRouteChange({
+      accountId: nextAccountId,
+      category: nextCategory,
+      label: nextLabel,
+      mailbox: nextMailbox,
+      mailMode: nextMode,
+      search: nextSearch,
+      threadId: nextThreadId
+    });
+  }, [category, labelFilter, mailMode, mailbox, onRouteChange, searchQuery, selectedMailboxAccountId, selectedThreadId]);
+
   function updateThreadLabels(threadId: string, labels: string[]) {
     const normalizedLabels = Array.from(new Set(labels.map((label) => label.trim()).filter(Boolean))).slice(0, 20);
     patchThreadUiState([threadId], { labels: normalizedLabels });
@@ -5252,7 +5358,7 @@ function EmailWorkspace({
       const storedLabels = state.labels ?? thread.labels ?? [];
       updateThreadLabels(threadId, [...storedLabels, normalizedLabel]);
     }
-    setLabelFilter(normalizedLabel);
+    applyEmailRoute({ label: normalizedLabel, mailMode: "list", threadId: "" });
     onShowSuccess(`已添加标签：${normalizedLabel}`);
   }
 
@@ -5264,7 +5370,7 @@ function EmailWorkspace({
     const state = threadUiState[threadId] ?? {};
     updateThreadLabels(threadId, getEmailThreadUserLabels(thread, state).filter((candidate) => candidate.toLowerCase() !== label.toLowerCase()));
     if (labelFilter === label) {
-      setLabelFilter("");
+      applyEmailRoute({ label: "", threadId: mailMode === "detail" ? selectedThreadId : "" });
     }
     onShowSuccess(`已移除标签：${label}`);
   }
@@ -5280,10 +5386,25 @@ function EmailWorkspace({
 
   useEffect(() => {
     if (selectedMailboxAccountId !== allEmailAccountsKey && !accounts.some((account) => account.id === selectedMailboxAccountId)) {
-      setSelectedMailboxAccountId(allEmailAccountsKey);
+      applyEmailRoute({ accountId: allEmailAccountsKey });
       setSelectedThreadIds(new Set());
     }
-  }, [accounts, selectedMailboxAccountId]);
+  }, [accounts, applyEmailRoute, selectedMailboxAccountId]);
+
+  useEffect(() => {
+    setMailbox((current) => (current === routeMailbox ? current : routeMailbox));
+    setCategory((current) => (current === routeCategory ? current : routeCategory));
+    setMailMode((current) => {
+      const nextMode = routeEmailThreadIdToMode(detailThreadId, routeMailMode);
+      return current === nextMode ? current : nextMode;
+    });
+    setSelectedMailboxAccountId((current) => (current === routeAccountId ? current : routeAccountId));
+    setLabelFilter((current) => (current === routeLabel ? current : routeLabel));
+    setSearchQuery((current) => (current === routeSearch ? current : routeSearch));
+    if (detailThreadId && detailThreadId !== selectedThreadId) {
+      onSelectThread(detailThreadId);
+    }
+  }, [detailThreadId, onSelectThread, routeAccountId, routeCategory, routeLabel, routeMailMode, routeMailbox, routeSearch, selectedThreadId]);
 
   useEffect(() => {
     if (!selectedThreadId || !messagesByThread[selectedThreadId]?.length) {
@@ -5300,18 +5421,8 @@ function EmailWorkspace({
     if (!thread) {
       return;
     }
-    const messages = messagesByThread[detailThreadId] ?? [];
     const state = threadUiState[detailThreadId] ?? {};
-    const isDeleted = Boolean(state.deleted);
-    const isArchived = Boolean(state.archived);
-    const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
-    const nextCategory = state.category ?? inferEmailThreadCategory(thread, messages);
-    const nextMailbox = isDeleted ? "trash" : isArchived ? "archived" : isSnoozed ? "snoozed" : "inbox";
-    setSelectedMailboxAccountId((current) => (current === allEmailAccountsKey ? current : allEmailAccountsKey));
-    setSearchQuery((current) => (current ? "" : current));
     setSelectedThreadIds((current) => (current.size ? new Set() : current));
-    setCategory((current) => (current === nextCategory ? current : nextCategory));
-    setMailbox((current) => (current === nextMailbox ? current : nextMailbox));
     setMailMode((current) => (current === "detail" ? current : "detail"));
     if (detailThreadId !== selectedThreadId) {
       onSelectThread(detailThreadId);
@@ -5320,7 +5431,7 @@ function EmailWorkspace({
       patchThreadUiState([detailThreadId], { read: true });
       persistThreadState(detailThreadId, { read: true });
     }
-  }, [detailThreadId, messagesByThread, onSelectThread, patchThreadUiState, persistThreadState, selectedThreadId, threadUiState, threads]);
+  }, [detailThreadId, onSelectThread, patchThreadUiState, persistThreadState, selectedThreadId, threadUiState, threads]);
 
   useEffect(() => {
     if (view === "mail" && hasEmailDraftContent) {
@@ -5349,9 +5460,7 @@ function EmailWorkspace({
   }, [composeMinimized, composeOpen, draftEditorHtml]);
 
   function selectMailboxAccount(accountId: string) {
-    setSelectedMailboxAccountId(accountId);
-    setMailMode("list");
-    setLabelFilter("");
+    applyEmailRoute({ accountId, label: "", mailMode: "list", threadId: "" });
     setSelectedThreadIds(new Set());
   }
 
@@ -5557,7 +5666,7 @@ function EmailWorkspace({
     }
     setSelectedThreadIds(new Set());
     if (threadIds.includes(selectedThreadId) && (action === "archive" || action === "delete" || action === "restore" || action === "unarchive" || action === "snooze" || action === "unsnooze")) {
-      setMailMode("list");
+      applyEmailRoute({ mailMode: "list", threadId: "" });
     }
   }
 
@@ -5576,7 +5685,7 @@ function EmailWorkspace({
       return next;
     });
     if (ids.includes(selectedThreadId)) {
-      setMailMode("list");
+      applyEmailRoute({ mailMode: "list", threadId: "" });
     }
   }
 
@@ -5593,7 +5702,7 @@ function EmailWorkspace({
   }
 
   function openThreadDetail(threadId: string) {
-    setMailMode("detail");
+    applyEmailRoute({ mailMode: "detail", threadId });
     patchThreadUiState([threadId], { read: true });
     persistThreadState(threadId, { read: true });
     onSelectThread(threadId);
@@ -6449,7 +6558,7 @@ function EmailWorkspace({
         </div>
         <label className="gmail-search">
           <Search size={18} />
-          <input data-testid="email-search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索邮件" />
+          <input data-testid="email-search" value={searchQuery} onChange={(event) => applyEmailRoute({ search: event.target.value, mailMode: "list", threadId: "" })} placeholder="搜索邮件" />
           <Filter size={16} />
         </label>
         <button className="icon-button" aria-label="邮箱设置" type="button" onClick={() => onViewChange("settings")}>
@@ -6514,7 +6623,7 @@ function EmailWorkspace({
             {emailMailboxMeta.map((item) => {
               const Icon = item.icon;
               return (
-                <button className={`gmail-folder ${mailbox === item.key ? "active" : ""}`} key={item.key} type="button" onClick={() => { setMailbox(item.key); setMailMode("list"); setSelectedThreadIds(new Set()); }}>
+                <button className={`gmail-folder ${mailbox === item.key ? "active" : ""}`} key={item.key} type="button" onClick={() => { applyEmailRoute({ mailbox: item.key, mailMode: "list", threadId: "" }); setSelectedThreadIds(new Set()); }}>
                   <Icon size={16} />
                   <span>{item.label}</span>
                   <small>{mailboxCounts[item.key] || ""}</small>
@@ -6536,7 +6645,7 @@ function EmailWorkspace({
               </button>
             </div>
             {allEmailLabels.map((label) => (
-              <button className={`gmail-folder ${labelFilter === label ? "active" : ""}`} data-testid={`email-label-filter-${sanitizeTestId(label)}`} key={label} type="button" onClick={() => { setLabelFilter(labelFilter === label ? "" : label); setMailMode("list"); }}>
+              <button className={`gmail-folder ${labelFilter === label ? "active" : ""}`} data-testid={`email-label-filter-${sanitizeTestId(label)}`} key={label} type="button" onClick={() => { applyEmailRoute({ label: labelFilter === label ? "" : label, mailMode: "list", threadId: "" }); }}>
                 <Tag size={15} />
                 <span>{label}</span>
               </button>
@@ -6628,7 +6737,7 @@ function EmailWorkspace({
                 {emailCategoryMeta.map((item) => {
                   const Icon = item.icon;
                   return (
-                    <button className={`gmail-category-tab ${category === item.key ? "active" : ""}`} key={item.key} type="button" onClick={() => setCategory(item.key)}>
+                    <button className={`gmail-category-tab ${category === item.key ? "active" : ""}`} key={item.key} type="button" onClick={() => applyEmailRoute({ category: item.key, mailMode: "list", threadId: "" })}>
                       <Icon size={16} />
                       <span>{item.label}</span>
                       <small>{categoryCounts[item.key]}</small>
@@ -6727,7 +6836,7 @@ function EmailWorkspace({
           ) : (
             <section className="gmail-detail-pane">
               <div className="gmail-detail-toolbar">
-                <button className="icon-button" aria-label="返回列表" type="button" onClick={() => setMailMode("list")}>
+                <button className="icon-button" aria-label="返回列表" type="button" onClick={() => applyEmailRoute({ mailMode: "list", threadId: "" })}>
                   <ChevronLeft size={18} />
                 </button>
                 <button
