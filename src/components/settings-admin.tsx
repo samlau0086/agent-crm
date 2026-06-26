@@ -7,7 +7,7 @@ import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
-import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmRecord, CsvImportJob, FieldDefinition, ImportJobQueueSummary, ObjectDefinition, Permission, Pipeline, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
+import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -23,6 +23,8 @@ interface SettingsAdminProps {
   teams: Team[];
   apiKeys: ApiKey[];
   webhooks: WebhookEndpoint[];
+  notificationChannels: NotificationChannel[];
+  emailAccounts: EmailAccount[];
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
   importJobQueueSummary?: ImportJobQueueSummary;
@@ -113,6 +115,18 @@ type CurrencyDraft = {
   isBase: boolean;
   active: boolean;
 };
+
+type NotificationChannelDraft = {
+  name: string;
+  type: NotificationChannelType;
+  events: WebhookEvent[];
+  active: boolean;
+  barkEndpoint: string;
+  barkDeviceKey: string;
+  webhookUrl: string;
+  recipients: string;
+  accountId: string;
+};
 type ToastState = { intent: "success" | "error" | "info"; message: string };
 type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
@@ -168,6 +182,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [apiKeyDraft, setApiKeyDraft] = useState<ApiKeyDraft>(emptyApiKeyDraft());
   const [createdApiKeyToken, setCreatedApiKeyToken] = useState<string | null>(null);
   const [webhookDraft, setWebhookDraft] = useState<WebhookDraft>(emptyWebhookDraft());
+  const [selectedNotificationChannelId, setSelectedNotificationChannelId] = useState("");
+  const [notificationChannelDraft, setNotificationChannelDraft] = useState<NotificationChannelDraft>(emptyNotificationChannelDraft());
   const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
   const [createdWebhookSecret, setCreatedWebhookSecret] = useState<string | null>(null);
@@ -191,6 +207,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const selectedRole = props.roles.find((role) => role.id === selectedRoleId);
   const selectedUser = props.users.find((user) => user.id === selectedUserId);
   const selectedTeam = props.teams.find((team) => team.id === selectedTeamId);
+  const selectedNotificationChannel = props.notificationChannels.find((channel) => channel.id === selectedNotificationChannelId);
   const currencyRecords = useMemo(() => props.records.filter((record) => record.objectKey === "currencies"), [props.records]);
   const selectedCurrency = currencyRecords.find((currency) => currency.id === selectedCurrencyId);
   const objectFields = useMemo(
@@ -284,6 +301,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   useEffect(() => {
     setWebhookDeliveryWebhookId((current) => (props.webhooks.some((webhook) => webhook.id === current) ? current : props.webhooks[0]?.id ?? ""));
   }, [props.webhooks]);
+
+  useEffect(() => {
+    setSelectedNotificationChannelId((current) => (props.notificationChannels.some((channel) => channel.id === current) ? current : ""));
+  }, [props.notificationChannels]);
+
+  useEffect(() => {
+    setNotificationChannelDraft(selectedNotificationChannel ? notificationChannelDraftFromChannel(selectedNotificationChannel) : emptyNotificationChannelDraft());
+  }, [selectedNotificationChannel]);
 
   useEffect(() => {
     setSelectedCurrencyId((current) => (currencyRecords.some((currency) => currency.id === current) ? current : currencyRecords[0]?.id ?? ""));
@@ -458,6 +483,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   function resetWebhookForm() {
     setWebhookDraft(emptyWebhookDraft());
     setCreatedWebhookSecret(null);
+  }
+
+  function resetNotificationChannelForm() {
+    setSelectedNotificationChannelId("");
+    setNotificationChannelDraft(emptyNotificationChannelDraft());
   }
 
   function resetCurrencyForm() {
@@ -814,6 +844,34 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setMessage(`Webhook retry ${retried.status}: ${retried.responseStatus ?? retried.errorMessage ?? "no response"}`);
   }
 
+  function toggleNotificationChannelEvent(event: WebhookEvent, enabled: boolean) {
+    setNotificationChannelDraft((current) => ({
+      ...current,
+      events: enabled ? Array.from(new Set([...current.events, event])) : current.events.filter((candidate) => candidate !== event)
+    }));
+  }
+
+  async function saveNotificationChannel() {
+    const payload = notificationChannelPayload(notificationChannelDraft);
+    if (selectedNotificationChannel) {
+      await fetchJson(`/api/notification-channels/${selectedNotificationChannel.id}`, { method: "PATCH", body: payload });
+      setMessage(`已更新通知渠道 ${payload.name}`);
+      return;
+    }
+    await fetchJson("/api/notification-channels", { method: "POST", body: payload });
+    setMessage(`已创建通知渠道 ${payload.name}`);
+    setNotificationChannelDraft(emptyNotificationChannelDraft());
+  }
+
+  async function deleteNotificationChannel() {
+    if (!selectedNotificationChannel) return;
+    if (!(await requestConfirm({ title: "删除通知渠道", message: `确定删除通知渠道“${selectedNotificationChannel.name}”？`, confirmLabel: "删除", danger: true }))) return;
+    await fetchJson(`/api/notification-channels/${selectedNotificationChannel.id}`, { method: "DELETE" });
+    setMessage(`已删除通知渠道 ${selectedNotificationChannel.name}`);
+    setSelectedNotificationChannelId("");
+    setNotificationChannelDraft(emptyNotificationChannelDraft());
+  }
+
   async function saveCurrency() {
     const code = normalizeCurrencyCode(currencyDraft.code);
     const label = currencyDraft.label.trim();
@@ -1006,6 +1064,22 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onEventFilterChange={setWebhookDeliveryEventFilter}
             onClearSecret={() => setCreatedWebhookSecret(null)}
             onReset={resetWebhookForm}
+          />
+
+          <NotificationChannelAdminPanel
+            channels={props.notificationChannels}
+            emailAccounts={props.emailAccounts}
+            users={props.users}
+            draft={notificationChannelDraft}
+            selectedChannelId={selectedNotificationChannelId}
+            selectedChannel={selectedNotificationChannel}
+            isPending={isPending}
+            onDraftChange={(patch) => setNotificationChannelDraft((current) => ({ ...current, ...patch }))}
+            onToggleEvent={toggleNotificationChannelEvent}
+            onSelect={setSelectedNotificationChannelId}
+            onNew={resetNotificationChannelForm}
+            onSave={() => runAction(saveNotificationChannel)}
+            onDelete={() => runAction(deleteNotificationChannel)}
           />
         </div>
       ) : null}
@@ -2583,6 +2657,152 @@ function WebhookAdminPanel({
   );
 }
 
+function NotificationChannelAdminPanel({
+  channels,
+  emailAccounts,
+  draft,
+  selectedChannelId,
+  selectedChannel,
+  isPending,
+  onDraftChange,
+  onToggleEvent,
+  onSelect,
+  onNew,
+  onSave,
+  onDelete
+}: {
+  channels: NotificationChannel[];
+  emailAccounts: EmailAccount[];
+  users: User[];
+  draft: NotificationChannelDraft;
+  selectedChannelId: string;
+  selectedChannel?: NotificationChannel;
+  isPending: boolean;
+  onDraftChange: (patch: Partial<NotificationChannelDraft>) => void;
+  onToggleEvent: (event: WebhookEvent, enabled: boolean) => void;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+  onSave: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <section className="settings-panel">
+      <div className="settings-panel-header">
+        <div>
+          <h2 className="page-title">通知渠道</h2>
+          <div className="subtle">关键事件可通过 Bark、Webhook 或 Email 提醒；同一类型可配置多条 channel。</div>
+        </div>
+        <button className="secondary-button" type="button" onClick={onNew} disabled={isPending}>
+          <Plus size={16} />
+          新建渠道
+        </button>
+      </div>
+
+      <div className="settings-grid settings-grid-wide" style={{ marginTop: 14 }}>
+        <div className="settings-card">
+          <div className="form-grid">
+            <label>
+              <span className="subtle">名称</span>
+              <input className="input" data-testid="settings-notification-name" value={draft.name} onChange={(event) => onDraftChange({ name: event.target.value })} />
+            </label>
+            <label>
+              <span className="subtle">类型</span>
+              <select className="input" data-testid="settings-notification-type" value={draft.type} onChange={(event) => onDraftChange({ type: event.target.value as NotificationChannelType })}>
+                <option value="bark">Bark</option>
+                <option value="webhook">Webhook</option>
+                <option value="email">Email</option>
+              </select>
+            </label>
+            {draft.type === "bark" ? (
+              <>
+                <label>
+                  <span className="subtle">Bark Endpoint</span>
+                  <input className="input" data-testid="settings-notification-bark-endpoint" value={draft.barkEndpoint} onChange={(event) => onDraftChange({ barkEndpoint: event.target.value })} placeholder="https://api.day.app" />
+                </label>
+                <label>
+                  <span className="subtle">Device Key</span>
+                  <input className="input" data-testid="settings-notification-bark-key" value={draft.barkDeviceKey} onChange={(event) => onDraftChange({ barkDeviceKey: event.target.value })} />
+                </label>
+              </>
+            ) : null}
+            {draft.type === "webhook" ? (
+              <label className="wide">
+                <span className="subtle">Webhook URL</span>
+                <input className="input" data-testid="settings-notification-webhook-url" value={draft.webhookUrl} onChange={(event) => onDraftChange({ webhookUrl: event.target.value })} placeholder="https://example.com/notify" />
+              </label>
+            ) : null}
+            {draft.type === "email" ? (
+              <>
+                <label className="wide">
+                  <span className="subtle">收件人</span>
+                  <input className="input" data-testid="settings-notification-email-recipients" value={draft.recipients} onChange={(event) => onDraftChange({ recipients: event.target.value })} placeholder="ops@example.com, sales@example.com" />
+                </label>
+                <label>
+                  <span className="subtle">发件账户</span>
+                  <select className="input" data-testid="settings-notification-email-account" value={draft.accountId} onChange={(event) => onDraftChange({ accountId: event.target.value })}>
+                    <option value="">自动选择可发件账户</option>
+                    {emailAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>{account.name} - {account.emailAddress}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : null}
+            <label className="checkbox-label">
+              <input type="checkbox" checked={draft.active} onChange={(event) => onDraftChange({ active: event.target.checked })} />
+              启用
+            </label>
+            <div className="wide permission-picker">
+              {availableWebhookEvents.map((event) => (
+                <label className="permission-option" key={event}>
+                  <input data-testid={`settings-notification-event-${event}`} type="checkbox" checked={draft.events.includes(event)} onChange={(change) => onToggleEvent(event, change.target.checked)} />
+                  <span>
+                    <strong>{event}</strong>
+                    <small>触发 {event}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <button className="primary-button" data-testid="settings-notification-save" type="button" onClick={onSave} disabled={isPending || !draft.name.trim() || draft.events.length === 0}>
+              <Save size={16} />
+              {selectedChannel ? "保存渠道" : "创建渠道"}
+            </button>
+            {selectedChannel ? (
+              <button className="danger-button" type="button" onClick={onDelete} disabled={isPending}>
+                <Trash2 size={16} />
+                删除
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="settings-card">
+          <div className="stage-header">
+            <strong>已配置渠道</strong>
+            <span className="badge">{channels.length}</span>
+          </div>
+          {channels.length ? (
+            <div className="activity-list" style={{ marginTop: 12 }}>
+              {channels.map((channel) => (
+                <button className={`settings-item settings-select ${selectedChannelId === channel.id ? "selected" : ""}`} data-testid={`settings-notification-channel-${channel.id}`} key={channel.id} type="button" onClick={() => onSelect(channel.id)}>
+                  <strong>{channel.name}</strong>
+                  <span>{notificationChannelTypeLabel(channel.type)} - {channel.events.join(", ")}</span>
+                  <span className={channel.active ? "badge" : "danger-badge"}>{channel.active ? "启用" : "停用"}</span>
+                  {channel.lastNotifiedAt ? <span className="subtle">最近通知 {formatAuditTime(channel.lastNotifiedAt)}</span> : null}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state" style={{ marginTop: 12 }}>暂无通知渠道</div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function BackupOperationsPanel({ backups, isPending, onCreate }: { backups: BackupFile[]; isPending: boolean; onCreate: () => void }) {
   return (
     <section className="settings-panel audit-panel">
@@ -3209,6 +3429,78 @@ function emptyWebhookDraft(): WebhookDraft {
     events: ["webhook.test"],
     active: true
   };
+}
+
+function emptyNotificationChannelDraft(): NotificationChannelDraft {
+  return {
+    name: "",
+    type: "bark",
+    events: ["record.created", "record.updated", "activity.created"],
+    active: true,
+    barkEndpoint: "https://api.day.app",
+    barkDeviceKey: "",
+    webhookUrl: "https://example.com/notify",
+    recipients: "",
+    accountId: ""
+  };
+}
+
+function notificationChannelDraftFromChannel(channel: NotificationChannel): NotificationChannelDraft {
+  const config = channel.config ?? {};
+
+  return {
+    name: channel.name,
+    type: channel.type,
+    events: channel.events,
+    active: channel.active,
+    barkEndpoint: typeof config.barkEndpoint === "string" ? config.barkEndpoint : "https://api.day.app",
+    barkDeviceKey: typeof config.barkDeviceKey === "string" ? config.barkDeviceKey : "",
+    webhookUrl: typeof config.url === "string" ? config.url : "https://example.com/notify",
+    recipients: Array.isArray(config.recipients)
+      ? config.recipients.filter((item): item is string => typeof item === "string").join(", ")
+      : "",
+    accountId: typeof config.accountId === "string" ? config.accountId : ""
+  };
+}
+
+function notificationChannelPayload(draft: NotificationChannelDraft) {
+  const config =
+    draft.type === "bark"
+      ? {
+          barkEndpoint: draft.barkEndpoint.trim() || "https://api.day.app",
+          barkDeviceKey: draft.barkDeviceKey.trim()
+        }
+      : draft.type === "webhook"
+        ? {
+            url: draft.webhookUrl.trim()
+          }
+        : {
+            recipients: draft.recipients
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+            ...(draft.accountId ? { accountId: draft.accountId } : {})
+          };
+
+  return {
+    name: draft.name.trim(),
+    type: draft.type,
+    events: draft.events,
+    active: draft.active,
+    config
+  };
+}
+
+function notificationChannelTypeLabel(type: NotificationChannelType): string {
+  if (type === "bark") {
+    return "Bark";
+  }
+
+  if (type === "webhook") {
+    return "Webhook";
+  }
+
+  return "Email";
 }
 
 function emptyCurrencyDraft(): CurrencyDraft {

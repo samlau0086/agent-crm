@@ -319,6 +319,7 @@ export const seedData: CrmSnapshot = {
   apiKeys: [],
   webhooks: [],
   webhookDeliveries: [],
+  notificationChannels: [],
   emailAccounts: [],
   emailSignatures: [
     {

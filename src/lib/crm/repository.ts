@@ -63,6 +63,9 @@ import type {
   ImportJobQueueSummary,
   KnowledgeArticle,
   MediaAsset,
+  NotificationChannel,
+  NotificationChannelType,
+  NotificationEvent,
   ObjectDefinition,
   Permission,
   Pipeline,
@@ -197,6 +200,34 @@ function mapWebhookEndpoint(webhook: {
     lastDeliveredAt: webhook.lastDeliveredAt?.toISOString(),
     createdAt: webhook.createdAt.toISOString(),
     updatedAt: webhook.updatedAt.toISOString()
+  };
+}
+
+function mapNotificationChannel(channel: {
+  id: string;
+  workspaceId: string;
+  name: string;
+  type: string;
+  events: string[];
+  config: Prisma.JsonValue;
+  active: boolean;
+  createdById: string;
+  lastNotifiedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): NotificationChannel {
+  return {
+    id: channel.id,
+    workspaceId: channel.workspaceId,
+    name: channel.name,
+    type: channel.type as NotificationChannel["type"],
+    events: channel.events as NotificationChannel["events"],
+    config: asRecord(channel.config),
+    active: channel.active,
+    createdById: channel.createdById,
+    lastNotifiedAt: channel.lastNotifiedAt?.toISOString(),
+    createdAt: channel.createdAt.toISOString(),
+    updatedAt: channel.updatedAt.toISOString()
   };
 }
 
@@ -1313,6 +1344,86 @@ export class PrismaCrmRepository {
       details: { url: updated.url, events: updated.events, active: updated.active }
     });
     return mapWebhookEndpoint(updated);
+  }
+
+  async listNotificationChannels(context: RequestContext): Promise<NotificationChannel[]> {
+    requirePermission(context, "crm.admin");
+    const channels = await this.db.notificationChannel.findMany({
+      where: { workspaceId: context.workspaceId },
+      orderBy: { createdAt: "desc" }
+    });
+    return channels.map(mapNotificationChannel);
+  }
+
+  async createNotificationChannel(
+    context: RequestContext,
+    input: { name: string; type: NotificationChannelType; events: string[]; config: Record<string, unknown>; active?: boolean }
+  ): Promise<NotificationChannel> {
+    requirePermission(context, "crm.admin");
+    const data = normalizeNotificationChannelInput(input);
+    const channel = await this.db.notificationChannel.create({
+      data: {
+        workspaceId: context.workspaceId,
+        name: data.name,
+        type: data.type,
+        events: data.events,
+        config: data.config as Prisma.InputJsonValue,
+        active: data.active,
+        createdById: context.user.id
+      }
+    });
+    await this.writeAuditLog(context, "create", "notification_channel", channel.id, {
+      summary: `Created notification channel ${channel.name}`,
+      details: { type: channel.type, events: channel.events, active: channel.active }
+    });
+    return mapNotificationChannel(channel);
+  }
+
+  async updateNotificationChannel(
+    context: RequestContext,
+    id: string,
+    patch: Partial<{ name: string; type: NotificationChannelType; events: string[]; config: Record<string, unknown>; active: boolean }>
+  ): Promise<NotificationChannel> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.db.notificationChannel.findFirst({ where: { id, workspaceId: context.workspaceId } });
+    if (!existing) {
+      throw new Error("Notification channel not found");
+    }
+    const data = normalizeNotificationChannelInput({
+      name: patch.name ?? existing.name,
+      type: patch.type ?? (existing.type as NotificationChannelType),
+      events: patch.events ?? existing.events,
+      config: patch.config ?? asRecord(existing.config),
+      active: patch.active ?? existing.active
+    });
+    const updated = await this.db.notificationChannel.update({
+      where: { id },
+      data: {
+        name: data.name,
+        type: data.type,
+        events: data.events,
+        config: data.config as Prisma.InputJsonValue,
+        active: data.active
+      }
+    });
+    await this.writeAuditLog(context, "update", "notification_channel", updated.id, {
+      summary: `Updated notification channel ${updated.name}`,
+      details: { type: updated.type, events: updated.events, active: updated.active }
+    });
+    return mapNotificationChannel(updated);
+  }
+
+  async deleteNotificationChannel(context: RequestContext, id: string): Promise<void> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.db.notificationChannel.findFirst({ where: { id, workspaceId: context.workspaceId } });
+    if (!existing) {
+      throw new Error("Notification channel not found");
+    }
+    await this.db.notificationChannel.delete({ where: { id } });
+    await this.writeAuditLog(context, "delete", "notification_channel", existing.id, {
+      summary: `Deleted notification channel ${existing.name}`,
+      details: { type: existing.type, events: existing.events }
+    });
   }
 
   async listWebhookDeliveries(
@@ -4368,6 +4479,85 @@ export class PrismaCrmRepository {
       .catch((error) => {
         console.error(`Failed to enqueue webhook event ${event}`, error);
       });
+    this.emitNotificationEvent(context, event, data);
+  }
+
+  private emitNotificationEvent(context: RequestContext, event: NotificationEvent, data: Record<string, unknown>): void {
+    void this.deliverNotificationEvent(context, event, data).catch((error) => {
+      console.error(`Failed to deliver notification event ${event}`, error);
+    });
+  }
+
+  private async deliverNotificationEvent(context: RequestContext, event: NotificationEvent, data: Record<string, unknown>): Promise<void> {
+    const channels = await this.db.notificationChannel.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        active: true,
+        events: { has: event }
+      },
+      orderBy: { createdAt: "asc" }
+    });
+    for (const channel of channels) {
+      await this.deliverNotificationChannel(context, mapNotificationChannel(channel), event, data).catch(async (error) => {
+        await this.writeAuditLog(context, "create", "notification_delivery", channel.id, {
+          summary: `Failed notification ${channel.name}: ${error instanceof Error ? error.message : "unknown error"}`,
+          details: { channelId: channel.id, event, type: channel.type }
+        });
+      });
+    }
+  }
+
+  private async deliverNotificationChannel(context: RequestContext, channel: NotificationChannel, event: NotificationEvent, data: Record<string, unknown>): Promise<void> {
+    const title = `AI Agent CRM: ${event}`;
+    const body = buildNotificationBody(event, data);
+    if (channel.type === "bark") {
+      const endpoint = typeof channel.config.barkEndpoint === "string" ? channel.config.barkEndpoint : "https://api.day.app";
+      const deviceKey = typeof channel.config.barkDeviceKey === "string" ? channel.config.barkDeviceKey.trim() : "";
+      if (!deviceKey) {
+        throw new Error("Bark device key is required");
+      }
+      const url = `${endpoint.replace(/\/$/, "")}/${encodeURIComponent(deviceKey)}/${encodeURIComponent(title)}/${encodeURIComponent(body)}`;
+      await assertWebhookDeliveryTarget(url);
+      await fetchWithTimeout(url, { method: "GET", headers: { "user-agent": "ai-agent-crm-notification/1.0" } });
+    } else if (channel.type === "webhook") {
+      const url = typeof channel.config.url === "string" ? channel.config.url.trim() : "";
+      if (!url) {
+        throw new Error("Webhook notification URL is required");
+      }
+      await assertWebhookDeliveryTarget(url);
+      await fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "user-agent": "ai-agent-crm-notification/1.0" },
+        body: JSON.stringify({ event, title, body, data, channelId: channel.id, createdAt: new Date().toISOString() })
+      });
+    } else if (channel.type === "email") {
+      const recipients = Array.isArray(channel.config.recipients) ? channel.config.recipients.filter((item): item is string => typeof item === "string" && item.includes("@")) : [];
+      if (!recipients.length) {
+        throw new Error("Email notification recipients are required");
+      }
+      const configuredAccountId = typeof channel.config.accountId === "string" ? channel.config.accountId : "";
+      const account =
+        (configuredAccountId ? await this.db.emailAccount.findFirst({ where: { id: configuredAccountId, workspaceId: context.workspaceId } }) : null) ??
+        (await this.db.emailAccount.findFirst({ where: { workspaceId: context.workspaceId, status: "active", sendEnabled: true }, orderBy: { createdAt: "asc" } }));
+      if (!account) {
+        throw new Error("No active email account is available for notifications");
+      }
+      await this.queueEmailMessage(context, {
+        accountId: account.id,
+        to: recipients,
+        subject: title,
+        bodyText: body,
+        clientRequestId: `notification-${channel.id}-${event}-${Date.now()}`
+      });
+    }
+    await this.db.notificationChannel.update({
+      where: { id: channel.id },
+      data: { lastNotifiedAt: new Date() }
+    });
+    await this.writeAuditLog(context, "create", "notification_delivery", channel.id, {
+      summary: `Delivered notification ${channel.name}: ${event}`,
+      details: { channelId: channel.id, event, type: channel.type }
+    });
   }
 
   private async deliverWebhook(
@@ -5525,6 +5715,52 @@ function normalizeWebhookInput(input: { name: string; url: string; events: strin
     events: assertValidWebhookEvents(input.events),
     active: input.active ?? true
   };
+}
+
+function normalizeNotificationChannelInput(input: {
+  name: string;
+  type: NotificationChannelType;
+  events: string[];
+  config: Record<string, unknown>;
+  active?: boolean;
+}): { name: string; type: NotificationChannelType; events: NotificationEvent[]; config: Record<string, unknown>; active: boolean } {
+  const name = input.name.trim();
+  if (!name) {
+    throw new Error("Notification channel name is required");
+  }
+  if (!["bark", "webhook", "email"].includes(input.type)) {
+    throw new Error("Notification channel type is unsupported");
+  }
+  const events = assertValidWebhookEvents(input.events);
+  const config = asRecord(input.config as Prisma.JsonValue);
+  if (input.type === "bark" && typeof config.barkDeviceKey !== "string") {
+    throw new Error("Bark device key is required");
+  }
+  if (input.type === "webhook" && typeof config.url !== "string") {
+    throw new Error("Webhook URL is required");
+  }
+  if (input.type === "email" && (!Array.isArray(config.recipients) || config.recipients.length === 0)) {
+    throw new Error("Email recipients are required");
+  }
+  return {
+    name,
+    type: input.type,
+    events,
+    config,
+    active: input.active ?? true
+  };
+}
+
+function buildNotificationBody(event: NotificationEvent, data: Record<string, unknown>): string {
+  const lines = [
+    `事件：${event}`,
+    typeof data.title === "string" ? `标题：${data.title}` : "",
+    typeof data.objectKey === "string" ? `对象：${data.objectKey}` : "",
+    typeof data.recordId === "string" ? `记录 ID：${data.recordId}` : "",
+    typeof data.activityId === "string" ? `活动 ID：${data.activityId}` : "",
+    `时间：${new Date().toISOString()}`
+  ].filter(Boolean);
+  return lines.join("\n");
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 10000): Promise<Response> {

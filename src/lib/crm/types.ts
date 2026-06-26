@@ -113,6 +113,23 @@ export interface WebhookDelivery {
   deliveredAt?: string;
 }
 
+export type NotificationChannelType = "bark" | "webhook" | "email";
+export type NotificationEvent = WebhookEvent;
+
+export interface NotificationChannel {
+  id: string;
+  workspaceId: string;
+  name: string;
+  type: NotificationChannelType;
+  events: NotificationEvent[];
+  config: Record<string, unknown>;
+  active: boolean;
+  createdById: string;
+  lastNotifiedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type EmailProviderType = "smtp_imap" | "gmail" | "outlook" | "custom";
 export type EmailAccountStatus = "draft" | "active" | "disabled" | "error";
 export type EmailDirection = "inbound" | "outbound";
@@ -714,6 +731,7 @@ export interface CrmSnapshot {
   apiKeys: ApiKey[];
   webhooks: WebhookEndpoint[];
   webhookDeliveries: WebhookDelivery[];
+  notificationChannels: NotificationChannel[];
   emailAccounts: EmailAccount[];
   emailSignatures?: EmailSignature[];
   emailThreads: EmailThread[];

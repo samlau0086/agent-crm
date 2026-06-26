@@ -248,6 +248,30 @@ export const webhookCreateSchema = z
 
 export const webhookUpdateSchema = webhookCreateSchema.partial().strict();
 
+export const notificationChannelTypeSchema = z.enum(["bark", "webhook", "email"]);
+
+export const notificationChannelConfigSchema = z
+  .object({
+    barkEndpoint: z.string().trim().url().optional(),
+    barkDeviceKey: z.string().trim().min(1).max(200).optional(),
+    url: z.string().trim().url().optional(),
+    recipients: z.array(z.string().trim().email()).max(MAX_OUTBOUND_EMAIL_RECIPIENTS).optional(),
+    accountId: z.string().trim().min(1).optional()
+  })
+  .strict();
+
+export const notificationChannelCreateSchema = z
+  .object({
+    name: labelSchema,
+    type: notificationChannelTypeSchema,
+    events: z.array(webhookEventSchema).min(1),
+    config: notificationChannelConfigSchema,
+    active: z.boolean().optional()
+  })
+  .strict();
+
+export const notificationChannelUpdateSchema = notificationChannelCreateSchema.partial().strict();
+
 export const emailProviderSchema = z.enum(["smtp_imap", "gmail", "outlook", "custom"]);
 export const emailAccountStatusSchema = z.enum(["draft", "active", "disabled", "error"]);
 export const emailDirectionSchema = z.enum(["inbound", "outbound"]);

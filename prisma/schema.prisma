@@ -30,6 +30,7 @@ model Workspace {
   apiKeys             ApiKey[]
   webhooks            WebhookEndpoint[]
   webhookDeliveries   WebhookDelivery[]
+  notificationChannels NotificationChannel[]
   emailAccounts       EmailAccount[]
   emailThreads        EmailThread[]
   emailThreadStates   EmailThreadState[]
@@ -61,6 +62,7 @@ model User {
   passwordSetupTokens PasswordSetupToken[]
   apiKeys             ApiKey[]
   webhooksCreated     WebhookEndpoint[]
+  notificationChannelsCreated NotificationChannel[]
   emailThreadStates   EmailThreadState[]
   emailSignaturesCreated EmailSignature[]
   mediaAssetsCreated  MediaAsset[]
@@ -371,6 +373,26 @@ model WebhookDelivery {
   @@index([workspaceId, webhookId, createdAt])
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, event, createdAt])
+}
+
+model NotificationChannel {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  name            String
+  type            String
+  events          String[]
+  config          Json
+  active          Boolean   @default(true)
+  createdById     String
+  lastNotifiedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
+  createdBy       User      @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, active, type, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([createdById, createdAt])
 }
 
 model EmailAccount {

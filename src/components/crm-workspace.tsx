@@ -84,6 +84,7 @@ import type {
   ImportPreset,
   KnowledgeArticle,
   MediaAsset,
+  NotificationChannel,
   ObjectDefinition,
   Pipeline,
   RecordListResult,
@@ -126,6 +127,7 @@ interface CrmWorkspaceProps {
   roles: Role[];
   apiKeys: ApiKey[];
   webhooks: WebhookEndpoint[];
+  notificationChannels: NotificationChannel[];
   emailAccounts: EmailAccount[];
   emailSignatures: EmailSignature[];
   emailThreads: EmailThread[];
@@ -1196,6 +1198,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
   const [contactMethodEditingRecordId, setContactMethodEditingRecordId] = useState("");
   const [contactMethodEditingValue, setContactMethodEditingValue] = useState("");
+  const [contactFollowUpDraft, setContactFollowUpDraft] = useState<ContactFollowUpDraft | null>(null);
+  const [isContactFollowUpGenerating, setIsContactFollowUpGenerating] = useState(false);
   const [companyAddressEditing, setCompanyAddressEditing] = useState<{ valueKey: string; addressId: string } | null>(null);
   const [recordActivityComposerType, setRecordActivityComposerType] = useState<Activity["type"] | "">("");
   const [showListSettings, setShowListSettings] = useState(false);
@@ -2766,46 +2770,76 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.replace(nextQuery ? `${crmPathForNav("email")}?${nextQuery}` : crmPathForNav("email"));
   }
 
-  async function startWhatsAppFollowUp(record: CrmRecord, method: ContactMethodDraft) {
-    const whatsappUrl = buildContactMethodUrl("whatsapp", method.value);
-    if (!whatsappUrl) {
-      showError("WhatsApp 联系方式无效");
-      return;
-    }
-    const prompt = await requestPrompt({
-      title: "生成 WhatsApp 跟进消息",
-      message: `输入希望 AI 生成的初始联系目标。联系人：${record.title} · ${method.value}`,
-      placeholder: "例如：简短介绍我们能提供的产品，并询问采购计划。",
-      confirmLabel: "生成并打开 WhatsApp",
-      defaultValue: ""
-    });
-    const trimmedPrompt = prompt?.trim();
-    if (!trimmedPrompt) {
-      return;
-    }
-    const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
-      method: "POST",
-      body: {
-        purpose: "draft",
-        recordId: record.id,
-        userPrompt: [
-          "Generate one concise WhatsApp opening message for sales follow-up.",
-          "Do not include email subject, greeting blocks, signature, source notes, or placeholders.",
-          `User instruction: ${trimmedPrompt}`
-        ].join("\n"),
-        sourceText: buildWhatsAppAiSourceText(record, method, trimmedPrompt)
-      }
-    });
-    const messageText = (result.enabled ? result.text : trimmedPrompt).trim();
-    await createRecordActivity({
+  function openContactFollowUp(record: CrmRecord, method: ContactMethodDraft, channel: ContactFollowUpDraft["channel"]) {
+    setContactFollowUpDraft({
+      channel,
+      method,
       recordId: record.id,
-      type: "note",
-      title: `WhatsApp 跟进：${record.title}`,
-      body: [`Prompt: ${trimmedPrompt}`, messageText ? `AI 初始消息:\n${messageText}` : ""].filter(Boolean).join("\n\n")
+      recordTitle: record.title,
+      message: ""
     });
-    const separator = whatsappUrl.includes("?") ? "&" : "?";
-    window.open(`${whatsappUrl}${separator}text=${encodeURIComponent(messageText || trimmedPrompt)}`, "_blank", "noreferrer");
-    showSuccess("已生成 WhatsApp 初始消息，并记录到活动时间线");
+  }
+
+  async function generateContactFollowUpMessage() {
+    if (!contactFollowUpDraft) {
+      return;
+    }
+    const record = records.find((candidate) => candidate.id === contactFollowUpDraft.recordId) ?? selectedRecord;
+    if (!record) {
+      showError("未找到关联记录，无法生成跟进内容");
+      return;
+    }
+    setIsContactFollowUpGenerating(true);
+    try {
+      const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
+        method: "POST",
+        body: {
+          purpose: "draft",
+          recordId: record.id,
+          userPrompt: [
+            contactFollowUpDraft.channel === "whatsapp"
+              ? "Generate one concise WhatsApp opening or follow-up message for sales outreach."
+              : "Generate one concise phone follow-up plan for a sales call.",
+            "Use CRM overview, next-step suggestion, recent activities, and customer background when available.",
+            "Do not include email subject, signature, source notes, or placeholders.",
+            contactFollowUpDraft.message.trim() ? `User instruction: ${contactFollowUpDraft.message.trim()}` : "User instruction: create a practical next follow-up."
+          ].join("\n"),
+          sourceText: buildContactFollowUpAiSourceText(record, selectedActivities, contactFollowUpDraft)
+        }
+      });
+      setContactFollowUpDraft((current) => (current ? { ...current, message: (result.enabled ? result.text : current.message).trim() } : current));
+    } finally {
+      setIsContactFollowUpGenerating(false);
+    }
+  }
+
+  async function submitContactFollowUp() {
+    if (!contactFollowUpDraft) {
+      return;
+    }
+    const messageText = contactFollowUpDraft.message.trim();
+    if (!messageText) {
+      showError("请输入跟进内容");
+      return;
+    }
+    await createRecordActivity({
+      recordId: contactFollowUpDraft.recordId,
+      type: contactFollowUpDraft.channel === "call" ? "call" : "note",
+      title: `${contactFollowUpDraft.channel === "call" ? "电话跟进" : "WhatsApp 跟进"}：${contactFollowUpDraft.recordTitle}`,
+      body: [
+        `联系方式：${contactMethodTypeLabels[contactFollowUpDraft.method.type]} ${contactFollowUpDraft.method.value}`,
+        messageText
+      ].join("\n\n")
+    });
+    if (contactFollowUpDraft.channel === "whatsapp") {
+      const whatsappUrl = buildContactMethodUrl("whatsapp", contactFollowUpDraft.method.value);
+      if (whatsappUrl) {
+        const separator = whatsappUrl.includes("?") ? "&" : "?";
+        window.open(`${whatsappUrl}${separator}text=${encodeURIComponent(messageText)}`, "_blank", "noreferrer");
+      }
+    }
+    setContactFollowUpDraft(null);
+    showSuccess("跟进记录已保存到活动时间线");
   }
 
   function selectEmailThread(threadId: string) {
@@ -3794,7 +3828,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       users={props.users}
                       testId={`create-field-${activeObject.key}-${field.key}`}
                       onRecordsLoaded={mergeLoadedRecords}
-                      onUploadMediaAssets={(files) => runAction(() => uploadMediaAssets(files).then(() => undefined))}
+                      onUploadMediaAssets={uploadMediaAssets}
+                      onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                      onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
                       onChange={(nextValue) => setCreateValues((current) => ({ ...current, [field.key]: nextValue }))}
                     />
                   ))}
@@ -3893,7 +3929,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           users={props.users}
                           testId={`edit-field-${selectedRecord.objectKey}-${field.key}`}
                           onRecordsLoaded={mergeLoadedRecords}
-                          onUploadMediaAssets={(files) => runAction(() => uploadMediaAssets(files).then(() => undefined))}
+                          onUploadMediaAssets={uploadMediaAssets}
+                          onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                          onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
                           onChange={(nextValue) => setEditValues((current) => ({ ...current, [field.key]: nextValue }))}
                         />
                       ))}
@@ -3986,7 +4024,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           record={selectedRecord}
                           onComposeEmail={(emailAddress) => composeEmailForRecord(selectedRecord, emailAddress)}
                           onFilterEmail={(emailAddress) => setRecordEmailActivityFilter(emailAddress)}
-                          onStartWhatsApp={(method) => runAction(() => startWhatsAppFollowUp(selectedRecord, method))}
+                          onStartWhatsApp={(method) => openContactFollowUp(selectedRecord, method, "whatsapp")}
+                          onStartCall={(method) => openContactFollowUp(selectedRecord, method, "call")}
                           onEditMethod={toggleQuickContactMethodEditor}
                           editingMethodId={contactMethodEditingId}
                           editingRecordId={contactMethodEditingRecordId}
@@ -4682,6 +4721,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             teams={props.teams}
             apiKeys={props.apiKeys}
             webhooks={props.webhooks}
+            notificationChannels={props.notificationChannels}
+            emailAccounts={props.emailAccounts}
             auditLogs={props.auditLogs}
             backupFiles={props.backupFiles}
             importJobQueueSummary={props.importJobQueueSummary}
@@ -4689,6 +4730,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
 
       </main>
+      <ContactFollowUpDialog
+        draft={contactFollowUpDraft}
+        generating={isContactFollowUpGenerating}
+        onCancel={() => setContactFollowUpDraft(null)}
+        onChange={(messageText) => setContactFollowUpDraft((current) => (current ? { ...current, message: messageText } : current))}
+        onGenerate={() => runAction(generateContactFollowUpMessage)}
+        onSubmit={() => runAction(submitContactFollowUp)}
+      />
       <ToastViewport toast={toast ?? (error ? { intent: "error", message: error } : message ? { intent: "success", message } : null)} onDismiss={() => { setToast(null); setMessage(null); setError(null); }} />
       <ConfirmDialog
         state={confirmDialog}
@@ -4783,6 +4832,66 @@ function PromptDialog({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function ContactFollowUpDialog({
+  draft,
+  generating,
+  onCancel,
+  onChange,
+  onGenerate,
+  onSubmit
+}: {
+  draft: ContactFollowUpDraft | null;
+  generating: boolean;
+  onCancel: () => void;
+  onChange: (message: string) => void;
+  onGenerate: () => void;
+  onSubmit: () => void;
+}) {
+  if (!draft) {
+    return null;
+  }
+
+  const channelLabel = draft.channel === "whatsapp" ? "WhatsApp" : "电话";
+  return (
+    <div className="modal-backdrop" data-testid="contact-follow-up-modal" role="dialog" aria-modal="true" aria-label={`${channelLabel}跟进`}>
+      <div className="modal-panel app-dialog">
+        <div className="email-pane-header compact">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>{channelLabel}跟进</h2>
+            <p className="subtle">{draft.recordTitle} · {contactMethodTypeLabels[draft.method.type]} {draft.method.value}</p>
+          </div>
+          <button className="icon-button" aria-label="关闭跟进窗口" type="button" onClick={onCancel}>
+            <XCircle size={16} />
+          </button>
+        </div>
+        <label>
+          <span className="subtle">{draft.channel === "whatsapp" ? "初始化联系消息" : "电话跟进计划/结论"}</span>
+          <textarea
+            className="textarea"
+            data-testid="contact-follow-up-message"
+            value={draft.message}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={draft.channel === "whatsapp" ? "输入要发送给客户的 WhatsApp 初始消息" : "输入电话跟进计划、沟通重点或完成后的跟进记录"}
+          />
+        </label>
+        <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="secondary-button" data-testid="contact-follow-up-ai-generate" type="button" onClick={onGenerate} disabled={generating}>
+            <Bot className={generating ? "spin-icon" : undefined} size={16} />
+            AI 生成
+          </button>
+          <button className="secondary-button" type="button" onClick={onCancel}>
+            取消
+          </button>
+          <button className="primary-button" data-testid="contact-follow-up-submit" type="button" onClick={onSubmit} disabled={!draft.message.trim()}>
+            <Save size={16} />
+            保存到活动时间线
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -5144,15 +5253,11 @@ function EmailWorkspace({
   const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
-  const [editingMediaAssetId, setEditingMediaAssetId] = useState("");
-  const [mediaAssetNameDraft, setMediaAssetNameDraft] = useState("");
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [attachmentUploads, setAttachmentUploads] = useState<EmailAttachmentUploadItem[]>([]);
   const composeEditorRef = useRef<HTMLDivElement>(null);
   const handledComposeOpenRequestRef = useRef("");
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
-  const mediaLibraryUploadInputRef = useRef<HTMLInputElement>(null);
-  const mediaReplaceInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || hasEmailDraftBody(emailDraft) || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const signatureOptions = useMemo(() => getEmailSignatureOptions(signatures, accounts, emailDraft.accountId), [accounts, emailDraft.accountId, signatures]);
@@ -5624,46 +5729,6 @@ function EmailWorkspace({
     );
     updateComposeBodyFromEditor();
     setMediaLibraryOpen(false);
-  }
-
-  function startEditingMediaAsset(asset: MediaAsset) {
-    setEditingMediaAssetId(asset.id);
-    setMediaAssetNameDraft(asset.name);
-  }
-
-  function saveMediaAssetName(asset: MediaAsset) {
-    const nextName = mediaAssetNameDraft.trim();
-    if (!nextName) {
-      onShowToast({ intent: "error", message: "请输入图片名称。" });
-      return;
-    }
-    onUpdateMediaAsset(asset.id, { name: nextName });
-    setEditingMediaAssetId("");
-    setMediaAssetNameDraft("");
-  }
-
-  async function replaceEditingMediaAsset(files: FileList | null) {
-    const asset = mediaAssets.find((candidate) => candidate.id === editingMediaAssetId);
-    const file = files?.[0];
-    if (!asset || !file) {
-      return;
-    }
-    if (!file.type.startsWith("image/")) {
-      onShowToast({ intent: "error", message: "请选择图片文件。" });
-      return;
-    }
-    if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
-      onShowToast({ intent: "error", message: `${file.name} 超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}。` });
-      return;
-    }
-    onUpdateMediaAsset(asset.id, {
-      name: mediaAssetNameDraft.trim() || file.name,
-      contentType: file.type || "image/png",
-      size: file.size,
-      contentBase64: await readFileAsBase64(file)
-    });
-    setEditingMediaAssetId("");
-    setMediaAssetNameDraft("");
   }
 
   function performMailboxAction(action: "archive" | "unarchive" | "delete" | "restore" | "read" | "unread" | "snooze" | "unsnooze" | "important", threadIds = selectedThreadIdsArray) {
@@ -7493,89 +7558,19 @@ function EmailWorkspace({
         ) : null}
 
         {mediaLibraryOpen ? (
-          <div className="modal-backdrop" data-testid="email-media-library-modal" role="dialog" aria-modal="true" aria-label="媒体库">
-            <div className="modal-panel media-library-modal">
-              <div className="email-pane-header compact">
-                <div>
-                  <h2 className="page-title" style={{ fontSize: 18 }}>媒体库</h2>
-                  <p className="subtle">选择图片插入邮件正文，或上传新图片供产品主图和邮件复用。</p>
-                </div>
-                <button className="icon-button" aria-label="关闭媒体库" type="button" onClick={() => setMediaLibraryOpen(false)}>
-                  <XCircle size={16} />
-                </button>
-              </div>
-              <div className="toolbar">
-                <button className="secondary-button" type="button" onClick={() => mediaLibraryUploadInputRef.current?.click()} disabled={disabled}>
-                  <ImageIcon size={16} />
-                  上传图片
-                </button>
-                <input
-                  ref={mediaLibraryUploadInputRef}
-                  hidden
-                  accept="image/*"
-                  multiple
-                  type="file"
-                  onChange={(event) => {
-                    void onUploadMediaAssets(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
-                <input
-                  ref={mediaReplaceInputRef}
-                  hidden
-                  accept="image/*"
-                  type="file"
-                  onChange={(event) => {
-                    void replaceEditingMediaAsset(event.target.files);
-                    event.target.value = "";
-                  }}
-                />
-              </div>
-              {mediaAssets.length ? (
-                <div className="media-library-grid">
-                  {mediaAssets.map((asset) => (
-                    <div className="media-library-card" key={asset.id}>
-                      <button className="media-library-select" type="button" onClick={() => insertMediaAssetInline(asset)}>
-                        <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
-                      </button>
-                      {editingMediaAssetId === asset.id ? (
-                        <div className="media-library-edit">
-                          <input className="input" data-testid={`media-asset-name-${asset.id}`} value={mediaAssetNameDraft} onChange={(event) => setMediaAssetNameDraft(event.target.value)} />
-                          <div className="toolbar compact-toolbar">
-                            <button className="secondary-button" type="button" onClick={() => saveMediaAssetName(asset)} disabled={disabled || !mediaAssetNameDraft.trim()}>
-                              <Save size={14} />
-                              保存
-                            </button>
-                            <button className="secondary-button" type="button" onClick={() => mediaReplaceInputRef.current?.click()} disabled={disabled}>
-                              <Upload size={14} />
-                              替换
-                            </button>
-                            <button className="secondary-button" type="button" onClick={() => setEditingMediaAssetId("")}>
-                              取消
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="media-library-card-footer">
-                          <span title={asset.name}>{asset.name}</span>
-                          <div className="toolbar compact-toolbar">
-                            <button className="icon-button" aria-label={`编辑 ${asset.name}`} data-testid={`media-asset-edit-${asset.id}`} type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); startEditingMediaAsset(asset); }} disabled={disabled}>
-                              <Pencil size={14} />
-                            </button>
-                            <button className="icon-button danger-button" aria-label={`删除 ${asset.name}`} data-testid={`media-asset-delete-${asset.id}`} type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onDeleteMediaAsset(asset); }} disabled={disabled}>
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state">媒体库暂无图片</div>
-              )}
-            </div>
-          </div>
+          <MediaLibraryModal
+            description="选择图片插入邮件正文，或上传新图片供产品主图和邮件复用。"
+            disabled={disabled}
+            mediaAssets={mediaAssets}
+            onClose={() => setMediaLibraryOpen(false)}
+            onDeleteMediaAsset={onDeleteMediaAsset}
+            onSelect={insertMediaAssetInline}
+            onUpdateMediaAsset={onUpdateMediaAsset}
+            onUploadMediaAssets={onUploadMediaAssets}
+            selectLabel="插入"
+            testId="email-media-library-modal"
+            title="媒体库"
+          />
         ) : null}
 
         {attachmentModalOpen ? (
@@ -10282,25 +10277,234 @@ function TalkAboutThisPanel({
   );
 }
 
+function MediaLibraryModal({
+  description,
+  disabled,
+  mediaAssets,
+  onClose,
+  onDeleteMediaAsset,
+  onSelect,
+  onUpdateMediaAsset,
+  onUploadMediaAssets,
+  selectFirstUploaded = false,
+  selectLabel = "选择",
+  testId,
+  title
+}: {
+  description: string;
+  disabled?: boolean;
+  mediaAssets: MediaAsset[];
+  onClose: () => void;
+  onDeleteMediaAsset?: (asset: MediaAsset) => void;
+  onSelect: (asset: MediaAsset) => void;
+  onUpdateMediaAsset?: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  selectFirstUploaded?: boolean;
+  selectLabel?: string;
+  testId: string;
+  title: string;
+}) {
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [editingAssetId, setEditingAssetId] = useState("");
+  const [nameDraft, setNameDraft] = useState("");
+  const editingAsset = mediaAssets.find((asset) => asset.id === editingAssetId);
+
+  async function uploadFiles(files: FileList | File[] | null) {
+    const uploaded = await onUploadMediaAssets(files);
+    if (selectFirstUploaded && uploaded[0]) {
+      onSelect(uploaded[0]);
+    }
+  }
+
+  async function replaceEditingAsset(files: FileList | null) {
+    const file = files?.[0];
+    if (!editingAsset || !file || !onUpdateMediaAsset) {
+      return;
+    }
+    if (!file.type.startsWith("image/") || file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
+      return;
+    }
+    onUpdateMediaAsset(editingAsset.id, {
+      name: nameDraft.trim() || file.name,
+      contentType: file.type || "image/png",
+      size: file.size,
+      contentBase64: await readFileAsBase64(file)
+    });
+    setEditingAssetId("");
+    setNameDraft("");
+  }
+
+  function saveEditingAssetName(asset: MediaAsset) {
+    const nextName = nameDraft.trim();
+    if (!nextName || !onUpdateMediaAsset) {
+      return;
+    }
+    onUpdateMediaAsset(asset.id, { name: nextName });
+    setEditingAssetId("");
+    setNameDraft("");
+  }
+
+  return (
+    <div className="modal-backdrop" data-testid={testId} role="dialog" aria-modal="true" aria-label={title}>
+      <div className="modal-panel media-library-modal">
+        <div className="email-pane-header compact">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>{title}</h2>
+            <p className="subtle">{description}</p>
+          </div>
+          <button className="icon-button" aria-label="关闭媒体库" type="button" onClick={onClose}>
+            <XCircle size={16} />
+          </button>
+        </div>
+        <div
+          className={`email-attachment-dropzone ${dragActive ? "active" : ""}`}
+          data-testid={`${testId}-dropzone`}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            setDragActive(true);
+          }}
+          onDragOver={(event) => event.preventDefault()}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragActive(false);
+            void uploadFiles(event.dataTransfer.files);
+          }}
+        >
+          <Upload size={24} />
+          <strong>拖拽图片到这里</strong>
+          <span className="subtle">或从本地选择图片，上传后可复用于产品、联系人、公司和邮件。</span>
+          <button className="secondary-button" type="button" onClick={() => uploadInputRef.current?.click()} disabled={disabled}>
+            <ImageIcon size={16} />
+            上传图片
+          </button>
+          <input
+            ref={uploadInputRef}
+            hidden
+            accept="image/*"
+            multiple
+            type="file"
+            onChange={(event) => {
+              void uploadFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+          <input
+            ref={replaceInputRef}
+            hidden
+            accept="image/*"
+            type="file"
+            onChange={(event) => {
+              void replaceEditingAsset(event.target.files);
+              event.target.value = "";
+            }}
+          />
+        </div>
+        {mediaAssets.length ? (
+          <div className="media-library-grid">
+            {mediaAssets.map((asset) => (
+              <div className="media-library-card" key={asset.id}>
+                <button className="media-library-select" type="button" onClick={() => onSelect(asset)}>
+                  <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
+                </button>
+                {editingAssetId === asset.id ? (
+                  <div className="media-library-edit">
+                    <input className="input" data-testid={`media-asset-name-${asset.id}`} value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
+                    <div className="toolbar compact-toolbar">
+                      <button className="secondary-button" type="button" onClick={() => saveEditingAssetName(asset)} disabled={disabled || !nameDraft.trim() || !onUpdateMediaAsset}>
+                        <Save size={14} />
+                        保存
+                      </button>
+                      <button className="secondary-button" type="button" onClick={() => replaceInputRef.current?.click()} disabled={disabled || !onUpdateMediaAsset}>
+                        <Upload size={14} />
+                        替换
+                      </button>
+                      <button className="secondary-button" type="button" onClick={() => setEditingAssetId("")}>
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="media-library-card-footer">
+                    <span title={asset.name}>{asset.name}</span>
+                    <div className="toolbar compact-toolbar">
+                      <button className="secondary-button" type="button" onClick={() => onSelect(asset)}>
+                        {selectLabel}
+                      </button>
+                      <button
+                        className="icon-button"
+                        aria-label={`编辑 ${asset.name}`}
+                        data-testid={`media-asset-edit-${asset.id}`}
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setEditingAssetId(asset.id);
+                          setNameDraft(asset.name);
+                        }}
+                        disabled={disabled || !onUpdateMediaAsset}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        className="icon-button danger-button"
+                        aria-label={`删除 ${asset.name}`}
+                        data-testid={`media-asset-delete-${asset.id}`}
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onDeleteMediaAsset?.(asset);
+                        }}
+                        disabled={disabled || !onDeleteMediaAsset}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">媒体库暂无图片</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MediaImageFieldInput({
   label,
   mediaAssets,
   testId,
   value,
   onChange,
-  onUploadMediaAssets
+  onUploadMediaAssets,
+  onUpdateMediaAsset,
+  onDeleteMediaAsset
 }: {
   label: string;
   mediaAssets: MediaAsset[];
   testId?: string;
   value: string;
   onChange: (value: string) => void;
-  onUploadMediaAssets?: (files: FileList | File[] | null) => void;
+  onUploadMediaAssets?: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  onUpdateMediaAsset?: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onDeleteMediaAsset?: (asset: MediaAsset) => void;
 }) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   return (
-    <label className="wide media-field">
-      <span className="subtle">{label}</span>
+    <div className="wide media-field">
+      <div className="stage-header">
+        <span className="subtle">{label}</span>
+        <button className="secondary-button" type="button" onClick={() => setMediaLibraryOpen(true)}>
+          <ImageIcon size={15} />
+          打开媒体库
+        </button>
+      </div>
       <div className="media-field-grid">
         <div className="media-field-preview">
           {value ? <img alt={label} src={value} /> : <span className="subtle">未选择图片</span>}
@@ -10308,35 +10512,40 @@ function MediaImageFieldInput({
         <div className="media-field-controls">
           <input className="input" data-testid={testId} value={value} onChange={(event) => onChange(event.target.value)} placeholder="图片 URL 或从媒体库选择" />
           <div className="toolbar compact-toolbar">
-            <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()}>
+            <button className="secondary-button" type="button" onClick={() => setMediaLibraryOpen(true)}>
               <ImageIcon size={15} />
-              上传图片
+              选择/上传图片
             </button>
-            <input
-              ref={fileInputRef}
-              hidden
-              accept="image/*"
-              type="file"
-              onChange={(event) => {
-                onUploadMediaAssets?.(event.target.files);
-                event.target.value = "";
-              }}
-            />
+            {value ? (
+              <button className="secondary-button" type="button" onClick={() => onChange("")}>
+                <XCircle size={15} />
+                清除
+              </button>
+            ) : null}
           </div>
-          {mediaAssets.length ? (
-            <div className="media-picker-strip" data-testid={testId ? `${testId}-media-library` : undefined}>
-              {mediaAssets.slice(0, 12).map((asset) => (
-                <button key={asset.id} type="button" onClick={() => onChange(mediaAssetDataUrl(asset))} title={asset.name}>
-                  <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <span className="subtle">媒体库暂无图片，可先上传。</span>
-          )}
+          <span className="subtle">可粘贴外部图片 URL，也可通过媒体库拖拽上传、编辑或删除图片。</span>
         </div>
       </div>
-    </label>
+      {mediaLibraryOpen ? (
+        <MediaLibraryModal
+          description="选择图片作为当前字段，也可拖拽上传新图片并统一管理。"
+          disabled={!onUploadMediaAssets}
+          mediaAssets={mediaAssets}
+          onClose={() => setMediaLibraryOpen(false)}
+          onDeleteMediaAsset={onDeleteMediaAsset}
+          onSelect={(asset) => {
+            onChange(mediaAssetDataUrl(asset));
+            setMediaLibraryOpen(false);
+          }}
+          onUpdateMediaAsset={onUpdateMediaAsset}
+          onUploadMediaAssets={onUploadMediaAssets ?? (async () => [])}
+          selectFirstUploaded
+          selectLabel="使用"
+          testId={testId ? `${testId}-media-library-modal` : "record-media-library-modal"}
+          title={`${label}媒体库`}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -10349,6 +10558,8 @@ function FieldInput({
   testId,
   onRecordsLoaded,
   onUploadMediaAssets,
+  onUpdateMediaAsset,
+  onDeleteMediaAsset,
   onChange
 }: {
   field: FieldDefinition;
@@ -10358,7 +10569,9 @@ function FieldInput({
   users: User[];
   testId?: string;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
-  onUploadMediaAssets?: (files: FileList | File[] | null) => void;
+  onUploadMediaAssets?: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  onUpdateMediaAsset?: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onDeleteMediaAsset?: (asset: MediaAsset) => void;
   onChange: (value: string) => void;
 }) {
   if (
@@ -10374,6 +10587,8 @@ function FieldInput({
         value={value}
         onChange={onChange}
         onUploadMediaAssets={onUploadMediaAssets}
+        onUpdateMediaAsset={onUpdateMediaAsset}
+        onDeleteMediaAsset={onDeleteMediaAsset}
       />
     );
   }
@@ -11078,6 +11293,14 @@ type ContactMethodDraft = {
   sourceRecordId?: string;
 };
 
+type ContactFollowUpDraft = {
+  channel: "whatsapp" | "call";
+  method: ContactMethodDraft;
+  recordId: string;
+  recordTitle: string;
+  message: string;
+};
+
 const contactMethodsValueKey = "__contactMethods";
 const companyPrimaryContactValueKey = "__primaryContactId";
 const companyBillingAddressesValueKey = "__billingAddresses";
@@ -11187,6 +11410,7 @@ function ContactMethodsQuickActions({
   onComposeEmail,
   onFilterEmail,
   onStartWhatsApp,
+  onStartCall,
   onEditMethod,
   editingMethodId,
   editingRecordId
@@ -11196,6 +11420,7 @@ function ContactMethodsQuickActions({
   onComposeEmail: (emailAddress: string) => void;
   onFilterEmail?: (emailAddress: string) => void;
   onStartWhatsApp?: (method: ContactMethodDraft) => void;
+  onStartCall?: (method: ContactMethodDraft) => void;
   onEditMethod?: (method: ContactMethodDraft) => void;
   editingMethodId?: string;
   editingRecordId?: string;
@@ -11238,7 +11463,8 @@ function ContactMethodsQuickActions({
           label,
           value,
           icon: Phone,
-          href: `tel:${normalizePhoneHref(value)}`,
+          onClick: onStartCall ? () => onStartCall(method) : undefined,
+          href: onStartCall ? undefined : `tel:${normalizePhoneHref(value)}`,
           badge,
           secondaryActions: editAction ? [editAction] : undefined
         };
@@ -12064,13 +12290,19 @@ function buildContactMethodUrl(type: ContactMethodType, value: string): string |
   return undefined;
 }
 
-function buildWhatsAppAiSourceText(record: CrmRecord, method: ContactMethodDraft, prompt: string): string {
+function buildContactFollowUpAiSourceText(record: CrmRecord, activities: Activity[], draft: ContactFollowUpDraft): string {
   const data = record.data && typeof record.data === "object" ? record.data : {};
+  const recentActivities = activities
+    .filter((activity) => activity.recordId === record.id)
+    .slice(0, 8)
+    .map((activity) => `${activity.type}: ${activity.title}${activity.body ? ` - ${activity.body}` : ""}`);
   return [
     `CRM record: ${record.title}`,
     `Object: ${record.objectKey}`,
-    `WhatsApp: ${method.value}`,
-    `Prompt: ${prompt}`,
+    `Channel: ${draft.channel}`,
+    `Contact method: ${contactMethodTypeLabels[draft.method.type]} ${draft.method.value}`,
+    `Current user input: ${draft.message}`,
+    `Recent activities: ${recentActivities.join("\n").slice(0, 3000) || "none"}`,
     `Record data: ${JSON.stringify(data).slice(0, 3000)}`
   ].join("\n");
 }
