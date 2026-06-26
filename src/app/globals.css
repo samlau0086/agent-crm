@@ -2480,6 +2480,55 @@ button {
   white-space: nowrap;
 }
 
+.company-address-card-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.address-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.address-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.address-card.editing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(13, 148, 136, 0.12);
+}
+
+.address-lines {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.address-lines span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.company-address-single-editor {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
 .quick-action-content strong {
   font-size: 13px;
 }

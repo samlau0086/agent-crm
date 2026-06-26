@@ -1135,6 +1135,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
+  const [companyAddressEditing, setCompanyAddressEditing] = useState<{ valueKey: string; addressId: string } | null>(null);
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -1591,6 +1592,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setRecordEmailActivityFilter("");
     setContactMethodEditingId("");
+    setCompanyAddressEditing(null);
   }, [selectedRecord?.id]);
 
   useEffect(() => {
@@ -2010,6 +2012,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecords((current) => mergeRecords(current, [updatedRecord]));
     if (selectedRecord.objectKey === "contacts") {
       setContactMethodEditingId("");
+    }
+    if (selectedRecord.objectKey === "companies") {
+      setCompanyAddressEditing(null);
     }
     setMessage("记录已更新");
     router.refresh();
@@ -3730,16 +3735,36 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             value={editValues[companyPrimaryContactValueKey] ?? ""}
                             onChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
                           />
-                          <CompanyAddressesEditor
+                          <CompanyAddressCards
                             title="Billing address"
                             testIdPrefix="edit-company-billing-address"
                             value={editValues[companyBillingAddressesValueKey] ?? ""}
+                            editingAddressId={companyAddressEditing?.valueKey === companyBillingAddressesValueKey ? companyAddressEditing.addressId : ""}
+                            onAdd={() => setCompanyAddressEditing({ valueKey: companyBillingAddressesValueKey, addressId: createCompanyAddressId() })}
+                            onEdit={(addressId) =>
+                              setCompanyAddressEditing((current) =>
+                                current?.valueKey === companyBillingAddressesValueKey && current.addressId === addressId
+                                  ? null
+                                  : { valueKey: companyBillingAddressesValueKey, addressId }
+                              )
+                            }
+                            onCancel={() => setCompanyAddressEditing(null)}
                             onChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
                           />
-                          <CompanyAddressesEditor
+                          <CompanyAddressCards
                             title="Shipping address"
                             testIdPrefix="edit-company-shipping-address"
                             value={editValues[companyShippingAddressesValueKey] ?? ""}
+                            editingAddressId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
+                            onAdd={() => setCompanyAddressEditing({ valueKey: companyShippingAddressesValueKey, addressId: createCompanyAddressId() })}
+                            onEdit={(addressId) =>
+                              setCompanyAddressEditing((current) =>
+                                current?.valueKey === companyShippingAddressesValueKey && current.addressId === addressId
+                                  ? null
+                                  : { valueKey: companyShippingAddressesValueKey, addressId }
+                              )
+                            }
+                            onCancel={() => setCompanyAddressEditing(null)}
                             onChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
                           />
                         </>
@@ -11123,6 +11148,178 @@ function CompanyAddressesEditor({
   );
 }
 
+function CompanyAddressCards({
+  title,
+  testIdPrefix,
+  value,
+  editingAddressId,
+  onAdd,
+  onEdit,
+  onCancel,
+  onChange
+}: {
+  title: string;
+  testIdPrefix: string;
+  value: string;
+  editingAddressId: string;
+  onAdd: () => void;
+  onEdit: (addressId: string) => void;
+  onCancel: () => void;
+  onChange: (addresses: CompanyAddressDraft[]) => void;
+}) {
+  const addresses = normalizeCompanyAddresses(parseJsonValue(value)).filter(companyAddressHasContent);
+  const editingAddress = editingAddressId
+    ? normalizeCompanyAddresses(parseJsonValue(value)).find((address) => address.id === editingAddressId) ?? { ...emptyCompanyAddress(), id: editingAddressId }
+    : undefined;
+
+  return (
+    <section className="wide settings-card company-address-card-panel" data-testid={`${testIdPrefix}-cards`}>
+      <div className="stage-header">
+        <div>
+          <strong>{title}</strong>
+          <div className="subtle">地址保存后以卡片显示，可单独编辑每个地址。</div>
+        </div>
+        <button className="secondary-button" data-testid={`${testIdPrefix}-add-single`} type="button" onClick={onAdd}>
+          <UserPlus size={16} />
+          新增地址
+        </button>
+      </div>
+
+      {addresses.length > 0 ? (
+        <div className="address-card-grid">
+          {addresses.map((address) => {
+            const lines = formatCompanyAddressLines(address);
+            return (
+              <article className={`address-card ${editingAddressId === address.id ? "editing" : ""}`} data-testid={`${testIdPrefix}-card-${address.id}`} key={address.id}>
+                <div className="stage-header">
+                  <div>
+                    <strong>{address.label || title}</strong>
+                    <div className="subtle">{formatCompanyAddressRegion(address) || "未填写区域"}</div>
+                  </div>
+                  <button className="secondary-button compact-button" type="button" onClick={() => onEdit(address.id)}>
+                    <Pencil size={14} />
+                    {editingAddressId === address.id ? "收起" : "编辑"}
+                  </button>
+                </div>
+                <div className="address-lines">
+                  {lines.length > 0 ? (
+                    lines.map((line) => <span key={line}>{line}</span>)
+                  ) : (
+                    <span className="subtle">暂无地址明细</span>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty-state compact-empty" data-testid={`${testIdPrefix}-empty`}>
+          暂无地址，点击新增地址添加。
+        </div>
+      )}
+
+      {editingAddress ? (
+        <CompanyAddressSingleEditor
+          testIdPrefix={`${testIdPrefix}-single`}
+          value={value}
+          addressId={editingAddress.id}
+          onCancel={onCancel}
+          onChange={onChange}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function CompanyAddressSingleEditor({
+  testIdPrefix,
+  value,
+  addressId,
+  onCancel,
+  onChange
+}: {
+  testIdPrefix: string;
+  value: string;
+  addressId: string;
+  onCancel: () => void;
+  onChange: (addresses: CompanyAddressDraft[]) => void;
+}) {
+  const addresses = normalizeCompanyAddresses(parseJsonValue(value));
+  const existingAddress = addresses.find((candidate) => candidate.id === addressId);
+  const address = existingAddress ?? { ...emptyCompanyAddress(), id: addressId };
+
+  function updateAddress(patch: Partial<CompanyAddressDraft>) {
+    const hasExistingAddress = addresses.some((candidate) => candidate.id === addressId);
+    const sourceAddresses = hasExistingAddress ? addresses : [...addresses, address];
+    onChange(normalizeCompanyAddresses(sourceAddresses.map((candidate) => (candidate.id === addressId ? { ...candidate, ...patch } : candidate))));
+  }
+
+  function removeAddress() {
+    onChange(normalizeCompanyAddresses(addresses.filter((candidate) => candidate.id !== addressId)));
+    onCancel();
+  }
+
+  return (
+    <section className="company-address-single-editor" data-testid={`${testIdPrefix}-editor`}>
+      <div className="stage-header">
+        <div>
+          <strong>{existingAddress ? "编辑地址" : "新增地址"}</strong>
+          <div className="subtle">仅修改当前地址卡片，保存记录后生效。</div>
+        </div>
+        <div className="toolbar">
+          <button className="secondary-button" type="button" onClick={onCancel}>
+            收起
+          </button>
+          {existingAddress ? (
+            <button className="danger-button" type="button" onClick={removeAddress}>
+              <Trash2 size={16} />
+              删除地址
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="form-grid" style={{ marginTop: 10 }}>
+        <label>
+          <span className="subtle">标签</span>
+          <input className="input" value={address.label ?? ""} onChange={(event) => updateAddress({ label: event.target.value })} placeholder="总部 / 仓库 / 办公室" />
+        </label>
+        <label>
+          <span className="subtle">国家/地区</span>
+          <input className="input" value={address.country ?? ""} onChange={(event) => updateAddress({ country: event.target.value })} />
+        </label>
+        <label>
+          <span className="subtle">省/州</span>
+          <input className="input" value={address.region ?? ""} onChange={(event) => updateAddress({ region: event.target.value })} />
+        </label>
+        <label>
+          <span className="subtle">城市</span>
+          <input className="input" value={address.city ?? ""} onChange={(event) => updateAddress({ city: event.target.value })} />
+        </label>
+        <label className="wide">
+          <span className="subtle">地址 1</span>
+          <input className="input" data-testid={`${testIdPrefix}-line1`} value={address.line1 ?? ""} onChange={(event) => updateAddress({ line1: event.target.value })} />
+        </label>
+        <label className="wide">
+          <span className="subtle">地址 2</span>
+          <input className="input" value={address.line2 ?? ""} onChange={(event) => updateAddress({ line2: event.target.value })} />
+        </label>
+        <label>
+          <span className="subtle">邮编</span>
+          <input className="input" value={address.postalCode ?? ""} onChange={(event) => updateAddress({ postalCode: event.target.value })} />
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function formatCompanyAddressRegion(address: CompanyAddressDraft): string {
+  return [address.city, address.region, address.country].filter(Boolean).join(", ");
+}
+
+function formatCompanyAddressLines(address: CompanyAddressDraft): string[] {
+  return [address.line1, address.line2, [address.postalCode, formatCompanyAddressRegion(address)].filter(Boolean).join(" ")].filter((line): line is string => Boolean(line));
+}
+
 const quoteLineItemsValueKey = "__quoteLineItems";
 const quoteFeesValueKey = "__quoteFees";
 const hiddenQuoteFormFields = new Set(["productId", "quoteCurrency", "totalAmount"]);
@@ -11270,9 +11467,13 @@ function normalizePrimaryContactMethods(methods: ContactMethodDraft[]): ContactM
   return normalized.map((method, index) => ({ ...method, primary: firstPrimaryIndex >= 0 ? index === firstPrimaryIndex : index === 0 }));
 }
 
+function createCompanyAddressId(): string {
+  return `address-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function emptyCompanyAddress(): CompanyAddressDraft {
   return {
-    id: `address-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: createCompanyAddressId(),
     label: "",
     country: "",
     region: "",

@@ -1610,6 +1610,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /function getQuickContactMethodsForRecord\(record: CrmRecord, records: CrmRecord\[\]\): ContactMethodDraft\[\]/);
   assert.match(source, /selectedRecordQuickContactMethods\.length > 0 \? \([\s\S]*<ContactMethodsQuickActions/);
   assert.match(source, /const \[contactMethodEditingId, setContactMethodEditingId\] = useState\(""\)/);
+  assert.match(source, /const \[companyAddressEditing, setCompanyAddressEditing\] = useState<\{ valueKey: string; addressId: string \} \| null>\(null\)/);
   assert.match(source, /selectedRecord\.objectKey === "contacts" && selectedRecordQuickContactMethods\.length === 0/);
   assert.match(source, /selectedRecord\.objectKey === "contacts" && contactMethodEditingId \? \(/);
   assert.match(source, /<ContactMethodSingleEditor/);
@@ -1628,6 +1629,15 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /function CompanyPrimaryContactSelect/);
   assert.match(source, /data-testid="company-primary-contact-select"/);
   assert.match(source, /data-testid="company-primary-contact-link"/);
+  assert.match(source, /<CompanyAddressCards[\s\S]*testIdPrefix="edit-company-billing-address"/);
+  assert.match(source, /editingAddressId=\{companyAddressEditing\?\.valueKey === companyBillingAddressesValueKey \? companyAddressEditing\.addressId : ""\}/);
+  assert.match(source, /onAdd=\{\(\) => setCompanyAddressEditing\(\{ valueKey: companyBillingAddressesValueKey, addressId: createCompanyAddressId\(\) \}\)\}/);
+  assert.match(source, /onEdit=\{\(addressId\) =>[\s\S]*setCompanyAddressEditing\(\(current\) =>/);
+  assert.match(source, /function CompanyAddressCards/);
+  assert.match(source, /function CompanyAddressSingleEditor/);
+  assert.match(source, /const existingAddress = addresses\.find\(\(candidate\) => candidate\.id === addressId\)/);
+  assert.match(source, /const sourceAddresses = hasExistingAddress \? addresses : \[\.\.\.addresses, address\]/);
+  assert.match(source, /removeAddress\(\)[\s\S]*addresses\.filter\(\(candidate\) => candidate\.id !== addressId\)/);
   assert.match(source, /getRecordEmailAddressesForComposer\(selectedFields, selectedRecord, records\)/);
   assert.match(source, /getCompanyPrimaryContact\(record, records\)/);
   assert.match(source, /const routeEmailCompose = searchParams\.get\("compose"\) === "1"/);
@@ -1647,6 +1657,9 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(styles, /\.quick-action-chip \{/);
   assert.match(styles, /\.quick-action-actions \{/);
   assert.match(styles, /\.quick-action-secondary \{/);
+  assert.match(styles, /\.address-card-grid \{/);
+  assert.match(styles, /\.address-card \{/);
+  assert.match(styles, /\.company-address-single-editor \{/);
   assert.match(source, /handledComposeOpenRequestRef\.current = composeOpenRequestKey/);
   assert.match(source, /setComposeOpen\(true\);[\s\S]*setComposeMinimized\(false\);/);
   assert.match(source, /function getThreadPrimarySenderEmail/);
