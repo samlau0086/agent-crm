@@ -1686,8 +1686,19 @@ await run("record create and detail panels render full width in the main content
   assert.match(source, /recordPanelMode !== "closed" && \([\s\S]*<aside className="detail-panel record-drawer">/);
   assert.match(source, /className="drawer-header record-panel-header"/);
   assert.match(source, /data-testid="record-panel-back"[\s\S]*runAction\(closeRecordPanel\)[\s\S]*recordReturnEmailThreadId \? "返回邮件" : "返回列表"/);
+  assert.match(source, /const \[recordActivityComposerType, setRecordActivityComposerType\] = useState<Activity\["type"\] \| "">\(""\)/);
+  assert.match(source, /setRecordActivityComposerType\(""\);[\s\S]*selectedRecord\?\.id/);
+  assert.match(source, /function RecordSectionHeader/);
+  assert.match(source, /aria-expanded=\{isOpen\}/);
+  assert.match(source, /isOpen \? <ChevronDown size=\{16\} \/> : <Plus size=\{16\} \/>/);
   assert.match(source, /function RecordActivityComposer/);
   assert.match(source, /data-testid=\{`\$\{testIdPrefix\}-composer`\}/);
+  assert.match(source, /recordActivityComposerType === "task" \? \([\s\S]*<RecordActivityComposer[\s\S]*type="task"/);
+  assert.match(source, /recordActivityComposerType === "note" \? \([\s\S]*<RecordActivityComposer[\s\S]*type="note"/);
+  assert.match(source, /recordActivityComposerType === "call" \? \([\s\S]*<RecordActivityComposer[\s\S]*type="call"/);
+  assert.match(source, /recordActivityComposerType === "meeting" \? \([\s\S]*<RecordActivityComposer[\s\S]*type="meeting"/);
+  assert.match(source, /onToggle=\{\(\) => setRecordActivityComposerType\(\(current\) => \(current === "task" \? "" : "task"\)\)\}/);
+  assert.match(source, /setRecordActivityComposerType\(""\);[\s\S]*setMessage\("已添加任务"\)/);
   assert.match(source, /type="task"[\s\S]*testIdPrefix="record-task"/);
   assert.match(source, /type="note"[\s\S]*testIdPrefix="record-note"/);
   assert.match(source, /type="call"[\s\S]*testIdPrefix="record-call"/);
@@ -1699,6 +1710,7 @@ await run("record create and detail panels render full width in the main content
   assert.match(styles, /\.record-drawer \{[\s\S]*order: -1;[\s\S]*position: static;[\s\S]*max-height: none;[\s\S]*overflow: visible;/);
   assert.match(styles, /\.record-drawer \.drawer-header \{\s*position: static;/);
   assert.match(styles, /\.record-panel-header \{[\s\S]*justify-content: flex-start;/);
+  assert.match(styles, /\.record-section-header \{/);
   assert.match(styles, /\.record-activity-composer \{/);
   assert.doesNotMatch(styles, /\.workspace-grid\.has-drawer \{[\s\S]{0,120}minmax\(360px, 440px\)/);
   assert.doesNotMatch(styles, /\.record-drawer \{\s*position: sticky/);

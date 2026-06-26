@@ -612,6 +612,14 @@ button {
   background: #f8fafc;
 }
 
+.record-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
 .property-row {
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr);

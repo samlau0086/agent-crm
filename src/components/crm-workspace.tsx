@@ -34,6 +34,7 @@ import {
   Pencil,
   FileText,
   Phone,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -1136,6 +1137,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
   const [companyAddressEditing, setCompanyAddressEditing] = useState<{ valueKey: string; addressId: string } | null>(null);
+  const [recordActivityComposerType, setRecordActivityComposerType] = useState<Activity["type"] | "">("");
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -1597,6 +1599,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecordEmailActivityFilter("");
     setContactMethodEditingId("");
     setCompanyAddressEditing(null);
+    setRecordActivityComposerType("");
   }, [selectedRecord?.id]);
 
   useEffect(() => {
@@ -3964,25 +3967,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </section>
 
                     <section style={{ marginTop: 16 }}>
-                      <div className="property-name" style={{ marginBottom: 8 }}>
-                        任务
-                      </div>
-                      <RecordActivityComposer
-                        type="task"
-                        submitLabel="添加任务"
-                        titlePlaceholder="例如：跟进报价确认"
-                        bodyPlaceholder="任务说明、需要准备的资料或下一步动作"
-                        dateLabel="截止日期"
-                        isPending={isPending}
-                        testIdPrefix="record-task"
-                        onSubmit={(input) =>
-                          runAction(async () => {
-                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                            setMessage("已添加任务");
-                            router.refresh();
-                          })
-                        }
+                      <RecordSectionHeader
+                        title="任务"
+                        addLabel="添加任务"
+                        isOpen={recordActivityComposerType === "task"}
+                        onToggle={() => setRecordActivityComposerType((current) => (current === "task" ? "" : "task"))}
                       />
+                      {recordActivityComposerType === "task" ? (
+                        <RecordActivityComposer
+                          type="task"
+                          submitLabel="添加任务"
+                          titlePlaceholder="例如：跟进报价确认"
+                          bodyPlaceholder="任务说明、需要准备的资料或下一步动作"
+                          dateLabel="截止日期"
+                          isPending={isPending}
+                          testIdPrefix="record-task"
+                          onSubmit={(input) =>
+                            runAction(async () => {
+                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                              setRecordActivityComposerType("");
+                              setMessage("已添加任务");
+                              router.refresh();
+                            })
+                          }
+                        />
+                      ) : null}
                       <TaskList
                         activities={selectedTasks}
                         emptyMessage="暂无任务"
@@ -4000,24 +4009,30 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </section>
 
                     <section style={{ marginTop: 16 }}>
-                      <div className="property-name" style={{ marginBottom: 8 }}>
-                        备注
-                      </div>
-                      <RecordActivityComposer
-                        type="note"
-                        submitLabel="添加备注"
-                        titlePlaceholder="例如：客户偏好 / 背景补充"
-                        bodyPlaceholder="记录沟通背景、需求、风险或内部观察"
-                        isPending={isPending}
-                        testIdPrefix="record-note"
-                        onSubmit={(input) =>
-                          runAction(async () => {
-                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                            setMessage("已添加备注");
-                            router.refresh();
-                          })
-                        }
+                      <RecordSectionHeader
+                        title="备注"
+                        addLabel="添加备注"
+                        isOpen={recordActivityComposerType === "note"}
+                        onToggle={() => setRecordActivityComposerType((current) => (current === "note" ? "" : "note"))}
                       />
+                      {recordActivityComposerType === "note" ? (
+                        <RecordActivityComposer
+                          type="note"
+                          submitLabel="添加备注"
+                          titlePlaceholder="例如：客户偏好 / 背景补充"
+                          bodyPlaceholder="记录沟通背景、需求、风险或内部观察"
+                          isPending={isPending}
+                          testIdPrefix="record-note"
+                          onSubmit={(input) =>
+                            runAction(async () => {
+                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                              setRecordActivityComposerType("");
+                              setMessage("已添加备注");
+                              router.refresh();
+                            })
+                          }
+                        />
+                      ) : null}
                       <ActivityList
                         activities={selectedNotes}
                         emptyMessage="暂无备注"
@@ -4032,24 +4047,30 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </section>
 
                     <section style={{ marginTop: 16 }}>
-                      <div className="property-name" style={{ marginBottom: 8 }}>
-                        电话
-                      </div>
-                      <RecordActivityComposer
-                        type="call"
-                        submitLabel="添加电话记录"
-                        titlePlaceholder="例如：电话确认预算"
-                        bodyPlaceholder="记录电话结论、异议、承诺事项"
-                        isPending={isPending}
-                        testIdPrefix="record-call"
-                        onSubmit={(input) =>
-                          runAction(async () => {
-                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                            setMessage("已添加电话记录");
-                            router.refresh();
-                          })
-                        }
+                      <RecordSectionHeader
+                        title="电话"
+                        addLabel="添加电话记录"
+                        isOpen={recordActivityComposerType === "call"}
+                        onToggle={() => setRecordActivityComposerType((current) => (current === "call" ? "" : "call"))}
                       />
+                      {recordActivityComposerType === "call" ? (
+                        <RecordActivityComposer
+                          type="call"
+                          submitLabel="添加电话记录"
+                          titlePlaceholder="例如：电话确认预算"
+                          bodyPlaceholder="记录电话结论、异议、承诺事项"
+                          isPending={isPending}
+                          testIdPrefix="record-call"
+                          onSubmit={(input) =>
+                            runAction(async () => {
+                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                              setRecordActivityComposerType("");
+                              setMessage("已添加电话记录");
+                              router.refresh();
+                            })
+                          }
+                        />
+                      ) : null}
                       <ActivityList
                         activities={selectedCalls}
                         emptyMessage="暂无电话记录"
@@ -4064,25 +4085,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </section>
 
                     <section style={{ marginTop: 16 }}>
-                      <div className="property-name" style={{ marginBottom: 8 }}>
-                        会议
-                      </div>
-                      <RecordActivityComposer
-                        type="meeting"
-                        submitLabel="添加会议记录"
-                        titlePlaceholder="例如：产品演示会议"
-                        bodyPlaceholder="记录会议结论、参会人、待办事项"
-                        dateLabel="会议日期"
-                        isPending={isPending}
-                        testIdPrefix="record-meeting"
-                        onSubmit={(input) =>
-                          runAction(async () => {
-                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
-                            setMessage("已添加会议记录");
-                            router.refresh();
-                          })
-                        }
+                      <RecordSectionHeader
+                        title="会议"
+                        addLabel="添加会议记录"
+                        isOpen={recordActivityComposerType === "meeting"}
+                        onToggle={() => setRecordActivityComposerType((current) => (current === "meeting" ? "" : "meeting"))}
                       />
+                      {recordActivityComposerType === "meeting" ? (
+                        <RecordActivityComposer
+                          type="meeting"
+                          submitLabel="添加会议记录"
+                          titlePlaceholder="例如：产品演示会议"
+                          bodyPlaceholder="记录会议结论、参会人、待办事项"
+                          dateLabel="会议日期"
+                          isPending={isPending}
+                          testIdPrefix="record-meeting"
+                          onSubmit={(input) =>
+                            runAction(async () => {
+                              await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                              setRecordActivityComposerType("");
+                              setMessage("已添加会议记录");
+                              router.refresh();
+                            })
+                          }
+                        />
+                      ) : null}
                       <ActivityList
                         activities={selectedMeetings}
                         emptyMessage="暂无会议记录"
@@ -8758,6 +8785,27 @@ type RecordActivityComposerInput = {
   body?: string;
   dueAt?: string;
 };
+
+function RecordSectionHeader({
+  title,
+  addLabel,
+  isOpen,
+  onToggle
+}: {
+  title: string;
+  addLabel: string;
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="record-section-header">
+      <div className="property-name">{title}</div>
+      <button className={`icon-button ${isOpen ? "active" : ""}`} aria-expanded={isOpen} aria-label={isOpen ? `收起${addLabel}` : addLabel} title={isOpen ? `收起${addLabel}` : addLabel} type="button" onClick={onToggle}>
+        {isOpen ? <ChevronDown size={16} /> : <Plus size={16} />}
+      </button>
+    </div>
+  );
+}
 
 function RecordActivityComposer({
   type,
