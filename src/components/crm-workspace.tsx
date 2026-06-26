@@ -1136,6 +1136,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
+  const [contactMethodEditingRecordId, setContactMethodEditingRecordId] = useState("");
+  const [contactMethodEditingValue, setContactMethodEditingValue] = useState("");
   const [companyAddressEditing, setCompanyAddressEditing] = useState<{ valueKey: string; addressId: string } | null>(null);
   const [recordActivityComposerType, setRecordActivityComposerType] = useState<Activity["type"] | "">("");
   const [showListSettings, setShowListSettings] = useState(false);
@@ -1598,6 +1600,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setRecordEmailActivityFilter("");
     setContactMethodEditingId("");
+    setContactMethodEditingRecordId("");
+    setContactMethodEditingValue("");
     setCompanyAddressEditing(null);
     setRecordActivityComposerType("");
   }, [selectedRecord?.id]);
@@ -2011,11 +2015,78 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecords((current) => mergeRecords(current, [updatedRecord]));
     if (selectedRecord.objectKey === "contacts") {
       setContactMethodEditingId("");
+      setContactMethodEditingRecordId("");
+      setContactMethodEditingValue("");
     }
     if (selectedRecord.objectKey === "companies") {
       setCompanyAddressEditing(null);
     }
     setMessage("记录已更新");
+    router.refresh();
+  }
+
+  function startContactMethodEditor(record: CrmRecord, methodId: string, methods?: ContactMethodDraft[]) {
+    setContactMethodEditingId(methodId);
+    setContactMethodEditingRecordId(record.id);
+    setContactMethodEditingValue(JSON.stringify(methods ?? contactMethodsFromRecordData(record)));
+  }
+
+  function toggleQuickContactMethodEditor(method: ContactMethodDraft) {
+    if (!selectedRecord) {
+      return;
+    }
+
+    const targetRecordId = method.sourceRecordId || selectedRecord.id;
+    if (contactMethodEditingId === method.id && contactMethodEditingRecordId === targetRecordId) {
+      closeContactMethodEditor();
+      return;
+    }
+
+    const targetRecord = records.find((record) => record.id === targetRecordId) ?? selectedRecord;
+    startContactMethodEditor(targetRecord, method.id);
+  }
+
+  function startNewContactMethodEditor(record: CrmRecord, type: ContactMethodType = "email") {
+    const method = emptyContactMethod(type, contactMethodsFromRecordData(record).length === 0);
+    startContactMethodEditor(record, method.id, [...contactMethodsFromRecordData(record), method]);
+  }
+
+  function closeContactMethodEditor() {
+    setContactMethodEditingId("");
+    setContactMethodEditingRecordId("");
+    setContactMethodEditingValue("");
+  }
+
+  async function saveContactMethodEditor() {
+    const targetRecord = records.find((record) => record.id === contactMethodEditingRecordId);
+    if (!targetRecord) {
+      closeContactMethodEditor();
+      return;
+    }
+
+    const methods = contactMethodsFromValues({ [contactMethodsValueKey]: contactMethodEditingValue });
+    const primaryEmail = methods.find((method) => method.type === "email" && method.primary)?.value || methods.find((method) => method.type === "email")?.value || "";
+    const primaryPhone =
+      methods.find((method) => (method.type === "tel" || method.type === "mob") && method.primary)?.value ||
+      methods.find((method) => method.type === "tel" || method.type === "mob")?.value ||
+      "";
+    const updatedRecord = await fetchJson<CrmRecord>(`/api/records/${targetRecord.objectKey}/${targetRecord.id}`, {
+      method: "PATCH",
+      body: {
+        data: {
+          contactMethods: methods,
+          email: primaryEmail,
+          phone: primaryPhone
+        }
+      }
+    });
+
+    setRecords((current) => mergeRecords(current, [updatedRecord]));
+    if (selectedRecord?.id === updatedRecord.id) {
+      setEditValues(buildRecordValues(selectedFields, updatedRecord));
+    }
+    closeContactMethodEditor();
+    setMessage("联系方式已更新");
     router.refresh();
   }
 
@@ -3697,15 +3768,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
                         />
                       ) : null}
-                      {selectedRecord.objectKey === "contacts" && contactMethodEditingId ? (
-                        <ContactMethodSingleEditor
-                          testIdPrefix="edit-contact-method-single"
-                          value={editValues[contactMethodsValueKey] ?? ""}
-                          methodId={contactMethodEditingId}
-                          onCancel={() => setContactMethodEditingId("")}
-                          onChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
-                        />
-                      ) : null}
                       {selectedRecord.objectKey === "companies" ? (
                         <>
                           <CompanyPrimaryContactSelect
@@ -3779,12 +3841,33 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onComposeEmail={(emailAddress) => composeEmailForRecord(selectedRecord, emailAddress)}
                           onFilterEmail={(emailAddress) => setRecordEmailActivityFilter(emailAddress)}
                           onStartWhatsApp={(method) => runAction(() => startWhatsAppFollowUp(selectedRecord, method))}
-                          onEditMethod={(methodId) => setContactMethodEditingId((current) => (current === methodId ? "" : methodId))}
+                          onEditMethod={toggleQuickContactMethodEditor}
                           editingMethodId={contactMethodEditingId}
+                          editingRecordId={contactMethodEditingRecordId}
                         />
+                        {contactMethodEditingId ? (
+                          <section className="quick-contact-editor-panel" data-testid="quick-contact-method-editor">
+                            <ContactMethodSingleEditor
+                              testIdPrefix="quick-contact-method-single"
+                              value={contactMethodEditingValue}
+                              methodId={contactMethodEditingId}
+                              onCancel={closeContactMethodEditor}
+                              onChange={(methods) => setContactMethodEditingValue(JSON.stringify(normalizePrimaryContactMethods(methods)))}
+                            />
+                            <div className="toolbar" style={{ marginTop: 10 }}>
+                              <button className="primary-button" type="button" onClick={() => runAction(saveContactMethodEditor)} disabled={isPending}>
+                                <Save size={16} />
+                                保存联系方式
+                              </button>
+                              <button className="secondary-button" type="button" onClick={closeContactMethodEditor}>
+                                取消
+                              </button>
+                            </div>
+                          </section>
+                        ) : null}
                       {selectedRecord.objectKey === "contacts" ? (
                         <div className="toolbar" style={{ marginTop: 8 }}>
-                          <button className="secondary-button" type="button" onClick={() => setContactMethodEditingId(`method-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)}>
+                          <button className="secondary-button" type="button" onClick={() => startNewContactMethodEditor(selectedRecord)}>
                             <UserPlus size={16} />
                             新增联系方式
                           </button>
@@ -10783,6 +10866,7 @@ type ContactMethodDraft = {
   value: string;
   label?: string;
   primary?: boolean;
+  sourceRecordId?: string;
 };
 
 const contactMethodsValueKey = "__contactMethods";
@@ -10895,15 +10979,17 @@ function ContactMethodsQuickActions({
   onFilterEmail,
   onStartWhatsApp,
   onEditMethod,
-  editingMethodId
+  editingMethodId,
+  editingRecordId
 }: {
   methods: ContactMethodDraft[];
   record: CrmRecord;
   onComposeEmail: (emailAddress: string) => void;
   onFilterEmail?: (emailAddress: string) => void;
   onStartWhatsApp?: (method: ContactMethodDraft) => void;
-  onEditMethod?: (methodId: string) => void;
+  onEditMethod?: (method: ContactMethodDraft) => void;
   editingMethodId?: string;
+  editingRecordId?: string;
 }) {
   const items = normalizePrimaryContactMethods(methods)
     .filter((method) => method.value.trim())
@@ -10911,10 +10997,11 @@ function ContactMethodsQuickActions({
       const label = method.label?.trim() || contactMethodTypeLabels[method.type];
       const value = method.value.trim();
       const badge = method.primary ? "主联系方式" : undefined;
+      const methodRecordId = method.sourceRecordId || record.id;
       const editAction = onEditMethod
         ? {
-            label: editingMethodId === method.id ? "收起" : "编辑",
-            onClick: () => onEditMethod(method.id)
+            label: editingMethodId === method.id && editingRecordId === methodRecordId ? "收起" : "编辑",
+            onClick: () => onEditMethod(method)
           }
         : undefined;
       if (method.type === "email") {
@@ -11793,24 +11880,39 @@ function dedupeContactMethods(methods: ContactMethodDraft[]): ContactMethodDraft
 
 function getQuickContactMethodsForRecord(record: CrmRecord, records: CrmRecord[]): ContactMethodDraft[] {
   if (record.objectKey === "contacts") {
-    return dedupeContactMethods(contactMethodsFromRecordData(record));
+    return dedupeContactMethods(contactMethodsFromRecordData(record).map((method) => ({ ...method, sourceRecordId: record.id })));
   }
   if (record.objectKey === "companies") {
-    const directMethods = contactMethodsFromRecordData(record);
+    const directMethods = contactMethodsFromRecordData(record).map((method) => ({ ...method, sourceRecordId: record.id }));
     const primaryContact = getCompanyPrimaryContact(record, records);
-    const primaryMethods = primaryContact ? contactMethodsFromRecordData(primaryContact).map((method) => ({ ...method, label: method.label || `主联系人 ${contactMethodTypeLabels[method.type]}` })) : [];
-    const relatedEmailMethods = getCompanyContactRecords(record, records).flatMap((contact) =>
-      getRecordEmailAddressesFromData(contact).map<ContactMethodDraft>((emailAddress) => ({
-        id: `company-contact-email-${contact.id}-${emailAddress}`,
-        type: "email",
-        value: emailAddress,
-        label: contact.id === primaryContact?.id ? "主联系人 Email" : `${contact.title} Email`,
-        primary: contact.id === primaryContact?.id
-      }))
-    );
+    const primaryMethods = primaryContact
+      ? contactMethodsFromRecordData(primaryContact).map((method) => ({
+          ...method,
+          label: method.label || `主联系人 ${contactMethodTypeLabels[method.type]}`,
+          sourceRecordId: primaryContact.id
+        }))
+      : [];
+    const relatedEmailMethods = getCompanyContactRecords(record, records).flatMap((contact) => {
+      const contactMethods = contactMethodsFromRecordData(contact);
+      return getRecordEmailAddressesFromData(contact).map<ContactMethodDraft>((emailAddress) => {
+        const existingMethod = contactMethods.find((method) => method.type === "email" && method.value.trim().toLowerCase() === emailAddress.toLowerCase());
+        return {
+          ...(existingMethod ?? {
+            id: `company-contact-email-${contact.id}-${emailAddress}`,
+            type: "email" as ContactMethodType,
+            value: emailAddress,
+            label: "Email",
+            primary: false
+          }),
+          label: contact.id === primaryContact?.id ? "主联系人 Email" : `${contact.title} Email`,
+          primary: contact.id === primaryContact?.id || existingMethod?.primary === true,
+          sourceRecordId: contact.id
+        };
+      });
+    });
     return dedupeContactMethods([...primaryMethods, ...directMethods, ...relatedEmailMethods]);
   }
-  return dedupeContactMethods(contactMethodsFromRecordData(record));
+  return dedupeContactMethods(contactMethodsFromRecordData(record).map((method) => ({ ...method, sourceRecordId: record.id })));
 }
 
 function buildInitialValues(fields: FieldDefinition[], objectKey?: string): Record<string, string> {

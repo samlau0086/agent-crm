@@ -2458,6 +2458,12 @@ button {
   background: #f8fafc;
 }
 
+.quick-contact-editor-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .quick-action-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
