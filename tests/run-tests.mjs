@@ -1220,6 +1220,22 @@ await run("product quote currency migration handles malformed quote json arrays"
   assert.doesNotMatch(migration, /jsonb_array_elements\(COALESCE\("CrmRecord"\."data"->'fees'/);
 });
 
+await run("performance phase one adds indexed CRM record query paths", () => {
+  const migration = readFileSync("prisma/migrations/20260626090000_perf_phase_one/migration.sql", "utf8");
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+
+  assert.match(migration, /CREATE EXTENSION IF NOT EXISTS pg_trgm/);
+  assert.match(migration, /"CrmRecord_contacts_company_id_idx"/);
+  assert.match(migration, /"CrmRecord_contacts_methods_trgm_idx"/);
+  assert.match(migration, /"CrmRecord_companies_domain_eq_idx"/);
+  assert.match(repository, /listRecordsForUniqueValidation\(context, objectKey, fields, data\)/);
+  assert.match(repository, /listRecordsForUniqueValidation\(context, objectKey, fields, nextData, recordId\)/);
+  assert.doesNotMatch(repository, /const existing = await this\.listRecordsForValidation\(context, objectKey\);[\s\S]{0,260}validateRecordPayload\(fields, data, existing\)/);
+  assert.match(repository, /function recordSearchSql\(objectKey: string, search: string\): Prisma\.Sql/);
+  assert.match(repository, /if \(objectKey === "contacts"\)[\s\S]*"data"->>'contactMethods'/);
+  assert.match(repository, /if \(objectKey === "companies"\)[\s\S]*"data"->>'domain'/);
+});
+
 await run("service health payload exposes email readiness summary", async () => {
   const email = await checkEmailSubsystemDiagnostics({
     env: {

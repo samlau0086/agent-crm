@@ -3405,11 +3405,11 @@ export class PrismaCrmRepository {
     requirePermission(context, "crm.write");
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
-    const existing = await this.listRecordsForValidation(context, objectKey);
     const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data, await this.listRecordsForValidation(context, "currencies")) : input.data;
     if (objectKey === "quotes") {
       validateQuoteRecordData(data, await this.listRecordsForValidation(context, "products"));
     }
+    const existing = await this.listRecordsForUniqueValidation(context, objectKey, fields, data);
     validateRecordPayload(fields, data, existing);
     await this.assertRecordReferences(context, fields, data, true);
 
@@ -3454,7 +3454,7 @@ export class PrismaCrmRepository {
     if (objectKey === "quotes") {
       validateQuoteRecordData(nextData, await this.listRecordsForValidation(context, "products"));
     }
-    validateRecordPayload(fields, nextData, await this.listRecordsForValidation(context, objectKey), recordId);
+    validateRecordPayload(fields, nextData, await this.listRecordsForUniqueValidation(context, objectKey, fields, nextData, recordId), recordId);
     await this.assertRecordReferences(context, fields, nextData, true);
 
     const updated = await this.db.crmRecord.update({
@@ -4563,6 +4563,37 @@ export class PrismaCrmRepository {
     return records.map(mapRecord);
   }
 
+  private async listRecordsForUniqueValidation(
+    context: RequestContext,
+    objectKey: string,
+    fields: FieldDefinition[],
+    data: Record<string, unknown>,
+    currentRecordId?: string
+  ): Promise<CrmRecord[]> {
+    const uniqueClauses = fields
+      .filter((field) => field.unique && !isBlankValue(data[field.key]))
+      .map((field) => {
+        const column = recordJsonTextSql(field.key);
+        return Prisma.sql`(${column} IS NOT NULL AND ${column} <> '' AND lower(${column}) = lower(${String(data[field.key])}))`;
+      });
+
+    if (uniqueClauses.length === 0) {
+      return [];
+    }
+
+    const currentRecordFilter = currentRecordId ? Prisma.sql`AND "id" <> ${currentRecordId}` : Prisma.empty;
+    const records = await this.db.$queryRaw<Parameters<typeof mapRecord>[0][]>(Prisma.sql`
+      SELECT "id", "workspaceId", "objectKey", "title", "stageKey", "ownerId", "data", "createdAt", "updatedAt"
+      FROM "CrmRecord"
+      WHERE "workspaceId" = ${context.workspaceId}
+        AND "objectKey" = ${objectKey}
+        ${currentRecordFilter}
+        AND (${Prisma.join(uniqueClauses, " OR ")})
+    `);
+
+    return records.map(mapRecord);
+  }
+
   private async assertRelationCanBeDeleted(context: RequestContext, relation: RelationDefinition): Promise<void> {
     const fields = await this.listFieldDefinitions(context);
     const referenceFields = fields.filter(
@@ -4745,12 +4776,12 @@ export class PrismaCrmRepository {
     }
 
     for (const filter of filters) {
-      clauses.push(recordFilterSql(filter.field, filter.operator, filter.value));
+      clauses.push(recordFilterSql(objectKey, filter.field, filter.operator, filter.value));
     }
 
     const search = query.q?.trim();
     if (search) {
-      clauses.push(Prisma.sql`(lower("title") LIKE '%' || lower(${search}) || '%' OR lower("data"::text) LIKE '%' || lower(${search}) || '%')`);
+      clauses.push(recordSearchSql(objectKey, search));
     }
 
     return Prisma.sql`(${Prisma.join(clauses, " AND ")})`;
@@ -5390,7 +5421,7 @@ function sortDirectionSql(direction: "asc" | "desc"): Prisma.Sql {
   return direction === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
 }
 
-function recordFilterSql(field: string, operator: "contains" | "equals", value: string): Prisma.Sql {
+function recordFilterSql(objectKey: string, field: string, operator: "contains" | "equals", value: string): Prisma.Sql {
   const normalized = value.trim();
   if (field === "title" || field === "stageKey" || field === "ownerId") {
     const column = Prisma.raw(`"${field}"`);
@@ -5407,9 +5438,53 @@ function recordFilterSql(field: string, operator: "contains" | "equals", value: 
     return operator === "equals" ? Prisma.sql`${column} = ${parsed}` : Prisma.sql`${column} >= ${parsed}`;
   }
 
+  const column = recordJsonTextSql(field);
+  if (objectKey === "contacts" && field === "companyId" && operator === "equals") {
+    return Prisma.sql`${column} = ${normalized}`;
+  }
+
   return operator === "equals"
-    ? Prisma.sql`lower("data"->>${field}) = lower(${normalized})`
-    : Prisma.sql`lower("data"->>${field}) LIKE '%' || lower(${normalized}) || '%'`;
+    ? Prisma.sql`lower(${column}) = lower(${normalized})`
+    : Prisma.sql`lower(${column}) LIKE '%' || lower(${normalized}) || '%'`;
+}
+
+function recordSearchSql(objectKey: string, search: string): Prisma.Sql {
+  const clauses: Prisma.Sql[] = [Prisma.sql`lower("title") LIKE '%' || lower(${search}) || '%'`];
+
+  if (objectKey === "contacts") {
+    clauses.push(Prisma.sql`lower("data"->>'email') LIKE '%' || lower(${search}) || '%'`);
+    clauses.push(Prisma.sql`lower("data"->>'phone') LIKE '%' || lower(${search}) || '%'`);
+    clauses.push(Prisma.sql`lower("data"->>'contactMethods') LIKE '%' || lower(${search}) || '%'`);
+    return Prisma.sql`(${Prisma.join(clauses, " OR ")})`;
+  }
+
+  if (objectKey === "companies") {
+    clauses.push(Prisma.sql`lower("data"->>'domain') LIKE '%' || lower(${search}) || '%'`);
+    clauses.push(Prisma.sql`lower("data"->>'industry') LIKE '%' || lower(${search}) || '%'`);
+    return Prisma.sql`(${Prisma.join(clauses, " OR ")})`;
+  }
+
+  clauses.push(Prisma.sql`lower("data"::text) LIKE '%' || lower(${search}) || '%'`);
+  return Prisma.sql`(${Prisma.join(clauses, " OR ")})`;
+}
+
+function recordJsonTextSql(field: string): Prisma.Sql {
+  switch (field) {
+    case "companyId":
+      return Prisma.sql`"data"->>'companyId'`;
+    case "contactMethods":
+      return Prisma.sql`"data"->>'contactMethods'`;
+    case "domain":
+      return Prisma.sql`"data"->>'domain'`;
+    case "email":
+      return Prisma.sql`"data"->>'email'`;
+    case "industry":
+      return Prisma.sql`"data"->>'industry'`;
+    case "phone":
+      return Prisma.sql`"data"->>'phone'`;
+    default:
+      return Prisma.sql`"data"->>${field}`;
+  }
 }
 
 function recordOrderBySql(sort: RecordListQuery["sort"]): Prisma.Sql {
