@@ -2359,11 +2359,15 @@ await run("media library stores reusable images for product main images and emai
   assert.match(store, /deleteMediaAsset\(context: RequestContext/);
   assert.match(page, /repository\.listMediaAssets\(context\)/);
   assert.match(source, /async function uploadMediaAssets\(files: FileList \| File\[\] \| null\): Promise<MediaAsset\[\]>/);
+  assert.match(source, /contentType: file\.type \|\| "application\/octet-stream"/);
   assert.match(source, /async function updateMediaAsset/);
   assert.match(source, /async function deleteMediaAsset/);
   assert.match(source, /function MediaImageFieldInput/);
   assert.match(source, /field\.objectKey === "products" && field\.key === "mainImageUrl"/);
   assert.match(source, /function MediaLibraryModal/);
+  assert.match(source, /canSelectAsset\?: \(asset: MediaAsset\) => boolean/);
+  assert.match(source, /function MediaAssetPreview/);
+  assert.match(source, /function isImageMediaAsset/);
   assert.match(source, /testId="email-media-library-modal"/);
   assert.match(source, /testId=\{testId \? `\$\{testId\}-media-library-modal` : "record-media-library-modal"\}/);
   assert.match(source, /function insertMediaAssetInline\(asset: MediaAsset\)/);
@@ -2381,6 +2385,39 @@ await run("media library stores reusable images for product main images and emai
   assert.match(styles, /\.media-library-select/);
   assert.match(styles, /\.media-library-edit/);
   assert.match(styles, /\.media-field-preview/);
+  assert.match(styles, /\.media-file-preview/);
+});
+
+await run("activity records and product records support reusable file attachments", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const apiSchemas = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
+  const seed = readFileSync("src/lib/crm/seed.ts", "utf8");
+  const migration = readFileSync("prisma/migrations/20260627090000_product_attachments/migration.sql", "utf8");
+  assert.match(apiSchemas, /mediaAssetContentTypeSchema/);
+  assert.doesNotMatch(apiSchemas, /imageContentTypeSchema/);
+  assert.match(source, /type ActivityAttachment = TaskAttachment/);
+  assert.match(source, /function AttachmentPicker/);
+  assert.match(source, /serializeActivityDetails\(\{ text: body, attachments \}\)/);
+  assert.match(source, /function parseActivityDetails/);
+  assert.match(source, /function ProductAttachmentsFieldInput/);
+  assert.match(source, /field\.objectKey === "products" && field\.key === "attachments"/);
+  assert.match(source, /ContactFollowUpDialog[\s\S]*AttachmentPicker/);
+  assert.match(source, /ActivityList[\s\S]*TaskAttachmentPreview/);
+  assert.match(seed, /field-product-attachments/);
+  assert.match(seed, /key: "attachments"/);
+  assert.match(migration, /field-product-attachments-/);
+  assert.match(migration, /jsonb_set\("data", '\{attachments\}', '\[\]'::jsonb, true\)/);
+});
+
+await run("crm settings expose payment term option management", () => {
+  const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+  assert.match(settings, /const quotePaymentTermField = props\.fields\.find/);
+  assert.match(settings, /function PaymentTermAdminPanel/);
+  assert.match(settings, /data-testid="settings-payment-terms"/);
+  assert.match(settings, /data-testid="settings-payment-term-options"/);
+  assert.match(settings, /async function savePaymentTermOptions/);
+  assert.match(settings, /parseSelectOptionsText\(paymentTermOptionsText\)/);
+  assert.match(settings, /\/api\/field-definitions\/\$\{quotePaymentTermField\.id\}/);
 });
 
 await run("notification channels support bark webhook and email event delivery", () => {
@@ -7044,6 +7081,7 @@ await run("product and quote seed metadata supports company and contact associat
   assert.equal(objects.some((object) => object.key === "currencies" && object.isSystem), true);
   assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "mainImageUrl"), true);
   assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "unitPriceCurrency" && field.required), true);
+  assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "attachments" && field.type === "textarea"), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "quoteCurrency" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "companyId" && field.type === "reference" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "contactId" && field.type === "reference" && field.required), true);
@@ -7067,6 +7105,7 @@ await run("product and quote seed metadata supports company and contact associat
   const product = store.getRecord(context, "products", "product-ai-sales-standard");
   assert.equal(product.data.mainImageUrl, "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM");
   assert.equal(product.data.unitPriceCurrency, "CNY");
+  assert.deepEqual(product.data.attachments, []);
   const currencyDefinitions = getCurrencyDefinitions(store.listRecords(context, "currencies"));
   assert.equal(currencyDefinitions.some((currency) => currency.code === "CNY" && currency.isBase), true);
   assert.equal(currencyDefinitions.some((currency) => currency.code === "USD" && currency.rateToBase === 7.2), true);

@@ -871,6 +871,15 @@ button {
   background: var(--surface-strong);
 }
 
+.task-attachment-item > svg {
+  width: 54px;
+  height: 42px;
+  padding: 11px 16px;
+  border-radius: 7px;
+  background: #eef2ff;
+  color: var(--muted);
+}
+
 .task-attachment-item strong,
 .task-attachment-item span {
   display: block;
@@ -2222,6 +2231,25 @@ button {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.media-file-preview {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  gap: 6px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.media-file-preview span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .media-library-modal {

@@ -18,7 +18,12 @@ const optionalIdSchema = z
   .union([z.string().min(1), z.literal(""), z.null()])
   .optional()
   .transform((value) => value || undefined);
-const imageContentTypeSchema = z.enum(["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]);
+const mediaAssetContentTypeSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .regex(/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/i, "contentType must be a valid MIME type");
 
 export const fieldTypeSchema = z.enum(["text", "textarea", "number", "currency", "date", "select", "boolean", "user", "reference"]);
 
@@ -773,7 +778,7 @@ export const knowledgeArticleUpdateSchema = knowledgeArticleCreateSchema.partial
 
 const mediaAssetPayloadSchema = z.object({
   name: labelSchema.max(200),
-  contentType: imageContentTypeSchema,
+  contentType: mediaAssetContentTypeSchema,
   size: z.number().int().min(1).max(MAX_MEDIA_ASSET_BYTES),
   contentBase64: z.string().trim().min(1).refine(isValidEmailAttachmentBase64, {
     message: "contentBase64 must be valid base64"

@@ -186,6 +186,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [notificationChannelDraft, setNotificationChannelDraft] = useState<NotificationChannelDraft>(emptyNotificationChannelDraft());
   const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
+  const [paymentTermOptionsText, setPaymentTermOptionsText] = useState("");
   const [createdWebhookSecret, setCreatedWebhookSecret] = useState<string | null>(null);
   const [webhookDeliveries, setWebhookDeliveries] = useState<WebhookDelivery[]>([]);
   const [backupFiles, setBackupFiles] = useState<BackupFile[]>(props.backupFiles);
@@ -248,6 +249,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     [auditActionFilter, auditActorFilter, auditEntityFilter, auditObjectFilter, auditQuery]
   );
   const fieldObject = props.objects.find((object) => object.key === fieldDraft.objectKey);
+  const quotePaymentTermField = props.fields.find((field) => field.objectKey === "quotes" && field.key === "paymentTerm");
 
   function showToast(nextToast: ToastState) {
     setToast(nextToast);
@@ -317,6 +319,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   useEffect(() => {
     setCurrencyDraft(selectedCurrency ? currencyDraftFromRecord(selectedCurrency) : emptyCurrencyDraft());
   }, [selectedCurrency]);
+
+  useEffect(() => {
+    setPaymentTermOptionsText(quotePaymentTermField ? formatFieldOptions(quotePaymentTermField) : "");
+  }, [quotePaymentTermField]);
 
   useEffect(() => {
     if (!canManage || !webhookDeliveryWebhookId) {
@@ -919,6 +925,27 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     resetCurrencyForm();
   }
 
+  async function savePaymentTermOptions() {
+    if (!quotePaymentTermField) {
+      throw new Error("未找到报价 Payment term 字段");
+    }
+    const options = parseSelectOptionsText(paymentTermOptionsText);
+    if (!options.length) {
+      throw new Error("Payment term 至少需要一个可选项");
+    }
+    await fetchJson(`/api/field-definitions/${quotePaymentTermField.id}`, {
+      method: "PATCH",
+      body: {
+        label: quotePaymentTermField.label,
+        required: quotePaymentTermField.required,
+        unique: quotePaymentTermField.unique,
+        options,
+        position: quotePaymentTermField.position
+      }
+    });
+    setMessage("Payment term 选项已更新");
+  }
+
   async function deleteCurrency() {
     if (!selectedCurrency) return;
     if (selectedCurrency.data.isBase === true) {
@@ -1013,18 +1040,27 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       ) : null}
 
       {activeSettingsTab === "crm" ? (
-        <CurrencyAdminPanel
-          currencies={currencyRecords}
-          draft={currencyDraft}
-          selectedCurrencyId={selectedCurrencyId}
-          selectedCurrency={selectedCurrency}
-          isPending={isPending}
-          onSelectCurrency={setSelectedCurrencyId}
-          onDraftChange={(patch) => setCurrencyDraft((current) => ({ ...current, ...patch }))}
-          onNew={resetCurrencyForm}
-          onSave={() => runAction(saveCurrency)}
-          onDelete={() => runAction(deleteCurrency)}
-        />
+        <div className="settings-tab-panel" role="tabpanel">
+          <CurrencyAdminPanel
+            currencies={currencyRecords}
+            draft={currencyDraft}
+            selectedCurrencyId={selectedCurrencyId}
+            selectedCurrency={selectedCurrency}
+            isPending={isPending}
+            onSelectCurrency={setSelectedCurrencyId}
+            onDraftChange={(patch) => setCurrencyDraft((current) => ({ ...current, ...patch }))}
+            onNew={resetCurrencyForm}
+            onSave={() => runAction(saveCurrency)}
+            onDelete={() => runAction(deleteCurrency)}
+          />
+          <PaymentTermAdminPanel
+            field={quotePaymentTermField}
+            isPending={isPending}
+            optionsText={paymentTermOptionsText}
+            onChange={setPaymentTermOptionsText}
+            onSave={() => runAction(savePaymentTermOptions)}
+          />
+        </div>
       ) : null}
 
       {activeSettingsTab === "integrations" ? (
@@ -2327,6 +2363,53 @@ function CurrencyAdminPanel({
   );
 }
 
+function PaymentTermAdminPanel({
+  field,
+  isPending,
+  optionsText,
+  onChange,
+  onSave
+}: {
+  field?: FieldDefinition;
+  isPending: boolean;
+  optionsText: string;
+  onChange: (value: string) => void;
+  onSave: () => void;
+}) {
+  return (
+    <section className="settings-panel" data-testid="settings-payment-terms">
+      <div className="settings-panel-header">
+        <div>
+          <h2 className="page-title">Payment term</h2>
+          <div className="subtle">配置报价里的付款条件下拉选项。每行一个选项，格式为 label:value。</div>
+        </div>
+      </div>
+      {field ? (
+        <>
+          <label className="wide">
+            <span className="subtle">选项</span>
+            <textarea
+              className="textarea"
+              data-testid="settings-payment-term-options"
+              value={optionsText}
+              onChange={(event) => onChange(event.target.value)}
+              placeholder={"见票即付:due_on_receipt\nNet 30:net_30"}
+            />
+          </label>
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <button className="primary-button" data-testid="settings-save-payment-terms" type="button" onClick={onSave} disabled={isPending || !optionsText.trim()}>
+              <Save size={16} />
+              保存 Payment term
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="empty-state">未找到 quotes.paymentTerm 字段，请先在对象字段中恢复该字段。</div>
+      )}
+    </section>
+  );
+}
+
 function ApiKeyAdminPanel({
   apiKeys,
   users,
@@ -3561,7 +3644,11 @@ function parseFieldOptions(draft: FieldDraft, objects: ObjectDefinition[]) {
     return undefined;
   }
 
-  return draft.optionsText
+  return parseSelectOptionsText(draft.optionsText);
+}
+
+function parseSelectOptionsText(text: string) {
+  return text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)

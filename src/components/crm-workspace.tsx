@@ -361,16 +361,25 @@ type TaskAttachment = {
   contentType: string;
   size: number;
 };
-type TaskDetailsPayload = {
-  format: "task.v1";
+type ActivityAttachment = TaskAttachment;
+type ActivityDetailsPayload = {
+  format: "activity.v1" | "task.v1";
   text: string;
-  attachments: TaskAttachment[];
+  attachments: ActivityAttachment[];
+};
+type TaskDetailsPayload = ActivityDetailsPayload;
+type RecordActivityComposerInput = {
+  type: Activity["type"];
+  title: string;
+  body?: string;
+  dueAt?: string;
+  attachments?: ActivityAttachment[];
 };
 type TaskEditDraft = {
   title: string;
   dueAt: string;
   text: string;
-  attachments: TaskAttachment[];
+  attachments: ActivityAttachment[];
 };
 type KnowledgeArticleDraft = {
   editingArticleId?: string;
@@ -2776,7 +2785,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       method,
       recordId: record.id,
       recordTitle: record.title,
-      message: ""
+      message: "",
+      attachments: []
     });
   }
 
@@ -2826,10 +2836,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       recordId: contactFollowUpDraft.recordId,
       type: contactFollowUpDraft.channel === "call" ? "call" : "note",
       title: `${contactFollowUpDraft.channel === "call" ? "电话跟进" : "WhatsApp 跟进"}：${contactFollowUpDraft.recordTitle}`,
-      body: [
-        `联系方式：${contactMethodTypeLabels[contactFollowUpDraft.method.type]} ${contactFollowUpDraft.method.value}`,
-        messageText
-      ].join("\n\n")
+      body: serializeActivityDetails({
+        text: [
+          `联系方式：${contactMethodTypeLabels[contactFollowUpDraft.method.type]} ${contactFollowUpDraft.method.value}`,
+          messageText
+        ].join("\n\n"),
+        attachments: contactFollowUpDraft.attachments
+      })
     });
     if (contactFollowUpDraft.channel === "whatsapp") {
       const whatsappUrl = buildContactMethodUrl("whatsapp", contactFollowUpDraft.method.value);
@@ -3442,13 +3455,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function uploadMediaAssets(files: FileList | File[] | null): Promise<MediaAsset[]> {
-    const imageFiles = Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
-    if (!imageFiles.length) {
-      showToast({ intent: "info", message: "请选择图片文件。" });
+    const uploadFiles = Array.from(files ?? []);
+    if (!uploadFiles.length) {
+      showToast({ intent: "info", message: "请选择文件。" });
       return [];
     }
     const createdAssets: MediaAsset[] = [];
-    for (const file of imageFiles.slice(0, 10)) {
+    for (const file of uploadFiles.slice(0, 10)) {
       if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
         showToast({ intent: "error", message: `${file.name} 超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}，已跳过。` });
         continue;
@@ -3457,7 +3470,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         method: "POST",
         body: {
           name: file.name,
-          contentType: file.type || "image/png",
+          contentType: file.type || "application/octet-stream",
           size: file.size,
           contentBase64: await readFileAsBase64(file)
         }
@@ -3466,7 +3479,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     if (createdAssets.length) {
       setMediaAssets((current) => mergeMediaAssets(createdAssets, current));
-      showSuccess(`已上传 ${createdAssets.length} 张图片到媒体库`);
+      showSuccess(`已上传 ${createdAssets.length} 个文件到媒体库`);
     }
     return createdAssets;
   }
@@ -3477,14 +3490,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: patch
     });
     setMediaAssets((current) => mergeMediaAssets([updated], current.filter((asset) => asset.id !== updated.id)));
-    showSuccess(`媒体图片已更新：${updated.name}`);
+    showSuccess(`媒体文件已更新：${updated.name}`);
   }
 
   async function deleteMediaAsset(asset: MediaAsset) {
     if (
       !(await requestConfirm({
-        title: "删除媒体图片",
-        message: `确定从媒体库删除“${asset.name}”？已经使用该图片的记录不会自动清空。`,
+        title: "删除媒体文件",
+        message: `确定从媒体库删除“${asset.name}”？已经使用该文件的记录不会自动清空。`,
         confirmLabel: "删除",
         danger: true
       }))
@@ -3493,7 +3506,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     await fetchJson(`/api/media-assets/${asset.id}`, { method: "DELETE" });
     setMediaAssets((current) => current.filter((candidate) => candidate.id !== asset.id));
-    showSuccess(`媒体图片已删除：${asset.name}`);
+    showSuccess(`媒体文件已删除：${asset.name}`);
   }
 
   function runAction(action: () => Promise<void>) {
@@ -4250,7 +4263,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             bodyPlaceholder="任务说明、需要准备的资料或下一步动作"
                             dateLabel="截止日期"
                             isPending={isPending}
+                            mediaAssets={mediaAssets}
                             testIdPrefix="record-task"
+                            onUploadMediaAssets={uploadMediaAssets}
                             onSubmit={(input) =>
                               runAction(async () => {
                                 await createRecordActivity({ recordId: selectedRecord.id, ...input });
@@ -4291,7 +4306,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             titlePlaceholder="例如：客户偏好 / 背景补充"
                             bodyPlaceholder="记录沟通背景、需求、风险或内部观察"
                             isPending={isPending}
+                            mediaAssets={mediaAssets}
                             testIdPrefix="record-note"
+                            onUploadMediaAssets={uploadMediaAssets}
                             onSubmit={(input) =>
                               runAction(async () => {
                                 await createRecordActivity({ recordId: selectedRecord.id, ...input });
@@ -4305,6 +4322,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <ActivityList
                           activities={selectedNotes}
                           emptyMessage="暂无备注"
+                          mediaAssets={mediaAssets}
                           testIdPrefix="record-note"
                           renderMeta={(activity) => (
                             <>
@@ -4329,7 +4347,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             titlePlaceholder="例如：电话确认预算"
                             bodyPlaceholder="记录电话结论、异议、承诺事项"
                             isPending={isPending}
+                            mediaAssets={mediaAssets}
                             testIdPrefix="record-call"
+                            onUploadMediaAssets={uploadMediaAssets}
                             onSubmit={(input) =>
                               runAction(async () => {
                                 await createRecordActivity({ recordId: selectedRecord.id, ...input });
@@ -4343,6 +4363,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <ActivityList
                           activities={selectedCalls}
                           emptyMessage="暂无电话记录"
+                          mediaAssets={mediaAssets}
                           testIdPrefix="record-call"
                           renderMeta={(activity) => (
                             <>
@@ -4368,7 +4389,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             bodyPlaceholder="记录会议结论、参会人、待办事项"
                             dateLabel="会议日期"
                             isPending={isPending}
+                            mediaAssets={mediaAssets}
                             testIdPrefix="record-meeting"
+                            onUploadMediaAssets={uploadMediaAssets}
                             onSubmit={(input) =>
                               runAction(async () => {
                                 await createRecordActivity({ recordId: selectedRecord.id, ...input });
@@ -4382,6 +4405,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <ActivityList
                           activities={selectedMeetings}
                           emptyMessage="暂无会议记录"
+                          mediaAssets={mediaAssets}
                           testIdPrefix="record-meeting"
                           renderMeta={(activity) => (
                             <>
@@ -4400,6 +4424,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       <ActivityList
                         activities={selectedActivities}
                         emptyMessage="暂无活动"
+                        mediaAssets={mediaAssets}
                         testIdPrefix="record-activity"
                         renderMeta={(activity) => (
                           <>
@@ -4706,7 +4731,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onShowToast={showToast}
           />
         )}
-        {activeNav === "activities" && <ActivityTimeline activities={activities} records={records} />}
+        {activeNav === "activities" && <ActivityTimeline activities={activities} mediaAssets={mediaAssets} records={records} />}
         {activeNav === "settings" && (
           <SettingsAdmin
             role={props.role}
@@ -4733,10 +4758,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       <ContactFollowUpDialog
         draft={contactFollowUpDraft}
         generating={isContactFollowUpGenerating}
+        mediaAssets={mediaAssets}
         onCancel={() => setContactFollowUpDraft(null)}
+        onAttachmentsChange={(attachments) => setContactFollowUpDraft((current) => (current ? { ...current, attachments } : current))}
         onChange={(messageText) => setContactFollowUpDraft((current) => (current ? { ...current, message: messageText } : current))}
         onGenerate={() => runAction(generateContactFollowUpMessage)}
         onSubmit={() => runAction(submitContactFollowUp)}
+        onUploadMediaAssets={uploadMediaAssets}
       />
       <ToastViewport toast={toast ?? (error ? { intent: "error", message: error } : message ? { intent: "success", message } : null)} onDismiss={() => { setToast(null); setMessage(null); setError(null); }} />
       <ConfirmDialog
@@ -4839,17 +4867,23 @@ function PromptDialog({
 function ContactFollowUpDialog({
   draft,
   generating,
+  mediaAssets,
   onCancel,
+  onAttachmentsChange,
   onChange,
   onGenerate,
-  onSubmit
+  onSubmit,
+  onUploadMediaAssets
 }: {
   draft: ContactFollowUpDraft | null;
   generating: boolean;
+  mediaAssets: MediaAsset[];
   onCancel: () => void;
+  onAttachmentsChange: (attachments: ActivityAttachment[]) => void;
   onChange: (message: string) => void;
   onGenerate: () => void;
   onSubmit: () => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
 }) {
   if (!draft) {
     return null;
@@ -4878,6 +4912,15 @@ function ContactFollowUpDialog({
             placeholder={draft.channel === "whatsapp" ? "输入要发送给客户的 WhatsApp 初始消息" : "输入电话跟进计划、沟通重点或完成后的跟进记录"}
           />
         </label>
+        <AttachmentPicker
+          attachments={draft.attachments}
+          disabled={generating}
+          label="跟进附件"
+          mediaAssets={mediaAssets}
+          onChange={onAttachmentsChange}
+          onUploadMediaAssets={onUploadMediaAssets}
+          testIdPrefix="contact-follow-up-attachment"
+        />
         <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 12 }}>
           <button className="secondary-button" data-testid="contact-follow-up-ai-generate" type="button" onClick={onGenerate} disabled={generating}>
             <Bot className={generating ? "spin-icon" : undefined} size={16} />
@@ -7559,6 +7602,8 @@ function EmailWorkspace({
 
         {mediaLibraryOpen ? (
           <MediaLibraryModal
+            accept="image/*"
+            canSelectAsset={isImageMediaAsset}
             description="选择图片插入邮件正文，或上传新图片供产品主图和邮件复用。"
             disabled={disabled}
             mediaAssets={mediaAssets}
@@ -8378,7 +8423,7 @@ function TaskView({
     closeTaskEditor();
   }
 
-  async function uploadTaskImages(files: FileList | File[] | null) {
+  async function uploadTaskAttachments(files: FileList | File[] | null) {
     setIsUploadingTaskImage(true);
     try {
       const uploaded = await onUploadMediaAssets(files);
@@ -8389,7 +8434,7 @@ function TaskView({
         }));
       }
     } catch (error) {
-      onShowToast({ intent: "error", message: error instanceof Error ? error.message : "图片上传失败" });
+      onShowToast({ intent: "error", message: error instanceof Error ? error.message : "附件上传失败" });
     } finally {
       setIsUploadingTaskImage(false);
     }
@@ -8532,7 +8577,7 @@ function TaskView({
             }))
           }
           onSave={saveTaskEdit}
-          onUploadImages={uploadTaskImages}
+          onUploadImages={uploadTaskAttachments}
         />
       )}
     </section>
@@ -8678,7 +8723,7 @@ function TaskEditDialog({
         <div className="drawer-header">
           <div>
             <h2 className="page-title" style={{ fontSize: 18 }}>编辑任务</h2>
-            <p className="subtle">修改标题、截止时间、备注，并添加图片附件。</p>
+            <p className="subtle">修改标题、截止时间、备注，并添加附件。</p>
           </div>
           <button className="icon-button" aria-label="关闭编辑任务" type="button" onClick={onCancel}>
             <XCircle size={18} />
@@ -8706,16 +8751,15 @@ function TaskEditDialog({
         </div>
         <div className="task-attachment-panel">
           <div className="toolbar between">
-            <strong>图片附件</strong>
+            <strong>附件</strong>
             <div className="toolbar">
               <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-                <ImageIcon size={16} />
-                {isUploading ? "上传中" : "上传图片"}
+                <Upload size={16} />
+                {isUploading ? "上传中" : "上传附件"}
               </button>
               <input
                 ref={fileInputRef}
                 hidden
-                accept="image/*"
                 multiple
                 type="file"
                 onChange={(event) => {
@@ -8730,12 +8774,12 @@ function TaskEditDialog({
             <div className="media-picker-strip task-media-picker" data-testid="task-edit-media-library">
               {mediaAssets.slice(0, 16).map((asset) => (
                 <button key={asset.id} type="button" onClick={() => onAddMediaAsset(asset)} title={asset.name}>
-                  <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
+                  <MediaAssetPreview asset={asset} />
                 </button>
               ))}
             </div>
           ) : (
-            <div className="subtle">媒体库暂无图片，可先上传。</div>
+            <div className="subtle">媒体库暂无文件，可先上传。</div>
           )}
         </div>
         <div className="toolbar" style={{ justifyContent: "flex-end" }}>
@@ -8768,7 +8812,7 @@ function TaskAttachmentPreview({
         const asset = mediaAssets.find((candidate) => candidate.id === attachment.mediaAssetId);
         return (
           <div className="task-attachment-item" key={attachment.id}>
-            {asset ? <img alt={attachment.name} src={mediaAssetDataUrl(asset)} /> : <Paperclip size={18} />}
+            {asset && isImageMediaAsset(asset) ? <img alt={attachment.name} src={mediaAssetDataUrl(asset)} /> : <Paperclip size={18} />}
             <div>
               <strong>{attachment.name}</strong>
               <span className="subtle">{attachment.contentType} · {formatBytes(attachment.size)}</span>
@@ -9039,7 +9083,7 @@ function formatCalendarDateTime(date: Date): string {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-function ActivityTimeline({ activities, records }: { activities: Activity[]; records: CrmRecord[] }) {
+function ActivityTimeline({ activities, mediaAssets, records }: { activities: Activity[]; mediaAssets: MediaAsset[]; records: CrmRecord[] }) {
   const sortedActivities = [...activities].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 
   return (
@@ -9048,6 +9092,7 @@ function ActivityTimeline({ activities, records }: { activities: Activity[]; rec
       <ActivityList
         activities={sortedActivities}
         emptyMessage="暂无活动"
+        mediaAssets={mediaAssets}
         testIdPrefix="activity-view-activity"
         renderMeta={(activity) => (
           <>
@@ -9059,13 +9104,6 @@ function ActivityTimeline({ activities, records }: { activities: Activity[]; rec
     </section>
   );
 }
-
-type RecordActivityComposerInput = {
-  type: Activity["type"];
-  title: string;
-  body?: string;
-  dueAt?: string;
-};
 
 function RecordSectionHeader({
   title,
@@ -9095,7 +9133,9 @@ function RecordActivityComposer({
   bodyPlaceholder,
   dateLabel,
   isPending,
+  mediaAssets,
   testIdPrefix,
+  onUploadMediaAssets,
   onSubmit
 }: {
   type: Activity["type"];
@@ -9104,12 +9144,15 @@ function RecordActivityComposer({
   bodyPlaceholder: string;
   dateLabel?: string;
   isPending: boolean;
+  mediaAssets: MediaAsset[];
   testIdPrefix: string;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
   onSubmit: (input: RecordActivityComposerInput) => void;
 }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [dueAt, setDueAt] = useState("");
+  const [attachments, setAttachments] = useState<ActivityAttachment[]>([]);
   const requiresDueAt = type === "task";
   const showsDueAt = Boolean(dateLabel);
   const canSubmit = Boolean(title.trim()) && (!requiresDueAt || Boolean(dueAt));
@@ -9122,12 +9165,13 @@ function RecordActivityComposer({
     onSubmit({
       type,
       title: title.trim(),
-      body: body.trim() || undefined,
+      body: type === "task" ? serializeTaskDetails({ text: body, attachments }) : serializeActivityDetails({ text: body, attachments }),
       dueAt: showsDueAt && dueAt ? dueAt : undefined
     });
     setTitle("");
     setBody("");
     setDueAt("");
+    setAttachments([]);
   }
 
   return (
@@ -9148,6 +9192,15 @@ function RecordActivityComposer({
           <textarea className="textarea" data-testid={`${testIdPrefix}-body`} value={body} onChange={(event) => setBody(event.target.value)} placeholder={bodyPlaceholder} />
         </label>
       </div>
+      <AttachmentPicker
+        attachments={attachments}
+        disabled={isPending}
+        label="附件"
+        mediaAssets={mediaAssets}
+        onChange={setAttachments}
+        onUploadMediaAssets={onUploadMediaAssets}
+        testIdPrefix={`${testIdPrefix}-attachment`}
+      />
       <div className="toolbar" style={{ marginTop: 10 }}>
         <button className="secondary-button" data-testid={`${testIdPrefix}-submit`} type="button" onClick={submit} disabled={isPending || !canSubmit}>
           <Save size={16} />
@@ -9158,14 +9211,75 @@ function RecordActivityComposer({
   );
 }
 
+function AttachmentPicker({
+  attachments,
+  disabled,
+  label,
+  mediaAssets,
+  onChange,
+  onUploadMediaAssets,
+  testIdPrefix
+}: {
+  attachments: ActivityAttachment[];
+  disabled?: boolean;
+  label: string;
+  mediaAssets: MediaAsset[];
+  onChange: (attachments: ActivityAttachment[]) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  testIdPrefix: string;
+}) {
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+
+  function addAsset(asset: MediaAsset) {
+    onChange(appendUniqueTaskAttachment(attachments, taskAttachmentFromMediaAsset(asset)));
+  }
+
+  return (
+    <div className="task-attachment-panel" data-testid={`${testIdPrefix}-panel`}>
+      <div className="toolbar between">
+        <strong>{label}</strong>
+        <button className="secondary-button" data-testid={`${testIdPrefix}-open`} type="button" onClick={() => setMediaLibraryOpen(true)} disabled={disabled}>
+          <Paperclip size={16} />
+          添加附件
+        </button>
+      </div>
+      <TaskAttachmentPreview
+        attachments={attachments}
+        mediaAssets={mediaAssets}
+        onRemove={(attachmentId) => onChange(attachments.filter((attachment) => attachment.id !== attachmentId))}
+      />
+      {!attachments.length ? <div className="subtle">可添加压缩包、文档、图片、视频等附件。</div> : null}
+      {mediaLibraryOpen ? (
+        <MediaLibraryModal
+          description="选择已有媒体文件，或拖拽上传压缩包、文档、图片、视频等附件。"
+          disabled={disabled}
+          mediaAssets={mediaAssets}
+          onClose={() => setMediaLibraryOpen(false)}
+          onSelect={(asset) => {
+            addAsset(asset);
+            setMediaLibraryOpen(false);
+          }}
+          onUploadMediaAssets={onUploadMediaAssets}
+          selectFirstUploaded
+          selectLabel="添加"
+          testId={`${testIdPrefix}-media-library-modal`}
+          title="添加附件"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function ActivityList({
   activities,
   emptyMessage,
+  mediaAssets = [],
   testIdPrefix,
   renderMeta
 }: {
   activities: Activity[];
   emptyMessage: string;
+  mediaAssets?: MediaAsset[];
   testIdPrefix?: string;
   renderMeta: (activity: Activity) => ReactNode;
 }) {
@@ -9176,12 +9290,14 @@ function ActivityList({
   return (
     <div className="activity-list" style={{ marginTop: 12 }}>
       {activities.map((activity) => {
-        const body = activity.type === "task" ? parseTaskDetails(activity.body).text : activity.body;
+        const details = parseActivityDetails(activity.body);
+        const body = details.text;
         return (
           <div className="activity-item" data-testid={testIdPrefix ? `${testIdPrefix}-${activity.id}` : undefined} key={activity.id}>
             <div className="activity-meta">{renderMeta(activity)}</div>
             <strong>{activity.title}</strong>
             {body && <div className="subtle">{body}</div>}
+            <TaskAttachmentPreview attachments={details.attachments} mediaAssets={mediaAssets} />
           </div>
         );
       })}
@@ -10277,7 +10393,22 @@ function TalkAboutThisPanel({
   );
 }
 
+function MediaAssetPreview({ asset }: { asset: MediaAsset }) {
+  if (isImageMediaAsset(asset)) {
+    return <img alt={asset.name} src={mediaAssetDataUrl(asset)} />;
+  }
+
+  return (
+    <div className="media-file-preview">
+      <Paperclip size={22} />
+      <span>{mediaAssetExtension(asset.name) || asset.contentType}</span>
+    </div>
+  );
+}
+
 function MediaLibraryModal({
+  accept,
+  canSelectAsset,
   description,
   disabled,
   mediaAssets,
@@ -10291,6 +10422,8 @@ function MediaLibraryModal({
   testId,
   title
 }: {
+  accept?: string;
+  canSelectAsset?: (asset: MediaAsset) => boolean;
   description: string;
   disabled?: boolean;
   mediaAssets: MediaAsset[];
@@ -10310,11 +10443,13 @@ function MediaLibraryModal({
   const [editingAssetId, setEditingAssetId] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const editingAsset = mediaAssets.find((asset) => asset.id === editingAssetId);
+  const visibleMediaAssets = canSelectAsset ? mediaAssets.filter(canSelectAsset) : mediaAssets;
 
   async function uploadFiles(files: FileList | File[] | null) {
     const uploaded = await onUploadMediaAssets(files);
-    if (selectFirstUploaded && uploaded[0]) {
-      onSelect(uploaded[0]);
+    const selectableUploaded = canSelectAsset ? uploaded.find(canSelectAsset) : uploaded[0];
+    if (selectFirstUploaded && selectableUploaded) {
+      onSelect(selectableUploaded);
     }
   }
 
@@ -10323,12 +10458,12 @@ function MediaLibraryModal({
     if (!editingAsset || !file || !onUpdateMediaAsset) {
       return;
     }
-    if (!file.type.startsWith("image/") || file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
+    if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
       return;
     }
     onUpdateMediaAsset(editingAsset.id, {
       name: nameDraft.trim() || file.name,
-      contentType: file.type || "image/png",
+      contentType: file.type || "application/octet-stream",
       size: file.size,
       contentBase64: await readFileAsBase64(file)
     });
@@ -10374,16 +10509,16 @@ function MediaLibraryModal({
           }}
         >
           <Upload size={24} />
-          <strong>拖拽图片到这里</strong>
-          <span className="subtle">或从本地选择图片，上传后可复用于产品、联系人、公司和邮件。</span>
+          <strong>拖拽文件到这里</strong>
+          <span className="subtle">或从本地选择文件，上传后可复用于产品、联系人、公司、邮件和活动附件。</span>
           <button className="secondary-button" type="button" onClick={() => uploadInputRef.current?.click()} disabled={disabled}>
-            <ImageIcon size={16} />
-            上传图片
+            <Upload size={16} />
+            上传文件
           </button>
           <input
             ref={uploadInputRef}
             hidden
-            accept="image/*"
+            accept={accept}
             multiple
             type="file"
             onChange={(event) => {
@@ -10394,7 +10529,7 @@ function MediaLibraryModal({
           <input
             ref={replaceInputRef}
             hidden
-            accept="image/*"
+            accept={accept}
             type="file"
             onChange={(event) => {
               void replaceEditingAsset(event.target.files);
@@ -10402,12 +10537,12 @@ function MediaLibraryModal({
             }}
           />
         </div>
-        {mediaAssets.length ? (
+        {visibleMediaAssets.length ? (
           <div className="media-library-grid">
-            {mediaAssets.map((asset) => (
+            {visibleMediaAssets.map((asset) => (
               <div className="media-library-card" key={asset.id}>
                 <button className="media-library-select" type="button" onClick={() => onSelect(asset)}>
-                  <img alt={asset.name} src={mediaAssetDataUrl(asset)} />
+                  <MediaAssetPreview asset={asset} />
                 </button>
                 {editingAssetId === asset.id ? (
                   <div className="media-library-edit">
@@ -10469,7 +10604,7 @@ function MediaLibraryModal({
             ))}
           </div>
         ) : (
-          <div className="empty-state">媒体库暂无图片</div>
+          <div className="empty-state">媒体库暂无可选文件</div>
         )}
       </div>
     </div>
@@ -10528,6 +10663,8 @@ function MediaImageFieldInput({
       </div>
       {mediaLibraryOpen ? (
         <MediaLibraryModal
+          accept="image/*"
+          canSelectAsset={isImageMediaAsset}
           description="选择图片作为当前字段，也可拖拽上传新图片并统一管理。"
           disabled={!onUploadMediaAssets}
           mediaAssets={mediaAssets}
@@ -10545,6 +10682,36 @@ function MediaImageFieldInput({
           title={`${label}媒体库`}
         />
       ) : null}
+    </div>
+  );
+}
+
+function ProductAttachmentsFieldInput({
+  label,
+  mediaAssets,
+  testId,
+  value,
+  onChange,
+  onUploadMediaAssets
+}: {
+  label: string;
+  mediaAssets: MediaAsset[];
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+}) {
+  const attachments = parseAttachmentListValue(value);
+  return (
+    <div className="wide" data-testid={testId}>
+      <AttachmentPicker
+        attachments={attachments}
+        label={label}
+        mediaAssets={mediaAssets}
+        onChange={(nextAttachments) => onChange(JSON.stringify(nextAttachments))}
+        onUploadMediaAssets={onUploadMediaAssets}
+        testIdPrefix={testId ? `${testId}-product-attachment` : "product-attachment"}
+      />
     </div>
   );
 }
@@ -10589,6 +10756,19 @@ function FieldInput({
         onUploadMediaAssets={onUploadMediaAssets}
         onUpdateMediaAsset={onUpdateMediaAsset}
         onDeleteMediaAsset={onDeleteMediaAsset}
+      />
+    );
+  }
+
+  if (field.objectKey === "products" && field.key === "attachments") {
+    return (
+      <ProductAttachmentsFieldInput
+        label={field.label}
+        mediaAssets={mediaAssets}
+        onChange={onChange}
+        onUploadMediaAssets={onUploadMediaAssets ?? (async () => [])}
+        testId={testId}
+        value={value}
       />
     );
   }
@@ -11299,6 +11479,7 @@ type ContactFollowUpDraft = {
   recordId: string;
   recordTitle: string;
   message: string;
+  attachments: ActivityAttachment[];
 };
 
 const contactMethodsValueKey = "__contactMethods";
@@ -12411,6 +12592,9 @@ function toInputValue(value: unknown): string {
   if (typeof value === "boolean") {
     return value ? "true" : "false";
   }
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(value);
+  }
 
   return String(value);
 }
@@ -12443,6 +12627,10 @@ function parseFormValues(fields: FieldDefinition[], values: Record<string, strin
     data.lineItems = lineItems;
     data.fees = fees;
     data.totalAmount = totals.totalAmount;
+  }
+
+  if (objectKey === "products") {
+    data.attachments = parseAttachmentListValue(values.attachments);
   }
 
   if (objectKey === "contacts") {
@@ -12521,23 +12709,36 @@ function displayValue(field: FieldDefinition | undefined, value: unknown, record
   return String(value ?? "-");
 }
 
-function parseTaskDetails(body?: string): TaskDetailsPayload {
+function parseActivityDetails(body?: string): ActivityDetailsPayload {
   if (!body) {
-    return { format: "task.v1", text: "", attachments: [] };
+    return { format: "activity.v1", text: "", attachments: [] };
   }
   try {
-    const parsed = JSON.parse(body) as Partial<TaskDetailsPayload>;
-    if (parsed?.format === "task.v1") {
+    const parsed = JSON.parse(body) as Partial<ActivityDetailsPayload>;
+    if (parsed?.format === "task.v1" || parsed?.format === "activity.v1") {
       return {
-        format: "task.v1",
+        format: parsed.format,
         text: typeof parsed.text === "string" ? parsed.text : "",
-        attachments: Array.isArray(parsed.attachments) ? parsed.attachments.filter(isTaskAttachment) : []
+        attachments: Array.isArray(parsed.attachments) ? parsed.attachments.filter(isActivityAttachment) : []
       };
     }
   } catch {
-    // Existing task bodies were plain text before task attachments were introduced.
+    // Existing activity bodies were plain text before attachments were introduced.
   }
-  return { format: "task.v1", text: body, attachments: [] };
+  return { format: "activity.v1", text: body, attachments: [] };
+}
+
+function parseTaskDetails(body?: string): TaskDetailsPayload {
+  return parseActivityDetails(body);
+}
+
+function serializeActivityDetails(input: Pick<ActivityDetailsPayload, "text" | "attachments">): string | undefined {
+  const text = input.text.trim();
+  const attachments = input.attachments.filter(isActivityAttachment);
+  if (!text && !attachments.length) {
+    return undefined;
+  }
+  return JSON.stringify({ format: "activity.v1", text, attachments } satisfies ActivityDetailsPayload);
 }
 
 function serializeTaskDetails(input: Pick<TaskDetailsPayload, "text" | "attachments">): string | undefined {
@@ -12547,6 +12748,21 @@ function serializeTaskDetails(input: Pick<TaskDetailsPayload, "text" | "attachme
     return undefined;
   }
   return JSON.stringify({ format: "task.v1", text, attachments } satisfies TaskDetailsPayload);
+}
+
+function parseAttachmentListValue(value: unknown): ActivityAttachment[] {
+  if (Array.isArray(value)) {
+    return value.filter(isActivityAttachment);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isActivityAttachment) : [];
+  } catch {
+    return [];
+  }
 }
 
 function createTaskEditDraft(activity: Activity | null): TaskEditDraft {
@@ -12559,7 +12775,7 @@ function createTaskEditDraft(activity: Activity | null): TaskEditDraft {
   };
 }
 
-function taskAttachmentFromMediaAsset(asset: MediaAsset): TaskAttachment {
+function taskAttachmentFromMediaAsset(asset: MediaAsset): ActivityAttachment {
   return {
     id: `${asset.id}-${Date.now()}`,
     mediaAssetId: asset.id,
@@ -12569,18 +12785,18 @@ function taskAttachmentFromMediaAsset(asset: MediaAsset): TaskAttachment {
   };
 }
 
-function appendUniqueTaskAttachment(attachments: TaskAttachment[], attachment: TaskAttachment): TaskAttachment[] {
+function appendUniqueTaskAttachment(attachments: ActivityAttachment[], attachment: ActivityAttachment): ActivityAttachment[] {
   if (attachments.some((candidate) => candidate.mediaAssetId === attachment.mediaAssetId)) {
     return attachments;
   }
   return [...attachments, attachment];
 }
 
-function isTaskAttachment(value: unknown): value is TaskAttachment {
+function isActivityAttachment(value: unknown): value is ActivityAttachment {
   if (!value || typeof value !== "object") {
     return false;
   }
-  const candidate = value as TaskAttachment;
+  const candidate = value as ActivityAttachment;
   return (
     typeof candidate.id === "string" &&
     typeof candidate.mediaAssetId === "string" &&
@@ -12588,6 +12804,19 @@ function isTaskAttachment(value: unknown): value is TaskAttachment {
     typeof candidate.contentType === "string" &&
     typeof candidate.size === "number"
   );
+}
+
+function isTaskAttachment(value: unknown): value is TaskAttachment {
+  return isActivityAttachment(value);
+}
+
+function isImageMediaAsset(asset: Pick<MediaAsset, "contentType">): boolean {
+  return asset.contentType.toLowerCase().startsWith("image/");
+}
+
+function mediaAssetExtension(name: string): string {
+  const extension = name.split(".").pop()?.trim();
+  return extension && extension !== name ? extension.toUpperCase() : "";
 }
 
 function toDateTimeLocalValue(value?: string): string {

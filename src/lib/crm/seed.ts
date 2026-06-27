@@ -163,6 +163,7 @@ export const seedData: CrmSnapshot = {
     { id: "field-product-description", workspaceId: defaultWorkspaceId, objectKey: "products", key: "description", label: "默认描述", type: "textarea", required: false, unique: false, isSystem: true, position: 5 },
     { id: "field-product-billing-cycle", workspaceId: defaultWorkspaceId, objectKey: "products", key: "billingCycle", label: "计费周期", type: "select", required: false, unique: false, options: [{ label: "一次性", value: "one_time" }, { label: "月付", value: "monthly" }, { label: "年付", value: "annual" }], isSystem: true, position: 6 },
     { id: "field-product-active", workspaceId: defaultWorkspaceId, objectKey: "products", key: "active", label: "启用", type: "boolean", required: false, unique: false, defaultValue: true, isSystem: true, position: 7 },
+    { id: "field-product-attachments", workspaceId: defaultWorkspaceId, objectKey: "products", key: "attachments", label: "附件", type: "textarea", required: false, unique: false, defaultValue: [], isSystem: true, position: 8 },
     { id: "field-quote-number", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "quoteNumber", label: "报价编号", type: "text", required: true, unique: true, isSystem: true, position: 1 },
     { id: "field-quote-company", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "companyId", label: "关联公司", type: "reference", required: true, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 2 },
     { id: "field-quote-contact", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "contactId", label: "关联联系人", type: "reference", required: true, unique: false, options: [{ label: "联系人", value: "contacts" }], isSystem: true, position: 3 },
@@ -255,7 +256,7 @@ export const seedData: CrmSnapshot = {
       objectKey: "products",
       title: "AI 销售助手标准版",
       ownerId: salesUserId,
-      data: { sku: "SKU-AI-SALES-STD", mainImageUrl: "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM", unitPrice: 2999, unitPriceCurrency: "CNY", description: "年度订阅，包含销售邮件 AI 辅助、CRM 时间线和基础自动化。", billingCycle: "annual", active: true },
+      data: { sku: "SKU-AI-SALES-STD", mainImageUrl: "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM", unitPrice: 2999, unitPriceCurrency: "CNY", description: "年度订阅，包含销售邮件 AI 辅助、CRM 时间线和基础自动化。", billingCycle: "annual", active: true, attachments: [] },
       createdAt: now,
       updatedAt: now
     },
