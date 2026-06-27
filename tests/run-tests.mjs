@@ -1957,6 +1957,22 @@ await run("contact and company lists render avatar and logo media fields", () =>
   assert.match(styles, /\.record-list-logo/);
 });
 
+await run("contact detail uses a social profile layout instead of a flat form", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /selectedRecord\.objectKey === "contacts" \? \(/);
+  assert.match(source, /<ContactProfileEditor/);
+  assert.match(source, /data-testid="contact-profile-layout"/);
+  assert.match(source, /function ContactProfileEditor/);
+  assert.match(source, /function ContactAvatarEditor/);
+  assert.match(source, /ContactMethodsEditor[\s\S]*showContactMethodEditor/);
+  assert.match(styles, /\.contact-profile-layout/);
+  assert.match(styles, /\.contact-profile-hero/);
+  assert.match(styles, /\.contact-profile-avatar/);
+  assert.match(styles, /\.contact-profile-grid/);
+});
+
 await run("workspace exposes product and quote modules as first-class crm objects", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /key: "products", label: "产品", icon: Package/);

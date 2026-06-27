@@ -3903,6 +3903,33 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 </h3>
                 {selectedRecord ? (
                   <>
+                    {selectedRecord.objectKey === "contacts" ? (
+                      <ContactProfileEditor
+                        allRecords={records}
+                        canManageOwners={canManageViews}
+                        contactMethodValue={editValues[contactMethodsValueKey] ?? ""}
+                        fields={selectedFormFields}
+                        isPending={isPending}
+                        mediaAssets={mediaAssets}
+                        ownerId={editOwnerId}
+                        record={selectedRecord}
+                        title={editTitle}
+                        users={props.users}
+                        values={editValues}
+                        onContactMethodsChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
+                        onDelete={() => runAction(submitDeleteRecord)}
+                        onOwnerChange={setEditOwnerId}
+                        onRecordsLoaded={mergeLoadedRecords}
+                        onSave={() => runAction(submitUpdateRecord)}
+                        onTitleChange={setEditTitle}
+                        onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                        onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
+                        onUploadMediaAssets={uploadMediaAssets}
+                        onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
+                        showContactMethodEditor={selectedRecordQuickContactMethods.length === 0}
+                      />
+                    ) : (
+                    <>
                     <div className="form-grid" style={{ marginTop: 12 }}>
                       <label className="wide">
                         <span className="subtle">名称</span>
@@ -4029,6 +4056,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         </button>
                       )}
                     </div>
+                    </>
+                    )}
 
                     {selectedRecordQuickContactMethods.length > 0 ? (
                       <>
@@ -11460,6 +11489,247 @@ function ProductThumbnail({ imageUrl, title }: { imageUrl: unknown; title: strin
       {src ? null : <Package size={18} />}
     </div>
   );
+}
+
+function ContactProfileEditor({
+  allRecords,
+  canManageOwners,
+  contactMethodValue,
+  fields,
+  isPending,
+  mediaAssets,
+  ownerId,
+  record,
+  showContactMethodEditor,
+  title,
+  users,
+  values,
+  onContactMethodsChange,
+  onDelete,
+  onDeleteMediaAsset,
+  onOwnerChange,
+  onRecordsLoaded,
+  onSave,
+  onTitleChange,
+  onUpdateMediaAsset,
+  onUploadMediaAssets,
+  onValueChange
+}: {
+  allRecords: CrmRecord[];
+  canManageOwners: boolean;
+  contactMethodValue: string;
+  fields: FieldDefinition[];
+  isPending: boolean;
+  mediaAssets: MediaAsset[];
+  ownerId: string;
+  record: CrmRecord;
+  showContactMethodEditor: boolean;
+  title: string;
+  users: User[];
+  values: Record<string, string>;
+  onContactMethodsChange: (methods: ContactMethodDraft[]) => void;
+  onDelete: () => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
+  onOwnerChange: (ownerId: string) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+  onSave: () => void;
+  onTitleChange: (title: string) => void;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  onValueChange: (fieldKey: string, value: string) => void;
+}) {
+  const avatarField = fields.find((field) => field.key === "avatarUrl");
+  const companyField = fields.find((field) => field.key === "companyId");
+  const detailFields = fields.filter((field) => field.key !== "avatarUrl" && field.key !== "companyId");
+  const primaryEmail = getPrimaryRecordEmail({ ...record, title, data: { ...record.data, ...values } });
+  const company = typeof values.companyId === "string" ? allRecords.find((candidate) => candidate.id === values.companyId) : undefined;
+
+  return (
+    <div className="contact-profile-layout" data-testid="contact-profile-layout">
+      <section className="contact-profile-hero">
+        <div className="contact-profile-cover" />
+        <div className="contact-profile-main">
+          <ContactAvatarEditor
+            mediaAssets={mediaAssets}
+            name={title || record.title}
+            value={avatarField ? values[avatarField.key] ?? "" : ""}
+            onChange={(nextValue) => avatarField ? onValueChange(avatarField.key, nextValue) : undefined}
+            onDeleteMediaAsset={onDeleteMediaAsset}
+            onUpdateMediaAsset={onUpdateMediaAsset}
+            onUploadMediaAssets={onUploadMediaAssets}
+          />
+          <div className="contact-profile-identity">
+            <label>
+              <span className="subtle">名称</span>
+              <input className="input contact-profile-name-input" data-testid="edit-record-title" value={title} onChange={(event) => onTitleChange(event.target.value)} />
+            </label>
+            <div className="contact-profile-summary">
+              {company ? <span>{company.title}</span> : null}
+              {primaryEmail ? <span>{primaryEmail}</span> : null}
+              <span>{users.find((user) => user.id === ownerId)?.name ?? "未分配负责人"}</span>
+            </div>
+          </div>
+          <div className="contact-profile-actions">
+            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
+              <Save size={16} />
+              保存
+            </button>
+            <button className="danger-button" type="button" onClick={onDelete} disabled={isPending}>
+              <Trash2 size={16} />
+              删除
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div className="contact-profile-grid">
+        <section className="contact-profile-card">
+          <div className="stage-header">
+            <div>
+              <strong>Profile</strong>
+              <div className="subtle">联系人身份、归属公司与负责人。</div>
+            </div>
+          </div>
+          <div className="form-grid contact-profile-form">
+            {companyField ? (
+              <FieldInput
+                allRecords={allRecords}
+                field={companyField}
+                mediaAssets={mediaAssets}
+                onChange={(nextValue) => onValueChange(companyField.key, nextValue)}
+                onRecordsLoaded={onRecordsLoaded}
+                testId={`edit-field-${record.objectKey}-${companyField.key}`}
+                users={users}
+                value={values[companyField.key] ?? ""}
+              />
+            ) : null}
+            <OwnerSelect
+              disabled={!canManageOwners}
+              testId="edit-record-owner"
+              users={users}
+              value={ownerId}
+              onChange={onOwnerChange}
+            />
+          </div>
+        </section>
+
+        <section className="contact-profile-card">
+          <div className="stage-header">
+            <div>
+              <strong>About</strong>
+              <div className="subtle">生日、性别、地址和其他联系人属性。</div>
+            </div>
+          </div>
+          <div className="form-grid contact-profile-form">
+            {detailFields.map((field) => (
+              <FieldInput
+                allRecords={allRecords}
+                field={field}
+                key={`contact-profile-${field.id}`}
+                mediaAssets={mediaAssets}
+                onChange={(nextValue) => onValueChange(field.key, nextValue)}
+                onDeleteMediaAsset={onDeleteMediaAsset}
+                onRecordsLoaded={onRecordsLoaded}
+                onUpdateMediaAsset={onUpdateMediaAsset}
+                onUploadMediaAssets={onUploadMediaAssets}
+                testId={`edit-field-${record.objectKey}-${field.key}`}
+                users={users}
+                value={values[field.key] ?? ""}
+              />
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {showContactMethodEditor ? (
+        <ContactMethodsEditor
+          testIdPrefix="edit-contact-method"
+          value={contactMethodValue}
+          onChange={onContactMethodsChange}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ContactAvatarEditor({
+  mediaAssets,
+  name,
+  value,
+  onChange,
+  onDeleteMediaAsset,
+  onUpdateMediaAsset,
+  onUploadMediaAssets
+}: {
+  mediaAssets: MediaAsset[];
+  name: string;
+  value: string;
+  onChange: (value: string) => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+}) {
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+  const safeValue = value.trim();
+  const initials = contactInitials(name);
+
+  return (
+    <div className="contact-avatar-editor">
+      <button
+        className="contact-profile-avatar"
+        style={safeValue ? { backgroundImage: `url("${safeValue.replace(/"/g, "%22")}")` } : undefined}
+        type="button"
+        onClick={() => setMediaLibraryOpen(true)}
+        aria-label="选择联系人头像"
+      >
+        {safeValue ? null : initials}
+      </button>
+      <div className="toolbar compact-toolbar">
+        <button className="secondary-button" type="button" onClick={() => setMediaLibraryOpen(true)}>
+          <ImageIcon size={15} />
+          更换头像
+        </button>
+        {safeValue ? (
+          <button className="secondary-button" type="button" onClick={() => onChange("")}>
+            <XCircle size={15} />
+            清除
+          </button>
+        ) : null}
+      </div>
+      {mediaLibraryOpen ? (
+        <MediaLibraryModal
+          accept="image/*"
+          canSelectAsset={isImageMediaAsset}
+          description="选择图片作为联系人头像，也可拖拽上传新图片。"
+          mediaAssets={mediaAssets}
+          onClose={() => setMediaLibraryOpen(false)}
+          onDeleteMediaAsset={onDeleteMediaAsset}
+          onSelect={(asset) => {
+            onChange(mediaAssetDataUrl(asset));
+            setMediaLibraryOpen(false);
+          }}
+          onUpdateMediaAsset={onUpdateMediaAsset}
+          onUploadMediaAssets={onUploadMediaAssets}
+          selectFirstUploaded
+          selectLabel="使用"
+          testId="contact-avatar-media-library-modal"
+          title="头像媒体库"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function contactInitials(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "?";
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
+  }
+  return trimmed.slice(0, 2).toUpperCase();
 }
 
 type ContactMethodType = "email" | "whatsapp" | "mob" | "tel" | "wechat" | "linkedin" | "instagram" | "facebook" | "x" | "website" | "other";
