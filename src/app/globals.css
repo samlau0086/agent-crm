@@ -665,7 +665,7 @@ button {
 }
 
 .contact-profile-summary span:not(:last-child)::after {
-  content: "·";
+  content: ".";
   margin-left: 8px;
   color: var(--muted);
 }
@@ -693,6 +693,31 @@ button {
 
 .contact-profile-form {
   margin-top: 12px;
+}
+
+.company-profile-cover {
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(15, 118, 110, 0.14)),
+    linear-gradient(0deg, #f8fafc, #f8fafc);
+}
+
+.company-profile-logo {
+  border-radius: 18px;
+  background-color: #ecfeff;
+}
+
+.company-profile-grid {
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+}
+
+.company-profile-addresses {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.company-profile-addresses .settings-card {
+  background: var(--surface);
 }
 
 @media (max-width: 900px) {

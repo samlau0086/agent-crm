@@ -1973,6 +1973,23 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(styles, /\.contact-profile-grid/);
 });
 
+await run("company detail uses the same profile layout pattern as contacts", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /selectedRecord\.objectKey === "companies" \? \(/);
+  assert.match(source, /<CompanyProfileEditor/);
+  assert.match(source, /data-testid="company-profile-layout"/);
+  assert.match(source, /function CompanyProfileEditor/);
+  assert.match(source, /function CompanyLogoEditor/);
+  assert.match(source, /<CompanyPrimaryContactSelect[\s\S]*primaryContactId/);
+  assert.match(source, /<CompanyAddressCards[\s\S]*testIdPrefix="edit-company-billing-address"/);
+  assert.match(source, /<CompanyAddressCards[\s\S]*testIdPrefix="edit-company-shipping-address"/);
+  assert.match(styles, /\.company-profile-cover/);
+  assert.match(styles, /\.company-profile-logo/);
+  assert.match(styles, /\.company-profile-addresses/);
+});
+
 await run("workspace exposes product and quote modules as first-class crm objects", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /key: "products", label: "产品", icon: Package/);

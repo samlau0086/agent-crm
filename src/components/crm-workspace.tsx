@@ -3928,6 +3928,54 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
                         showContactMethodEditor={selectedRecordQuickContactMethods.length === 0}
                       />
+                    ) : selectedRecord.objectKey === "companies" ? (
+                      <CompanyProfileEditor
+                        allRecords={records}
+                        billingAddressEditingId={companyAddressEditing?.valueKey === companyBillingAddressesValueKey ? companyAddressEditing.addressId : ""}
+                        billingAddressValue={editValues[companyBillingAddressesValueKey] ?? ""}
+                        canManageOwners={canManageViews}
+                        contacts={selectedCompanyContacts}
+                        fields={selectedFormFields}
+                        isPending={isPending}
+                        mediaAssets={mediaAssets}
+                        ownerId={editOwnerId}
+                        primaryContactId={editValues[companyPrimaryContactValueKey] ?? ""}
+                        record={selectedRecord}
+                        shippingAddressEditingId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
+                        shippingAddressValue={editValues[companyShippingAddressesValueKey] ?? ""}
+                        title={editTitle}
+                        users={props.users}
+                        values={editValues}
+                        onAddBillingAddress={() => setCompanyAddressEditing({ valueKey: companyBillingAddressesValueKey, addressId: createCompanyAddressId() })}
+                        onAddShippingAddress={() => setCompanyAddressEditing({ valueKey: companyShippingAddressesValueKey, addressId: createCompanyAddressId() })}
+                        onBillingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
+                        onCancelAddressEdit={() => setCompanyAddressEditing(null)}
+                        onDelete={() => runAction(submitDeleteRecord)}
+                        onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
+                        onEditBillingAddress={(addressId) =>
+                          setCompanyAddressEditing((current) =>
+                            current?.valueKey === companyBillingAddressesValueKey && current.addressId === addressId
+                              ? null
+                              : { valueKey: companyBillingAddressesValueKey, addressId }
+                          )
+                        }
+                        onEditShippingAddress={(addressId) =>
+                          setCompanyAddressEditing((current) =>
+                            current?.valueKey === companyShippingAddressesValueKey && current.addressId === addressId
+                              ? null
+                              : { valueKey: companyShippingAddressesValueKey, addressId }
+                          )
+                        }
+                        onOwnerChange={setEditOwnerId}
+                        onPrimaryContactChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
+                        onRecordsLoaded={mergeLoadedRecords}
+                        onSave={() => runAction(submitUpdateRecord)}
+                        onShippingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
+                        onTitleChange={setEditTitle}
+                        onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                        onUploadMediaAssets={uploadMediaAssets}
+                        onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
+                      />
                     ) : (
                     <>
                     <div className="form-grid" style={{ marginTop: 12 }}>
@@ -11646,6 +11694,265 @@ function ContactProfileEditor({
           testIdPrefix="edit-contact-method"
           value={contactMethodValue}
           onChange={onContactMethodsChange}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CompanyProfileEditor({
+  allRecords,
+  billingAddressEditingId,
+  billingAddressValue,
+  canManageOwners,
+  contacts,
+  fields,
+  isPending,
+  mediaAssets,
+  ownerId,
+  primaryContactId,
+  record,
+  shippingAddressEditingId,
+  shippingAddressValue,
+  title,
+  users,
+  values,
+  onAddBillingAddress,
+  onAddShippingAddress,
+  onBillingAddressesChange,
+  onCancelAddressEdit,
+  onDelete,
+  onDeleteMediaAsset,
+  onEditBillingAddress,
+  onEditShippingAddress,
+  onOwnerChange,
+  onPrimaryContactChange,
+  onRecordsLoaded,
+  onSave,
+  onShippingAddressesChange,
+  onTitleChange,
+  onUpdateMediaAsset,
+  onUploadMediaAssets,
+  onValueChange
+}: {
+  allRecords: CrmRecord[];
+  billingAddressEditingId: string;
+  billingAddressValue: string;
+  canManageOwners: boolean;
+  contacts: CrmRecord[];
+  fields: FieldDefinition[];
+  isPending: boolean;
+  mediaAssets: MediaAsset[];
+  ownerId: string;
+  primaryContactId: string;
+  record: CrmRecord;
+  shippingAddressEditingId: string;
+  shippingAddressValue: string;
+  title: string;
+  users: User[];
+  values: Record<string, string>;
+  onAddBillingAddress: () => void;
+  onAddShippingAddress: () => void;
+  onBillingAddressesChange: (addresses: CompanyAddressDraft[]) => void;
+  onCancelAddressEdit: () => void;
+  onDelete: () => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
+  onEditBillingAddress: (addressId: string) => void;
+  onEditShippingAddress: (addressId: string) => void;
+  onOwnerChange: (ownerId: string) => void;
+  onPrimaryContactChange: (contactId: string) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+  onSave: () => void;
+  onShippingAddressesChange: (addresses: CompanyAddressDraft[]) => void;
+  onTitleChange: (title: string) => void;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  onValueChange: (fieldKey: string, value: string) => void;
+}) {
+  const logoField = fields.find((field) => field.key === "logoUrl");
+  const detailFields = fields.filter((field) => field.key !== "logoUrl");
+  const primaryContact = contacts.find((contact) => contact.id === primaryContactId) ?? contacts[0];
+  const domain = typeof values.domain === "string" ? values.domain.trim() : "";
+  const industry = typeof values.industry === "string" ? values.industry.trim() : "";
+
+  return (
+    <div className="contact-profile-layout company-profile-layout" data-testid="company-profile-layout">
+      <section className="contact-profile-hero company-profile-hero">
+        <div className="contact-profile-cover company-profile-cover" />
+        <div className="contact-profile-main">
+          <CompanyLogoEditor
+            mediaAssets={mediaAssets}
+            name={title || record.title}
+            value={logoField ? values[logoField.key] ?? "" : ""}
+            onChange={(nextValue) => logoField ? onValueChange(logoField.key, nextValue) : undefined}
+            onDeleteMediaAsset={onDeleteMediaAsset}
+            onUpdateMediaAsset={onUpdateMediaAsset}
+            onUploadMediaAssets={onUploadMediaAssets}
+          />
+          <div className="contact-profile-identity">
+            <label>
+              <span className="subtle">公司名称</span>
+              <input className="input contact-profile-name-input" data-testid="edit-record-title" value={title} onChange={(event) => onTitleChange(event.target.value)} />
+            </label>
+            <div className="contact-profile-summary">
+              {domain ? <span>{domain}</span> : null}
+              {industry ? <span>{industry}</span> : null}
+              {primaryContact ? <span>主联系人 {formatEmailContactLabel(primaryContact, getPrimaryRecordEmail(primaryContact))}</span> : null}
+              <span>{users.find((user) => user.id === ownerId)?.name ?? "未分配负责人"}</span>
+            </div>
+          </div>
+          <div className="contact-profile-actions">
+            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
+              <Save size={16} />
+              保存
+            </button>
+            <button className="danger-button" type="button" onClick={onDelete} disabled={isPending}>
+              <Trash2 size={16} />
+              删除
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div className="contact-profile-grid company-profile-grid">
+        <section className="contact-profile-card">
+          <div className="stage-header">
+            <div>
+              <strong>Company Profile</strong>
+              <div className="subtle">公司基础信息、行业、域名与负责人。</div>
+            </div>
+          </div>
+          <div className="form-grid contact-profile-form">
+            <OwnerSelect
+              disabled={!canManageOwners}
+              testId="edit-record-owner"
+              users={users}
+              value={ownerId}
+              onChange={onOwnerChange}
+            />
+            {detailFields.map((field) => (
+              <FieldInput
+                allRecords={allRecords}
+                field={field}
+                key={`company-profile-${field.id}`}
+                mediaAssets={mediaAssets}
+                onChange={(nextValue) => onValueChange(field.key, nextValue)}
+                onDeleteMediaAsset={onDeleteMediaAsset}
+                onRecordsLoaded={onRecordsLoaded}
+                onUpdateMediaAsset={onUpdateMediaAsset}
+                onUploadMediaAssets={onUploadMediaAssets}
+                testId={`edit-field-${record.objectKey}-${field.key}`}
+                users={users}
+                value={values[field.key] ?? ""}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section className="contact-profile-card">
+          <div className="stage-header">
+            <div>
+              <strong>Contacts & Addresses</strong>
+              <div className="subtle">主联系人、账单地址和收货地址。</div>
+            </div>
+          </div>
+          <div className="form-grid contact-profile-form">
+            <CompanyPrimaryContactSelect
+              contacts={contacts}
+              value={primaryContactId}
+              onChange={onPrimaryContactChange}
+            />
+          </div>
+          <div className="company-profile-addresses">
+            <CompanyAddressCards
+              title="Billing address"
+              testIdPrefix="edit-company-billing-address"
+              value={billingAddressValue}
+              editingAddressId={billingAddressEditingId}
+              onAdd={onAddBillingAddress}
+              onEdit={onEditBillingAddress}
+              onCancel={onCancelAddressEdit}
+              onChange={onBillingAddressesChange}
+            />
+            <CompanyAddressCards
+              title="Shipping address"
+              testIdPrefix="edit-company-shipping-address"
+              value={shippingAddressValue}
+              editingAddressId={shippingAddressEditingId}
+              onAdd={onAddShippingAddress}
+              onEdit={onEditShippingAddress}
+              onCancel={onCancelAddressEdit}
+              onChange={onShippingAddressesChange}
+            />
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function CompanyLogoEditor({
+  mediaAssets,
+  name,
+  value,
+  onChange,
+  onDeleteMediaAsset,
+  onUpdateMediaAsset,
+  onUploadMediaAssets
+}: {
+  mediaAssets: MediaAsset[];
+  name: string;
+  value: string;
+  onChange: (value: string) => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+}) {
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+  const safeValue = value.trim();
+  const initials = contactInitials(name);
+
+  return (
+    <div className="contact-avatar-editor">
+      <button
+        className="contact-profile-avatar company-profile-logo"
+        style={safeValue ? { backgroundImage: `url("${safeValue.replace(/"/g, "%22")}")` } : undefined}
+        type="button"
+        onClick={() => setMediaLibraryOpen(true)}
+        aria-label="选择公司 Logo"
+      >
+        {safeValue ? null : initials}
+      </button>
+      <div className="toolbar compact-toolbar">
+        <button className="secondary-button" type="button" onClick={() => setMediaLibraryOpen(true)}>
+          <ImageIcon size={15} />
+          更换 Logo
+        </button>
+        {safeValue ? (
+          <button className="secondary-button" type="button" onClick={() => onChange("")}>
+            <XCircle size={15} />
+            清除
+          </button>
+        ) : null}
+      </div>
+      {mediaLibraryOpen ? (
+        <MediaLibraryModal
+          accept="image/*"
+          canSelectAsset={isImageMediaAsset}
+          description="选择图片作为公司 Logo，也可拖拽上传新图片。"
+          mediaAssets={mediaAssets}
+          onClose={() => setMediaLibraryOpen(false)}
+          onDeleteMediaAsset={onDeleteMediaAsset}
+          onSelect={(asset) => {
+            onChange(mediaAssetDataUrl(asset));
+            setMediaLibraryOpen(false);
+          }}
+          onUpdateMediaAsset={onUpdateMediaAsset}
+          onUploadMediaAssets={onUploadMediaAssets}
+          selectFirstUploaded
+          selectLabel="使用"
+          testId="company-logo-media-library-modal"
+          title="Logo 媒体库"
         />
       ) : null}
     </div>
