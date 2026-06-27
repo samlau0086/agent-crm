@@ -2333,6 +2333,12 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /event\.key === "ArrowDown"/);
   assert.match(source, /event\.key === "Tab" \|\| event\.key === "Enter"/);
   assert.match(source, /contactByEmail=\{contactByEmail\}/);
+  assert.match(source, /const \[composeCcVisible, setComposeCcVisible\] = useState\(false\)/);
+  assert.match(source, /const \[composeBccVisible, setComposeBccVisible\] = useState\(false\)/);
+  assert.match(source, /data-testid="email-compose-show-cc"[\s\S]*setComposeCcVisible\(true\)/);
+  assert.match(source, /data-testid="email-compose-show-bcc"[\s\S]*setComposeBccVisible\(true\)/);
+  assert.match(source, /\{composeCcVisible \? \([\s\S]*testId="email-compose-cc"[\s\S]*\) : null\}/);
+  assert.match(source, /\{composeBccVisible \? \([\s\S]*testId="email-compose-bcc"[\s\S]*\) : null\}/);
   assert.doesNotMatch(source, /data-testid="email-open-ai"/);
   assert.match(source, /data-testid="email-compose-signature"/);
   assert.match(source, /data-testid="email-signature-preview"/);
@@ -2345,6 +2351,8 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(styles, /\.email-recipient-input/);
   assert.match(styles, /\.email-recipient-token/);
   assert.match(styles, /\.email-recipient-suggestions/);
+  assert.match(styles, /\.email-compose-recipient-row/);
+  assert.match(styles, /\.email-compose-recipient-toggles/);
   assert.match(styles, /\.email-attachment-dropzone/);
 });
 

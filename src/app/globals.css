@@ -223,6 +223,23 @@ button {
   background: var(--accent-strong);
 }
 
+.text-button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 5px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.text-button:hover {
+  text-decoration: underline;
+}
+
 .danger-button {
   color: var(--danger);
 }
@@ -2129,6 +2146,20 @@ button {
 .email-compose-grid {
   display: grid;
   gap: 10px;
+}
+
+.email-compose-recipient-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.email-compose-recipient-toggles {
+  display: flex;
+  gap: 4px;
+  padding-top: 22px;
+  white-space: nowrap;
 }
 
 .email-compose-ai-bar {

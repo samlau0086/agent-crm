@@ -5369,6 +5369,8 @@ function EmailWorkspace({
   const [existingContactId, setExistingContactId] = useState("");
   const [existingContactPickerOpen, setExistingContactPickerOpen] = useState(false);
   const [composeAiPrompt, setComposeAiPrompt] = useState("");
+  const [composeCcVisible, setComposeCcVisible] = useState(false);
+  const [composeBccVisible, setComposeBccVisible] = useState(false);
   const [aiProviderApiKeyDraft, setAiProviderApiKeyDraft] = useState("");
   const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
@@ -5738,6 +5740,15 @@ function EmailWorkspace({
   }, [composeOpenRequestKey]);
 
   useEffect(() => {
+    if (emailDraft.cc.trim()) {
+      setComposeCcVisible(true);
+    }
+    if (emailDraft.bcc.trim()) {
+      setComposeBccVisible(true);
+    }
+  }, [emailDraft.bcc, emailDraft.cc]);
+
+  useEffect(() => {
     const editor = composeEditorRef.current;
     if (!editor || !composeOpen || composeMinimized || document.activeElement === editor) {
       return;
@@ -5766,6 +5777,8 @@ function EmailWorkspace({
     if (accountId && accountId !== emailDraft.accountId) {
       onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId }));
     }
+    setComposeCcVisible(Boolean(emailDraft.cc.trim()));
+    setComposeBccVisible(Boolean(emailDraft.bcc.trim()));
     setComposeOpen(true);
     setComposeMinimized(false);
     window.setTimeout(() => {
@@ -5776,6 +5789,12 @@ function EmailWorkspace({
   function closeComposePopup() {
     setComposeOpen(false);
     setComposeMinimized(false);
+    if (!emailDraft.cc.trim()) {
+      setComposeCcVisible(false);
+    }
+    if (!emailDraft.bcc.trim()) {
+      setComposeBccVisible(false);
+    }
     onComposeClosed();
   }
 
@@ -7499,30 +7518,48 @@ function EmailWorkspace({
                       ))}
                     </select>
                   </label>
-                  <EmailRecipientInput
-                    label="收件人"
-                    testId="email-compose-to"
-                    value={emailDraft.to}
-                    contactByEmail={contactByEmail}
-                    placeholder="buyer@example.com"
-                    onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: nextValue }))}
-                  />
-                  <EmailRecipientInput
-                    label="CC"
-                    testId="email-compose-cc"
-                    value={emailDraft.cc}
-                    contactByEmail={contactByEmail}
-                    placeholder="manager@example.com"
-                    onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: nextValue }))}
-                  />
-                  <EmailRecipientInput
-                    label="BCC"
-                    testId="email-compose-bcc"
-                    value={emailDraft.bcc}
-                    contactByEmail={contactByEmail}
-                    placeholder="archive@example.com"
-                    onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: nextValue }))}
-                  />
+                  <div className="email-compose-recipient-row">
+                    <EmailRecipientInput
+                      label="收件人"
+                      testId="email-compose-to"
+                      value={emailDraft.to}
+                      contactByEmail={contactByEmail}
+                      placeholder="buyer@example.com"
+                      onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, to: nextValue }))}
+                    />
+                    <div className="email-compose-recipient-toggles">
+                      {!composeCcVisible ? (
+                        <button className="text-button" data-testid="email-compose-show-cc" type="button" onClick={() => setComposeCcVisible(true)}>
+                          CC
+                        </button>
+                      ) : null}
+                      {!composeBccVisible ? (
+                        <button className="text-button" data-testid="email-compose-show-bcc" type="button" onClick={() => setComposeBccVisible(true)}>
+                          BCC
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {composeCcVisible ? (
+                    <EmailRecipientInput
+                      label="CC"
+                      testId="email-compose-cc"
+                      value={emailDraft.cc}
+                      contactByEmail={contactByEmail}
+                      placeholder="manager@example.com"
+                      onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, cc: nextValue }))}
+                    />
+                  ) : null}
+                  {composeBccVisible ? (
+                    <EmailRecipientInput
+                      label="BCC"
+                      testId="email-compose-bcc"
+                      value={emailDraft.bcc}
+                      contactByEmail={contactByEmail}
+                      placeholder="archive@example.com"
+                      onChange={(nextValue) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, bcc: nextValue }))}
+                    />
+                  ) : null}
                   <label>
                     <span className="subtle">主题</span>
                     <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
