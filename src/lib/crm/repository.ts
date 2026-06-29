@@ -3917,8 +3917,17 @@ export class PrismaCrmRepository {
   async deleteRecord(context: RequestContext, objectKey: string, recordId: string): Promise<void> {
     requirePermission(context, "crm.write");
     const record = await this.getRecord(context, objectKey, recordId);
-    await this.db.activity.deleteMany({ where: { recordId } });
-    await this.db.crmRecord.delete({ where: { id: recordId } });
+    await this.db.$transaction(async (tx) => {
+      await tx.emailThread.updateMany({
+        where: { workspaceId: context.workspaceId, recordId },
+        data: { recordId: null }
+      });
+      await tx.talkMessage.deleteMany({
+        where: { workspaceId: context.workspaceId, targetType: "record", objectKey, recordId }
+      });
+      await tx.activity.deleteMany({ where: { workspaceId: context.workspaceId, recordId } });
+      await tx.crmRecord.delete({ where: { id: recordId, workspaceId: context.workspaceId, objectKey } });
+    });
     await this.writeAuditLog(context, "delete", "record", recordId, {
       objectKey,
       summary: `Deleted ${objectKey} record ${record.title}`,

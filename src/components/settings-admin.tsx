@@ -907,11 +907,25 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }
 
   async function reviewRecordChangeRequest(request: RecordChangeRequest, decision: "approve" | "reject") {
-    const reviewNote =
+    const actionLabel = request.action === "delete" ? "删除" : "修改";
+    const confirmed = await requestConfirm(
       decision === "reject"
-        ? await requestConfirm({ title: "拒绝审批", message: `确定拒绝“${request.recordTitle}”的${request.action === "delete" ? "删除" : "修改"}申请？`, confirmLabel: "拒绝", danger: true })
-        : await requestConfirm({ title: "通过审批", message: `确定通过“${request.recordTitle}”的${request.action === "delete" ? "删除" : "修改"}申请？`, confirmLabel: "通过" });
-    if (!reviewNote) return;
+        ? {
+            title: "拒绝审批",
+            message: `确定拒绝“${request.recordTitle}”的${actionLabel}申请？`,
+            confirmLabel: "拒绝",
+            danger: true
+          }
+        : {
+            title: "通过审批",
+            message:
+              request.action === "delete"
+                ? `确定通过“${request.recordTitle}”的删除申请？通过后记录会被正式删除。`
+                : `确定通过“${request.recordTitle}”的修改申请？`,
+            confirmLabel: "通过"
+          }
+    );
+    if (!confirmed) return;
     const updated = await fetchJson<RecordChangeRequest>(`/api/record-change-requests/${request.id}`, {
       method: "PATCH",
       body: { decision }
