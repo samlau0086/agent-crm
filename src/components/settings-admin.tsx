@@ -169,6 +169,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId] = useState("");
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabKey>("access");
   const [selectedObjectId, setSelectedObjectId] = useState("");
   const [selectedFieldId, setSelectedFieldId] = useState("");
@@ -905,34 +906,42 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setWebhookDeliveries((current) => [delivery, ...current.filter((candidate) => candidate.id !== delivery.id)].slice(0, 20));
     setMessage(`Webhook test ${delivery.status}: ${delivery.responseStatus ?? delivery.errorMessage ?? "no response"}`);
   }
-
   async function reviewRecordChangeRequest(request: RecordChangeRequest, decision: "approve" | "reject") {
-    const actionLabel = request.action === "delete" ? "删除" : "修改";
+    const actionLabel = request.action === "delete" ? "\u5220\u9664" : "\u4fee\u6539";
     const confirmed = await requestConfirm(
       decision === "reject"
         ? {
-            title: "拒绝审批",
-            message: `确定拒绝“${request.recordTitle}”的${actionLabel}申请？`,
-            confirmLabel: "拒绝",
+            title: "\u62d2\u7edd\u5ba1\u6279",
+            message: `\u786e\u5b9a\u62d2\u7edd\u201c${request.recordTitle}\u201d\u7684${actionLabel}\u7533\u8bf7\uff1f`,
+            confirmLabel: "\u62d2\u7edd",
             danger: true
           }
         : {
-            title: "通过审批",
+            title: "\u901a\u8fc7\u5ba1\u6279",
             message:
               request.action === "delete"
-                ? `确定通过“${request.recordTitle}”的删除申请？通过后记录会被正式删除。`
-                : `确定通过“${request.recordTitle}”的修改申请？`,
-            confirmLabel: "通过"
+                ? `\u786e\u5b9a\u901a\u8fc7\u201c${request.recordTitle}\u201d\u7684\u5220\u9664\u7533\u8bf7\uff1f\u901a\u8fc7\u540e\u8bb0\u5f55\u4f1a\u88ab\u6b63\u5f0f\u5220\u9664\u3002`
+                : `\u786e\u5b9a\u901a\u8fc7\u201c${request.recordTitle}\u201d\u7684\u4fee\u6539\u7533\u8bf7\uff1f`,
+            confirmLabel: "\u901a\u8fc7"
           }
     );
     if (!confirmed) return;
-    const updated = await fetchJson<RecordChangeRequest>(`/api/record-change-requests/${request.id}`, {
-      method: "PATCH",
-      body: { decision }
-    });
-    setRecordChangeRequests((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)).filter((candidate) => candidate.status === "pending"));
-    setMessage(decision === "approve" ? "审批已通过" : "审批已拒绝");
-    router.refresh();
+    setMessage(null);
+    setError(null);
+    setReviewingRecordChangeRequestId(request.id);
+    try {
+      const updated = await fetchJson<RecordChangeRequest>(`/api/record-change-requests/${request.id}`, {
+        method: "PATCH",
+        body: { decision }
+      });
+      setRecordChangeRequests((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)).filter((candidate) => candidate.status === "pending"));
+      setMessage(decision === "approve" ? "\u5ba1\u6279\u5df2\u901a\u8fc7" : "\u5ba1\u6279\u5df2\u62d2\u7edd");
+      router.refresh();
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "\u5ba1\u6279\u64cd\u4f5c\u5931\u8d25");
+    } finally {
+      setReviewingRecordChangeRequestId("");
+    }
   }
 
   async function retryWebhookDelivery(delivery: WebhookDelivery) {
@@ -1994,9 +2003,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           <RecordChangeRequestAdminPanel
             requests={recordChangeRequests}
             users={props.users}
-            isPending={isPending}
-            onApprove={(request) => runAction(() => reviewRecordChangeRequest(request, "approve"))}
-            onReject={(request) => runAction(() => reviewRecordChangeRequest(request, "reject"))}
+            reviewingRequestId={reviewingRecordChangeRequestId}
+            onApprove={(request) => { void reviewRecordChangeRequest(request, "approve"); }}
+            onReject={(request) => { void reviewRecordChangeRequest(request, "reject"); }}
           />
 
           <BackupOperationsPanel backups={backupFiles} isPending={isPending} onCreate={() => runAction(createBackup)} />
@@ -3099,13 +3108,13 @@ function NotificationChannelAdminPanel({
 function RecordChangeRequestAdminPanel({
   requests,
   users,
-  isPending,
+  reviewingRequestId,
   onApprove,
   onReject
 }: {
   requests: RecordChangeRequest[];
   users: User[];
-  isPending: boolean;
+  reviewingRequestId: string;
   onApprove: (request: RecordChangeRequest) => void;
   onReject: (request: RecordChangeRequest) => void;
 }) {
@@ -3132,13 +3141,13 @@ function RecordChangeRequestAdminPanel({
               <div className="subtle">原因：{request.reason}</div>
               {request.patch ? <code className="audit-details">{formatAuditDetails(request.patch as Record<string, unknown>)}</code> : null}
               <div className="toolbar compact-toolbar" style={{ marginTop: 10 }}>
-                <button className="primary-button" data-testid={`record-change-approve-${request.id}`} type="button" onClick={() => onApprove(request)} disabled={isPending}>
+                <button className="primary-button" data-testid={`record-change-approve-${request.id}`} type="button" onClick={() => onApprove(request)} disabled={Boolean(reviewingRequestId)}>
                   <CheckCircle2 size={15} />
-                  通过
+                  {reviewingRequestId === request.id ? "\u5904\u7406\u4e2d" : "\u901a\u8fc7"}
                 </button>
-                <button className="danger-button" data-testid={`record-change-reject-${request.id}`} type="button" onClick={() => onReject(request)} disabled={isPending}>
+                <button className="danger-button" data-testid={`record-change-reject-${request.id}`} type="button" onClick={() => onReject(request)} disabled={Boolean(reviewingRequestId)}>
                   <XCircle size={15} />
-                  拒绝
+                  {"\u62d2\u7edd"}
                 </button>
               </div>
             </article>

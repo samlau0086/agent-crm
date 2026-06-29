@@ -1627,6 +1627,19 @@ await run("workspace and settings use friendly feedback instead of browser dialo
   assert.match(sourceWithUi, /<RefreshCw className=\{[^}]*spin-icon/);
 });
 
+await run("record change approval actions use local feedback instead of global transition", () => {
+  const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+
+  assert.match(settings, /const \[reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId\] = useState\(""\)/);
+  assert.match(settings, /setReviewingRecordChangeRequestId\(request\.id\)[\s\S]*fetchJson<RecordChangeRequest>\(`\/api\/record-change-requests\/\$\{request\.id\}`/);
+  assert.match(settings, /catch \(actionError\)[\s\S]*showError\(actionError instanceof Error \? actionError\.message/);
+  assert.match(settings, /finally \{[\s\S]*setReviewingRecordChangeRequestId\(""\)/);
+  assert.match(settings, /reviewingRequestId=\{reviewingRecordChangeRequestId\}/);
+  assert.match(settings, /onApprove=\{\(request\) => \{ void reviewRecordChangeRequest\(request, "approve"\); \}\}/);
+  assert.match(settings, /disabled=\{Boolean\(reviewingRequestId\)\}/);
+  assert.doesNotMatch(settings, /onApprove=\{\(request\) => runAction\(\(\) => reviewRecordChangeRequest\(request, "approve"\)\)\}/);
+});
+
 await run("record workspace refresh cannot leave create locked behind global pending", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
 
