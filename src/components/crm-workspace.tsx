@@ -1468,6 +1468,19 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         : undefined,
     [recordChangeRequests, selectedRecord]
   );
+  const selectedRecordPendingUpdateRequest = useMemo(
+    () =>
+      selectedRecord
+        ? recordChangeRequests.find(
+            (request) =>
+              request.status === "pending" &&
+              request.action === "update" &&
+              request.objectKey === selectedRecord.objectKey &&
+              request.recordId === selectedRecord.id
+          )
+        : undefined,
+    [recordChangeRequests, selectedRecord]
+  );
   const selectedFields = useMemo(
     () =>
       props.fields
@@ -2227,7 +2240,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     });
     if ("pendingApproval" in result) {
-      setRecordChangeRequests((current) => [result.request, ...current.filter((request) => request.id !== result.request.id)]);
+      setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [result.request]));
       showSuccess("修改申请已提交，等待管理员审核");
       router.refresh();
       return;
@@ -4116,6 +4129,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
                       />
                     ) : null}
+                    {selectedRecordPendingUpdateRequest ? (
+                      <RecordUpdatePendingBanner
+                        fields={selectedFields}
+                        record={selectedRecord}
+                        request={selectedRecordPendingUpdateRequest}
+                        users={props.users}
+                        onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                        disabled={isPending || isRecordSavePending}
+                      />
+                    ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
                       <ContactProfileEditor
                         allRecords={records}
@@ -4126,6 +4149,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         mediaAssets={mediaAssets}
                         ownerId={editOwnerId}
                         pendingDeleteRequest={selectedRecordPendingDeleteRequest}
+                        pendingUpdateRequest={selectedRecordPendingUpdateRequest}
                         record={selectedRecord}
                         saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                         title={editTitle}
@@ -4156,6 +4180,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         mediaAssets={mediaAssets}
                         ownerId={editOwnerId}
                         pendingDeleteRequest={selectedRecordPendingDeleteRequest}
+                        pendingUpdateRequest={selectedRecordPendingUpdateRequest}
                         primaryContactId={editValues[companyPrimaryContactValueKey] ?? ""}
                         record={selectedRecord}
                         saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
@@ -11894,6 +11919,52 @@ function RecordDeletePendingBanner({
   );
 }
 
+function RecordUpdatePendingBanner({
+  disabled,
+  fields,
+  record,
+  request,
+  users,
+  onCancel
+}: {
+  disabled: boolean;
+  fields: FieldDefinition[];
+  record: CrmRecord;
+  request: RecordChangeRequest;
+  users: User[];
+  onCancel: (request: RecordChangeRequest) => void;
+}) {
+  const changes = buildRecordUpdateDiffs(record, request, fields, users);
+  return (
+    <section className="record-update-pending-banner" data-testid="record-update-pending-banner">
+      <Clock3 size={18} />
+      <div className="record-update-pending-content">
+        <strong>修改待审核</strong>
+        <div>已提交修改申请，管理员审核通过前不会正式应用。原因：{request.reason}</div>
+        <div className="subtle">提交时间：{formatDate(request.createdAt)}</div>
+        {changes.length > 0 ? (
+          <div className="record-change-diff-list">
+            {changes.map((change) => (
+              <div className="record-change-diff-row" key={change.key}>
+                <span className="record-change-diff-label">{change.label}</span>
+                <span className="record-change-old-value">{change.oldValue || "空"}</span>
+                <span className="record-change-arrow">→</span>
+                <mark className="record-change-new-value">{change.newValue || "空"}</mark>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="subtle">此修改申请没有可展示的字段差异。</div>
+        )}
+      </div>
+      <button className="secondary-button" data-testid="record-update-pending-cancel" type="button" onClick={() => onCancel(request)} disabled={disabled}>
+        <RotateCcw size={16} />
+        取消申请
+      </button>
+    </section>
+  );
+}
+
 function RecordListImage({ imageUrl, title, objectKey }: { imageUrl: unknown; title: string; objectKey: string }) {
   const src = typeof imageUrl === "string" ? imageUrl.trim() : "";
   if (!src) {
@@ -11906,6 +11977,90 @@ function RecordListImage({ imageUrl, title, objectKey }: { imageUrl: unknown; ti
       style={{ backgroundImage: `url("${src.replace(/"/g, "%22")}")` }}
     />
   );
+}
+
+type RecordChangeDiff = {
+  key: string;
+  label: string;
+  oldValue: string;
+  newValue: string;
+};
+
+function buildRecordUpdateDiffs(record: CrmRecord, request: RecordChangeRequest, fields: FieldDefinition[], users: User[]): RecordChangeDiff[] {
+  const patch = request.patch ?? {};
+  const diffs: RecordChangeDiff[] = [];
+  if (typeof patch.title === "string" && patch.title !== record.title) {
+    diffs.push({ key: "title", label: "名称", oldValue: record.title, newValue: patch.title });
+  }
+  if ("ownerId" in patch && patch.ownerId !== record.ownerId) {
+    diffs.push({
+      key: "ownerId",
+      label: "负责人",
+      oldValue: ownerLabel(record.ownerId, users),
+      newValue: ownerLabel(typeof patch.ownerId === "string" ? patch.ownerId : undefined, users)
+    });
+  }
+
+  const patchData = isPlainRecord(patch.data) ? patch.data : {};
+  for (const field of fields) {
+    if (!(field.key in patchData)) {
+      continue;
+    }
+    const oldValue = record.data[field.key];
+    const newValue = patchData[field.key];
+    if (recordChangeValueKey(oldValue) === recordChangeValueKey(newValue)) {
+      continue;
+    }
+    diffs.push({
+      key: field.key,
+      label: field.label,
+      oldValue: formatRecordChangeValue(field, oldValue, users),
+      newValue: formatRecordChangeValue(field, newValue, users)
+    });
+  }
+  return diffs;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function recordChangeValueKey(value: unknown): string {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function formatRecordChangeValue(field: FieldDefinition, value: unknown, users: User[]): string {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  if (field.key === "contactMethods") {
+    return normalizeContactMethods(value)
+      .map((method) => `${contactMethodTypeLabels[method.type]}: ${method.value}${method.primary ? "（主）" : ""}`)
+      .join("；");
+  }
+  if (field.type === "user") {
+    return ownerLabel(typeof value === "string" ? value : undefined, users);
+  }
+  if (field.type === "boolean") {
+    return value === true || value === "true" ? "是" : "否";
+  }
+  if (field.type === "select") {
+    const optionValue = String(value);
+    return field.options?.find((option) => option.value === optionValue)?.label ?? optionValue;
+  }
+  if (field.type === "date" && typeof value === "string") {
+    return formatDate(value);
+  }
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
 }
 
 function ProductThumbnail({ imageUrl, title }: { imageUrl: unknown; title: string }) {
@@ -11926,6 +12081,7 @@ function ContactProfileEditor({
   mediaAssets,
   ownerId,
   pendingDeleteRequest,
+  pendingUpdateRequest,
   record,
   saveLabel,
   showContactMethodEditor,
@@ -11952,6 +12108,7 @@ function ContactProfileEditor({
   mediaAssets: MediaAsset[];
   ownerId: string;
   pendingDeleteRequest?: RecordChangeRequest;
+  pendingUpdateRequest?: RecordChangeRequest;
   record: CrmRecord;
   saveLabel: string;
   showContactMethodEditor: boolean;
@@ -11978,7 +12135,7 @@ function ContactProfileEditor({
 
   return (
     <div className="contact-profile-layout" data-testid="contact-profile-layout">
-      <section className={`contact-profile-hero ${pendingDeleteRequest ? "delete-pending" : ""}`}>
+      <section className={`contact-profile-hero ${pendingDeleteRequest ? "delete-pending" : ""} ${pendingUpdateRequest ? "update-pending" : ""}`}>
         <div className="contact-profile-cover" />
         <div className="contact-profile-main">
           <ContactAvatarEditor
@@ -12102,6 +12259,7 @@ function CompanyProfileEditor({
   mediaAssets,
   ownerId,
   pendingDeleteRequest,
+  pendingUpdateRequest,
   primaryContactId,
   record,
   saveLabel,
@@ -12139,6 +12297,7 @@ function CompanyProfileEditor({
   mediaAssets: MediaAsset[];
   ownerId: string;
   pendingDeleteRequest?: RecordChangeRequest;
+  pendingUpdateRequest?: RecordChangeRequest;
   primaryContactId: string;
   record: CrmRecord;
   saveLabel: string;
@@ -12174,7 +12333,7 @@ function CompanyProfileEditor({
 
   return (
     <div className="contact-profile-layout company-profile-layout" data-testid="company-profile-layout">
-      <section className={`contact-profile-hero company-profile-hero ${pendingDeleteRequest ? "delete-pending" : ""}`}>
+      <section className={`contact-profile-hero company-profile-hero ${pendingDeleteRequest ? "delete-pending" : ""} ${pendingUpdateRequest ? "update-pending" : ""}`}>
         <div className="contact-profile-cover company-profile-cover" />
         <div className="contact-profile-main">
           <CompanyLogoEditor

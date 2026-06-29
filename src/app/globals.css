@@ -625,14 +625,30 @@ button {
     linear-gradient(0deg, #fff1f2, #fff1f2);
 }
 
-.record-delete-pending-banner {
+.contact-profile-hero.update-pending {
+  border-color: #fed7aa;
+  background: #fffaf0;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.12);
+}
+
+.contact-profile-hero.update-pending .contact-profile-cover {
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(251, 191, 36, 0.14)),
+    linear-gradient(0deg, #fffbeb, #fffbeb);
+}
+
+.record-delete-pending-banner,
+.record-update-pending-banner {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   margin-top: 12px;
   padding: 12px;
-  border: 1px solid #fecaca;
   border-radius: 8px;
+}
+
+.record-delete-pending-banner {
+  border: 1px solid #fecaca;
   background: #fef2f2;
   color: #7f1d1d;
 }
@@ -641,9 +657,67 @@ button {
   color: #991b1b;
 }
 
-.record-delete-pending-banner > button {
+.record-update-pending-banner {
+  border: 1px solid #fed7aa;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.record-update-pending-banner strong {
+  color: #92400e;
+}
+
+.record-delete-pending-banner > button,
+.record-update-pending-banner > button {
   margin-left: auto;
   white-space: nowrap;
+}
+
+.record-update-pending-content {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.record-change-diff-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.record-change-diff-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.35fr) minmax(120px, 1fr) auto minmax(120px, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.record-change-diff-label {
+  font-weight: 700;
+  color: #713f12;
+}
+
+.record-change-old-value {
+  color: #9a3412;
+  text-decoration: line-through;
+  overflow-wrap: anywhere;
+}
+
+.record-change-arrow {
+  color: #b45309;
+}
+
+.record-change-new-value {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #fde68a;
+  color: #713f12;
+  font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .contact-profile-cover {
