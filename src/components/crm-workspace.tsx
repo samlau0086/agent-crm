@@ -63,6 +63,7 @@ import type {
   Activity,
   ApiKey,
   AuditLog,
+  CrmPoolSettings,
   CrmRecord,
   CsvImportMapping,
   CsvImportPreview,
@@ -87,6 +88,8 @@ import type {
   NotificationChannel,
   ObjectDefinition,
   Pipeline,
+  RecordPool,
+  RecordPoolActionResult,
   RecordListResult,
   RelationDefinition,
   Role,
@@ -133,6 +136,7 @@ interface CrmWorkspaceProps {
   emailThreads: EmailThread[];
   emailAiSettings: EmailAiSettings;
   emailSyncSettings?: EmailSyncSettings;
+  poolSettings: CrmPoolSettings;
   knowledgeArticles: KnowledgeArticle[];
   mediaAssets: MediaAsset[];
   auditLogs: AuditLog[];
@@ -1185,6 +1189,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeEmailComposeKey = searchParams.get("composeKey") ?? "";
   const routeMode = searchParams.get("mode") ?? "";
   const routeCompanyId = searchParams.get("companyId") ?? "";
+  const routeRecordPool = normalizeRecordPool(searchParams.get("pool"));
   const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
   const [activeObjectKey, setActiveObjectKey] = useState(props.initialObjectKey);
@@ -1198,6 +1203,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordCursorStack, setRecordCursorStack] = useState<string[]>([""]);
   const [recordListObjectKey, setRecordListObjectKey] = useState(props.initialObjectKey);
   const [recordList, setRecordList] = useState<RecordListResult>(() => props.initialRecordList);
+  const [recordPool, setRecordPool] = useState<RecordPool>(routeRecordPool);
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
   const [query, setQuery] = useState("");
@@ -1360,6 +1366,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () => props.objects.find((object) => object.key === activeObjectKey) ?? props.objects[0],
     [activeObjectKey, props.objects]
   );
+  const activeObjectUsesPool = Boolean(activeObject && isPoolEnabledForObject(activeObject.key, props.poolSettings));
   const objectFields = useMemo(
     () =>
       props.fields
@@ -1429,7 +1436,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }, [activeObject?.key, visibleTableColumns]);
   const recordCursor = recordCursorStack[recordPage - 1] ?? "";
   const filteredRecords = objectRecords;
-  const exportRecordsUrl = activeObject ? buildRecordListUrl(activeObject.key, effectiveView, query, 1, `/api/records/${activeObject.key}/export`, 200) : "#";
+  const exportRecordsUrl = activeObject
+    ? buildRecordListUrl(activeObject.key, effectiveView, query, 1, `/api/records/${activeObject.key}/export`, 200, { pool: activeObjectUsesPool ? recordPool : undefined })
+    : "#";
   const importTemplateUrl = activeObject ? `/api/imports/templates/${activeObject.key}` : "#";
   const importFieldGuideUrl = activeObject ? `/api/imports/templates/${activeObject.key}/fields` : "#";
   const selectedRecord = useMemo(
@@ -1655,6 +1664,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }, [pathname, routeEmailThreadId, routeObjectKeys, routeRecordId, routeReturnEmailThreadId, routeMode]);
 
   useEffect(() => {
+    setRecordPool(routeRecordPool);
+  }, [routeRecordPool]);
+
+  useEffect(() => {
     setRecords(mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
     setActivities(mergeActivities(props.activities, props.dashboardSummary.openTasks, props.dashboardSummary.recentActivities));
     setRecordList(props.initialRecordList);
@@ -1688,7 +1701,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setRecordPage(1);
     setRecordCursorStack([""]);
-  }, [activeObjectKey, query, selectedViewId, viewDraft.filterField, viewDraft.filterOperator, viewDraft.filterValue, viewDraft.sortField, viewDraft.sortDirection]);
+  }, [activeObjectKey, query, recordPool, selectedViewId, viewDraft.filterField, viewDraft.filterOperator, viewDraft.filterValue, viewDraft.sortField, viewDraft.sortDirection]);
 
   useEffect(() => {
     setImportJobs(props.importJobs);
@@ -1835,7 +1848,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       buildRecordListUrl(activeObject.key, effectiveView, query, recordPage, `/api/records/${activeObject.key}`, 50, {
         cursor: recordCursor,
         fields: recordListFields,
-        keyset: true
+        keyset: true,
+        pool: activeObjectUsesPool ? recordPool : undefined
       }),
       {
       method: "GET",
@@ -1895,7 +1909,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [activeObject, effectiveView, props.fields, props.relations, query, recordCursor, recordListFields, recordPage]);
+  }, [activeObject, activeObjectUsesPool, effectiveView, props.fields, props.relations, query, recordCursor, recordListFields, recordPage, recordPool]);
 
   useEffect(() => {
     if (previousViewDraftResetKey.current === viewDraftResetKey) {
@@ -2047,10 +2061,29 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setError(null);
   }
 
+  function changeRecordPool(nextPool: RecordPool) {
+    setRecordPool(nextPool);
+    setRecordPage(1);
+    setRecordCursorStack([""]);
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (nextPool === "all") {
+      nextParams.delete("pool");
+    } else {
+      nextParams.set("pool", nextPool);
+    }
+    nextParams.delete("recordId");
+    nextParams.delete("mode");
+    const nextUrl = `${pathname}${nextParams.toString() ? `?${nextParams.toString()}` : ""}`;
+    router.replace(nextUrl);
+  }
+
   function openRecord(record: CrmRecord, options: { returnEmailThreadId?: string } = {}) {
     const nextNav = coreObjects.has(record.objectKey) ? (record.objectKey as NavKey) : "records";
     const nextPath = crmPathForNav(nextNav, record.objectKey);
     const detailParams = new URLSearchParams({ recordId: record.id });
+    if (isPoolEnabledForObject(record.objectKey, props.poolSettings) && recordPool !== "all") {
+      detailParams.set("pool", recordPool);
+    }
     if (options.returnEmailThreadId) {
       detailParams.set("returnEmailThreadId", options.returnEmailThreadId);
     }
@@ -2113,7 +2146,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     setRecordPanelMode("closed");
     if ((routeRecordId || routeMode === "create") && activeObject) {
-      router.push(crmPathForNav(coreObjects.has(activeObject.key) ? activeObject.key : "records", activeObject.key));
+      const listParams = new URLSearchParams();
+      if (activeObjectUsesPool && recordPool !== "all") {
+        listParams.set("pool", recordPool);
+      }
+      const listPath = crmPathForNav(coreObjects.has(activeObject.key) ? activeObject.key : "records", activeObject.key);
+      router.push(`${listPath}${listParams.toString() ? `?${listParams.toString()}` : ""}`);
     }
   }
 
@@ -2163,6 +2201,33 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     setMessage("记录已更新");
     router.refresh();
+  }
+
+  async function applyRecordPoolAction(action: "claim" | "release", record: CrmRecord) {
+    const result = await fetchJson<RecordPoolActionResult>(`/api/records/${record.objectKey}/${record.id}/${action}`, {
+      method: "POST"
+    });
+    mergeLoadedRecords([result.record]);
+    setRecordList((current) => ({
+      ...current,
+      records: current.records.map((candidate) => (candidate.id === result.record.id ? result.record : candidate))
+    }));
+    setEditOwnerId(result.record.ownerId ?? "");
+    showSuccess(action === "claim" ? "已领取到我的私海" : "已释放到公海");
+  }
+
+  async function transferRecordOwner(record: CrmRecord, ownerId: string) {
+    const result = await fetchJson<RecordPoolActionResult>(`/api/records/${record.objectKey}/${record.id}/transfer`, {
+      method: "POST",
+      body: { ownerId: ownerId || null }
+    });
+    mergeLoadedRecords([result.record]);
+    setRecordList((current) => ({
+      ...current,
+      records: current.records.map((candidate) => (candidate.id === result.record.id ? result.record : candidate))
+    }));
+    setEditOwnerId(result.record.ownerId ?? "");
+    showSuccess(result.record.ownerId ? "负责人已转移" : "已释放到公海");
   }
 
   function startContactMethodEditor(record: CrmRecord, methodId: string, methods?: ContactMethodDraft[]) {
@@ -3680,6 +3745,24 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 </div>
               )}
               <div className="list-tools">
+                {activeObjectUsesPool ? (
+                  <div className="toolbar" data-testid={`record-pool-switch-${activeObject.key}`}>
+                    {[
+                      { key: "all" as RecordPool, label: "全部" },
+                      { key: "public" as RecordPool, label: "公海" },
+                      { key: "private" as RecordPool, label: props.role.permissions.includes("crm.admin") ? "私海" : "我的私海" }
+                    ].map((item) => (
+                      <button
+                        className={recordPool === item.key ? "primary-button" : "secondary-button"}
+                        key={item.key}
+                        type="button"
+                        onClick={() => changeRecordPool(item.key)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <label>
                   <span className="subtle">搜索</span>
                   <input
@@ -3780,7 +3863,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     {filteredRecords.map((record) => (
                       <tr key={record.id}>
                         <td>
-                          <RecordTitleButton record={record} onOpen={() => openRecord(record)} />
+                          <div className="stack-compact">
+                            <RecordTitleButton record={record} onOpen={() => openRecord(record)} />
+                            {activeObjectUsesPool ? (
+                              <span className={record.ownerId ? "status-pill" : "status-pill success"}>
+                                {recordPoolLabel(record, props.users)}
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
                         {visibleTableColumns.map((column) => (
                           <td key={column.key}>{displayTableColumnValue(column, record, records, props.users, currencies)}</td>
@@ -3903,6 +3993,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 </h3>
                 {selectedRecord ? (
                   <>
+                    {isPoolEnabledForObject(selectedRecord.objectKey, props.poolSettings) ? (
+                      <RecordPoolPanel
+                        currentUserId={props.contextUser.id}
+                        disabled={isPending}
+                        record={selectedRecord}
+                        users={props.users}
+                        canManagePool={props.role.permissions.includes("crm.pool.manage")}
+                        onClaim={() => runAction(() => applyRecordPoolAction("claim", selectedRecord))}
+                        onRelease={() => runAction(() => applyRecordPoolAction("release", selectedRecord))}
+                        onTransfer={(ownerId) => runAction(() => transferRecordOwner(selectedRecord, ownerId))}
+                      />
+                    ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
                       <ContactProfileEditor
                         allRecords={records}
@@ -4828,6 +4930,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             auditLogs={props.auditLogs}
             backupFiles={props.backupFiles}
             importJobQueueSummary={props.importJobQueueSummary}
+            poolSettings={props.poolSettings}
           />
         )}
 
@@ -11553,6 +11656,76 @@ function RecordTitleButton({ record, onOpen }: { record: CrmRecord; onOpen: () =
   );
 }
 
+function RecordPoolPanel({
+  canManagePool,
+  currentUserId,
+  disabled,
+  record,
+  users,
+  onClaim,
+  onRelease,
+  onTransfer
+}: {
+  canManagePool: boolean;
+  currentUserId: string;
+  disabled: boolean;
+  record: CrmRecord;
+  users: User[];
+  onClaim: () => void;
+  onRelease: () => void;
+  onTransfer: (ownerId: string) => void;
+}) {
+  const [transferOwnerId, setTransferOwnerId] = useState(record.ownerId ?? "");
+  useEffect(() => {
+    setTransferOwnerId(record.ownerId ?? "");
+  }, [record.ownerId]);
+
+  const isPublic = !record.ownerId;
+  const isMine = record.ownerId === currentUserId;
+
+  return (
+    <section className="section compact-section" data-testid={`record-pool-panel-${record.id}`}>
+      <div className="settings-panel-header">
+        <div>
+          <div className="subtle">公海 / 私海</div>
+          <div className="toolbar">
+            <span className={isPublic ? "status-pill success" : "status-pill"}>{isPublic ? "公海" : "私海"}</span>
+            <span className="subtle">{isPublic ? "当前没有负责人" : `负责人：${ownerLabel(record.ownerId, users)}`}</span>
+          </div>
+        </div>
+        <div className="toolbar">
+          {isPublic ? (
+            <button className="primary-button" type="button" onClick={onClaim} disabled={disabled}>
+              <UserPlus size={16} />
+              领取
+            </button>
+          ) : isMine || canManagePool ? (
+            <button className="secondary-button" type="button" onClick={onRelease} disabled={disabled}>
+              <RotateCcw size={16} />
+              释放到公海
+            </button>
+          ) : null}
+          {canManagePool ? (
+            <>
+              <select className="select" value={transferOwnerId} onChange={(event) => setTransferOwnerId(event.target.value)} disabled={disabled}>
+                <option value="">释放到公海</option>
+                {users.filter((user) => user.active).map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name} · {user.email}
+                  </option>
+                ))}
+              </select>
+              <button className="secondary-button" type="button" onClick={() => onTransfer(transferOwnerId)} disabled={disabled}>
+                转移负责人
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function RecordListImage({ imageUrl, title, objectKey }: { imageUrl: unknown; title: string; objectKey: string }) {
   const src = typeof imageUrl === "string" ? imageUrl.trim() : "";
   if (!src) {
@@ -13614,6 +13787,18 @@ function emptySavedView(objectKey: string): SavedView {
   };
 }
 
+function normalizeRecordPool(value: string | null): RecordPool {
+  return value === "public" || value === "private" || value === "all" ? value : "all";
+}
+
+function isPoolEnabledForObject(objectKey: string, settings: CrmPoolSettings): boolean {
+  return settings.enabled && settings.objectKeys.includes(objectKey);
+}
+
+function recordPoolLabel(record: CrmRecord, users: User[]): string {
+  return record.ownerId ? ownerLabel(record.ownerId, users) : "公海";
+}
+
 function buildRecordListUrl(
   objectKey: string,
   view: SavedView,
@@ -13621,7 +13806,7 @@ function buildRecordListUrl(
   page: number,
   path = `/api/records/${objectKey}`,
   pageSize = 50,
-  options: { cursor?: string; fields?: string[]; keyset?: boolean } = {}
+  options: { cursor?: string; fields?: string[]; keyset?: boolean; pool?: RecordPool } = {}
 ): string {
   const params = new URLSearchParams({
     page: String(page),
@@ -13636,6 +13821,9 @@ function buildRecordListUrl(
   }
   if (options.fields?.length) {
     params.set("fields", Array.from(new Set(options.fields)).join(","));
+  }
+  if (options.pool && options.pool !== "all") {
+    params.set("pool", options.pool);
   }
   if (query.trim()) {
     params.set("q", query.trim());

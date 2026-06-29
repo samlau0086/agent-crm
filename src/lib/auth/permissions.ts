@@ -27,6 +27,12 @@ export const permissionCatalog = [
     risk: "medium"
   },
   {
+    key: "crm.pool.manage",
+    label: "公海规则",
+    description: "配置公海/私海规则，并强制释放或转移联系人、公司负责人。",
+    risk: "high"
+  },
+  {
     key: "crm.admin",
     label: "管理员配置",
     description: "管理对象、字段、关系、管道、视图和审计日志。",

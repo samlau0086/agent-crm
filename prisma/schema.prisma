@@ -40,6 +40,7 @@ model Workspace {
   talkMessages        TalkMessage[]
   emailAiSettings     EmailAiSettings?
   emailSyncSettings   EmailSyncSettings?
+  poolSettings        CrmPoolSettings?
   mediaAssets         MediaAsset[]
 }
 
@@ -237,6 +238,19 @@ model SavedView {
 
   @@index([workspaceId, objectDefinitionId, isDefault])
   @@index([workspaceId, objectDefinitionId, name])
+}
+
+model CrmPoolSettings {
+  workspaceId             String    @id
+  enabled                 Boolean   @default(true)
+  objectKeys              String[]
+  privateLimit            Int       @default(100)
+  autoReclaimEnabled      Boolean   @default(true)
+  autoReclaimDays         Int       @default(30)
+  lastAutoReclaimAt       DateTime?
+  lastAutoReclaimCount    Int       @default(0)
+  updatedAt               DateTime  @updatedAt
+  workspace               Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model ImportJob {

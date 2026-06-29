@@ -7,7 +7,7 @@ import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
-import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
+import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -28,6 +28,7 @@ interface SettingsAdminProps {
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
   importJobQueueSummary?: ImportJobQueueSummary;
+  poolSettings: CrmPoolSettings;
 }
 
 type ObjectDraft = {
@@ -127,6 +128,12 @@ type NotificationChannelDraft = {
   recipients: string;
   accountId: string;
 };
+type PoolSettingsDraft = {
+  enabled: boolean;
+  privateLimit: string;
+  autoReclaimEnabled: boolean;
+  autoReclaimDays: string;
+};
 type ToastState = { intent: "success" | "error" | "info"; message: string };
 type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
@@ -144,7 +151,7 @@ const fieldTypes: FieldDefinition["type"][] = [
   "reference"
 ];
 
-type SettingsTabKey = "access" | "crm" | "integrations" | "operations";
+type SettingsTabKey = "access" | "crm" | "pool" | "integrations" | "operations";
 
 const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
   { key: "access", label: "成员权限", description: "用户、团队、角色与权限矩阵" },
@@ -184,6 +191,12 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [webhookDraft, setWebhookDraft] = useState<WebhookDraft>(emptyWebhookDraft());
   const [selectedNotificationChannelId, setSelectedNotificationChannelId] = useState("");
   const [notificationChannelDraft, setNotificationChannelDraft] = useState<NotificationChannelDraft>(emptyNotificationChannelDraft());
+  const [poolSettingsDraft, setPoolSettingsDraft] = useState<PoolSettingsDraft>(() => ({
+    enabled: props.poolSettings.enabled,
+    privateLimit: String(props.poolSettings.privateLimit),
+    autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
+    autoReclaimDays: String(props.poolSettings.autoReclaimDays)
+  }));
   const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
   const [paymentTermOptionsText, setPaymentTermOptionsText] = useState("");
@@ -248,6 +261,15 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       }),
     [auditActionFilter, auditActorFilter, auditEntityFilter, auditObjectFilter, auditQuery]
   );
+
+  useEffect(() => {
+    setPoolSettingsDraft({
+      enabled: props.poolSettings.enabled,
+      privateLimit: String(props.poolSettings.privateLimit),
+      autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
+      autoReclaimDays: String(props.poolSettings.autoReclaimDays)
+    });
+  }, [props.poolSettings]);
   const fieldObject = props.objects.find((object) => object.key === fieldDraft.objectKey);
   const quotePaymentTermField = props.fields.find((field) => field.objectKey === "quotes" && field.key === "paymentTerm");
 
@@ -964,6 +986,27 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setMessage(result.backup ? `Created backup ${result.backup.name}` : "Backup command completed");
   }
 
+  async function savePoolSettings() {
+    const privateLimit = Number.parseInt(poolSettingsDraft.privateLimit, 10);
+    const autoReclaimDays = Number.parseInt(poolSettingsDraft.autoReclaimDays, 10);
+    if (!Number.isFinite(privateLimit) || privateLimit < 1) {
+      throw new Error("私海上限必须大于 0");
+    }
+    if (!Number.isFinite(autoReclaimDays) || autoReclaimDays < 1) {
+      throw new Error("自动回收天数必须大于 0");
+    }
+    await fetchJson<CrmPoolSettings>("/api/pool-settings", {
+      method: "PATCH",
+      body: {
+        enabled: poolSettingsDraft.enabled,
+        privateLimit,
+        autoReclaimEnabled: poolSettingsDraft.autoReclaimEnabled,
+        autoReclaimDays
+      }
+    });
+    setMessage("公海规则已保存");
+  }
+
   if (!canManage) {
     return (
       <section className="settings-panel">
@@ -977,7 +1020,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     <div className="settings-stack">
       <section className="settings-tabs-shell" aria-label="设置分类">
         <div className="settings-tab-list" role="tablist" aria-label="设置分类">
-          {settingsTabs.map((tab) => (
+          {[...settingsTabs.slice(0, 2), { key: "pool" as SettingsTabKey, label: "公海规则", description: "联系人和公司的领取、释放、私海上限与自动回收" }, ...settingsTabs.slice(2)].map((tab) => (
             <button
               key={tab.key}
               className={`settings-tab-button ${activeSettingsTab === tab.key ? "active" : ""}`}
@@ -1060,6 +1103,72 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onChange={setPaymentTermOptionsText}
             onSave={() => runAction(savePaymentTermOptions)}
           />
+        </div>
+      ) : null}
+
+      {activeSettingsTab === "pool" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <section className="settings-panel">
+            <div className="settings-panel-header">
+              <div>
+                <h2 className="page-title">公海规则</h2>
+                <div className="subtle">首版仅作用于联系人和公司。ownerId 为空表示公海，有负责人表示私海。</div>
+              </div>
+              <span className="badge">contacts / companies</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span className="subtle">启用公海/私海</span>
+                <select
+                  className="select"
+                  value={poolSettingsDraft.enabled ? "1" : "0"}
+                  onChange={(event) => setPoolSettingsDraft((current) => ({ ...current, enabled: event.target.value === "1" }))}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">停用</option>
+                </select>
+              </label>
+              <label>
+                <span className="subtle">每人私海上限</span>
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  value={poolSettingsDraft.privateLimit}
+                  onChange={(event) => setPoolSettingsDraft((current) => ({ ...current, privateLimit: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span className="subtle">启用自动回收</span>
+                <select
+                  className="select"
+                  value={poolSettingsDraft.autoReclaimEnabled ? "1" : "0"}
+                  onChange={(event) => setPoolSettingsDraft((current) => ({ ...current, autoReclaimEnabled: event.target.value === "1" }))}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">停用</option>
+                </select>
+              </label>
+              <label>
+                <span className="subtle">未跟进回收天数</span>
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  value={poolSettingsDraft.autoReclaimDays}
+                  onChange={(event) => setPoolSettingsDraft((current) => ({ ...current, autoReclaimDays: event.target.value }))}
+                />
+              </label>
+            </div>
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              <button className="primary-button" type="button" onClick={() => runAction(savePoolSettings)} disabled={isPending}>
+                <Save size={16} />
+                保存公海规则
+              </button>
+              <span className="subtle">
+                最近回收：
+                {props.poolSettings.lastAutoReclaimAt ? `${props.poolSettings.lastAutoReclaimCount} 条 · ${props.poolSettings.lastAutoReclaimAt}` : "尚未执行"}
+              </span>
+            </div>
+          </section>
         </div>
       ) : null}
 

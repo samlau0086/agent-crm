@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { getCrmRepository, getRequestContextByUserId } from "@/lib/crm/repository";
 import { scheduleEmailSyncForActiveAccounts } from "@/lib/email/sync-scheduler";
-import type { EmailSyncSettings } from "@/lib/crm/types";
+import type { CrmPoolSettings, EmailSyncSettings } from "@/lib/crm/types";
 import { assertDatabaseReachable } from "./database-preflight.ts";
 import { loadLocalEnvFiles } from "./load-env.ts";
 import { configuredOperationalUserId, resolveOperationalUser, type OperationalUserResolution } from "./operational-user.ts";
@@ -85,6 +85,7 @@ async function runSyncCycle(): Promise<number> {
       }
     }
     await runSync(userResolution.context, userResolution, settings);
+    await runPoolAutoReclaimIfDue(userResolution.context);
     return settings.mode === "interval" ? settings.intervalMinutes * 60_000 : 60_000;
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
@@ -129,6 +130,32 @@ async function runSync(context: Awaited<ReturnType<typeof getRequestContextByUse
     }
     console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
   }
+}
+
+async function runPoolAutoReclaimIfDue(context: Awaited<ReturnType<typeof getRequestContextByUserId>>): Promise<void> {
+  try {
+    const repository = getCrmRepository();
+    const settings = await repository.getPoolSettings(context);
+    if (!shouldRunPoolAutoReclaim(settings)) {
+      return;
+    }
+    const result = await repository.runPoolAutoReclaim(context);
+    console.log(JSON.stringify({ event: "crm_pool_auto_reclaim", workspaceId: context.workspaceId, userId: context.user.id, ...result }, null, 2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "CRM pool auto reclaim failed.");
+  }
+}
+
+function shouldRunPoolAutoReclaim(settings: CrmPoolSettings): boolean {
+  if (!settings.enabled || !settings.autoReclaimEnabled) {
+    return false;
+  }
+  if (!settings.lastAutoReclaimAt) {
+    return true;
+  }
+  const lastRun = new Date(settings.lastAutoReclaimAt);
+  const now = new Date();
+  return lastRun.toDateString() !== now.toDateString();
 }
 
 function stop(): void {

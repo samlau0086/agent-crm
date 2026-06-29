@@ -30,6 +30,7 @@ import type {
   CsvImportPreview,
   CsvImportJob,
   CsvImportJobSourcePayload,
+  CrmPoolSettings,
   CrmRecord,
   CrmSnapshot,
   DashboardSummary,
@@ -54,6 +55,8 @@ import type {
   Pipeline,
   RecordListQuery,
   RecordListResult,
+  RecordPoolActionResult,
+  RecordPoolAutoReclaimResult,
   RelationDefinition,
   RequestContext,
   Role,
@@ -75,6 +78,7 @@ type StoredCsvImportJob = CsvImportJob & { sourcePayload?: CsvImportJobSourcePay
 type StoredApiKey = ApiKey & { tokenHash: string };
 type StoredWebhookEndpoint = WebhookEndpoint & { secret: string };
 type EmailAssistantInput = Parameters<typeof buildEmailAssistantContext>[0];
+const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -86,6 +90,10 @@ function stamp(): string {
 
 function createId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isPoolObjectKey(objectKey: string): boolean {
+  return POOL_OBJECT_KEYS.includes(objectKey as (typeof POOL_OBJECT_KEYS)[number]);
 }
 
 function normalizeRoleInput(input: Pick<Role, "name" | "permissions">): Pick<Role, "name" | "permissions"> {
@@ -1361,6 +1369,26 @@ export class CrmStore {
     return clone(settings);
   }
 
+  getPoolSettings(context: RequestContext): CrmPoolSettings {
+    requirePermission(context, "crm.read");
+    return clone(this.ensureCrmPoolSettings(context.workspaceId));
+  }
+
+  updatePoolSettings(context: RequestContext, patch: Partial<Omit<CrmPoolSettings, "workspaceId" | "objectKeys" | "lastAutoReclaimAt" | "lastAutoReclaimCount" | "updatedAt">>): CrmPoolSettings {
+    requirePermission(context, "crm.pool.manage");
+    const settings = this.ensureCrmPoolSettings(context.workspaceId);
+    if (patch.enabled !== undefined) settings.enabled = patch.enabled;
+    if (patch.privateLimit !== undefined) settings.privateLimit = normalizeIntegerLimit(patch.privateLimit, 1, 100000);
+    if (patch.autoReclaimEnabled !== undefined) settings.autoReclaimEnabled = patch.autoReclaimEnabled;
+    if (patch.autoReclaimDays !== undefined) settings.autoReclaimDays = normalizeIntegerLimit(patch.autoReclaimDays, 1, 3650);
+    settings.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "crm_pool_settings", context.workspaceId, {
+      summary: "Updated CRM pool settings",
+      details: { enabled: settings.enabled, privateLimit: settings.privateLimit, autoReclaimEnabled: settings.autoReclaimEnabled, autoReclaimDays: settings.autoReclaimDays }
+    });
+    return clone(settings);
+  }
+
   buildEmailAssistantContext(
     context: RequestContext,
     input: Pick<EmailAssistantInput, "purpose" | "targetLocale"> & { recordId?: string; objectKey?: string; threadId?: string; sourceMessageId?: string }
@@ -1884,6 +1912,7 @@ export class CrmStore {
     const pageSize = normalizePageSize(query.pageSize, { defaultSize: RECORD_DEFAULT_PAGE_SIZE, maxSize: RECORD_MAX_PAGE_SIZE });
     const view = buildQueryView(context.workspaceId, objectKey, query);
     const sorted = this.listRecords(context, objectKey)
+      .filter((record) => this.matchesRecordPool(context, record, query.pool))
       .filter((record) => matchesSavedView(record, view))
       .filter((record) => matchesRecordSearch(record, query.q))
       .sort((left, right) => (query.sort ? compareRecords(left, right, query.sort) : right.updatedAt.localeCompare(left.updatedAt)));
@@ -2026,6 +2055,148 @@ export class CrmStore {
       ownerId: record.ownerId
     });
     return clone(record);
+  }
+
+  claimRecord(context: RequestContext, objectKey: string, recordId: string): RecordPoolActionResult {
+    requirePermission(context, "crm.write");
+    this.assertPoolObjectEnabled(context, objectKey);
+    const record = this.data.records.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.id === recordId);
+    if (!record || !this.canAccessRecord(context, record)) {
+      throw new Error("记录不存在");
+    }
+    if (record.ownerId) {
+      throw new Error("该记录已在私海中，不能重复领取");
+    }
+    const settings = this.ensureCrmPoolSettings(context.workspaceId);
+    const privateCount = this.data.records.filter(
+      (candidate) => candidate.workspaceId === context.workspaceId && settings.objectKeys.includes(candidate.objectKey) && candidate.ownerId === context.user.id
+    ).length;
+    if (privateCount >= settings.privateLimit) {
+      throw new Error(`你的私海已达到上限 ${settings.privateLimit} 条，请先释放或转移记录`);
+    }
+    const previousOwnerId = record.ownerId;
+    record.ownerId = context.user.id;
+    record.updatedAt = stamp();
+    this.writeAuditLog(context, "record.claimed", "record", record.id, {
+      objectKey,
+      summary: `Claimed ${objectKey} record ${record.title}`,
+      details: { previousOwnerId, ownerId: record.ownerId }
+    });
+    this.deliverWebhookEvent(context, "record.updated", {
+      recordId: record.id,
+      objectKey,
+      title: record.title,
+      previousOwnerId,
+      ownerId: record.ownerId
+    });
+    return { record: clone(record), previousOwnerId, ownerId: record.ownerId };
+  }
+
+  releaseRecord(context: RequestContext, objectKey: string, recordId: string): RecordPoolActionResult {
+    requirePermission(context, "crm.write");
+    this.assertPoolObjectEnabled(context, objectKey);
+    const record = this.data.records.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.id === recordId);
+    if (!record || !this.canAccessRecord(context, record)) {
+      throw new Error("记录不存在");
+    }
+    if (!record.ownerId) {
+      throw new Error("该记录已经在公海中");
+    }
+    if (record.ownerId !== context.user.id && !context.role.permissions.includes("crm.pool.manage")) {
+      requirePermission(context, "crm.pool.manage");
+    }
+    const previousOwnerId = record.ownerId;
+    record.ownerId = undefined;
+    record.updatedAt = stamp();
+    this.writeAuditLog(context, "record.released", "record", record.id, {
+      objectKey,
+      summary: `Released ${objectKey} record ${record.title} to public pool`,
+      details: { previousOwnerId, ownerId: null }
+    });
+    this.deliverWebhookEvent(context, "record.updated", {
+      recordId: record.id,
+      objectKey,
+      title: record.title,
+      previousOwnerId,
+      ownerId: record.ownerId
+    });
+    return { record: clone(record), previousOwnerId, ownerId: record.ownerId };
+  }
+
+  transferRecord(context: RequestContext, objectKey: string, recordId: string, ownerId?: string | null): RecordPoolActionResult {
+    requirePermission(context, "crm.pool.manage");
+    this.assertPoolObjectEnabled(context, objectKey);
+    const record = this.data.records.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.id === recordId);
+    if (!record) {
+      throw new Error("记录不存在");
+    }
+    if (ownerId && !this.data.users.some((user) => user.workspaceId === context.workspaceId && user.id === ownerId && user.active)) {
+      throw new Error("目标负责人不存在或已停用");
+    }
+    const previousOwnerId = record.ownerId;
+    record.ownerId = ownerId ?? undefined;
+    record.updatedAt = stamp();
+    this.writeAuditLog(context, "record.transferred", "record", record.id, {
+      objectKey,
+      summary: `Transferred ${objectKey} record ${record.title}`,
+      details: { previousOwnerId, ownerId: record.ownerId ?? null }
+    });
+    this.deliverWebhookEvent(context, "record.updated", {
+      recordId: record.id,
+      objectKey,
+      title: record.title,
+      previousOwnerId,
+      ownerId: record.ownerId
+    });
+    return { record: clone(record), previousOwnerId, ownerId: record.ownerId };
+  }
+
+  runPoolAutoReclaim(context: RequestContext): RecordPoolAutoReclaimResult {
+    requirePermission(context, "crm.pool.manage");
+    const settings = this.ensureCrmPoolSettings(context.workspaceId);
+    const ranAt = new Date(stamp());
+    if (!settings.enabled || !settings.autoReclaimEnabled) {
+      return { scanned: 0, reclaimed: 0, reclaimedRecordIds: [], ranAt: ranAt.toISOString() };
+    }
+    const cutoff = ranAt.getTime() - settings.autoReclaimDays * 24 * 60 * 60 * 1000;
+    const candidates = this.data.records.filter(
+      (record) => record.workspaceId === context.workspaceId && settings.objectKeys.includes(record.objectKey) && Boolean(record.ownerId)
+    );
+    const reclaimedRecordIds: string[] = [];
+    for (const record of candidates) {
+      const latestActivityAt = this.data.activities
+        .filter((activity) => activity.workspaceId === context.workspaceId && activity.recordId === record.id)
+        .map((activity) => new Date(activity.createdAt).getTime())
+        .reduce((max, value) => Math.max(max, value), 0);
+      const latestThreadAt = this.data.emailThreads
+        .filter((thread) => thread.workspaceId === context.workspaceId && thread.recordId === record.id)
+        .map((thread) => new Date(thread.lastMessageAt ?? thread.updatedAt).getTime())
+        .reduce((max, value) => Math.max(max, value), 0);
+      const latestFollowUpAt = Math.max(new Date(record.updatedAt).getTime(), latestActivityAt, latestThreadAt);
+      if (latestFollowUpAt >= cutoff) {
+        continue;
+      }
+      const previousOwnerId = record.ownerId;
+      record.ownerId = undefined;
+      record.updatedAt = ranAt.toISOString();
+      reclaimedRecordIds.push(record.id);
+      this.writeAuditLog(context, "record.auto_reclaimed", "record", record.id, {
+        objectKey: record.objectKey,
+        summary: `Auto reclaimed ${record.objectKey} record ${record.title}`,
+        details: { previousOwnerId, ownerId: null, latestFollowUpAt: new Date(latestFollowUpAt).toISOString(), autoReclaimDays: settings.autoReclaimDays }
+      });
+      this.deliverWebhookEvent(context, "record.updated", {
+        recordId: record.id,
+        objectKey: record.objectKey,
+        title: record.title,
+        previousOwnerId,
+        ownerId: undefined
+      });
+    }
+    settings.lastAutoReclaimAt = ranAt.toISOString();
+    settings.lastAutoReclaimCount = reclaimedRecordIds.length;
+    settings.updatedAt = ranAt.toISOString();
+    return { scanned: candidates.length, reclaimed: reclaimedRecordIds.length, reclaimedRecordIds, ranAt: ranAt.toISOString() };
   }
 
   deleteRecord(context: RequestContext, objectKey: string, recordId: string): void {
@@ -3121,8 +3292,57 @@ export class CrmStore {
   }
 
   private canAccessRecord(context: RequestContext, record: CrmRecord): boolean {
+    const settings = isPoolObjectKey(record.objectKey) ? this.ensureCrmPoolSettings(context.workspaceId) : undefined;
+    if (settings?.enabled && settings.objectKeys.includes(record.objectKey)) {
+      return canManageAllRecords(context) || !record.ownerId || record.ownerId === context.user.id;
+    }
     const owner = record.ownerId ? this.data.users.find((user) => user.id === record.ownerId && user.workspaceId === context.workspaceId) : undefined;
     return canAccessRecordOwner(context, record.ownerId, owner?.teamId);
+  }
+
+  private matchesRecordPool(context: RequestContext, record: CrmRecord, pool?: RecordListQuery["pool"]): boolean {
+    const settings = isPoolObjectKey(record.objectKey) ? this.ensureCrmPoolSettings(context.workspaceId) : undefined;
+    if (!settings?.enabled || !settings.objectKeys.includes(record.objectKey)) {
+      return true;
+    }
+    if (pool === "public") {
+      return !record.ownerId;
+    }
+    if (pool === "private") {
+      return canManageAllRecords(context) ? Boolean(record.ownerId) : record.ownerId === context.user.id;
+    }
+    return true;
+  }
+
+  private assertPoolObjectEnabled(context: RequestContext, objectKey: string): void {
+    this.assertObject(context, objectKey);
+    const settings = this.ensureCrmPoolSettings(context.workspaceId);
+    if (!settings.enabled || !settings.objectKeys.includes(objectKey)) {
+      throw new Error("公海/私海机制仅支持已启用的联系人和公司对象");
+    }
+  }
+
+  private ensureCrmPoolSettings(workspaceId: string): CrmPoolSettings {
+    const settings = (this.data.poolSettings ??= []).find((candidate) => candidate.workspaceId === workspaceId);
+    if (settings) {
+      settings.objectKeys = settings.objectKeys.filter(isPoolObjectKey);
+      if (settings.objectKeys.length === 0) settings.objectKeys = [...POOL_OBJECT_KEYS];
+      settings.privateLimit = normalizeIntegerLimit(settings.privateLimit, 1, 100000);
+      settings.autoReclaimDays = normalizeIntegerLimit(settings.autoReclaimDays, 1, 3650);
+      return settings;
+    }
+    const created: CrmPoolSettings = {
+      workspaceId,
+      enabled: true,
+      objectKeys: [...POOL_OBJECT_KEYS],
+      privateLimit: 100,
+      autoReclaimEnabled: true,
+      autoReclaimDays: 30,
+      lastAutoReclaimCount: 0,
+      updatedAt: stamp()
+    };
+    this.data.poolSettings.push(created);
+    return created;
   }
 
   private ensureEmailAiSettings(workspaceId: string): EmailAiSettings {
@@ -3965,7 +4185,8 @@ function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize
     sort: query.sort?.field ? query.sort : undefined,
     cursor: query.cursor?.trim() || undefined,
     keyset: Boolean(query.keyset || query.cursor),
-    fields: query.fields?.filter((field) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field))
+    fields: query.fields?.filter((field) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field)),
+    pool: query.pool === "public" || query.pool === "private" || query.pool === "all" ? query.pool : undefined
   };
 }
 

@@ -24,7 +24,7 @@ export const seedData: CrmSnapshot = {
       id: "role-admin",
       workspaceId: defaultWorkspaceId,
       name: "管理员",
-      permissions: ["crm.read", "crm.write", "crm.import", "crm.admin", "ai.use", "ai.admin"]
+      permissions: ["crm.read", "crm.write", "crm.import", "crm.pool.manage", "crm.admin", "ai.use", "ai.admin"]
     },
     {
       id: "role-sales",
@@ -417,6 +417,18 @@ export const seedData: CrmSnapshot = {
       intervalMinutes: 5,
       dailyAt: "03:00",
       limit: 25,
+      updatedAt: now
+    }
+  ],
+  poolSettings: [
+    {
+      workspaceId: defaultWorkspaceId,
+      enabled: true,
+      objectKeys: ["contacts", "companies"],
+      privateLimit: 100,
+      autoReclaimEnabled: true,
+      autoReclaimDays: 30,
+      lastAutoReclaimCount: 0,
       updatedAt: now
     }
   ],

@@ -17,7 +17,8 @@ export function parseRecordListQuery(request: NextRequest): RecordListQuery {
     sort: sortField ? ({ field: sortField, direction: sortDirection } satisfies RecordSort) : undefined,
     cursor: normalizeCursor(searchParams.get("cursor")),
     keyset: searchParams.get("keyset") === "1" || searchParams.get("pagination") === "keyset",
-    fields: parseFields(searchParams.get("fields"))
+    fields: parseFields(searchParams.get("fields")),
+    pool: parsePool(searchParams.get("pool"))
   };
 }
 
@@ -56,4 +57,11 @@ function parseFields(value: string | null): string[] | undefined {
     .map((field) => field.trim())
     .filter((field) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field));
   return fields.length > 0 ? Array.from(new Set(fields)) : undefined;
+}
+
+function parsePool(value: string | null): RecordListQuery["pool"] {
+  if (value === "public" || value === "private" || value === "all") {
+    return value;
+  }
+  return undefined;
 }

@@ -45,6 +45,7 @@ import type {
   CsvImportPreview,
   CsvImportJobSourcePayload,
   CsvImportJob,
+  CrmPoolSettings,
   CrmRecord,
   DashboardSummary,
   EmailAccount,
@@ -71,6 +72,8 @@ import type {
   Pipeline,
   RecordListQuery,
   RecordListResult,
+  RecordPoolActionResult,
+  RecordPoolAutoReclaimResult,
   RelationDefinition,
   RequestContext,
   Role,
@@ -89,6 +92,7 @@ import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quo
 
 type PrismaContext = PrismaClient;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
+const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
 
 function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
   return (value ?? {}) as Record<string, unknown>;
@@ -111,6 +115,10 @@ function emailSendClaimTimeoutMs(): number {
     return DEFAULT_EMAIL_SEND_CLAIM_TIMEOUT_MS;
   }
   return Math.max(MIN_EMAIL_SEND_CLAIM_TIMEOUT_MS, Math.floor(configured));
+}
+
+function isPoolObjectKey(objectKey: string): boolean {
+  return POOL_OBJECT_KEYS.includes(objectKey as (typeof POOL_OBJECT_KEYS)[number]);
 }
 
 function isEmailSendClaimStale(sendAttemptedAt: string | undefined, staleBefore: Date): boolean {
@@ -609,6 +617,30 @@ function mapEmailSyncSettings(settings: {
     intervalMinutes: normalizeIntegerLimit(settings.intervalMinutes, 1, 1440),
     dailyAt: normalizeDailyTime(settings.dailyAt),
     limit: normalizeIntegerLimit(settings.limit, 1, 100),
+    updatedAt: settings.updatedAt.toISOString()
+  };
+}
+
+function mapCrmPoolSettings(settings: {
+  workspaceId: string;
+  enabled: boolean;
+  objectKeys: string[];
+  privateLimit: number;
+  autoReclaimEnabled: boolean;
+  autoReclaimDays: number;
+  lastAutoReclaimAt: Date | null;
+  lastAutoReclaimCount: number;
+  updatedAt: Date;
+}): CrmPoolSettings {
+  return {
+    workspaceId: settings.workspaceId,
+    enabled: settings.enabled,
+    objectKeys: settings.objectKeys.filter(isPoolObjectKey),
+    privateLimit: normalizeIntegerLimit(settings.privateLimit, 1, 100000),
+    autoReclaimEnabled: settings.autoReclaimEnabled,
+    autoReclaimDays: normalizeIntegerLimit(settings.autoReclaimDays, 1, 3650),
+    lastAutoReclaimAt: settings.lastAutoReclaimAt?.toISOString(),
+    lastAutoReclaimCount: settings.lastAutoReclaimCount,
     updatedAt: settings.updatedAt.toISOString()
   };
 }
@@ -2644,6 +2676,30 @@ export class PrismaCrmRepository {
     return mapEmailSyncSettings(updated);
   }
 
+  async getPoolSettings(context: RequestContext): Promise<CrmPoolSettings> {
+    requirePermission(context, "crm.read");
+    return this.ensureCrmPoolSettings(context.workspaceId);
+  }
+
+  async updatePoolSettings(context: RequestContext, patch: Partial<Omit<CrmPoolSettings, "workspaceId" | "objectKeys" | "lastAutoReclaimAt" | "lastAutoReclaimCount" | "updatedAt">>): Promise<CrmPoolSettings> {
+    requirePermission(context, "crm.pool.manage");
+    const current = await this.ensureCrmPoolSettings(context.workspaceId);
+    const updated = await this.db.crmPoolSettings.update({
+      where: { workspaceId: context.workspaceId },
+      data: {
+        enabled: patch.enabled ?? current.enabled,
+        privateLimit: normalizeIntegerLimit(patch.privateLimit ?? current.privateLimit, 1, 100000),
+        autoReclaimEnabled: patch.autoReclaimEnabled ?? current.autoReclaimEnabled,
+        autoReclaimDays: normalizeIntegerLimit(patch.autoReclaimDays ?? current.autoReclaimDays, 1, 3650)
+      }
+    });
+    await this.writeAuditLog(context, "update", "crm_pool_settings", context.workspaceId, {
+      summary: "Updated CRM pool settings",
+      details: { enabled: updated.enabled, privateLimit: updated.privateLimit, autoReclaimEnabled: updated.autoReclaimEnabled, autoReclaimDays: updated.autoReclaimDays }
+    });
+    return mapCrmPoolSettings(updated);
+  }
+
   async buildEmailAssistantContext(
     context: RequestContext,
     input: { purpose: EmailAssistantPurpose; recordId?: string; threadId?: string; sourceMessageId?: string; targetLocale?: string }
@@ -3420,7 +3476,7 @@ export class PrismaCrmRepository {
   async listRecords(context: RequestContext, objectKey: string): Promise<CrmRecord[]> {
     requirePermission(context, "crm.read");
     await this.requireObject(context, objectKey);
-    const accessWhere = await this.recordAccessWhere(context);
+    const accessWhere = await this.recordAccessWhere(context, objectKey);
     const records = await this.db.crmRecord.findMany({
       where: {
         workspaceId: context.workspaceId,
@@ -3518,7 +3574,7 @@ export class PrismaCrmRepository {
         id: recordId,
         workspaceId: context.workspaceId,
         objectKey,
-        ...(await this.recordAccessWhere(context))
+        ...(await this.recordAccessWhere(context, objectKey))
       }
     });
     if (!record) {
@@ -3621,6 +3677,167 @@ export class PrismaCrmRepository {
       ownerId: mapped.ownerId
     });
     return mapped;
+  }
+
+  async claimRecord(context: RequestContext, objectKey: string, recordId: string): Promise<RecordPoolActionResult> {
+    requirePermission(context, "crm.write");
+    await this.assertPoolObjectEnabled(context, objectKey);
+    const current = await this.getRecord(context, objectKey, recordId);
+    if (current.ownerId) {
+      throw new Error("该记录已在私海中，不能重复领取");
+    }
+    const settings = await this.ensureCrmPoolSettings(context.workspaceId);
+    const privateCount = await this.db.crmRecord.count({
+      where: {
+        workspaceId: context.workspaceId,
+        objectKey: { in: settings.objectKeys },
+        ownerId: context.user.id
+      }
+    });
+    if (privateCount >= settings.privateLimit) {
+      throw new Error(`你的私海已达到上限 ${settings.privateLimit} 条，请先释放或转移记录`);
+    }
+    const updated = await this.db.crmRecord.update({
+      where: { id: recordId },
+      data: { ownerId: context.user.id }
+    });
+    await this.writeAuditLog(context, "record.claimed", "record", recordId, {
+      objectKey,
+      summary: `Claimed ${objectKey} record ${updated.title}`,
+      details: { previousOwnerId: current.ownerId, ownerId: updated.ownerId }
+    });
+    const mapped = mapRecord(updated);
+    this.emitWebhookEvent(context, "record.updated", {
+      recordId: mapped.id,
+      objectKey,
+      title: mapped.title,
+      previousOwnerId: current.ownerId,
+      ownerId: mapped.ownerId
+    });
+    return { record: mapped, previousOwnerId: current.ownerId, ownerId: mapped.ownerId };
+  }
+
+  async releaseRecord(context: RequestContext, objectKey: string, recordId: string): Promise<RecordPoolActionResult> {
+    requirePermission(context, "crm.write");
+    await this.assertPoolObjectEnabled(context, objectKey);
+    const current = await this.getRecord(context, objectKey, recordId);
+    if (!current.ownerId) {
+      throw new Error("该记录已经在公海中");
+    }
+    if (current.ownerId !== context.user.id && !context.role.permissions.includes("crm.pool.manage")) {
+      requirePermission(context, "crm.pool.manage");
+    }
+    const updated = await this.db.crmRecord.update({
+      where: { id: recordId },
+      data: { ownerId: null }
+    });
+    await this.writeAuditLog(context, "record.released", "record", recordId, {
+      objectKey,
+      summary: `Released ${objectKey} record ${updated.title} to public pool`,
+      details: { previousOwnerId: current.ownerId, ownerId: null }
+    });
+    const mapped = mapRecord(updated);
+    this.emitWebhookEvent(context, "record.updated", {
+      recordId: mapped.id,
+      objectKey,
+      title: mapped.title,
+      previousOwnerId: current.ownerId,
+      ownerId: mapped.ownerId
+    });
+    return { record: mapped, previousOwnerId: current.ownerId, ownerId: mapped.ownerId };
+  }
+
+  async transferRecord(context: RequestContext, objectKey: string, recordId: string, ownerId?: string | null): Promise<RecordPoolActionResult> {
+    requirePermission(context, "crm.pool.manage");
+    await this.assertPoolObjectEnabled(context, objectKey);
+    const current = await this.getRecord(context, objectKey, recordId);
+    if (ownerId) {
+      const user = await this.db.user.findFirst({
+        where: { id: ownerId, workspaceId: context.workspaceId, active: true },
+        select: { id: true }
+      });
+      if (!user) {
+        throw new Error("目标负责人不存在或已停用");
+      }
+    }
+    const updated = await this.db.crmRecord.update({
+      where: { id: recordId },
+      data: { ownerId: ownerId ?? null }
+    });
+    await this.writeAuditLog(context, "record.transferred", "record", recordId, {
+      objectKey,
+      summary: `Transferred ${objectKey} record ${updated.title}`,
+      details: { previousOwnerId: current.ownerId, ownerId: updated.ownerId }
+    });
+    const mapped = mapRecord(updated);
+    this.emitWebhookEvent(context, "record.updated", {
+      recordId: mapped.id,
+      objectKey,
+      title: mapped.title,
+      previousOwnerId: current.ownerId,
+      ownerId: mapped.ownerId
+    });
+    return { record: mapped, previousOwnerId: current.ownerId, ownerId: mapped.ownerId };
+  }
+
+  async runPoolAutoReclaim(context: RequestContext): Promise<RecordPoolAutoReclaimResult> {
+    requirePermission(context, "crm.pool.manage");
+    const settings = await this.ensureCrmPoolSettings(context.workspaceId);
+    const ranAt = new Date();
+    if (!settings.enabled || !settings.autoReclaimEnabled) {
+      return { scanned: 0, reclaimed: 0, reclaimedRecordIds: [], ranAt: ranAt.toISOString() };
+    }
+    const cutoff = new Date(ranAt.getTime() - settings.autoReclaimDays * 24 * 60 * 60 * 1000);
+    const records = await this.db.crmRecord.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        objectKey: { in: settings.objectKeys },
+        ownerId: { not: null }
+      },
+      select: { id: true, objectKey: true, title: true, ownerId: true, updatedAt: true }
+    });
+    const reclaimedRecordIds: string[] = [];
+    for (const record of records) {
+      const latestActivity = await this.db.activity.findFirst({
+        where: { workspaceId: context.workspaceId, recordId: record.id },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true }
+      });
+      const latestThread = await this.db.emailThread.findFirst({
+        where: { workspaceId: context.workspaceId, recordId: record.id },
+        orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
+        select: { lastMessageAt: true, updatedAt: true }
+      });
+      const latestFollowUpAt = new Date(
+        Math.max(
+          record.updatedAt.getTime(),
+          latestActivity?.createdAt.getTime() ?? 0,
+          (latestThread?.lastMessageAt ?? latestThread?.updatedAt)?.getTime() ?? 0
+        )
+      );
+      if (latestFollowUpAt >= cutoff) {
+        continue;
+      }
+      await this.db.crmRecord.update({ where: { id: record.id }, data: { ownerId: null } });
+      reclaimedRecordIds.push(record.id);
+      await this.writeAuditLog(context, "record.auto_reclaimed", "record", record.id, {
+        objectKey: record.objectKey,
+        summary: `Auto reclaimed ${record.objectKey} record ${record.title}`,
+        details: { previousOwnerId: record.ownerId, ownerId: null, latestFollowUpAt: latestFollowUpAt.toISOString(), autoReclaimDays: settings.autoReclaimDays }
+      });
+      this.emitWebhookEvent(context, "record.updated", {
+        recordId: record.id,
+        objectKey: record.objectKey,
+        title: record.title,
+        previousOwnerId: record.ownerId,
+        ownerId: undefined
+      });
+    }
+    await this.db.crmPoolSettings.update({
+      where: { workspaceId: context.workspaceId },
+      data: { lastAutoReclaimAt: ranAt, lastAutoReclaimCount: reclaimedRecordIds.length }
+    });
+    return { scanned: records.length, reclaimed: reclaimedRecordIds.length, reclaimedRecordIds, ranAt: ranAt.toISOString() };
   }
 
   async deleteRecord(context: RequestContext, objectKey: string, recordId: string): Promise<void> {
@@ -5023,7 +5240,7 @@ export class PrismaCrmRepository {
             id: value,
             workspaceId: context.workspaceId,
             objectKey: targetObjectKey,
-            ...(requireVisibleRecord ? await this.recordAccessWhere(context) : {})
+            ...(requireVisibleRecord ? await this.recordAccessWhere(context, targetObjectKey) : {})
           },
           select: { id: true }
         });
@@ -5034,7 +5251,37 @@ export class PrismaCrmRepository {
     }
   }
 
-  private async recordAccessWhere(context: RequestContext): Promise<Prisma.CrmRecordWhereInput> {
+  private async recordAccessWhere(context: RequestContext, objectKey?: string, pool?: RecordListQuery["pool"]): Promise<Prisma.CrmRecordWhereInput> {
+    const settings = objectKey && isPoolObjectKey(objectKey) ? await this.ensureCrmPoolSettings(context.workspaceId) : undefined;
+    const poolEnabled = Boolean(settings?.enabled && settings.objectKeys.includes(objectKey ?? ""));
+
+    if (objectKey && poolEnabled) {
+      if (canManageAllRecords(context)) {
+        if (pool === "public") return { ownerId: null };
+        if (pool === "private") return { ownerId: { not: null } };
+        return {};
+      }
+      if (pool === "public") return { ownerId: null };
+      if (pool === "private") return { ownerId: context.user.id };
+      return { OR: [{ ownerId: null }, { ownerId: context.user.id }] };
+    }
+
+    if (!objectKey && !canManageAllRecords(context)) {
+      const ownerIds = await this.visibleOwnerIds(context);
+      return {
+        OR: [
+          {
+            objectKey: { in: [...POOL_OBJECT_KEYS] },
+            OR: [{ ownerId: null }, { ownerId: context.user.id }]
+          },
+          {
+            objectKey: { notIn: [...POOL_OBJECT_KEYS] },
+            ownerId: { in: ownerIds }
+          }
+        ]
+      };
+    }
+
     if (canManageAllRecords(context)) {
       return {};
     }
@@ -5047,7 +5294,17 @@ export class PrismaCrmRepository {
     const filters = query.filters?.filter((filter) => filter.field && filter.value.trim()) ?? [];
     const clauses: Prisma.Sql[] = [Prisma.sql`"workspaceId" = ${context.workspaceId}`, Prisma.sql`"objectKey" = ${objectKey}`];
 
-    if (!canManageAllRecords(context)) {
+    const settings = isPoolObjectKey(objectKey) ? await this.ensureCrmPoolSettings(context.workspaceId) : undefined;
+    const poolEnabled = Boolean(settings?.enabled && settings.objectKeys.includes(objectKey));
+    if (poolEnabled) {
+      if (query.pool === "public") {
+        clauses.push(Prisma.sql`"ownerId" IS NULL`);
+      } else if (query.pool === "private") {
+        clauses.push(canManageAllRecords(context) ? Prisma.sql`"ownerId" IS NOT NULL` : Prisma.sql`"ownerId" = ${context.user.id}`);
+      } else if (!canManageAllRecords(context)) {
+        clauses.push(Prisma.sql`("ownerId" IS NULL OR "ownerId" = ${context.user.id})`);
+      }
+    } else if (!canManageAllRecords(context)) {
       clauses.push(Prisma.sql`"ownerId" IN (${Prisma.join(await this.visibleOwnerIds(context))})`);
     }
 
@@ -5209,6 +5466,14 @@ export class PrismaCrmRepository {
     }
   }
 
+  private async assertPoolObjectEnabled(context: RequestContext, objectKey: string): Promise<void> {
+    await this.requireObject(context, objectKey);
+    const settings = await this.ensureCrmPoolSettings(context.workspaceId);
+    if (!settings.enabled || !settings.objectKeys.includes(objectKey)) {
+      throw new Error("公海/私海机制仅支持已启用的联系人和公司对象");
+    }
+  }
+
   private async assertTeamNameAvailable(context: RequestContext, name: string, currentTeamId?: string): Promise<void> {
     const duplicate = await this.db.team.findFirst({
       where: {
@@ -5329,6 +5594,23 @@ export class PrismaCrmRepository {
       }
     });
     return mapEmailSyncSettings(created);
+  }
+
+  private async ensureCrmPoolSettings(workspaceId: string): Promise<CrmPoolSettings> {
+    const settings = await this.db.crmPoolSettings.findUnique({ where: { workspaceId } });
+    if (settings) {
+      return mapCrmPoolSettings(settings);
+    }
+    const created = await this.db.crmPoolSettings.create({
+      data: {
+        workspaceId,
+        objectKeys: [...POOL_OBJECT_KEYS],
+        privateLimit: 100,
+        autoReclaimEnabled: true,
+        autoReclaimDays: 30
+      }
+    });
+    return mapCrmPoolSettings(created);
   }
 
   private async ensureDefaultEmailSignatures(context: RequestContext): Promise<void> {
@@ -5929,7 +6211,8 @@ function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize
     sort: query.sort?.field ? query.sort : undefined,
     cursor: query.cursor?.trim() || undefined,
     keyset: Boolean(query.keyset || query.cursor),
-    fields: normalizeProjectedRecordFields(query.fields)
+    fields: normalizeProjectedRecordFields(query.fields),
+    pool: query.pool === "public" || query.pool === "private" || query.pool === "all" ? query.pool : undefined
   };
 }
 

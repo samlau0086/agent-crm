@@ -215,7 +215,7 @@ export const savedViewCreateSchema = z
 
 export const savedViewUpdateSchema = savedViewCreateSchema.partial().strict();
 
-export const permissionSchema = z.enum(["crm.read", "crm.write", "crm.import", "crm.admin", "ai.use", "ai.admin"]);
+export const permissionSchema = z.enum(["crm.read", "crm.write", "crm.import", "crm.pool.manage", "crm.admin", "ai.use", "ai.admin"]);
 
 export const roleCreateSchema = z
   .object({
@@ -225,6 +225,21 @@ export const roleCreateSchema = z
   .strict();
 
 export const roleUpdateSchema = roleCreateSchema.partial().strict();
+
+export const poolSettingsUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    privateLimit: z.number().int().min(1).max(100000).optional(),
+    autoReclaimEnabled: z.boolean().optional(),
+    autoReclaimDays: z.number().int().min(1).max(3650).optional()
+  })
+  .strict();
+
+export const recordPoolTransferSchema = z
+  .object({
+    ownerId: z.union([z.string().trim().min(1), z.null()]).optional()
+  })
+  .strict();
 
 export const apiKeyCreateSchema = z
   .object({

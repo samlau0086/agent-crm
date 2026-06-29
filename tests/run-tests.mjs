@@ -1571,8 +1571,11 @@ await run("settings admin groups configuration panels by tabs", () => {
   const source = readFileSync("src/components/settings-admin.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "integrations" \| "operations"/);
+  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "integrations" \| "operations"/);
   assert.match(source, /const settingsTabs/);
+  assert.match(source, /公海规则/);
+  assert.match(source, /\/api\/pool-settings/);
+  assert.match(source, /activeSettingsTab === "pool"[\s\S]*保存公海规则/);
   assert.match(source, /role="tablist"/);
   assert.match(source, /aria-selected=\{activeSettingsTab === tab\.key\}/);
   assert.match(source, /activeSettingsTab === "access"[\s\S]*UserTeamAdminPanel[\s\S]*RoleAdminPanel[\s\S]*PermissionMatrix/);
@@ -3944,7 +3947,7 @@ await run("sales users cannot manage metadata", () => {
   );
 });
 
-await run("sales users only see owned or team-owned records", () => {
+await run("sales users see public pool and own private contact records only", () => {
   const snapshot = structuredClone(seedData);
   snapshot.teams.push({ id: "team-enterprise", workspaceId: defaultWorkspaceId, name: "Enterprise" });
   snapshot.users.push({
@@ -3965,12 +3968,27 @@ await run("sales users only see owned or team-owned records", () => {
     createdAt: "2026-06-18T00:00:00.000Z",
     updatedAt: "2026-06-18T00:00:00.000Z"
   });
+  snapshot.records.push({
+    id: "contact-public",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Public Pool Contact",
+    data: { email: "public-pool@example.com" },
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z"
+  });
 
   const store = new CrmStore(snapshot);
   const salesContext = store.getContext("user-sales");
   const adminContext = store.getContext("user-admin");
 
   assert.equal(store.listRecords(salesContext, "contacts").some((record) => record.id === "contact-other"), false);
+  assert.equal(store.listRecords(salesContext, "contacts").some((record) => record.id === "contact-public"), true);
+  assert.deepEqual(
+    store.queryRecords(salesContext, "contacts", { pool: "public" }).records.map((record) => record.id),
+    ["contact-public"]
+  );
+  assert.equal(store.queryRecords(salesContext, "contacts", { pool: "private" }).records.every((record) => record.ownerId === "user-sales"), true);
   assert.throws(() => store.getRecord(salesContext, "contacts", "contact-other"), /记录不存在|not found/);
   const hiddenActivity = store.createActivity(adminContext, { recordId: "contact-other", type: "note", title: "Hidden activity" });
   assert.equal(store.listActivities(salesContext, "contact-other").length, 0);
@@ -3981,6 +3999,65 @@ await run("sales users only see owned or team-owned records", () => {
   );
   assert.equal(store.getRecord(adminContext, "contacts", "contact-other").id, "contact-other");
   assert.equal(store.getActivity(adminContext, hiddenActivity.id).title, "Hidden activity");
+});
+
+await run("public pool claim release and admin transfer enforce ownership rules", () => {
+  const snapshot = structuredClone(seedData);
+  snapshot.records.push({
+    id: "contact-public-claim",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Claimable Contact",
+    data: { email: "claimable@example.com" },
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z"
+  });
+  snapshot.records.push({
+    id: "contact-admin-private",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Admin Private Contact",
+    ownerId: "user-admin",
+    data: { email: "admin-private@example.com" },
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z"
+  });
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+
+  store.updatePoolSettings(adminContext, { privateLimit: 100 });
+  const claimed = store.claimRecord(salesContext, "contacts", "contact-public-claim");
+  assert.equal(claimed.record.ownerId, "user-sales");
+  assert.equal(store.getRecord(salesContext, "contacts", "contact-public-claim").ownerId, "user-sales");
+  assert.throws(() => store.releaseRecord(salesContext, "contacts", "contact-admin-private"), /记录不存在|crm\.pool\.manage|not found/);
+
+  const released = store.releaseRecord(salesContext, "contacts", "contact-public-claim");
+  assert.equal(released.record.ownerId, undefined);
+  const transferred = store.transferRecord(adminContext, "contacts", "contact-public-claim", "user-admin");
+  assert.equal(transferred.record.ownerId, "user-admin");
+  const actions = store.listAuditLogs(adminContext).map((log) => log.action);
+  assert.ok(actions.includes("record.claimed"));
+  assert.ok(actions.includes("record.released"));
+  assert.ok(actions.includes("record.transferred"));
+});
+
+await run("public pool claim respects private pool limit", () => {
+  const snapshot = structuredClone(seedData);
+  snapshot.records.push({
+    id: "contact-public-limit",
+    workspaceId: defaultWorkspaceId,
+    objectKey: "contacts",
+    title: "Limit Contact",
+    data: { email: "limit@example.com" },
+    createdAt: "2026-06-18T00:00:00.000Z",
+    updatedAt: "2026-06-18T00:00:00.000Z"
+  });
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  store.updatePoolSettings(adminContext, { privateLimit: 1 });
+  assert.throws(() => store.claimRecord(salesContext, "contacts", "contact-public-limit"), /私海已达到上限|limit/i);
 });
 
 await run("non-admin record writes keep owner scoped to the current user", () => {

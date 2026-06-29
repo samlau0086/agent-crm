@@ -6,7 +6,11 @@ export function formatAuditAction(action: AuditLog["action"]): string {
     update: "更新",
     delete: "删除",
     import: "导入",
-    api_error: "API 错误"
+    api_error: "API 错误",
+    "record.claimed": "领取记录",
+    "record.released": "释放记录",
+    "record.transferred": "转移记录",
+    "record.auto_reclaimed": "自动回收"
   };
   return labels[action] ?? action;
 }

@@ -13,6 +13,7 @@ export type Permission =
   | "crm.read"
   | "crm.write"
   | "crm.import"
+  | "crm.pool.manage"
   | "crm.admin"
   | "ai.use"
   | "ai.admin";
@@ -410,6 +411,20 @@ export interface EmailSyncSettings {
   updatedAt: string;
 }
 
+export type RecordPool = "public" | "private" | "all";
+
+export interface CrmPoolSettings {
+  workspaceId: string;
+  enabled: boolean;
+  objectKeys: string[];
+  privateLimit: number;
+  autoReclaimEnabled: boolean;
+  autoReclaimDays: number;
+  lastAutoReclaimAt?: string;
+  lastAutoReclaimCount: number;
+  updatedAt: string;
+}
+
 export interface AiProviderConfig {
   provider: AiProviderType;
   baseUrl: string;
@@ -524,6 +539,7 @@ export interface RecordListQuery {
   cursor?: string;
   keyset?: boolean;
   fields?: string[];
+  pool?: RecordPool;
 }
 
 export interface RecordListResult {
@@ -565,7 +581,29 @@ export interface Pipeline {
 
 export type ActivityType = "note" | "call" | "meeting" | "task" | "email" | "stage_change";
 
-export type AuditAction = "create" | "update" | "delete" | "import" | "api_error";
+export type AuditAction =
+  | "create"
+  | "update"
+  | "delete"
+  | "import"
+  | "api_error"
+  | "record.claimed"
+  | "record.released"
+  | "record.transferred"
+  | "record.auto_reclaimed";
+
+export interface RecordPoolActionResult {
+  record: CrmRecord;
+  previousOwnerId?: string;
+  ownerId?: string;
+}
+
+export interface RecordPoolAutoReclaimResult {
+  scanned: number;
+  reclaimed: number;
+  reclaimedRecordIds: string[];
+  ranAt: string;
+}
 
 export interface Activity {
   id: string;
@@ -741,6 +779,7 @@ export interface CrmSnapshot {
   talkMessages?: TalkMessage[];
   emailAiSettings: EmailAiSettings[];
   emailSyncSettings?: EmailSyncSettings[];
+  poolSettings?: CrmPoolSettings[];
   mediaAssets?: MediaAsset[];
 }
 
