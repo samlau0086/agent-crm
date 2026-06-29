@@ -122,6 +122,28 @@ export const recordWriteSchema = z
 
 export const recordPatchSchema = recordWriteSchema.partial().strict();
 
+const changeReasonSchema = z.string().trim().min(3).max(1000);
+
+export const recordPatchWithReasonSchema = recordWriteSchema
+  .partial()
+  .extend({
+    changeReason: changeReasonSchema.optional()
+  })
+  .strict();
+
+export const recordDeleteRequestSchema = z
+  .object({
+    changeReason: changeReasonSchema.optional()
+  })
+  .strict();
+
+export const recordChangeRequestReviewSchema = z
+  .object({
+    decision: z.enum(["approve", "reject"]),
+    reviewNote: z.string().trim().max(1000).optional()
+  })
+  .strict();
+
 export const recordFilterSchema = z
   .object({
     field: z.string().trim().min(1),

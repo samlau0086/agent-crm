@@ -16,3 +16,15 @@ async function patchApiMetricsHandler(request: NextRequest, { params }: { params
 }
 
 export const PATCH = withApiMetrics("PATCH /api/webhooks/[id]", patchApiMetricsHandler);
+
+async function deleteApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const context = await getRequestContext(request);
+    await getCrmRepository().deleteWebhook(context, params.id);
+    return ok({ ok: true });
+  } catch (error) {
+    return handleApiError(error, request);
+  }
+}
+
+export const DELETE = withApiMetrics("DELETE /api/webhooks/[id]", deleteApiMetricsHandler);

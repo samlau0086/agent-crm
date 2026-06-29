@@ -88,6 +88,7 @@ import type {
   NotificationChannel,
   ObjectDefinition,
   Pipeline,
+  RecordChangeRequest,
   RecordPool,
   RecordPoolActionResult,
   RecordListResult,
@@ -137,6 +138,7 @@ interface CrmWorkspaceProps {
   emailAiSettings: EmailAiSettings;
   emailSyncSettings?: EmailSyncSettings;
   poolSettings: CrmPoolSettings;
+  recordChangeRequests: RecordChangeRequest[];
   knowledgeArticles: KnowledgeArticle[];
   mediaAssets: MediaAsset[];
   auditLogs: AuditLog[];
@@ -148,6 +150,8 @@ interface CrmWorkspaceProps {
 
 const recordListRequestTimeoutMs = 15_000;
 const routeRefreshTimeoutMs = 10_000;
+const editApprovalObjectKeys = new Set(["contacts", "companies"]);
+const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "products", "quotes"]);
 
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
@@ -165,6 +169,7 @@ type EmailRoutePatch = {
   search?: string;
   threadId?: string;
 };
+type RecordChangeRequestResponse = { pendingApproval: true; request: RecordChangeRequest };
 type EmailThreadUiState = {
   archived?: boolean;
   category?: EmailCategoryKey;
@@ -2180,17 +2185,35 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
 
-    const updatedRecord = await fetchJson<CrmRecord>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
+    const changeReason = editApprovalObjectKeys.has(selectedRecord.objectKey)
+      ? await requestPrompt({
+          title: "提交修改审批",
+          message: `请填写修改“${selectedRecord.title}”的原因。管理员审核通过后才会正式应用。`,
+          placeholder: "例如：客户更新了公司资料和主要联系方式"
+        })
+      : "";
+    if (editApprovalObjectKeys.has(selectedRecord.objectKey) && !changeReason?.trim()) {
+      setMessage("已取消修改审批");
+      return;
+    }
+
+    const result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
       method: "PATCH",
       body: {
         title: editTitle.trim(),
         data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
         stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
-        ownerId: editOwnerId || undefined
+        ownerId: editOwnerId || undefined,
+        changeReason: changeReason?.trim() || undefined
       }
     });
+    if ("pendingApproval" in result) {
+      setMessage("修改申请已提交，等待管理员审核");
+      router.refresh();
+      return;
+    }
 
-    setRecords((current) => mergeRecords(current, [updatedRecord]));
+    setRecords((current) => mergeRecords(current, [result]));
     if (selectedRecord.objectKey === "contacts") {
       setContactMethodEditingId("");
       setContactMethodEditingRecordId("");
@@ -2275,20 +2298,39 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       methods.find((method) => (method.type === "tel" || method.type === "mob") && method.primary)?.value ||
       methods.find((method) => method.type === "tel" || method.type === "mob")?.value ||
       "";
-    const updatedRecord = await fetchJson<CrmRecord>(`/api/records/${targetRecord.objectKey}/${targetRecord.id}`, {
+    const changeReason = targetRecord.objectKey === "contacts"
+      ? await requestPrompt({
+          title: "提交联系方式修改审批",
+          message: `请填写修改“${targetRecord.title}”联系方式的原因。管理员审核通过后才会正式应用。`,
+          placeholder: "例如：客户确认了新的主邮箱"
+        })
+      : "";
+    if (targetRecord.objectKey === "contacts" && !changeReason?.trim()) {
+      setMessage("已取消联系方式修改");
+      return;
+    }
+
+    const result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${targetRecord.objectKey}/${targetRecord.id}`, {
       method: "PATCH",
       body: {
         data: {
           contactMethods: methods,
           email: primaryEmail,
           phone: primaryPhone
-        }
+        },
+        changeReason: changeReason?.trim() || undefined
       }
     });
+    if ("pendingApproval" in result) {
+      closeContactMethodEditor();
+      setMessage("联系方式修改申请已提交，等待管理员审核");
+      router.refresh();
+      return;
+    }
 
-    setRecords((current) => mergeRecords(current, [updatedRecord]));
-    if (selectedRecord?.id === updatedRecord.id) {
-      setEditValues(buildRecordValues(selectedFields, updatedRecord));
+    setRecords((current) => mergeRecords(current, [result]));
+    if (selectedRecord?.id === result.id) {
+      setEditValues(buildRecordValues(selectedFields, result));
     }
     closeContactMethodEditor();
     setMessage("联系方式已更新");
@@ -2299,18 +2341,26 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (!selectedRecord) {
       return;
     }
-    if (
-      !(await requestConfirm({
-        title: "删除记录",
-        message: `确定删除记录“${selectedRecord.title}”？相关活动也会被删除。`,
-        confirmLabel: "删除",
-        danger: true
-      }))
-    ) {
+    const changeReason = deleteApprovalObjectKeys.has(selectedRecord.objectKey)
+      ? await requestPrompt({
+          title: "提交删除审批",
+          message: `请填写删除“${selectedRecord.title}”的原因。管理员审核通过后才会正式删除。`,
+          placeholder: "例如：重复记录，已合并到正确客户"
+        })
+      : "";
+    if (deleteApprovalObjectKeys.has(selectedRecord.objectKey) && !changeReason?.trim()) {
+      setMessage("已取消删除审批");
       return;
     }
 
-    await fetchJson(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, { method: "DELETE" });
+    const result = await fetchJson<{ ok: true } | RecordChangeRequestResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
+      method: "DELETE",
+      body: { changeReason: changeReason?.trim() || undefined }
+    });
+    if ("pendingApproval" in result) {
+      setMessage("删除申请已提交，等待管理员审核");
+      return;
+    }
     setMessage("记录已删除");
     setRecordPanelMode("closed");
     router.refresh();
@@ -4931,6 +4981,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             backupFiles={props.backupFiles}
             importJobQueueSummary={props.importJobQueueSummary}
             poolSettings={props.poolSettings}
+            recordChangeRequests={props.recordChangeRequests}
           />
         )}
 
@@ -5466,6 +5517,7 @@ function EmailWorkspace({
   const selectedThreadAllowsExternalImages = selectedThread ? externalImageThreadIds.has(selectedThread.id) : false;
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
+  const [composeFullSize, setComposeFullSize] = useState(false);
   const [detailMoreOpen, setDetailMoreOpen] = useState(false);
   const [emailSettingsStep, setEmailSettingsStep] = useState<EmailSettingsStep>("identity");
   const [accountConnectionTests, setAccountConnectionTests] = useState<Record<string, { status: "testing" | "success" | "failed"; message: string; testedAt?: string }>>({});
@@ -5840,6 +5892,7 @@ function EmailWorkspace({
     handledComposeOpenRequestRef.current = composeOpenRequestKey;
     setComposeOpen(true);
     setComposeMinimized(false);
+    setComposeFullSize(false);
   }, [composeOpenRequestKey]);
 
   useEffect(() => {
@@ -5884,6 +5937,7 @@ function EmailWorkspace({
     setComposeBccVisible(Boolean(emailDraft.bcc.trim()));
     setComposeOpen(true);
     setComposeMinimized(false);
+    setComposeFullSize(false);
     window.setTimeout(() => {
       document.querySelector<HTMLInputElement>("[data-testid='email-compose-to']")?.focus();
     }, 0);
@@ -5892,6 +5946,7 @@ function EmailWorkspace({
   function closeComposePopup() {
     setComposeOpen(false);
     setComposeMinimized(false);
+    setComposeFullSize(false);
     if (!emailDraft.cc.trim()) {
       setComposeCcVisible(false);
     }
@@ -7567,7 +7622,7 @@ function EmailWorkspace({
 
         {composeOpen ? (
           <section
-            className={`gmail-compose-popup ${composeMinimized ? "minimized" : ""}`}
+            className={`gmail-compose-popup ${composeMinimized ? "minimized" : ""} ${composeFullSize && !composeMinimized ? "full-size" : ""}`}
             data-testid="email-compose-popup"
             aria-label="写邮件"
           >
@@ -7591,6 +7646,20 @@ function EmailWorkspace({
               <div className="toolbar">
                 <button className="icon-button" aria-label={composeMinimized ? "展开写信窗口" : "最小化写信窗口"} type="button" onClick={(event) => { event.stopPropagation(); setComposeMinimized((current) => !current); }}>
                   {composeMinimized ? <Maximize2 size={15} /> : <Minus size={15} />}
+                </button>
+                <button
+                  className="icon-button"
+                  data-testid="email-compose-full-size"
+                  aria-label={composeFullSize && !composeMinimized ? "恢复普通宽度" : "全宽撰写"}
+                  title={composeFullSize && !composeMinimized ? "恢复普通宽度" : "全宽撰写"}
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setComposeMinimized(false);
+                    setComposeFullSize((current) => !current);
+                  }}
+                >
+                  <Maximize2 size={15} />
                 </button>
                 <button className="icon-button" aria-label="关闭写信窗口" type="button" onClick={(event) => { event.stopPropagation(); closeComposePopup(); }}>
                   <XCircle size={15} />

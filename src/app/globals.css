@@ -1806,6 +1806,13 @@ button {
   cursor: pointer;
 }
 
+.gmail-compose-popup.full-size {
+  left: 236px;
+  right: 24px;
+  width: auto;
+  max-height: calc(100vh - 48px);
+}
+
 .gmail-compose-popup-header {
   display: flex;
   align-items: center;
@@ -1855,6 +1862,10 @@ button {
   max-height: calc(min(720px, 100vh - 88px) - 40px);
   overflow: auto;
   padding: 12px;
+}
+
+.gmail-compose-popup.full-size .gmail-compose-popup-body {
+  max-height: calc(100vh - 88px);
 }
 
 .email-client {
@@ -3506,6 +3517,12 @@ button {
   }
 
   .gmail-compose-popup.minimized {
+    width: auto;
+  }
+
+  .gmail-compose-popup.full-size {
+    left: 8px;
+    right: 8px;
     width: auto;
   }
 

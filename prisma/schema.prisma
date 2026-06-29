@@ -42,6 +42,7 @@ model Workspace {
   emailSyncSettings   EmailSyncSettings?
   poolSettings        CrmPoolSettings?
   mediaAssets         MediaAsset[]
+  recordChangeRequests RecordChangeRequest[]
 }
 
 model User {
@@ -251,6 +252,28 @@ model CrmPoolSettings {
   lastAutoReclaimCount    Int       @default(0)
   updatedAt               DateTime  @updatedAt
   workspace               Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model RecordChangeRequest {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  objectKey     String
+  recordId      String
+  action        String
+  status        String    @default("pending")
+  reason        String
+  requestedById String
+  reviewedById  String?
+  reviewNote    String?
+  patch         Json?
+  recordTitle   String
+  createdAt     DateTime  @default(now())
+  reviewedAt    DateTime?
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, objectKey, recordId])
+  @@index([workspaceId, requestedById, createdAt])
 }
 
 model ImportJob {

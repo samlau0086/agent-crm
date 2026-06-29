@@ -425,6 +425,26 @@ export interface CrmPoolSettings {
   updatedAt: string;
 }
 
+export type RecordChangeRequestAction = "update" | "delete";
+export type RecordChangeRequestStatus = "pending" | "approved" | "rejected";
+
+export interface RecordChangeRequest {
+  id: string;
+  workspaceId: string;
+  objectKey: string;
+  recordId: string;
+  action: RecordChangeRequestAction;
+  status: RecordChangeRequestStatus;
+  reason: string;
+  requestedById: string;
+  reviewedById?: string;
+  reviewNote?: string;
+  patch?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>;
+  recordTitle: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
 export interface AiProviderConfig {
   provider: AiProviderType;
   baseUrl: string;
@@ -590,7 +610,10 @@ export type AuditAction =
   | "record.claimed"
   | "record.released"
   | "record.transferred"
-  | "record.auto_reclaimed";
+  | "record.auto_reclaimed"
+  | "record.change_requested"
+  | "record.change_approved"
+  | "record.change_rejected";
 
 export interface RecordPoolActionResult {
   record: CrmRecord;
@@ -780,6 +803,7 @@ export interface CrmSnapshot {
   emailAiSettings: EmailAiSettings[];
   emailSyncSettings?: EmailSyncSettings[];
   poolSettings?: CrmPoolSettings[];
+  recordChangeRequests?: RecordChangeRequest[];
   mediaAssets?: MediaAsset[];
 }
 

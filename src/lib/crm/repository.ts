@@ -1,4 +1,4 @@
-import { Prisma, type PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { createApiKeyToken, getApiKeyTokenPrefix, hashApiKeyToken } from "@/lib/auth/api-key";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
@@ -70,6 +70,7 @@ import type {
   ObjectDefinition,
   Permission,
   Pipeline,
+  RecordChangeRequest,
   RecordListQuery,
   RecordListResult,
   RecordPoolActionResult,
@@ -90,12 +91,18 @@ import type {
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
 import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
 
-type PrismaContext = PrismaClient;
+type PrismaContext = typeof prisma;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
 const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
+const EDIT_APPROVAL_OBJECT_KEYS = ["contacts", "companies"] as const;
+const DELETE_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals", "products", "quotes"] as const;
 
 function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
   return (value ?? {}) as Record<string, unknown>;
+}
+
+function toJsonObject<T>(value: T): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
 }
 
 function isPrismaUniqueConstraintError(error: unknown): boolean {
@@ -119,6 +126,14 @@ function emailSendClaimTimeoutMs(): number {
 
 function isPoolObjectKey(objectKey: string): boolean {
   return POOL_OBJECT_KEYS.includes(objectKey as (typeof POOL_OBJECT_KEYS)[number]);
+}
+
+function requiresEditApproval(objectKey: string): boolean {
+  return EDIT_APPROVAL_OBJECT_KEYS.includes(objectKey as (typeof EDIT_APPROVAL_OBJECT_KEYS)[number]);
+}
+
+function requiresDeleteApproval(objectKey: string): boolean {
+  return DELETE_APPROVAL_OBJECT_KEYS.includes(objectKey as (typeof DELETE_APPROVAL_OBJECT_KEYS)[number]);
 }
 
 function isEmailSendClaimStale(sendAttemptedAt: string | undefined, staleBefore: Date): boolean {
@@ -642,6 +657,40 @@ function mapCrmPoolSettings(settings: {
     lastAutoReclaimAt: settings.lastAutoReclaimAt?.toISOString(),
     lastAutoReclaimCount: settings.lastAutoReclaimCount,
     updatedAt: settings.updatedAt.toISOString()
+  };
+}
+
+function mapRecordChangeRequest(request: {
+  id: string;
+  workspaceId: string;
+  objectKey: string;
+  recordId: string;
+  action: string;
+  status: string;
+  reason: string;
+  requestedById: string;
+  reviewedById: string | null;
+  reviewNote: string | null;
+  patch: Prisma.JsonValue | null;
+  recordTitle: string;
+  createdAt: Date;
+  reviewedAt: Date | null;
+}): RecordChangeRequest {
+  return {
+    id: request.id,
+    workspaceId: request.workspaceId,
+    objectKey: request.objectKey,
+    recordId: request.recordId,
+    action: request.action as RecordChangeRequest["action"],
+    status: request.status as RecordChangeRequest["status"],
+    reason: request.reason,
+    requestedById: request.requestedById,
+    reviewedById: request.reviewedById ?? undefined,
+    reviewNote: request.reviewNote ?? undefined,
+    patch: request.patch ? (request.patch as RecordChangeRequest["patch"]) : undefined,
+    recordTitle: request.recordTitle,
+    createdAt: request.createdAt.toISOString(),
+    reviewedAt: request.reviewedAt?.toISOString()
   };
 }
 
@@ -1376,6 +1425,20 @@ export class PrismaCrmRepository {
       details: { url: updated.url, events: updated.events, active: updated.active }
     });
     return mapWebhookEndpoint(updated);
+  }
+
+  async deleteWebhook(context: RequestContext, id: string): Promise<void> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.db.webhookEndpoint.findFirst({ where: { id, workspaceId: context.workspaceId } });
+    if (!existing) {
+      throw new Error("Webhook not found");
+    }
+    await this.db.webhookDelivery.deleteMany({ where: { webhookId: id, workspaceId: context.workspaceId } });
+    await this.db.webhookEndpoint.delete({ where: { id } });
+    await this.writeAuditLog(context, "delete", "webhook", id, {
+      summary: `Deleted webhook ${existing.name}`,
+      details: { url: existing.url, events: existing.events }
+    });
   }
 
   async listNotificationChannels(context: RequestContext): Promise<NotificationChannel[]> {
@@ -3630,14 +3693,7 @@ export class PrismaCrmRepository {
   ): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     const current = await this.getRecord(context, objectKey, recordId);
-    const mergedData = { ...current.data, ...(patch.data ?? {}) };
-    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData, await this.listRecordsForValidation(context, "currencies")) : mergedData;
-    const fields = await this.listFieldDefinitions(context, objectKey);
-    if (objectKey === "quotes") {
-      validateQuoteRecordData(nextData, await this.listRecordsForValidation(context, "products"));
-    }
-    validateRecordPayload(fields, nextData, await this.listRecordsForUniqueValidation(context, objectKey, fields, nextData, recordId), recordId);
-    await this.assertRecordReferences(context, fields, nextData, true);
+    const { nextData } = await this.validateRecordPatch(context, objectKey, recordId, current, patch);
 
     const updated = await this.db.crmRecord.update({
       where: { id: recordId },
@@ -3677,6 +3733,24 @@ export class PrismaCrmRepository {
       ownerId: mapped.ownerId
     });
     return mapped;
+  }
+
+  private async validateRecordPatch(
+    context: RequestContext,
+    objectKey: string,
+    recordId: string,
+    current: CrmRecord,
+    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>
+  ): Promise<{ nextData: Record<string, unknown>; fields: FieldDefinition[] }> {
+    const mergedData = { ...current.data, ...(patch.data ?? {}) };
+    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData, await this.listRecordsForValidation(context, "currencies")) : mergedData;
+    const fields = await this.listFieldDefinitions(context, objectKey);
+    if (objectKey === "quotes") {
+      validateQuoteRecordData(nextData, await this.listRecordsForValidation(context, "products"));
+    }
+    validateRecordPayload(fields, nextData, await this.listRecordsForUniqueValidation(context, objectKey, fields, nextData, recordId), recordId);
+    await this.assertRecordReferences(context, fields, nextData, true);
+    return { nextData, fields };
   }
 
   async claimRecord(context: RequestContext, objectKey: string, recordId: string): Promise<RecordPoolActionResult> {
@@ -3855,6 +3929,151 @@ export class PrismaCrmRepository {
       objectKey,
       title: record.title
     });
+  }
+
+  async listRecordChangeRequests(context: RequestContext, status: "pending" | "approved" | "rejected" | "all" = "pending"): Promise<RecordChangeRequest[]> {
+    requirePermission(context, "crm.admin");
+    const requests = await this.db.recordChangeRequest.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        ...(status === "all" ? {} : { status })
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    });
+    return requests.map(mapRecordChangeRequest);
+  }
+
+  async requestRecordUpdate(
+    context: RequestContext,
+    objectKey: string,
+    recordId: string,
+    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>,
+    reason: string
+  ): Promise<RecordChangeRequest> {
+    requirePermission(context, "crm.write");
+    if (!requiresEditApproval(objectKey)) {
+      throw new Error("This object does not require update approval");
+    }
+    const cleanedReason = reason.trim();
+    if (cleanedReason.length < 3) {
+      throw new Error("请填写修改原因，至少 3 个字符");
+    }
+    const current = await this.getRecord(context, objectKey, recordId);
+    await this.validateRecordPatch(context, objectKey, recordId, current, patch);
+    const request = await this.db.recordChangeRequest.create({
+      data: {
+        workspaceId: context.workspaceId,
+        objectKey,
+        recordId,
+        action: "update",
+        status: "pending",
+        reason: cleanedReason,
+        requestedById: context.user.id,
+        patch: toJsonObject(patch),
+        recordTitle: current.title
+      }
+    });
+    await this.writeAuditLog(context, "record.change_requested", "record_change_request", request.id, {
+      objectKey,
+      summary: `Requested update approval for ${objectKey} record ${current.title}`,
+      details: { recordId, action: "update", reason: cleanedReason }
+    });
+    return mapRecordChangeRequest(request);
+  }
+
+  async requestRecordDelete(context: RequestContext, objectKey: string, recordId: string, reason: string): Promise<RecordChangeRequest> {
+    requirePermission(context, "crm.write");
+    if (!requiresDeleteApproval(objectKey)) {
+      throw new Error("This object does not require delete approval");
+    }
+    const cleanedReason = reason.trim();
+    if (cleanedReason.length < 3) {
+      throw new Error("请填写删除原因，至少 3 个字符");
+    }
+    const current = await this.getRecord(context, objectKey, recordId);
+    const request = await this.db.recordChangeRequest.create({
+      data: {
+        workspaceId: context.workspaceId,
+        objectKey,
+        recordId,
+        action: "delete",
+        status: "pending",
+        reason: cleanedReason,
+        requestedById: context.user.id,
+        recordTitle: current.title
+      }
+    });
+    await this.writeAuditLog(context, "record.change_requested", "record_change_request", request.id, {
+      objectKey,
+      summary: `Requested delete approval for ${objectKey} record ${current.title}`,
+      details: { recordId, action: "delete", reason: cleanedReason }
+    });
+    return mapRecordChangeRequest(request);
+  }
+
+  async reviewRecordChangeRequest(
+    context: RequestContext,
+    requestId: string,
+    input: { decision: "approve" | "reject"; reviewNote?: string }
+  ): Promise<RecordChangeRequest> {
+    requirePermission(context, "crm.admin");
+    const request = await this.db.recordChangeRequest.findFirst({
+      where: { id: requestId, workspaceId: context.workspaceId }
+    });
+    if (!request) {
+      throw new Error("审批申请不存在");
+    }
+    if (request.status !== "pending") {
+      throw new Error("审批申请已经处理");
+    }
+    const reviewedAt = new Date();
+    if (input.decision === "reject") {
+      const rejected = await this.db.recordChangeRequest.update({
+        where: { id: requestId },
+        data: {
+          status: "rejected",
+          reviewedById: context.user.id,
+          reviewNote: input.reviewNote?.trim() || undefined,
+          reviewedAt
+        }
+      });
+      await this.writeAuditLog(context, "record.change_rejected", "record_change_request", request.id, {
+        objectKey: request.objectKey,
+        summary: `Rejected ${request.action} request for ${request.objectKey} record ${request.recordTitle}`,
+        details: { recordId: request.recordId, action: request.action, reviewNote: input.reviewNote }
+      });
+      return mapRecordChangeRequest(rejected);
+    }
+
+    if (request.action === "update") {
+      await this.updateRecord(
+        context,
+        request.objectKey,
+        request.recordId,
+        (request.patch ?? {}) as Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>
+      );
+    } else if (request.action === "delete") {
+      await this.deleteRecord(context, request.objectKey, request.recordId);
+    } else {
+      throw new Error("Unsupported change request action");
+    }
+
+    const approved = await this.db.recordChangeRequest.update({
+      where: { id: requestId },
+      data: {
+        status: "approved",
+        reviewedById: context.user.id,
+        reviewNote: input.reviewNote?.trim() || undefined,
+        reviewedAt
+      }
+    });
+    await this.writeAuditLog(context, "record.change_approved", "record_change_request", request.id, {
+      objectKey: request.objectKey,
+      summary: `Approved ${request.action} request for ${request.objectKey} record ${request.recordTitle}`,
+      details: { recordId: request.recordId, action: request.action, reviewNote: input.reviewNote }
+    });
+    return mapRecordChangeRequest(approved);
   }
 
   async listPipelines(context: RequestContext): Promise<Pipeline[]> {

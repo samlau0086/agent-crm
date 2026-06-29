@@ -7,7 +7,7 @@ import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
-import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
+import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -29,6 +29,7 @@ interface SettingsAdminProps {
   backupFiles: BackupFile[];
   importJobQueueSummary?: ImportJobQueueSummary;
   poolSettings: CrmPoolSettings;
+  recordChangeRequests: RecordChangeRequest[];
 }
 
 type ObjectDraft = {
@@ -189,6 +190,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [apiKeyDraft, setApiKeyDraft] = useState<ApiKeyDraft>(emptyApiKeyDraft());
   const [createdApiKeyToken, setCreatedApiKeyToken] = useState<string | null>(null);
   const [webhookDraft, setWebhookDraft] = useState<WebhookDraft>(emptyWebhookDraft());
+  const [selectedWebhookEditId, setSelectedWebhookEditId] = useState("");
+  const [recordChangeRequests, setRecordChangeRequests] = useState<RecordChangeRequest[]>(props.recordChangeRequests);
   const [selectedNotificationChannelId, setSelectedNotificationChannelId] = useState("");
   const [notificationChannelDraft, setNotificationChannelDraft] = useState<NotificationChannelDraft>(emptyNotificationChannelDraft());
   const [poolSettingsDraft, setPoolSettingsDraft] = useState<PoolSettingsDraft>(() => ({
@@ -222,6 +225,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const selectedUser = props.users.find((user) => user.id === selectedUserId);
   const selectedTeam = props.teams.find((team) => team.id === selectedTeamId);
   const selectedNotificationChannel = props.notificationChannels.find((channel) => channel.id === selectedNotificationChannelId);
+  const selectedWebhookEdit = props.webhooks.find((webhook) => webhook.id === selectedWebhookEditId);
   const currencyRecords = useMemo(() => props.records.filter((record) => record.objectKey === "currencies"), [props.records]);
   const selectedCurrency = currencyRecords.find((currency) => currency.id === selectedCurrencyId);
   const objectFields = useMemo(
@@ -325,6 +329,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   useEffect(() => {
     setWebhookDeliveryWebhookId((current) => (props.webhooks.some((webhook) => webhook.id === current) ? current : props.webhooks[0]?.id ?? ""));
   }, [props.webhooks]);
+
+  useEffect(() => {
+    setRecordChangeRequests(props.recordChangeRequests);
+  }, [props.recordChangeRequests]);
 
   useEffect(() => {
     setSelectedNotificationChannelId((current) => (props.notificationChannels.some((channel) => channel.id === current) ? current : ""));
@@ -510,6 +518,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   function resetWebhookForm() {
     setWebhookDraft(emptyWebhookDraft());
+    setSelectedWebhookEditId("");
     setCreatedWebhookSecret(null);
   }
 
@@ -842,7 +851,27 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     }));
   }
 
-  async function createWebhook() {
+  function editWebhook(webhook: WebhookEndpoint) {
+    setSelectedWebhookEditId(webhook.id);
+    setWebhookDraft({
+      name: webhook.name,
+      url: webhook.url,
+      events: webhook.events,
+      active: webhook.active
+    });
+    setCreatedWebhookSecret(null);
+  }
+
+  async function saveWebhook() {
+    if (selectedWebhookEditId) {
+      await fetchJson<WebhookEndpoint>(`/api/webhooks/${selectedWebhookEditId}`, {
+        method: "PATCH",
+        body: webhookDraft
+      });
+      setMessage(`Webhook 已更新：${webhookDraft.name}`);
+      router.refresh();
+      return;
+    }
     const result = await fetchJson<CreatedWebhookEndpoint>("/api/webhooks", {
       method: "POST",
       body: webhookDraft
@@ -850,12 +879,24 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setCreatedWebhookSecret(result.secret);
     setMessage(`Created webhook ${result.webhook.name}. Copy the signing secret now; it will not be shown again.`);
     setWebhookDraft(emptyWebhookDraft());
+    router.refresh();
+  }
+
+  async function deleteWebhook(webhook: WebhookEndpoint) {
+    if (!(await requestConfirm({ title: "删除 Webhook", message: `确定删除 Webhook“${webhook.name}”？已有投递记录也会被清理。`, confirmLabel: "删除", danger: true }))) return;
+    await fetchJson(`/api/webhooks/${webhook.id}`, { method: "DELETE" });
+    if (selectedWebhookEditId === webhook.id) {
+      resetWebhookForm();
+    }
+    setMessage(`Webhook 已删除：${webhook.name}`);
+    router.refresh();
   }
 
   async function toggleWebhook(webhook: WebhookEndpoint) {
     if (webhook.active && !(await requestConfirm({ title: "停用 Webhook", message: `确定停用 Webhook“${webhook.name}”？相关集成将不再收到事件。`, confirmLabel: "停用", danger: true }))) return;
     await fetchJson(`/api/webhooks/${webhook.id}`, { method: "PATCH", body: { active: !webhook.active } });
     setMessage(`${webhook.active ? "Disabled" : "Enabled"} webhook ${webhook.name}`);
+    router.refresh();
   }
 
   async function testWebhook(webhook: WebhookEndpoint) {
@@ -863,6 +904,21 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setWebhookDeliveryWebhookId(webhook.id);
     setWebhookDeliveries((current) => [delivery, ...current.filter((candidate) => candidate.id !== delivery.id)].slice(0, 20));
     setMessage(`Webhook test ${delivery.status}: ${delivery.responseStatus ?? delivery.errorMessage ?? "no response"}`);
+  }
+
+  async function reviewRecordChangeRequest(request: RecordChangeRequest, decision: "approve" | "reject") {
+    const reviewNote =
+      decision === "reject"
+        ? await requestConfirm({ title: "拒绝审批", message: `确定拒绝“${request.recordTitle}”的${request.action === "delete" ? "删除" : "修改"}申请？`, confirmLabel: "拒绝", danger: true })
+        : await requestConfirm({ title: "通过审批", message: `确定通过“${request.recordTitle}”的${request.action === "delete" ? "删除" : "修改"}申请？`, confirmLabel: "通过" });
+    if (!reviewNote) return;
+    const updated = await fetchJson<RecordChangeRequest>(`/api/record-change-requests/${request.id}`, {
+      method: "PATCH",
+      body: { decision }
+    });
+    setRecordChangeRequests((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)).filter((candidate) => candidate.status === "pending"));
+    setMessage(decision === "approve" ? "审批已通过" : "审批已拒绝");
+    router.refresh();
   }
 
   async function retryWebhookDelivery(delivery: WebhookDelivery) {
@@ -1192,6 +1248,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             webhooks={props.webhooks}
             users={props.users}
             draft={webhookDraft}
+            selectedWebhook={selectedWebhookEdit}
             createdSecret={createdWebhookSecret}
             deliveries={webhookDeliveries}
             selectedWebhookId={webhookDeliveryWebhookId}
@@ -1200,7 +1257,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             isPending={isPending}
             onDraftChange={(patch) => setWebhookDraft((current) => ({ ...current, ...patch }))}
             onToggleEvent={toggleWebhookEvent}
-            onCreate={() => runAction(createWebhook)}
+            onCreate={() => runAction(saveWebhook)}
+            onEdit={editWebhook}
+            onDelete={(webhook) => runAction(() => deleteWebhook(webhook))}
             onToggle={(webhook) => runAction(() => toggleWebhook(webhook))}
             onTest={(webhook) => runAction(() => testWebhook(webhook))}
             onRetryDelivery={(delivery) => runAction(() => retryWebhookDelivery(delivery))}
@@ -1917,6 +1976,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           {props.importJobQueueSummary ? (
             <ImportQueueMonitor summary={props.importJobQueueSummary} users={props.users} />
           ) : null}
+
+          <RecordChangeRequestAdminPanel
+            requests={recordChangeRequests}
+            users={props.users}
+            isPending={isPending}
+            onApprove={(request) => runAction(() => reviewRecordChangeRequest(request, "approve"))}
+            onReject={(request) => runAction(() => reviewRecordChangeRequest(request, "reject"))}
+          />
 
           <BackupOperationsPanel backups={backupFiles} isPending={isPending} onCreate={() => runAction(createBackup)} />
 
@@ -2649,6 +2716,7 @@ function WebhookAdminPanel({
   webhooks,
   users,
   draft,
+  selectedWebhook,
   createdSecret,
   deliveries,
   selectedWebhookId,
@@ -2658,6 +2726,8 @@ function WebhookAdminPanel({
   onDraftChange,
   onToggleEvent,
   onCreate,
+  onEdit,
+  onDelete,
   onToggle,
   onTest,
   onRetryDelivery,
@@ -2670,6 +2740,7 @@ function WebhookAdminPanel({
   webhooks: WebhookEndpoint[];
   users: User[];
   draft: WebhookDraft;
+  selectedWebhook?: WebhookEndpoint;
   createdSecret: string | null;
   deliveries: WebhookDelivery[];
   selectedWebhookId: string;
@@ -2679,6 +2750,8 @@ function WebhookAdminPanel({
   onDraftChange: (patch: Partial<WebhookDraft>) => void;
   onToggleEvent: (event: WebhookEvent, enabled: boolean) => void;
   onCreate: () => void;
+  onEdit: (webhook: WebhookEndpoint) => void;
+  onDelete: (webhook: WebhookEndpoint) => void;
   onToggle: (webhook: WebhookEndpoint) => void;
   onTest: (webhook: WebhookEndpoint) => void;
   onRetryDelivery: (delivery: WebhookDelivery) => void;
@@ -2743,8 +2816,14 @@ function WebhookAdminPanel({
           </div>
           <button className="primary-button" data-testid="settings-create-webhook" type="button" onClick={onCreate} disabled={isPending || !draft.name.trim() || !draft.url.trim() || draft.events.length === 0} style={{ marginTop: 12 }}>
             <Save size={16} />
-            Create webhook
+            {selectedWebhook ? "Save webhook" : "Create webhook"}
           </button>
+          {selectedWebhook ? (
+            <button className="secondary-button" type="button" onClick={onReset} disabled={isPending} style={{ marginTop: 12, marginLeft: 8 }}>
+              <XCircle size={15} />
+              Cancel edit
+            </button>
+          ) : null}
         </div>
 
         <div className="settings-card">
@@ -2767,6 +2846,10 @@ function WebhookAdminPanel({
                   </div>
                   {webhook.lastDeliveredAt ? <div className="subtle">Last delivered {formatAuditTime(webhook.lastDeliveredAt)}</div> : null}
                   <div className="toolbar compact-toolbar" style={{ marginTop: 10 }}>
+                    <button className="secondary-button" data-testid={`settings-webhook-edit-${webhook.id}`} type="button" onClick={() => onEdit(webhook)} disabled={isPending}>
+                      <Save size={15} />
+                      Edit
+                    </button>
                     <button className="secondary-button" data-testid={`settings-webhook-test-${webhook.id}`} type="button" onClick={() => onTest(webhook)} disabled={isPending || !webhook.active}>
                       <CheckCircle2 size={15} />
                       Test
@@ -2774,6 +2857,10 @@ function WebhookAdminPanel({
                     <button className={webhook.active ? "danger-button" : "secondary-button"} data-testid={`settings-webhook-toggle-${webhook.id}`} type="button" onClick={() => onToggle(webhook)} disabled={isPending}>
                       <XCircle size={15} />
                       {webhook.active ? "Disable" : "Enable"}
+                    </button>
+                    <button className="danger-button" data-testid={`settings-webhook-delete-${webhook.id}`} type="button" onClick={() => onDelete(webhook)} disabled={isPending}>
+                      <Trash2 size={15} />
+                      Delete
                     </button>
                   </div>
                 </article>
@@ -2991,6 +3078,61 @@ function NotificationChannelAdminPanel({
           )}
         </div>
       </div>
+    </section>
+  );
+}
+
+function RecordChangeRequestAdminPanel({
+  requests,
+  users,
+  isPending,
+  onApprove,
+  onReject
+}: {
+  requests: RecordChangeRequest[];
+  users: User[];
+  isPending: boolean;
+  onApprove: (request: RecordChangeRequest) => void;
+  onReject: (request: RecordChangeRequest) => void;
+}) {
+  return (
+    <section className="settings-panel" data-testid="settings-record-change-requests">
+      <div className="settings-panel-header">
+        <div>
+          <h2 className="page-title">记录变更审批</h2>
+          <div className="subtle">联系人/公司修改，以及联系人、公司、交易、产品、报价删除，需要管理员审核后生效。</div>
+        </div>
+        <span className="badge">{requests.length}</span>
+      </div>
+      {requests.length > 0 ? (
+        <div className="activity-list" style={{ marginTop: 12 }}>
+          {requests.map((request) => (
+            <article className="activity-item" data-testid={`record-change-request-${request.id}`} key={request.id}>
+              <div className="stage-header">
+                <strong>{request.recordTitle}</strong>
+                <span className={request.action === "delete" ? "danger-badge" : "badge"}>{request.action === "delete" ? "删除申请" : "修改申请"}</span>
+              </div>
+              <div className="subtle">
+                {request.objectKey} · {users.find((user) => user.id === request.requestedById)?.name ?? request.requestedById} · {formatAuditTime(request.createdAt)}
+              </div>
+              <div className="subtle">原因：{request.reason}</div>
+              {request.patch ? <code className="audit-details">{formatAuditDetails(request.patch as Record<string, unknown>)}</code> : null}
+              <div className="toolbar compact-toolbar" style={{ marginTop: 10 }}>
+                <button className="primary-button" data-testid={`record-change-approve-${request.id}`} type="button" onClick={() => onApprove(request)} disabled={isPending}>
+                  <CheckCircle2 size={15} />
+                  通过
+                </button>
+                <button className="danger-button" data-testid={`record-change-reject-${request.id}`} type="button" onClick={() => onReject(request)} disabled={isPending}>
+                  <XCircle size={15} />
+                  拒绝
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state" style={{ marginTop: 12 }}>暂无待审批的记录变更。</div>
+      )}
     </section>
   );
 }
