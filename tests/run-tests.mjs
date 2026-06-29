@@ -1997,6 +1997,10 @@ await run("contact detail uses a social profile layout instead of a flat form", 
 
   assert.match(source, /selectedRecord\.objectKey === "contacts" \? \(/);
   assert.match(source, /<ContactProfileEditor/);
+  assert.match(source, /saveLabel=\{editApprovalObjectKeys\.has\(selectedRecord\.objectKey\) \? "提交修改审批" : "保存"\}/);
+  assert.match(source, /onSave=\{\(\) => runRecordSaveAction\(submitUpdateRecord\)\}/);
+  assert.match(source, /const \[isRecordSavePending, setIsRecordSavePending\] = useState\(false\)/);
+  assert.match(source, /setRecordChangeRequests\(\(current\) => \[result\.request, \.\.\.current\.filter\(\(request\) => request\.id !== result\.request\.id\)\]\)/);
   assert.match(source, /data-testid="contact-profile-layout"/);
   assert.match(source, /function ContactProfileEditor/);
   assert.match(source, /function ContactAvatarEditor/);
@@ -2013,6 +2017,8 @@ await run("company detail uses the same profile layout pattern as contacts", () 
 
   assert.match(source, /selectedRecord\.objectKey === "companies" \? \(/);
   assert.match(source, /<CompanyProfileEditor/);
+  assert.match(source, /saveLabel=\{editApprovalObjectKeys\.has\(selectedRecord\.objectKey\) \? "提交修改审批" : "保存"\}/);
+  assert.match(source, /onSave=\{\(\) => runRecordSaveAction\(submitUpdateRecord\)\}/);
   assert.match(source, /data-testid="company-profile-layout"/);
   assert.match(source, /function CompanyProfileEditor/);
   assert.match(source, /function CompanyLogoEditor/);

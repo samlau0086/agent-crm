@@ -1289,6 +1289,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [promptValue, setPromptValue] = useState("");
   const [isHydrated, setIsHydrated] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const [isRecordSavePending, setIsRecordSavePending] = useState(false);
   const [isRouteRefreshPending, startRouteRefreshTransition] = useTransition();
   const [isRouteRefreshing, setIsRouteRefreshing] = useState(false);
   const previousCreateFormResetKey = useRef("");
@@ -2226,7 +2227,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     });
     if ("pendingApproval" in result) {
-      setMessage("修改申请已提交，等待管理员审核");
+      setRecordChangeRequests((current) => [result.request, ...current.filter((request) => request.id !== result.request.id)]);
+      showSuccess("修改申请已提交，等待管理员审核");
       router.refresh();
       return;
     }
@@ -3673,6 +3675,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
+  function runRecordSaveAction(action: () => Promise<void>) {
+    setMessage(null);
+    setError(null);
+    setIsRecordSavePending(true);
+    void (async () => {
+      try {
+        await action();
+      } catch (actionError) {
+        showError(actionError instanceof Error ? actionError.message : "保存失败");
+      } finally {
+        setIsRecordSavePending(false);
+      }
+    })();
+  }
+
   function refreshRoute() {
     setMessage(null);
     setError(null);
@@ -4105,11 +4122,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         canManageOwners={canManageViews}
                         contactMethodValue={editValues[contactMethodsValueKey] ?? ""}
                         fields={selectedFormFields}
-                        isPending={isPending}
+                        isPending={isPending || isRecordSavePending}
                         mediaAssets={mediaAssets}
                         ownerId={editOwnerId}
                         pendingDeleteRequest={selectedRecordPendingDeleteRequest}
                         record={selectedRecord}
+                        saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                         title={editTitle}
                         users={props.users}
                         values={editValues}
@@ -4118,7 +4136,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
                         onOwnerChange={setEditOwnerId}
                         onRecordsLoaded={mergeLoadedRecords}
-                        onSave={() => runAction(submitUpdateRecord)}
+                        onSave={() => runRecordSaveAction(submitUpdateRecord)}
                         onTitleChange={setEditTitle}
                         onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
                         onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
@@ -4134,12 +4152,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         canManageOwners={canManageViews}
                         contacts={selectedCompanyContacts}
                         fields={selectedFormFields}
-                        isPending={isPending}
+                        isPending={isPending || isRecordSavePending}
                         mediaAssets={mediaAssets}
                         ownerId={editOwnerId}
                         pendingDeleteRequest={selectedRecordPendingDeleteRequest}
                         primaryContactId={editValues[companyPrimaryContactValueKey] ?? ""}
                         record={selectedRecord}
+                        saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                         shippingAddressEditingId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
                         shippingAddressValue={editValues[companyShippingAddressesValueKey] ?? ""}
                         title={editTitle}
@@ -4169,7 +4188,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onOwnerChange={setEditOwnerId}
                         onPrimaryContactChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
                         onRecordsLoaded={mergeLoadedRecords}
-                        onSave={() => runAction(submitUpdateRecord)}
+                        onSave={() => runRecordSaveAction(submitUpdateRecord)}
                         onShippingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
                         onTitleChange={setEditTitle}
                         onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
@@ -11908,6 +11927,7 @@ function ContactProfileEditor({
   ownerId,
   pendingDeleteRequest,
   record,
+  saveLabel,
   showContactMethodEditor,
   title,
   users,
@@ -11933,6 +11953,7 @@ function ContactProfileEditor({
   ownerId: string;
   pendingDeleteRequest?: RecordChangeRequest;
   record: CrmRecord;
+  saveLabel: string;
   showContactMethodEditor: boolean;
   title: string;
   users: User[];
@@ -11983,7 +12004,7 @@ function ContactProfileEditor({
           <div className="contact-profile-actions">
             <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
               <Save size={16} />
-              保存
+              {saveLabel}
             </button>
             {pendingDeleteRequest ? (
               <button className="danger-button" data-testid="edit-record-cancel-delete-request" type="button" onClick={() => onCancelDeleteRequest(pendingDeleteRequest)} disabled={isPending}>
@@ -12083,6 +12104,7 @@ function CompanyProfileEditor({
   pendingDeleteRequest,
   primaryContactId,
   record,
+  saveLabel,
   shippingAddressEditingId,
   shippingAddressValue,
   title,
@@ -12119,6 +12141,7 @@ function CompanyProfileEditor({
   pendingDeleteRequest?: RecordChangeRequest;
   primaryContactId: string;
   record: CrmRecord;
+  saveLabel: string;
   shippingAddressEditingId: string;
   shippingAddressValue: string;
   title: string;
@@ -12178,7 +12201,7 @@ function CompanyProfileEditor({
           <div className="contact-profile-actions">
             <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
               <Save size={16} />
-              保存
+              {saveLabel}
             </button>
             {pendingDeleteRequest ? (
               <button className="danger-button" data-testid="edit-record-cancel-delete-request" type="button" onClick={() => onCancelDeleteRequest(pendingDeleteRequest)} disabled={isPending}>
