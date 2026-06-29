@@ -2001,6 +2001,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           ) : null}
 
           <RecordChangeRequestAdminPanel
+            fields={props.fields}
+            objects={props.objects}
+            records={props.records}
             requests={recordChangeRequests}
             users={props.users}
             reviewingRequestId={reviewingRecordChangeRequestId}
@@ -3105,13 +3108,26 @@ function NotificationChannelAdminPanel({
   );
 }
 
+type RecordReviewRow = {
+  key: string;
+  label: string;
+  oldValue: string;
+  newValue: string;
+};
+
 function RecordChangeRequestAdminPanel({
+  fields,
+  objects,
+  records,
   requests,
   users,
   reviewingRequestId,
   onApprove,
   onReject
 }: {
+  fields: FieldDefinition[];
+  objects: ObjectDefinition[];
+  records: CrmRecord[];
   requests: RecordChangeRequest[];
   users: User[];
   reviewingRequestId: string;
@@ -3128,36 +3144,254 @@ function RecordChangeRequestAdminPanel({
         <span className="badge">{requests.length}</span>
       </div>
       {requests.length > 0 ? (
-        <div className="activity-list" style={{ marginTop: 12 }}>
-          {requests.map((request) => (
-            <article className="activity-item" data-testid={`record-change-request-${request.id}`} key={request.id}>
-              <div className="stage-header">
-                <strong>{request.recordTitle}</strong>
-                <span className={request.action === "delete" ? "danger-badge" : "badge"}>{request.action === "delete" ? "删除申请" : "修改申请"}</span>
-              </div>
-              <div className="subtle">
-                {request.objectKey} · {users.find((user) => user.id === request.requestedById)?.name ?? request.requestedById} · {formatAuditTime(request.createdAt)}
-              </div>
-              <div className="subtle">原因：{request.reason}</div>
-              {request.patch ? <code className="audit-details">{formatAuditDetails(request.patch as Record<string, unknown>)}</code> : null}
-              <div className="toolbar compact-toolbar" style={{ marginTop: 10 }}>
-                <button className="primary-button" data-testid={`record-change-approve-${request.id}`} type="button" onClick={() => onApprove(request)} disabled={Boolean(reviewingRequestId)}>
-                  <CheckCircle2 size={15} />
-                  {reviewingRequestId === request.id ? "\u5904\u7406\u4e2d" : "\u901a\u8fc7"}
-                </button>
-                <button className="danger-button" data-testid={`record-change-reject-${request.id}`} type="button" onClick={() => onReject(request)} disabled={Boolean(reviewingRequestId)}>
-                  <XCircle size={15} />
-                  {"\u62d2\u7edd"}
-                </button>
-              </div>
-            </article>
-          ))}
+        <div className="record-review-list" style={{ marginTop: 12 }}>
+          {requests.map((request) => {
+            const object = objects.find((item) => item.key === request.objectKey);
+            const record = records.find((item) => item.id === request.recordId && item.objectKey === request.objectKey);
+            const requestFields = fields.filter((field) => field.objectKey === request.objectKey);
+            const reviewRows = buildRecordReviewRows(request, record, requestFields, users);
+            const requestedBy = users.find((user) => user.id === request.requestedById);
+            return (
+              <article className={`record-review-card ${request.action === "delete" ? "delete-review" : "update-review"}`} data-testid={`record-change-request-${request.id}`} key={request.id}>
+                <div className="record-review-header">
+                  <div>
+                    <strong>{request.recordTitle}</strong>
+                    <div className="subtle">
+                      {object?.label ?? request.objectKey} · {requestedBy?.name ?? request.requestedById} · {formatAuditTime(request.createdAt)}
+                    </div>
+                  </div>
+                  <span className={request.action === "delete" ? "danger-badge" : "badge"}>{request.action === "delete" ? "删除申请" : "修改申请"}</span>
+                </div>
+
+                <div className="record-review-reason">
+                  <span>申请原因</span>
+                  <strong>{request.reason}</strong>
+                </div>
+
+                {request.action === "delete" ? (
+                  <div className="record-review-delete-note">
+                    <strong>将删除此记录</strong>
+                    <span>通过后记录会被实质删除。请确认该记录不再需要保留，且相关业务数据已处理。</span>
+                  </div>
+                ) : null}
+
+                {reviewRows.length > 0 ? (
+                  <div className="record-review-diff-table" data-testid={`record-change-diff-${request.id}`}>
+                    <div className="record-review-diff-head">
+                      <span>字段</span>
+                      <span>当前值</span>
+                      <span>{request.action === "delete" ? "记录值" : "申请值"}</span>
+                    </div>
+                    {reviewRows.map((row) => (
+                      <div className="record-review-diff-row" key={`${request.id}-${row.key}`}>
+                        <strong>{row.label}</strong>
+                        <span className="record-review-value old-value">{row.oldValue || "空"}</span>
+                        <span className="record-review-value new-value">{row.newValue || "空"}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state compact-empty">{request.action === "delete" ? "未找到可展示的记录字段。" : "此申请没有可展示的字段差异。"}</div>
+                )}
+
+                <div className="toolbar compact-toolbar" style={{ marginTop: 10 }}>
+                  <button className="primary-button" data-testid={`record-change-approve-${request.id}`} type="button" onClick={() => onApprove(request)} disabled={Boolean(reviewingRequestId)}>
+                    <CheckCircle2 size={15} />
+                    {reviewingRequestId === request.id ? "\u5904\u7406\u4e2d" : "\u901a\u8fc7"}
+                  </button>
+                  <button className="danger-button" data-testid={`record-change-reject-${request.id}`} type="button" onClick={() => onReject(request)} disabled={Boolean(reviewingRequestId)}>
+                    <XCircle size={15} />
+                    {"\u62d2\u7edd"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       ) : (
         <div className="empty-state" style={{ marginTop: 12 }}>暂无待审批的记录变更。</div>
       )}
     </section>
   );
+}
+
+function buildRecordReviewRows(request: RecordChangeRequest, record: CrmRecord | undefined, fields: FieldDefinition[], users: User[]): RecordReviewRow[] {
+  const rows: RecordReviewRow[] = [];
+  const fieldByKey = new Map(fields.map((field) => [field.key, field]));
+
+  if (request.action === "delete") {
+    if (!record) {
+      return rows;
+    }
+    rows.push({ key: "title", label: "名称", oldValue: record.title, newValue: record.title });
+    if (record.ownerId) {
+      rows.push({ key: "ownerId", label: "负责人", oldValue: formatRecordReviewOwner(record.ownerId, users), newValue: formatRecordReviewOwner(record.ownerId, users) });
+    }
+    for (const field of fields) {
+      if (!(field.key in record.data)) {
+        continue;
+      }
+      rows.push({
+        key: field.key,
+        label: field.label,
+        oldValue: formatRecordReviewValue(field, record.data[field.key], users),
+        newValue: formatRecordReviewValue(field, record.data[field.key], users)
+      });
+    }
+    return rows;
+  }
+
+  const patch = request.patch ?? {};
+  if ("title" in patch) {
+    rows.push({
+      key: "title",
+      label: "名称",
+      oldValue: record?.title ?? "",
+      newValue: formatRecordReviewValue(undefined, patch.title, users)
+    });
+  }
+  if ("stageKey" in patch) {
+    rows.push({
+      key: "stageKey",
+      label: "阶段",
+      oldValue: record?.stageKey ?? "",
+      newValue: formatRecordReviewValue(undefined, patch.stageKey, users)
+    });
+  }
+  if ("ownerId" in patch) {
+    rows.push({
+      key: "ownerId",
+      label: "负责人",
+      oldValue: formatRecordReviewOwner(record?.ownerId, users),
+      newValue: formatRecordReviewOwner(typeof patch.ownerId === "string" ? patch.ownerId : undefined, users)
+    });
+  }
+
+  const patchData = isRecordReviewObject(patch.data) ? patch.data : {};
+  const dataKeys = uniqueSorted(Object.keys(patchData));
+  for (const key of dataKeys) {
+    const field = fieldByKey.get(key);
+    const oldValue = record?.data[key];
+    const newValue = patchData[key];
+    if (recordReviewValueKey(oldValue) === recordReviewValueKey(newValue)) {
+      continue;
+    }
+    rows.push({
+      key,
+      label: field?.label ?? fieldLabelFromKey(key),
+      oldValue: formatRecordReviewValue(field, oldValue, users),
+      newValue: formatRecordReviewValue(field, newValue, users)
+    });
+  }
+
+  return rows;
+}
+
+function isRecordReviewObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function recordReviewValueKey(value: unknown): string {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function formatRecordReviewOwner(ownerId: string | undefined, users: User[]): string {
+  if (!ownerId) {
+    return "公海";
+  }
+  const user = users.find((item) => item.id === ownerId);
+  return user ? `${user.name} · ${user.email}` : ownerId;
+}
+
+function formatRecordReviewValue(field: FieldDefinition | undefined, value: unknown, users: User[]): string {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  if (field?.key === "contactMethods") {
+    return formatContactMethodsForReview(value);
+  }
+  if (field?.type === "user") {
+    return formatRecordReviewOwner(typeof value === "string" ? value : undefined, users);
+  }
+  if (field?.type === "boolean") {
+    return value === true || value === "true" ? "是" : "否";
+  }
+  if (field?.type === "select") {
+    const optionValue = String(value);
+    return field.options?.find((option) => option.value === optionValue)?.label ?? optionValue;
+  }
+  if (field?.type === "date" && typeof value === "string") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("zh-CN");
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => formatRecordReviewNestedValue(item)).join("\n");
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value);
+}
+
+function formatContactMethodsForReview(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return formatRecordReviewNestedValue(value);
+  }
+  return value
+    .map((item) => {
+      if (!isRecordReviewObject(item)) {
+        return formatRecordReviewNestedValue(item);
+      }
+      const type = typeof item.type === "string" ? contactMethodReviewLabels[item.type] ?? fieldLabelFromKey(item.type) : "联系方式";
+      const methodValue = typeof item.value === "string" ? item.value : "";
+      const label = typeof item.label === "string" && item.label.trim() ? ` · ${item.label.trim()}` : "";
+      const primary = item.primary === true ? "（主）" : "";
+      return `${type}: ${methodValue}${label}${primary}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatRecordReviewNestedValue(value: unknown): string {
+  if (value === undefined || value === null || value === "") {
+    return "空";
+  }
+  if (isRecordReviewObject(value)) {
+    const parts = Object.entries(value)
+      .filter(([, itemValue]) => itemValue !== undefined && itemValue !== null && itemValue !== "")
+      .map(([key, itemValue]) => `${fieldLabelFromKey(key)}: ${formatRecordReviewNestedValue(itemValue)}`);
+    return parts.length > 0 ? parts.join("；") : "空";
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => formatRecordReviewNestedValue(item)).join("\n");
+  }
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+  return String(value);
+}
+
+const contactMethodReviewLabels: Record<string, string> = {
+  email: "Email",
+  whatsapp: "WhatsApp",
+  mobile: "Mob",
+  phone: "Tel",
+  social: "社媒",
+  other: "其他"
+};
+
+function fieldLabelFromKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/^./, (value) => value.toUpperCase());
 }
 
 function BackupOperationsPanel({ backups, isPending, onCreate }: { backups: BackupFile[]; isPending: boolean; onCreate: () => void }) {

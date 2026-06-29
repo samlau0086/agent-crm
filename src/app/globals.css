@@ -3155,6 +3155,133 @@ button {
   line-height: 1.45;
 }
 
+.record-review-list {
+  display: grid;
+  gap: 12px;
+}
+
+.record-review-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.record-review-card.update-review {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.record-review-card.delete-review {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: color-mix(in srgb, var(--danger) 5%, var(--panel));
+}
+
+.record-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.record-review-reason {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.record-review-reason span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.record-review-delete-note {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 9%, var(--panel));
+  color: var(--danger);
+}
+
+.record-review-delete-note span {
+  color: var(--text);
+}
+
+.record-review-diff-table {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.record-review-diff-head,
+.record-review-diff-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.75fr) minmax(0, 1.35fr) minmax(0, 1.35fr);
+  gap: 0;
+}
+
+.record-review-diff-head {
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.record-review-diff-head span,
+.record-review-diff-row > strong,
+.record-review-diff-row > span {
+  min-width: 0;
+  padding: 10px;
+  border-right: 1px solid var(--line);
+}
+
+.record-review-diff-head span:last-child,
+.record-review-diff-row > span:last-child {
+  border-right: 0;
+}
+
+.record-review-diff-row {
+  border-top: 1px solid var(--line);
+}
+
+.record-review-diff-row > strong {
+  color: var(--text);
+  background: color-mix(in srgb, var(--soft) 55%, var(--panel));
+}
+
+.record-review-value {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.record-review-value.old-value {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.record-review-card.delete-review .record-review-value.old-value {
+  text-decoration: none;
+}
+
+.record-review-value.new-value {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.record-review-card.delete-review .record-review-value.new-value {
+  background: transparent;
+}
+
 .audit-time {
   white-space: nowrap;
 }

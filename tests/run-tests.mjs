@@ -1640,6 +1640,26 @@ await run("record change approval actions use local feedback instead of global t
   assert.doesNotMatch(settings, /onApprove=\{\(request\) => runAction\(\(\) => reviewRecordChangeRequest\(request, "approve"\)\)\}/);
 });
 
+await run("record change approval renders readable field diffs instead of raw json", () => {
+  const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+  const panelSource = settings.slice(settings.indexOf("function RecordChangeRequestAdminPanel"), settings.indexOf("function BackupOperationsPanel"));
+
+  assert.match(settings, /fields=\{props\.fields\}/);
+  assert.match(settings, /objects=\{props\.objects\}/);
+  assert.match(settings, /records=\{props\.records\}/);
+  assert.match(panelSource, /const reviewRows = buildRecordReviewRows\(request, record, requestFields, users\)/);
+  assert.match(panelSource, /className="record-review-diff-table"/);
+  assert.match(panelSource, /className="record-review-value old-value"/);
+  assert.match(panelSource, /className="record-review-value new-value"/);
+  assert.match(panelSource, /formatContactMethodsForReview/);
+  assert.doesNotMatch(panelSource, /<code className="audit-details">\{formatAuditDetails\(request\.patch/);
+  assert.match(styles, /\.record-review-diff-table/);
+  assert.match(styles, /\.record-review-diff-row/);
+  assert.match(styles, /\.record-review-value \{[\s\S]*white-space: pre-wrap/);
+  assert.match(styles, /\.record-review-value \{[\s\S]*overflow-wrap: anywhere/);
+});
+
 await run("record workspace refresh cannot leave create locked behind global pending", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
 
