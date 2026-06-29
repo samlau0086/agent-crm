@@ -122,7 +122,7 @@ export const recordWriteSchema = z
 
 export const recordPatchSchema = recordWriteSchema.partial().strict();
 
-const changeReasonSchema = z.string().trim().min(3).max(1000);
+const changeReasonSchema = z.string().trim().min(1).max(1000);
 
 export const recordPatchWithReasonSchema = recordWriteSchema
   .partial()

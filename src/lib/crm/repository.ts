@@ -3967,8 +3967,8 @@ export class PrismaCrmRepository {
       throw new Error("This object does not require update approval");
     }
     const cleanedReason = reason.trim();
-    if (cleanedReason.length < 3) {
-      throw new Error("请填写修改原因，至少 3 个字符");
+    if (cleanedReason.length < 1) {
+      throw new Error("请填写修改原因");
     }
     const current = await this.getRecord(context, objectKey, recordId);
     await this.validateRecordPatch(context, objectKey, recordId, current, patch);
@@ -3999,8 +3999,8 @@ export class PrismaCrmRepository {
       throw new Error("This object does not require delete approval");
     }
     const cleanedReason = reason.trim();
-    if (cleanedReason.length < 3) {
-      throw new Error("请填写删除原因，至少 3 个字符");
+    if (cleanedReason.length < 1) {
+      throw new Error("请填写删除原因");
     }
     const current = await this.getRecord(context, objectKey, recordId);
     const request = await this.db.recordChangeRequest.create({

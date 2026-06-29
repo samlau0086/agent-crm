@@ -42,6 +42,8 @@ import {
   MAX_IMPORT_MAPPING_FIELDS,
   MAX_SAVED_VIEW_COLUMNS,
   MAX_SAVED_VIEW_FILTERS,
+  recordDeleteRequestSchema,
+  recordPatchWithReasonSchema,
   savedViewCreateSchema
 } from "../src/lib/crm/api-schemas.ts";
 import { defaultWorkspaceId, seedData } from "../src/lib/crm/seed.ts";
@@ -437,6 +439,22 @@ await run("api optional json helper preserves empty-body command compatibility",
       ),
     (error) => error instanceof ApiError && error.status === 400 && error.code === "VALIDATION_ERROR"
   );
+});
+
+await run("record approval schemas accept short Chinese reasons", async () => {
+  assert.deepEqual(
+    await parseOptionalJsonBody(
+      new Request("http://local.test", {
+        method: "DELETE",
+        body: JSON.stringify({ changeReason: "重复" }),
+        headers: { "content-type": "application/json" }
+      }),
+      recordDeleteRequestSchema,
+      {}
+    ),
+    { changeReason: "重复" }
+  );
+  assert.equal(recordPatchWithReasonSchema.parse({ changeReason: "误删" }).changeReason, "误删");
 });
 
 await run("api json helper rejects oversized request bodies", async () => {
