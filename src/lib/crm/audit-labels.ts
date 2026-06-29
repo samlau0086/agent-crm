@@ -13,7 +13,8 @@ export function formatAuditAction(action: AuditLog["action"]): string {
     "record.auto_reclaimed": "自动回收",
     "record.change_requested": "记录变更待审批",
     "record.change_approved": "记录变更已批准",
-    "record.change_rejected": "记录变更已拒绝"
+    "record.change_rejected": "记录变更已拒绝",
+    "record.change_cancelled": "记录变更已取消"
   };
   return labels[action] ?? action;
 }

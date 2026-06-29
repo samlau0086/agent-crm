@@ -1278,6 +1278,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailConnectionTestRun, setEmailConnectionTestRun] = useState<EmailConnectionTestRun | null>(null);
   const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>(props.knowledgeArticles);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>(props.mediaAssets);
+  const [recordChangeRequests, setRecordChangeRequests] = useState<RecordChangeRequest[]>(props.recordChangeRequests);
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeArticleDraft>({ title: "", body: "", tags: "", active: true });
   const [deletedActivityIds, setDeletedActivityIds] = useState<Set<string>>(() => new Set());
   const [message, setMessage] = useState<string | null>(null);
@@ -1452,6 +1453,19 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       filteredRecords[0] ??
       objectRecords[0],
     [activeObject?.key, filteredRecords, objectRecords, records, selectedRecordId]
+  );
+  const selectedRecordPendingDeleteRequest = useMemo(
+    () =>
+      selectedRecord
+        ? recordChangeRequests.find(
+            (request) =>
+              request.status === "pending" &&
+              request.action === "delete" &&
+              request.objectKey === selectedRecord.objectKey &&
+              request.recordId === selectedRecord.id
+          )
+        : undefined,
+    [recordChangeRequests, selectedRecord]
   );
   const selectedFields = useMemo(
     () =>
@@ -1715,6 +1729,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setImportPresets(props.importPresets);
   }, [props.importPresets]);
+
+  useEffect(() => {
+    setRecordChangeRequests(props.recordChangeRequests);
+  }, [props.recordChangeRequests]);
 
   useEffect(() => {
     setRecordEmailActivityFilter("");
@@ -2358,11 +2376,30 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: { changeReason: changeReason?.trim() || undefined }
     });
     if ("pendingApproval" in result) {
+      setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [result.request]));
       setMessage("删除申请已提交，等待管理员审核");
       return;
     }
     setMessage("记录已删除");
     setRecordPanelMode("closed");
+    router.refresh();
+  }
+
+  async function cancelRecordChangeRequest(request: RecordChangeRequest) {
+    const confirmed = await requestConfirm({
+      title: "取消删除申请",
+      message: `确定取消删除“${request.recordTitle}”的申请？取消后可继续编辑该记录。`,
+      confirmLabel: "取消申请"
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    const updated = await fetchJson<RecordChangeRequest>(`/api/record-change-requests/${request.id}`, {
+      method: "DELETE"
+    });
+    setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [updated]).filter((candidate) => candidate.status === "pending"));
+    setMessage("删除申请已取消");
     router.refresh();
   }
 
@@ -4055,6 +4092,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onTransfer={(ownerId) => runAction(() => transferRecordOwner(selectedRecord, ownerId))}
                       />
                     ) : null}
+                    {selectedRecordPendingDeleteRequest ? (
+                      <RecordDeletePendingBanner
+                        disabled={isPending}
+                        request={selectedRecordPendingDeleteRequest}
+                        onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                      />
+                    ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
                       <ContactProfileEditor
                         allRecords={records}
@@ -4064,10 +4108,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         isPending={isPending}
                         mediaAssets={mediaAssets}
                         ownerId={editOwnerId}
+                        pendingDeleteRequest={selectedRecordPendingDeleteRequest}
                         record={selectedRecord}
                         title={editTitle}
                         users={props.users}
                         values={editValues}
+                        onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
                         onContactMethodsChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
                         onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
                         onOwnerChange={setEditOwnerId}
@@ -4091,6 +4137,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         isPending={isPending}
                         mediaAssets={mediaAssets}
                         ownerId={editOwnerId}
+                        pendingDeleteRequest={selectedRecordPendingDeleteRequest}
                         primaryContactId={editValues[companyPrimaryContactValueKey] ?? ""}
                         record={selectedRecord}
                         shippingAddressEditingId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
@@ -4102,6 +4149,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onAddShippingAddress={() => setCompanyAddressEditing({ valueKey: companyShippingAddressesValueKey, addressId: createCompanyAddressId() })}
                         onBillingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
                         onCancelAddressEdit={() => setCompanyAddressEditing(null)}
+                        onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
                         onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
                         onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
                         onEditBillingAddress={(addressId) =>
@@ -4239,10 +4287,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <Save size={16} />
                         保存
                       </button>
-                      <button className="danger-button" data-testid="edit-record-delete" type="button" onClick={() => { void runImmediateAction(submitDeleteRecord); }} disabled={isPending}>
-                        <Trash2 size={16} />
-                        删除
-                      </button>
+                      {selectedRecordPendingDeleteRequest ? (
+                        <button className="danger-button" data-testid="edit-record-cancel-delete-request" type="button" onClick={() => { void runImmediateAction(() => cancelRecordChangeRequest(selectedRecordPendingDeleteRequest)); }} disabled={isPending}>
+                          <RotateCcw size={16} />
+                          取消申请
+                        </button>
+                      ) : (
+                        <button className="danger-button" data-testid="edit-record-delete" type="button" onClick={() => { void runImmediateAction(submitDeleteRecord); }} disabled={isPending}>
+                          <Trash2 size={16} />
+                          删除
+                        </button>
+                      )}
                       {selectedDealNextStage && selectedRecord && (
                         <button
                           className="secondary-button"
@@ -4981,7 +5036,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             backupFiles={props.backupFiles}
             importJobQueueSummary={props.importJobQueueSummary}
             poolSettings={props.poolSettings}
-            recordChangeRequests={props.recordChangeRequests}
+            recordChangeRequests={recordChangeRequests}
           />
         )}
 
@@ -11795,6 +11850,31 @@ function RecordPoolPanel({
   );
 }
 
+function RecordDeletePendingBanner({
+  disabled,
+  request,
+  onCancel
+}: {
+  disabled: boolean;
+  request: RecordChangeRequest;
+  onCancel: (request: RecordChangeRequest) => void;
+}) {
+  return (
+    <section className="record-delete-pending-banner" data-testid="record-delete-pending-banner">
+      <Trash2 size={18} />
+      <div>
+        <strong>删除待审核</strong>
+        <div>已提交删除申请，管理员审核通过前不会正式删除。原因：{request.reason}</div>
+        <div className="subtle">提交时间：{formatDate(request.createdAt)}</div>
+      </div>
+      <button className="danger-button" data-testid="record-delete-pending-cancel" type="button" onClick={() => onCancel(request)} disabled={disabled}>
+        <RotateCcw size={16} />
+        取消申请
+      </button>
+    </section>
+  );
+}
+
 function RecordListImage({ imageUrl, title, objectKey }: { imageUrl: unknown; title: string; objectKey: string }) {
   const src = typeof imageUrl === "string" ? imageUrl.trim() : "";
   if (!src) {
@@ -11826,11 +11906,13 @@ function ContactProfileEditor({
   isPending,
   mediaAssets,
   ownerId,
+  pendingDeleteRequest,
   record,
   showContactMethodEditor,
   title,
   users,
   values,
+  onCancelDeleteRequest,
   onContactMethodsChange,
   onDelete,
   onDeleteMediaAsset,
@@ -11849,11 +11931,13 @@ function ContactProfileEditor({
   isPending: boolean;
   mediaAssets: MediaAsset[];
   ownerId: string;
+  pendingDeleteRequest?: RecordChangeRequest;
   record: CrmRecord;
   showContactMethodEditor: boolean;
   title: string;
   users: User[];
   values: Record<string, string>;
+  onCancelDeleteRequest: (request: RecordChangeRequest) => void;
   onContactMethodsChange: (methods: ContactMethodDraft[]) => void;
   onDelete: () => void;
   onDeleteMediaAsset: (asset: MediaAsset) => void;
@@ -11873,7 +11957,7 @@ function ContactProfileEditor({
 
   return (
     <div className="contact-profile-layout" data-testid="contact-profile-layout">
-      <section className="contact-profile-hero">
+      <section className={`contact-profile-hero ${pendingDeleteRequest ? "delete-pending" : ""}`}>
         <div className="contact-profile-cover" />
         <div className="contact-profile-main">
           <ContactAvatarEditor
@@ -11901,10 +11985,17 @@ function ContactProfileEditor({
               <Save size={16} />
               保存
             </button>
-            <button className="danger-button" type="button" onClick={onDelete} disabled={isPending}>
-              <Trash2 size={16} />
-              删除
-            </button>
+            {pendingDeleteRequest ? (
+              <button className="danger-button" data-testid="edit-record-cancel-delete-request" type="button" onClick={() => onCancelDeleteRequest(pendingDeleteRequest)} disabled={isPending}>
+                <RotateCcw size={16} />
+                取消申请
+              </button>
+            ) : (
+              <button className="danger-button" data-testid="edit-record-delete" type="button" onClick={onDelete} disabled={isPending}>
+                <Trash2 size={16} />
+                删除
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -11989,6 +12080,7 @@ function CompanyProfileEditor({
   isPending,
   mediaAssets,
   ownerId,
+  pendingDeleteRequest,
   primaryContactId,
   record,
   shippingAddressEditingId,
@@ -12000,6 +12092,7 @@ function CompanyProfileEditor({
   onAddShippingAddress,
   onBillingAddressesChange,
   onCancelAddressEdit,
+  onCancelDeleteRequest,
   onDelete,
   onDeleteMediaAsset,
   onEditBillingAddress,
@@ -12023,6 +12116,7 @@ function CompanyProfileEditor({
   isPending: boolean;
   mediaAssets: MediaAsset[];
   ownerId: string;
+  pendingDeleteRequest?: RecordChangeRequest;
   primaryContactId: string;
   record: CrmRecord;
   shippingAddressEditingId: string;
@@ -12034,6 +12128,7 @@ function CompanyProfileEditor({
   onAddShippingAddress: () => void;
   onBillingAddressesChange: (addresses: CompanyAddressDraft[]) => void;
   onCancelAddressEdit: () => void;
+  onCancelDeleteRequest: (request: RecordChangeRequest) => void;
   onDelete: () => void;
   onDeleteMediaAsset: (asset: MediaAsset) => void;
   onEditBillingAddress: (addressId: string) => void;
@@ -12056,7 +12151,7 @@ function CompanyProfileEditor({
 
   return (
     <div className="contact-profile-layout company-profile-layout" data-testid="company-profile-layout">
-      <section className="contact-profile-hero company-profile-hero">
+      <section className={`contact-profile-hero company-profile-hero ${pendingDeleteRequest ? "delete-pending" : ""}`}>
         <div className="contact-profile-cover company-profile-cover" />
         <div className="contact-profile-main">
           <CompanyLogoEditor
@@ -12085,10 +12180,17 @@ function CompanyProfileEditor({
               <Save size={16} />
               保存
             </button>
-            <button className="danger-button" type="button" onClick={onDelete} disabled={isPending}>
-              <Trash2 size={16} />
-              删除
-            </button>
+            {pendingDeleteRequest ? (
+              <button className="danger-button" data-testid="edit-record-cancel-delete-request" type="button" onClick={() => onCancelDeleteRequest(pendingDeleteRequest)} disabled={isPending}>
+                <RotateCcw size={16} />
+                取消申请
+              </button>
+            ) : (
+              <button className="danger-button" data-testid="edit-record-delete" type="button" onClick={onDelete} disabled={isPending}>
+                <Trash2 size={16} />
+                删除
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -13748,6 +13850,13 @@ function mergeRecords(...groups: Array<Array<CrmRecord | null | undefined> | nul
 function mergeActivities(...groups: Array<Array<Activity | null | undefined> | null | undefined>): Activity[] {
   const activities = groups.flatMap((group) => group ?? []).filter((activity): activity is Activity => Boolean(activity?.id));
   return [...new Map(activities.map((activity) => [activity.id, activity])).values()].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
+}
+
+function mergeRecordChangeRequests(...groups: Array<Array<RecordChangeRequest | null | undefined> | null | undefined>): RecordChangeRequest[] {
+  const requests = groups.flatMap((group) => group ?? []).filter((request): request is RecordChangeRequest => Boolean(request?.id));
+  return [...new Map(requests.map((request) => [request.id, request])).values()].sort(
     (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
   );
 }

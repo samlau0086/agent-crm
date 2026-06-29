@@ -613,6 +613,39 @@ button {
   background: var(--surface);
 }
 
+.contact-profile-hero.delete-pending {
+  border-color: #fecaca;
+  background: #fff7f7;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.08);
+}
+
+.contact-profile-hero.delete-pending .contact-profile-cover {
+  background:
+    linear-gradient(135deg, rgba(239, 68, 68, 0.18), rgba(248, 113, 113, 0.12)),
+    linear-gradient(0deg, #fff1f2, #fff1f2);
+}
+
+.record-delete-pending-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #7f1d1d;
+}
+
+.record-delete-pending-banner strong {
+  color: #991b1b;
+}
+
+.record-delete-pending-banner > button {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .contact-profile-cover {
   height: 104px;
   background:

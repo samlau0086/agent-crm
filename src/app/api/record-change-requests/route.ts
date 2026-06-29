@@ -8,7 +8,7 @@ async function getApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const status = new URL(request.url).searchParams.get("status");
-    return ok(await getCrmRepository().listRecordChangeRequests(context, status === "approved" || status === "rejected" || status === "all" ? status : "pending"));
+    return ok(await getCrmRepository().listRecordChangeRequests(context, status === "approved" || status === "rejected" || status === "cancelled" || status === "all" ? status : "pending"));
   } catch (error) {
     return handleApiError(error, request);
   }

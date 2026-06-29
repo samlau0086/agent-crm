@@ -426,7 +426,7 @@ export interface CrmPoolSettings {
 }
 
 export type RecordChangeRequestAction = "update" | "delete";
-export type RecordChangeRequestStatus = "pending" | "approved" | "rejected";
+export type RecordChangeRequestStatus = "pending" | "approved" | "rejected" | "cancelled";
 
 export interface RecordChangeRequest {
   id: string;
@@ -613,7 +613,8 @@ export type AuditAction =
   | "record.auto_reclaimed"
   | "record.change_requested"
   | "record.change_approved"
-  | "record.change_rejected";
+  | "record.change_rejected"
+  | "record.change_cancelled";
 
 export interface RecordPoolActionResult {
   record: CrmRecord;

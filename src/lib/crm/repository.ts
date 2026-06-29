@@ -3931,12 +3931,14 @@ export class PrismaCrmRepository {
     });
   }
 
-  async listRecordChangeRequests(context: RequestContext, status: "pending" | "approved" | "rejected" | "all" = "pending"): Promise<RecordChangeRequest[]> {
-    requirePermission(context, "crm.admin");
+  async listRecordChangeRequests(context: RequestContext, status: RecordChangeRequest["status"] | "all" = "pending"): Promise<RecordChangeRequest[]> {
+    requirePermission(context, "crm.read");
+    const canViewAllRequests = canManageAllRecords(context);
     const requests = await this.db.recordChangeRequest.findMany({
       where: {
         workspaceId: context.workspaceId,
-        ...(status === "all" ? {} : { status })
+        ...(status === "all" ? {} : { status }),
+        ...(canViewAllRequests ? {} : { requestedById: context.user.id })
       },
       orderBy: { createdAt: "desc" },
       take: 100
@@ -4010,6 +4012,38 @@ export class PrismaCrmRepository {
       details: { recordId, action: "delete", reason: cleanedReason }
     });
     return mapRecordChangeRequest(request);
+  }
+
+  async cancelRecordChangeRequest(context: RequestContext, requestId: string): Promise<RecordChangeRequest> {
+    requirePermission(context, "crm.write");
+    const request = await this.db.recordChangeRequest.findFirst({
+      where: { id: requestId, workspaceId: context.workspaceId }
+    });
+    if (!request) {
+      throw new Error("审批申请不存在");
+    }
+    if (request.status !== "pending") {
+      throw new Error("审批申请已经处理");
+    }
+    const canCancel = canManageAllRecords(context) || request.requestedById === context.user.id;
+    if (!canCancel) {
+      throw new Error("只能取消自己提交的审批申请");
+    }
+    const cancelled = await this.db.recordChangeRequest.update({
+      where: { id: requestId },
+      data: {
+        status: "cancelled",
+        reviewedById: context.user.id,
+        reviewNote: "Cancelled by requester",
+        reviewedAt: new Date()
+      }
+    });
+    await this.writeAuditLog(context, "record.change_cancelled", "record_change_request", request.id, {
+      objectKey: request.objectKey,
+      summary: `Cancelled ${request.action} request for ${request.objectKey} record ${request.recordTitle}`,
+      details: { recordId: request.recordId, action: request.action }
+    });
+    return mapRecordChangeRequest(cancelled);
   }
 
   async reviewRecordChangeRequest(
