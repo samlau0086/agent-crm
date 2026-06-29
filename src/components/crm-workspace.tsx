@@ -4069,7 +4069,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         users={props.users}
                         values={editValues}
                         onContactMethodsChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
-                        onDelete={() => runAction(submitDeleteRecord)}
+                        onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
                         onOwnerChange={setEditOwnerId}
                         onRecordsLoaded={mergeLoadedRecords}
                         onSave={() => runAction(submitUpdateRecord)}
@@ -4102,7 +4102,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onAddShippingAddress={() => setCompanyAddressEditing({ valueKey: companyShippingAddressesValueKey, addressId: createCompanyAddressId() })}
                         onBillingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
                         onCancelAddressEdit={() => setCompanyAddressEditing(null)}
-                        onDelete={() => runAction(submitDeleteRecord)}
+                        onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
                         onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
                         onEditBillingAddress={(addressId) =>
                           setCompanyAddressEditing((current) =>
@@ -4239,7 +4239,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <Save size={16} />
                         保存
                       </button>
-                      <button className="danger-button" type="button" onClick={() => runAction(submitDeleteRecord)} disabled={isPending}>
+                      <button className="danger-button" data-testid="edit-record-delete" type="button" onClick={() => { void runImmediateAction(submitDeleteRecord); }} disabled={isPending}>
                         <Trash2 size={16} />
                         删除
                       </button>
