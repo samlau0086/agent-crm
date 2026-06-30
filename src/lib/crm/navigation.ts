@@ -8,6 +8,7 @@ export type CrmRouteNavKey =
   | "records"
   | "tasks"
   | "activities"
+  | "automation"
   | "email"
   | "settings";
 
@@ -29,6 +30,7 @@ const navPathByKey: Record<Exclude<CrmRouteNavKey, "records">, string> = {
   objects: "/objects",
   tasks: "/tasks",
   activities: "/activities",
+  automation: "/automation",
   email: "/email",
   settings: "/settings"
 };
@@ -62,7 +64,7 @@ export function resolveCrmRoute(segments: string[] = [], availableObjectKeys: st
     return { navKey: "records", objectKey: second, path: crmPathForNav("records", second) };
   }
 
-  if (first === "dashboard" || first === "objects" || first === "tasks" || first === "activities" || first === "email" || first === "settings") {
+  if (first === "dashboard" || first === "objects" || first === "tasks" || first === "activities" || first === "automation" || first === "email" || first === "settings") {
     return { navKey: first, objectKey: rootObjectKey, path: crmPathForNav(first) };
   }
 

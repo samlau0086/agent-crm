@@ -3090,6 +3090,209 @@ button {
   color: #047857;
 }
 
+.automation-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.automation-hero,
+.automation-ai-strip,
+.automation-editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.automation-hero {
+  background: linear-gradient(90deg, rgba(15, 118, 110, 0.08), rgba(37, 99, 235, 0.08));
+}
+
+.automation-ai-strip label {
+  flex: 1 1 420px;
+}
+
+.automation-object-tabs {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.automation-object-tab {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 74px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface-strong);
+}
+
+.automation-object-tab small,
+.automation-list-item small,
+.automation-node small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-object-tab.active {
+  border-color: rgba(15, 118, 110, 0.45);
+  color: #0f766e;
+  background: #ecfdf5;
+}
+
+.automation-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.32fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.automation-list,
+.automation-canvas-shell {
+  min-height: 520px;
+}
+
+.automation-list-items,
+.automation-approval-list,
+.automation-run-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.automation-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface-strong);
+}
+
+.automation-list-item.active {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.automation-designer {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.24fr) minmax(0, 1fr) minmax(230px, 0.32fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.automation-palette,
+.automation-inspector {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.automation-palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.automation-canvas {
+  display: flex;
+  min-height: 460px;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 20px;
+  border: 1px dashed rgba(100, 116, 139, 0.55);
+  border-radius: 8px;
+  background:
+    linear-gradient(var(--surface-strong), var(--surface-strong)) padding-box,
+    radial-gradient(circle at 1px 1px, rgba(100, 116, 139, 0.25) 1px, transparent 0) 0 0 / 18px 18px;
+}
+
+.automation-node-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.automation-node {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 230px;
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.automation-node.selected {
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.automation-node.trigger .automation-node-icon {
+  color: #2563eb;
+}
+
+.automation-node.condition .automation-node-icon {
+  color: #b45309;
+}
+
+.automation-node.action .automation-node-icon {
+  color: #0f766e;
+}
+
+.automation-node-edge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.automation-inspector label {
+  display: grid;
+  gap: 5px;
+}
+
+.automation-bottom-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .settings-tab-panel {
   display: grid;
   gap: 16px;
@@ -3939,6 +4142,23 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .automation-hero,
+  .automation-ai-strip,
+  .automation-editor-header {
+    display: grid;
+  }
+
+  .automation-object-tabs,
+  .automation-layout,
+  .automation-designer,
+  .automation-bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-canvas {
+    align-items: stretch;
+  }
+
   .audit-item {
     grid-template-columns: 34px minmax(0, 1fr);
   }
@@ -3976,6 +4196,10 @@ button {
 
   .settings-tab-list {
     grid-template-columns: 1fr;
+  }
+
+  .automation-node-wrap {
+    align-items: stretch;
   }
 
   .pipeline-board {

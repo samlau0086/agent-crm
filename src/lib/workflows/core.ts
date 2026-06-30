@@ -59,11 +59,7 @@ export function buildWorkflowIdempotencyKey(workflow: WorkflowDefinition, event:
   return [workflow.id, event, sourceId, eventVersion].filter(Boolean).join(":");
 }
 
-export function evaluateWorkflowConditions(
-  workflow: WorkflowDefinition,
-  data: Record<string, unknown>,
-  record?: CrmRecord
-): WorkflowRun["conditionResults"] {
+export function evaluateWorkflowConditions(workflow: WorkflowDefinition, data: Record<string, unknown>, record?: CrmRecord): WorkflowRun["conditionResults"] {
   return workflow.conditions.map((condition) => {
     const actualValue = readConditionValue(condition, data, record);
     const passed = evaluateConditionValue(condition, actualValue);
@@ -82,7 +78,7 @@ export function didWorkflowConditionsPass(results: WorkflowRun["conditionResults
 export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): WorkflowAiGenerationResult {
   const goal = input.goal.trim();
   const lowerGoal = goal.toLowerCase();
-  const targetObjectKey = input.objectKey ?? (lowerGoal.includes("deal") || goal.includes("交易") || goal.includes("Close") ? "deals" : "contacts");
+  const targetObjectKey = input.objectKey ?? (lowerGoal.includes("deal") || lowerGoal.includes("close") || goal.includes("交易") || goal.includes("成交") ? "deals" : "contacts");
   const isEmailGoal = lowerGoal.includes("email") || goal.includes("邮件") || goal.includes("回复") || goal.includes("未回复");
   const isDealGoal = targetObjectKey === "deals" || lowerGoal.includes("close") || goal.includes("成交") || goal.includes("推进");
   const isDormantGoal = goal.includes("天") || lowerGoal.includes("day") || lowerGoal.includes("dormant") || goal.includes("沉睡") || goal.includes("长期");

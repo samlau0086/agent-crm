@@ -49,11 +49,13 @@ import {
   Upload,
   UserPlus,
   UserRound,
+  Workflow as WorkflowIcon,
   XCircle,
   type LucideIcon
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { AutomationWorkspace } from "@/components/automation-workspace";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
@@ -160,7 +162,7 @@ const routeRefreshTimeoutMs = 10_000;
 const editApprovalObjectKeys = new Set(["contacts", "companies", "deals"]);
 const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "products", "quotes"]);
 
-type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
+type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "automation" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type DealWorkspaceView = "pipeline" | "list";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
@@ -430,6 +432,7 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
   { key: "objects", label: "对象", icon: LayoutList },
   { key: "tasks", label: "任务", icon: CheckCircle2 },
   { key: "activities", label: "活动", icon: ActivityIcon },
+  { key: "automation", label: "自动化", icon: WorkflowIcon },
   { key: "settings", label: "设置", icon: Settings }
 ];
 
@@ -5255,6 +5258,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
             records={records}
             onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
+          />
+        )}
+        {activeNav === "automation" && (
+          <AutomationWorkspace
+            workflows={props.workflows}
+            workflowRuns={props.workflowRuns}
+            workflowApprovals={props.workflowApprovals}
+            records={records}
+            users={props.users}
           />
         )}
         {activeNav === "settings" && (

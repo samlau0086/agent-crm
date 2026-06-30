@@ -1736,8 +1736,10 @@ await run("crm workspace routes modules through stable paths", () => {
   assert.deepEqual(resolveCrmRoute([], ["contacts", "companies"]), { navKey: "dashboard", objectKey: "contacts", path: "/" });
   assert.deepEqual(resolveCrmRoute(["companies"], ["contacts", "companies"]), { navKey: "companies", objectKey: "companies", path: "/companies" });
   assert.deepEqual(resolveCrmRoute(["email"], ["contacts", "companies"]), { navKey: "email", objectKey: "contacts", path: "/email" });
+  assert.deepEqual(resolveCrmRoute(["automation"], ["contacts", "companies"]), { navKey: "automation", objectKey: "contacts", path: "/automation" });
   assert.deepEqual(resolveCrmRoute(["records", "partners"], ["contacts", "partners"]), { navKey: "records", objectKey: "partners", path: "/records/partners" });
   assert.equal(resolveCrmRoute(["unknown"], ["contacts"]), null);
+  assert.equal(crmPathForNav("automation"), "/automation");
   assert.equal(crmPathForNav("settings"), "/settings");
   assert.equal(crmPathForNav("records", "partners"), "/records/partners");
 
@@ -1752,7 +1754,35 @@ await run("crm workspace routes modules through stable paths", () => {
   assert.match(workspace, /usePathname\(\)/);
   assert.match(workspace, /resolveCrmRoute\(pathname\.split\("\/"\)\.filter\(Boolean\), routeObjectKeys\)/);
   assert.match(workspace, /router\.push\(nextPath\)/);
+  assert.match(workspace, /type NavKey = [^\n]*"automation"/);
+  assert.match(workspace, /\{ key: "automation", label: "自动化", icon: WorkflowIcon \}/);
+  assert.match(workspace, /activeNav === "automation"[\s\S]*<AutomationWorkspace/);
   assert.doesNotMatch(workspace, /useState<NavKey>\("dashboard"\)/);
+});
+
+await run("automation workspace is a first-class visual workflow module", () => {
+  const navigation = readFileSync("src/lib/crm/navigation.ts", "utf8");
+  const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const automation = readFileSync("src/components/automation-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(navigation, /automation: "\/automation"/);
+  assert.match(automation, /export function AutomationWorkspace/);
+  assert.match(automation, /automationObjects/);
+  assert.match(automation, /automation-object-\$\{item\.key\}/);
+  assert.match(automation, /contacts/);
+  assert.match(automation, /companies/);
+  assert.match(automation, /deals/);
+  assert.match(automation, /email/);
+  assert.match(automation, /automation-node-canvas/);
+  assert.match(automation, /AutomationNodeInspector/);
+  assert.match(automation, /\/api\/workflows\/generate/);
+  assert.match(automation, /\/api\/workflows\/\$\{workflow\.id\}\/test/);
+  assert.match(workspace, /import \{ AutomationWorkspace \} from "@\/components\/automation-workspace"/);
+  assert.match(styles, /\.automation-layout/);
+  assert.match(styles, /\.automation-canvas/);
+  assert.match(styles, /\.automation-node\.selected/);
+  assert.doesNotMatch(automation, /window\.(alert|prompt|confirm)/);
 });
 
 await run("company detail loads inverse contact relationships", () => {
