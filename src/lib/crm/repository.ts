@@ -4044,6 +4044,57 @@ export class PrismaCrmRepository {
     return mapRecordChangeRequest(request);
   }
 
+  async requestActivityDelete(context: RequestContext, activityId: string, reason: string): Promise<RecordChangeRequest> {
+    requirePermission(context, "crm.write");
+    const cleanedReason = reason.trim();
+    if (cleanedReason.length < 1) {
+      throw new Error("请填写删除原因");
+    }
+    const activity = await this.getActivity(context, activityId);
+    const existingRequest = await this.db.recordChangeRequest.findFirst({
+      where: {
+        workspaceId: context.workspaceId,
+        objectKey: "activities",
+        recordId: activity.id,
+        action: "delete",
+        status: "pending"
+      }
+    });
+    if (existingRequest) {
+      return mapRecordChangeRequest(existingRequest);
+    }
+    const request = await this.db.recordChangeRequest.create({
+      data: {
+        workspaceId: context.workspaceId,
+        objectKey: "activities",
+        recordId: activity.id,
+        action: "delete",
+        status: "pending",
+        reason: cleanedReason,
+        requestedById: context.user.id,
+        recordTitle: activity.title,
+        patch: toJsonObject({
+          activity: {
+            recordId: activity.recordId,
+            type: activity.type,
+            title: activity.title,
+            body: activity.body,
+            dueAt: activity.dueAt,
+            completedAt: activity.completedAt,
+            archivedAt: activity.archivedAt,
+            createdAt: activity.createdAt
+          }
+        })
+      }
+    });
+    await this.writeAuditLog(context, "record.change_requested", "record_change_request", request.id, {
+      objectKey: "activities",
+      summary: `Requested delete approval for activity ${activity.title}`,
+      details: { activityId: activity.id, action: "delete", reason: cleanedReason, type: activity.type, recordId: activity.recordId }
+    });
+    return mapRecordChangeRequest(request);
+  }
+
   async cancelRecordChangeRequest(context: RequestContext, requestId: string): Promise<RecordChangeRequest> {
     requirePermission(context, "crm.write");
     const request = await this.db.recordChangeRequest.findFirst({
@@ -4117,6 +4168,8 @@ export class PrismaCrmRepository {
         request.recordId,
         stripRecordApprovalMetadata((request.patch ?? {}) as RecordChangeRequest["patch"])
       );
+    } else if (request.action === "delete" && request.objectKey === "activities") {
+      await this.deleteActivity(context, request.recordId);
     } else if (request.action === "delete") {
       await this.deleteRecord(context, request.objectKey, request.recordId);
     } else {

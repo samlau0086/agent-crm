@@ -447,6 +447,7 @@ export interface RecordChangeRequest {
   reviewNote?: string;
   patch?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">> & {
     previous?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>;
+    activity?: Partial<Pick<Activity, "recordId" | "type" | "title" | "body" | "dueAt" | "completedAt" | "archivedAt" | "createdAt">>;
   };
   recordTitle: string;
   createdAt: string;

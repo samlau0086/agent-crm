@@ -8,7 +8,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
+import type { Activity, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -19,6 +19,7 @@ interface SettingsAdminProps {
   pipelines: Pipeline[];
   savedViews: SavedView[];
   records: CrmRecord[];
+  activities: Activity[];
   roles: Role[];
   users: User[];
   teams: Team[];
@@ -2068,6 +2069,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           ) : null}
 
           <RecordChangeRequestAdminPanel
+            activities={props.activities}
             fields={props.fields}
             objects={props.objects}
             records={props.records}
@@ -3239,6 +3241,7 @@ type RecordReviewRow = {
 };
 
 function RecordChangeRequestAdminPanel({
+  activities,
   fields,
   objects,
   records,
@@ -3248,6 +3251,7 @@ function RecordChangeRequestAdminPanel({
   onApprove,
   onReject
 }: {
+  activities: Activity[];
   fields: FieldDefinition[];
   objects: ObjectDefinition[];
   records: CrmRecord[];
@@ -3272,7 +3276,7 @@ function RecordChangeRequestAdminPanel({
             const object = objects.find((item) => item.key === request.objectKey);
             const record = records.find((item) => item.id === request.recordId && item.objectKey === request.objectKey);
             const requestFields = fields.filter((field) => field.objectKey === request.objectKey);
-            const reviewRows = buildRecordReviewRows(request, record, requestFields, users);
+            const reviewRows = buildRecordReviewRows(request, record, requestFields, users, records, activities);
             const requestedBy = users.find((user) => user.id === request.requestedById);
             return (
               <article className={`record-review-card ${request.action === "delete" ? "delete-review" : "update-review"}`} data-testid={`record-change-request-${request.id}`} key={request.id}>
@@ -3338,11 +3342,35 @@ function RecordChangeRequestAdminPanel({
   );
 }
 
-function buildRecordReviewRows(request: RecordChangeRequest, record: CrmRecord | undefined, fields: FieldDefinition[], users: User[]): RecordReviewRow[] {
+function buildRecordReviewRows(
+  request: RecordChangeRequest,
+  record: CrmRecord | undefined,
+  fields: FieldDefinition[],
+  users: User[],
+  records: CrmRecord[] = [],
+  activities: Activity[] = []
+): RecordReviewRow[] {
   const rows: RecordReviewRow[] = [];
   const fieldByKey = new Map(fields.map((field) => [field.key, field]));
 
   if (request.action === "delete") {
+    if (request.objectKey === "activities") {
+      const activity = activities.find((candidate) => candidate.id === request.recordId) ?? request.patch?.activity;
+      if (!activity) {
+        return rows;
+      }
+      const linkedRecord = activity.recordId ? records.find((candidate) => candidate.id === activity.recordId) : undefined;
+      rows.push({ key: "type", label: "活动类型", oldValue: formatActivityType(String(activity.type ?? "")), newValue: formatActivityType(String(activity.type ?? "")) });
+      rows.push({ key: "title", label: "标题", oldValue: String(activity.title ?? request.recordTitle), newValue: String(activity.title ?? request.recordTitle) });
+      if (activity.body) {
+        rows.push({ key: "body", label: "内容", oldValue: String(activity.body), newValue: String(activity.body) });
+      }
+      rows.push({ key: "recordId", label: "关联记录", oldValue: linkedRecord?.title ?? String(activity.recordId ?? "未关联记录"), newValue: linkedRecord?.title ?? String(activity.recordId ?? "未关联记录") });
+      if (activity.createdAt) {
+        rows.push({ key: "createdAt", label: "创建时间", oldValue: formatAuditTime(String(activity.createdAt)), newValue: formatAuditTime(String(activity.createdAt)) });
+      }
+      return rows;
+    }
     if (!record) {
       return rows;
     }
@@ -4324,6 +4352,18 @@ function formatViewDraft(view: SavedView): ViewDraft {
     filterOperator: view.filters?.[0]?.operator ?? "contains",
     filterValue: view.filters?.[0]?.value ?? ""
   };
+}
+
+function formatActivityType(type: string): string {
+  const labels: Record<string, string> = {
+    note: "备注",
+    call: "电话",
+    meeting: "会议",
+    task: "任务",
+    email: "邮件",
+    stage_change: "阶段变更"
+  };
+  return labels[type] ?? (type || "活动");
 }
 
 async function fetchJson<T = unknown>(

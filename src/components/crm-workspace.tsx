@@ -1486,6 +1486,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         : undefined,
     [recordChangeRequests, selectedRecord]
   );
+  const pendingActivityDeleteRequestsById = useMemo(
+    () =>
+      new Map(
+        recordChangeRequests
+          .filter((request) => request.objectKey === "activities" && request.action === "delete" && request.status === "pending")
+          .map((request) => [request.recordId, request])
+      ),
+    [recordChangeRequests]
+  );
   const selectedFields = useMemo(
     () =>
       props.fields
@@ -2762,20 +2771,37 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function deleteTask(activity: Activity) {
+    const existingRequest = pendingActivityDeleteRequestsById.get(activity.id);
+    if (existingRequest) {
+      await cancelRecordChangeRequest(existingRequest);
+      return;
+    }
+    const activityTypeLabel = formatActivityType(activity.type);
+    const changeReason = await requestPrompt({
+      title: `提交${activityTypeLabel}删除审批`,
+      message: `请填写删除“${activity.title}”的原因。管理员审核通过后才会正式删除。`,
+      placeholder: "例如：重复记录，内容录入错误"
+    });
+    if (!changeReason?.trim()) {
+      setMessage("已取消删除审批");
+      return;
+    }
     if (
       !(await requestConfirm({
-        title: "删除任务",
-        message: `确定删除任务“${activity.title}”？`,
-        confirmLabel: "删除",
+        title: "提交删除审批",
+        message: `确定提交删除“${activity.title}”的审批申请？`,
+        confirmLabel: "提交申请",
         danger: true
       }))
     ) {
       return;
     }
-    await fetchJson(`/api/activities/${activity.id}`, { method: "DELETE" });
-    setDeletedActivityIds((current) => new Set([...current, activity.id]));
-    setActivities((current) => current.filter((candidate) => candidate.id !== activity.id));
-    showSuccess("任务已删除");
+    const result = await fetchJson<RecordChangeRequestResponse>(`/api/activities/${activity.id}`, {
+      method: "DELETE",
+      body: { changeReason: changeReason.trim() }
+    });
+    setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [result.request]));
+    showSuccess("删除申请已提交，等待管理员审核");
     router.refresh();
   }
 
@@ -4733,6 +4759,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           activities={selectedTasks}
                           emptyMessage="暂无任务"
                           mediaAssets={mediaAssets}
+                          pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
                           testIdPrefix="record-task"
                           users={props.users}
                           onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
@@ -4776,7 +4803,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           activities={selectedNotes}
                           emptyMessage="暂无备注"
                           mediaAssets={mediaAssets}
+                          pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
                           testIdPrefix="record-note"
+                          onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
                           renderMeta={(activity) => (
                             <>
                               <ActivityIcon size={15} />
@@ -4817,7 +4846,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           activities={selectedCalls}
                           emptyMessage="暂无电话记录"
                           mediaAssets={mediaAssets}
+                          pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
                           testIdPrefix="record-call"
+                          onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
                           renderMeta={(activity) => (
                             <>
                               <Phone size={15} />
@@ -4859,7 +4890,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           activities={selectedMeetings}
                           emptyMessage="暂无会议记录"
                           mediaAssets={mediaAssets}
+                          pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
                           testIdPrefix="record-meeting"
+                          onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
                           renderMeta={(activity) => (
                             <>
                               <CalendarClock size={15} />
@@ -4878,7 +4911,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         activities={selectedActivities}
                         emptyMessage="暂无活动"
                         mediaAssets={mediaAssets}
+                        pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
                         testIdPrefix="record-activity"
+                        onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
                         renderMeta={(activity) => (
                           <>
                             <ActivityIcon size={15} />
@@ -5173,6 +5208,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           <TaskView
             activities={taskActivities}
             mediaAssets={mediaAssets}
+            pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
             users={props.users}
             onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
             onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
@@ -5184,7 +5220,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onShowToast={showToast}
           />
         )}
-        {activeNav === "activities" && <ActivityTimeline activities={activities} mediaAssets={mediaAssets} records={records} />}
+        {activeNav === "activities" && (
+          <ActivityTimeline
+            activities={activities}
+            mediaAssets={mediaAssets}
+            pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
+            records={records}
+            onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
+          />
+        )}
         {activeNav === "settings" && (
           <SettingsAdmin
             role={props.role}
@@ -5194,6 +5238,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             pipelines={props.pipelines}
             savedViews={props.savedViews}
             records={records}
+            activities={activities}
             roles={props.roles}
             users={props.users}
             teams={props.teams}
@@ -8954,6 +8999,7 @@ function sanitizeTestId(value: string): string {
 function TaskView({
   activities,
   mediaAssets,
+  pendingDeleteRequestsById,
   users,
   onToggle,
   onArchive,
@@ -8966,6 +9012,7 @@ function TaskView({
 }: {
   activities: Activity[];
   mediaAssets: MediaAsset[];
+  pendingDeleteRequestsById: Map<string, RecordChangeRequest>;
   users: User[];
   onToggle: (activity: Activity, completed: boolean) => void;
   onArchive: (activity: Activity, archived: boolean) => void;
@@ -9132,6 +9179,7 @@ function TaskView({
           activities={visibleTasks}
           emptyMessage={emptyMessage}
           mediaAssets={mediaAssets}
+          pendingDeleteRequestsById={pendingDeleteRequestsById}
           testIdPrefix="task-view-task"
           users={users}
           onArchive={onArchive}
@@ -9216,6 +9264,7 @@ function TaskList({
   activities,
   emptyMessage,
   mediaAssets = [],
+  pendingDeleteRequestsById,
   testIdPrefix,
   users,
   onArchive,
@@ -9226,6 +9275,7 @@ function TaskList({
   activities: Activity[];
   emptyMessage: string;
   mediaAssets?: MediaAsset[];
+  pendingDeleteRequestsById?: Map<string, RecordChangeRequest>;
   testIdPrefix?: string;
   users: User[];
   onArchive?: (activity: Activity, archived: boolean) => void;
@@ -9244,6 +9294,7 @@ function TaskList({
         const archived = Boolean(activity.archivedAt);
         const overdue = isTaskOverdue(activity);
         const taskDetails = parseTaskDetails(activity.body);
+        const pendingDeleteRequest = pendingDeleteRequestsById?.get(activity.id);
         return (
           <div
             className="activity-item"
@@ -9257,6 +9308,7 @@ function TaskList({
               截止 {formatDate(activity.dueAt)} · {users.find((user) => user.id === activity.actorId)?.name ?? "未分配"}
               {completed && <span className="badge">已完成</span>}
               {archived && <span className="badge">已归档</span>}
+              {pendingDeleteRequest && <span className="danger-badge">删除待审核</span>}
               {!completed && overdue && <span className="badge danger-badge">已逾期</span>}
             </div>
             <strong>{activity.title}</strong>
@@ -9303,8 +9355,8 @@ function TaskList({
                   type="button"
                   onClick={() => onDelete(activity)}
                 >
-                  <Trash2 size={16} />
-                  删除
+                  {pendingDeleteRequest ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                  {pendingDeleteRequest ? "取消删除申请" : "删除"}
                 </button>
               )}
             </div>
@@ -9711,7 +9763,19 @@ function formatCalendarDateTime(date: Date): string {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-function ActivityTimeline({ activities, mediaAssets, records }: { activities: Activity[]; mediaAssets: MediaAsset[]; records: CrmRecord[] }) {
+function ActivityTimeline({
+  activities,
+  mediaAssets,
+  pendingDeleteRequestsById,
+  records,
+  onDelete
+}: {
+  activities: Activity[];
+  mediaAssets: MediaAsset[];
+  pendingDeleteRequestsById: Map<string, RecordChangeRequest>;
+  records: CrmRecord[];
+  onDelete: (activity: Activity) => void;
+}) {
   const sortedActivities = [...activities].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 
   return (
@@ -9721,7 +9785,9 @@ function ActivityTimeline({ activities, mediaAssets, records }: { activities: Ac
         activities={sortedActivities}
         emptyMessage="暂无活动"
         mediaAssets={mediaAssets}
+        pendingDeleteRequestsById={pendingDeleteRequestsById}
         testIdPrefix="activity-view-activity"
+        onDelete={onDelete}
         renderMeta={(activity) => (
           <>
             <ActivityIcon size={15} />
@@ -9902,13 +9968,17 @@ function ActivityList({
   activities,
   emptyMessage,
   mediaAssets = [],
+  pendingDeleteRequestsById,
   testIdPrefix,
+  onDelete,
   renderMeta
 }: {
   activities: Activity[];
   emptyMessage: string;
   mediaAssets?: MediaAsset[];
+  pendingDeleteRequestsById?: Map<string, RecordChangeRequest>;
   testIdPrefix?: string;
+  onDelete?: (activity: Activity) => void;
   renderMeta: (activity: Activity) => ReactNode;
 }) {
   if (activities.length === 0) {
@@ -9920,12 +9990,29 @@ function ActivityList({
       {activities.map((activity) => {
         const details = parseActivityDetails(activity.body);
         const body = details.text;
+        const pendingDeleteRequest = pendingDeleteRequestsById?.get(activity.id);
         return (
           <div className="activity-item" data-testid={testIdPrefix ? `${testIdPrefix}-${activity.id}` : undefined} key={activity.id}>
-            <div className="activity-meta">{renderMeta(activity)}</div>
+            <div className="activity-meta">
+              {renderMeta(activity)}
+              {pendingDeleteRequest && <span className="danger-badge">删除待审核</span>}
+            </div>
             <strong>{activity.title}</strong>
             {body && <div className="subtle">{body}</div>}
             <TaskAttachmentPreview attachments={details.attachments} mediaAssets={mediaAssets} />
+            {onDelete ? (
+              <div className="toolbar" style={{ marginTop: 10 }}>
+                <button
+                  className="secondary-button danger-button"
+                  data-testid={testIdPrefix ? `${testIdPrefix}-delete-${activity.id}` : undefined}
+                  type="button"
+                  onClick={() => onDelete(activity)}
+                >
+                  {pendingDeleteRequest ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                  {pendingDeleteRequest ? "取消删除申请" : "删除"}
+                </button>
+              </div>
+            ) : null}
           </div>
         );
       })}

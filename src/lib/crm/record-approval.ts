@@ -24,6 +24,17 @@ export function splitRecordApprovalPatch(record: CrmRecord, patch: RecordApprova
     if (approvalValueKey(previousValue) === approvalValueKey(nextValue)) {
       continue;
     }
+    if (key === "contactMethods") {
+      const contactMethodSplit = splitContactMethodsApprovalValue(previousValue, nextValue);
+      if (contactMethodSplit.immediateValue !== undefined) {
+        immediateData[key] = contactMethodSplit.immediateValue;
+      }
+      if (contactMethodSplit.approvalValue !== undefined) {
+        approvalData[key] = contactMethodSplit.approvalValue;
+        previousData[key] = contactMethodSplit.previousValue;
+      }
+      continue;
+    }
     if (isEmptyApprovalValue(previousValue)) {
       immediateData[key] = nextValue;
     } else {
@@ -96,4 +107,45 @@ function approvalValueKey(value: unknown): string {
 
 function isApprovalRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function splitContactMethodsApprovalValue(
+  previousValue: unknown,
+  nextValue: unknown
+): { immediateValue?: unknown; approvalValue?: unknown; previousValue?: unknown } {
+  const previousMethods = normalizeApprovalContactMethods(previousValue);
+  const nextMethods = normalizeApprovalContactMethods(nextValue);
+  if (approvalValueKey(previousMethods) === approvalValueKey(nextMethods)) {
+    return {};
+  }
+  if (previousMethods.length === 0) {
+    return { immediateValue: nextValue };
+  }
+
+  const previousById = new Map(previousMethods.map((method) => [method.id, method]));
+  const nextById = new Map(nextMethods.map((method) => [method.id, method]));
+  const hasRemovedMethod = previousMethods.some((method) => !nextById.has(method.id));
+  const hasChangedExistingMethod = nextMethods.some((method) => {
+    const previousMethod = previousById.get(method.id);
+    return Boolean(previousMethod && approvalValueKey(previousMethod) !== approvalValueKey(method));
+  });
+  if (hasRemovedMethod || hasChangedExistingMethod) {
+    return { approvalValue: nextValue, previousValue };
+  }
+  return { immediateValue: nextValue };
+}
+
+function normalizeApprovalContactMethods(value: unknown): Array<Record<string, unknown> & { id: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index) => {
+      if (!isApprovalRecord(item)) {
+        return undefined;
+      }
+      const id = typeof item.id === "string" && item.id.trim() ? item.id.trim() : `method-${index}`;
+      return { ...item, id };
+    })
+    .filter((method): method is Record<string, unknown> & { id: string } => Boolean(method));
 }

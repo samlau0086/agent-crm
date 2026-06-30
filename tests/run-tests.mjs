@@ -500,6 +500,62 @@ await run("record approval patch splits empty-value additions from non-empty cha
   assert.deepEqual(stripRecordApprovalMetadata(patchWithMetadata), approvalPatch);
 });
 
+await run("record approval patch treats new contact methods as immediate additions", () => {
+  const record = {
+    id: "record-1",
+    workspaceId: "workspace-1",
+    objectKey: "contacts",
+    title: "Instagram",
+    data: {
+      email: "no-reply@mail.instagram.com",
+      phone: "",
+      contactMethods: [{ id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: true }]
+    },
+    createdAt: "2026-06-30T00:00:00.000Z",
+    updatedAt: "2026-06-30T00:00:00.000Z"
+  };
+
+  const nextMethods = [
+    { id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: true },
+    { id: "method-whatsapp", type: "whatsapp", value: "85265426672", label: "WhatsApp", primary: false }
+  ];
+  const added = splitRecordApprovalPatch(record, {
+    data: {
+      contactMethods: nextMethods,
+      email: "no-reply@mail.instagram.com",
+      phone: "85265426672"
+    }
+  });
+
+  assert.deepEqual(added.approvalPatch, {});
+  assert.deepEqual(added.previousPatch, {});
+  assert.deepEqual(added.immediatePatch, {
+    data: {
+      contactMethods: nextMethods,
+      phone: "85265426672"
+    }
+  });
+
+  const changedExisting = splitRecordApprovalPatch(record, {
+    data: {
+      contactMethods: [{ id: "method-email", type: "email", value: "sales@example.com", label: "Email", primary: true }],
+      email: "sales@example.com"
+    }
+  });
+  assert.deepEqual(changedExisting.approvalPatch, {
+    data: {
+      contactMethods: [{ id: "method-email", type: "email", value: "sales@example.com", label: "Email", primary: true }],
+      email: "sales@example.com"
+    }
+  });
+  assert.deepEqual(changedExisting.previousPatch, {
+    data: {
+      contactMethods: [{ id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: true }],
+      email: "no-reply@mail.instagram.com"
+    }
+  });
+});
+
 await run("api json helper rejects oversized request bodies", async () => {
   await assert.rejects(
     () =>
@@ -1710,7 +1766,11 @@ await run("record change approval renders readable field diffs instead of raw js
   assert.match(settings, /fields=\{props\.fields\}/);
   assert.match(settings, /objects=\{props\.objects\}/);
   assert.match(settings, /records=\{props\.records\}/);
-  assert.match(panelSource, /const reviewRows = buildRecordReviewRows\(request, record, requestFields, users\)/);
+  assert.match(settings, /activities=\{props\.activities\}/);
+  assert.match(panelSource, /const reviewRows = buildRecordReviewRows\(request, record, requestFields, users, records, activities\)/);
+  assert.match(panelSource, /request\.objectKey === "activities"/);
+  assert.match(panelSource, /label: "活动类型"/);
+  assert.match(panelSource, /label: "关联记录"/);
   assert.match(panelSource, /previousRecordApprovalPatch\(patch\)/);
   assert.match(panelSource, /const previousData = isRecordReviewObject\(previousPatch\.data\) \? previousPatch\.data : \{\}/);
   assert.match(panelSource, /const oldValue = key in previousData \? previousData\[key\] : record\?\.data\[key\]/);
@@ -2022,6 +2082,7 @@ await run("record create and detail panels render full width in the main content
 await run("task workspace exposes todo completed archived and delete actions", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const route = readFileSync("src/app/api/activities/[id]/route.ts", "utf8");
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
 
   assert.match(source, /useState<"todo" \| "completed" \| "archived">\("todo"\)/);
   assert.match(source, /data-testid="task-tab-todo"/);
@@ -2029,12 +2090,20 @@ await run("task workspace exposes todo completed archived and delete actions", (
   assert.match(source, /data-testid="task-tab-archived"/);
   assert.match(source, /body: \{ archivedAt: archived \? new Date\(\)\.toISOString\(\) : null \}/);
   assert.match(source, /method: "DELETE"/);
+  assert.match(source, /body: \{ changeReason: changeReason\.trim\(\) \}/);
+  assert.match(source, /pendingActivityDeleteRequestsById/);
+  assert.match(source, /删除待审核/);
+  assert.match(source, /取消删除申请/);
   assert.match(source, /onDelete=\{\(activity\) => \{ void runImmediateAction\(\(\) => deleteTask\(activity\)\); \}\}/);
   assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-archive-\$\{activity\.id\}` : undefined\}/);
   assert.match(source, /data-testid=\{testIdPrefix \? `\$\{testIdPrefix\}-delete-\$\{activity\.id\}` : undefined\}/);
   assert.match(source, /activity\.completedAt \|\| activity\.archivedAt \|\| !activity\.dueAt/);
   assert.match(route, /export const DELETE = withApiMetrics\("DELETE \/api\/activities\/\[id\]"/);
-  assert.match(route, /deleteActivity\(context, params\.id\)/);
+  assert.match(route, /parseOptionalJson\(request, recordDeleteRequestSchema, \{\}\)/);
+  assert.match(route, /requestActivityDelete\(context, params\.id, body\.changeReason \?\? ""\)/);
+  assert.match(repository, /async requestActivityDelete\(context: RequestContext, activityId: string, reason: string\): Promise<RecordChangeRequest>/);
+  assert.match(repository, /objectKey: "activities"[\s\S]*recordId: activity\.id[\s\S]*action: "delete"/);
+  assert.match(repository, /request\.action === "delete" && request\.objectKey === "activities"[\s\S]*await this\.deleteActivity\(context, request\.recordId\)/);
 });
 
 await run("task workspace exposes calendar views and date slot task creation", () => {
@@ -2059,7 +2128,7 @@ await run("task workspace exposes calendar views and date slot task creation", (
   assert.match(source, /function TaskAttachmentPreview/);
   assert.match(source, /onUpdateTask=\{\(activity, draft\) => runAction\(\(\) => updateTask\(activity, draft\)\)\}/);
   assert.match(source, /method: "PATCH"[\s\S]*body: \{[\s\S]*title: draft\.title,[\s\S]*body: serializeTaskDetails/);
-  assert.match(source, /setDeletedActivityIds\(\(current\) => new Set\(\[\.\.\.current, activity\.id\]\)\)/);
+  assert.doesNotMatch(source, /setDeletedActivityIds\(\(current\) => new Set\(\[\.\.\.current, activity\.id\]\)\)/);
   assert.match(source, /data-testid=\{`task-view-\$\{mode\}`\}/);
   assert.match(source, /data-testid=\{`task-calendar-\$\{view\}`\}/);
   assert.match(source, /function TaskMonthCalendar/);
