@@ -2772,6 +2772,7 @@ await run("notification channels support bark webhook and email event delivery",
 
 await run("quick contact actions open follow-up dialogs and save timeline activities", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const formatUtils = readFileSync("src/lib/utils/format.ts", "utf8");
   assert.match(source, /type ContactFollowUpDraft/);
   assert.match(source, /function ContactFollowUpDialog/);
   assert.match(source, /data-testid="contact-follow-up-modal"/);
@@ -2785,6 +2786,10 @@ await run("quick contact actions open follow-up dialogs and save timeline activi
   assert.match(source, /window\.open\(`\$\{whatsappUrl\}\$\{separator\}text=\$\{encodeURIComponent\(messageText\)\}`/);
   assert.match(source, /onStartWhatsApp=\{\(method\) => openContactFollowUp\(selectedRecord, method, "whatsapp"\)\}/);
   assert.match(source, /onStartCall=\{\(method\) => openContactFollowUp\(selectedRecord, method, "call"\)\}/);
+  assert.match(formatUtils, /export function formatDateTimeSeconds/);
+  assert.match(formatUtils, /timeStyle: "medium"/);
+  assert.match(source, /formatActivityType\(activity\.type\)} · \{formatDateTimeSeconds\(activity\.createdAt\)\}/);
+  assert.match(source, /formatActivityType\(activity\.type\)} · \{formatDateTimeSeconds\(activity\.createdAt\)\} ·/);
 });
 
 await run("email workspace explains when translation fallback is not persisted", () => {

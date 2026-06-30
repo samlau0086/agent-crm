@@ -12,6 +12,17 @@ export function formatDate(value?: string): string {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(value));
 }
 
+export function formatDateTimeSeconds(value?: string): string {
+  if (!value) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+    hour12: false
+  }).format(new Date(value));
+}
+
 export function labelForOption(options: Array<{ label: string; value: string }> | undefined, value: unknown): string {
   const match = options?.find((option) => option.value === value);
   return match?.label ?? String(value ?? "-");

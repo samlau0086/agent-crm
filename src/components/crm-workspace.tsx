@@ -110,7 +110,7 @@ import { getEmailProviderCapability, getEmailProviderSetupVisibility, isOAuthEma
 import { buildEmailReplyDraft, type EmailComposeReplyDraft } from "@/lib/email/reply-draft";
 import { formatEmailSendResultMessage } from "@/lib/email/status-messages";
 import type { EmailDiagnosticStatus, EmailSubsystemDiagnostics } from "@/lib/email/diagnostics";
-import { formatCurrency, formatDate, labelForOption } from "@/lib/utils/format";
+import { formatCurrency, formatDate, formatDateTimeSeconds, labelForOption } from "@/lib/utils/format";
 import type { BackupFile } from "@/lib/ops/backups";
 
 interface CrmWorkspaceProps {
@@ -4831,7 +4831,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           renderMeta={(activity) => (
                             <>
                               <ActivityIcon size={15} />
-                              {formatDate(activity.createdAt)}
+                              {formatDateTimeSeconds(activity.createdAt)}
                             </>
                           )}
                         />
@@ -4874,7 +4874,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           renderMeta={(activity) => (
                             <>
                               <Phone size={15} />
-                              {formatDate(activity.createdAt)}
+                              {formatDateTimeSeconds(activity.createdAt)}
                             </>
                           )}
                         />
@@ -4918,7 +4918,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           renderMeta={(activity) => (
                             <>
                               <CalendarClock size={15} />
-                              {activity.dueAt ? formatDate(activity.dueAt) : formatDate(activity.createdAt)}
+                              {activity.dueAt ? formatDateTimeSeconds(activity.dueAt) : formatDateTimeSeconds(activity.createdAt)}
                             </>
                           )}
                         />
@@ -4939,7 +4939,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         renderMeta={(activity) => (
                           <>
                             <ActivityIcon size={15} />
-                            {formatActivityType(activity.type)} · {formatDate(activity.createdAt)}
+                            {formatActivityType(activity.type)} · {formatDateTimeSeconds(activity.createdAt)}
                           </>
                         )}
                       />
@@ -9814,7 +9814,7 @@ function ActivityTimeline({
         renderMeta={(activity) => (
           <>
             <ActivityIcon size={15} />
-            {formatActivityType(activity.type)} · {records.find((record) => record.id === activity.recordId)?.title ?? "未关联记录"}
+            {formatActivityType(activity.type)} · {formatDateTimeSeconds(activity.createdAt)} · {records.find((record) => record.id === activity.recordId)?.title ?? "未关联记录"}
           </>
         )}
       />
