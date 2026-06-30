@@ -13916,7 +13916,7 @@ function getContactMethodEmails(record: CrmRecord): string[] {
 }
 
 function getContactMethodPhone(methods: ContactMethodDraft[]): string {
-  return methods.find((method) => method.type === "mob" || method.type === "tel" || method.type === "whatsapp")?.value ?? "";
+  return methods.find((method) => method.type === "mob" || method.type === "tel")?.value ?? "";
 }
 
 function normalizePhoneHref(value: string): string {

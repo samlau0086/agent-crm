@@ -89,7 +89,7 @@ export function isContactMethodsAdditionOnly(previousValue: unknown, nextValue: 
   const previousById = new Map(previousMethods.map((method) => [method.id, method]));
   return previousMethods.every((method) => {
     const nextMethod = previousById.has(method.id) ? nextMethods.find((candidate) => candidate.id === method.id) : undefined;
-    return Boolean(nextMethod && approvalValueKey(nextMethod) === approvalValueKey(method));
+    return Boolean(nextMethod && contactMethodStableValueKey(nextMethod) === contactMethodStableValueKey(method));
   });
 }
 
@@ -116,6 +116,11 @@ function approvalValueKey(value: unknown): string {
   if (isEmptyApprovalValue(value)) return "";
   if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function contactMethodStableValueKey(method: Record<string, unknown>): string {
+  const { primary: _primary, ...stableMethod } = method;
+  return approvalValueKey(stableMethod);
 }
 
 function isApprovalRecord(value: unknown): value is Record<string, unknown> {

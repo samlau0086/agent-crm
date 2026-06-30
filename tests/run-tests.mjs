@@ -520,6 +520,20 @@ await run("record approval patch treats new contact methods as immediate additio
     { id: "method-whatsapp", type: "whatsapp", value: "85265426672", label: "WhatsApp", primary: false }
   ];
   assert.equal(isContactMethodsAdditionOnly(record.data.contactMethods, nextMethods), true);
+  const nextMethodsWithNewPrimary = [
+    { id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: false },
+    { id: "method-whatsapp", type: "whatsapp", value: "85265426672", label: "WhatsApp", primary: true }
+  ];
+  assert.equal(isContactMethodsAdditionOnly(record.data.contactMethods, nextMethodsWithNewPrimary), true);
+  assert.deepEqual(splitRecordApprovalPatch(record, { data: { contactMethods: nextMethodsWithNewPrimary } }), {
+    approvalPatch: {},
+    previousPatch: {},
+    immediatePatch: {
+      data: {
+        contactMethods: nextMethodsWithNewPrimary
+      }
+    }
+  });
   const added = splitRecordApprovalPatch(record, {
     data: {
       contactMethods: nextMethods,
@@ -2208,6 +2222,8 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(approvalBaselineRecord, contactMethodPatch\)\.approvalPatch\)/);
   assert.match(source, /const contactMethodData: Record<string, unknown> = \{[\s\S]*contactMethods: methods[\s\S]*\}/);
   assert.match(source, /if \(hasPhoneMethod \|\| hadPhoneMethod\) \{[\s\S]*contactMethodData\.phone = primaryPhone/);
+  assert.match(source, /function getContactMethodPhone\(methods: ContactMethodDraft\[\]\): string \{[\s\S]*method\.type === "mob" \|\| method\.type === "tel"/);
+  assert.doesNotMatch(source, /function getContactMethodPhone\(methods: ContactMethodDraft\[\]\): string \{[\s\S]*method\.type === "whatsapp"[\s\S]*\}/);
   assert.match(source, /if \("pendingApproval" in result\) \{[\s\S]*setRecords\(\(current\) => mergeRecords\(current, \[result\.record\]\)\)/);
   assert.match(source, /previousRecordApprovalPatch\(patch\)/);
   assert.match(source, /const \[isRecordSavePending, setIsRecordSavePending\] = useState\(false\)/);
