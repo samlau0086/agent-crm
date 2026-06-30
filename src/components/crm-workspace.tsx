@@ -13776,7 +13776,7 @@ function normalizeContactMethods(value: unknown): ContactMethodDraft[] {
   }
 
   return value
-    .map<CompanyAddressDraft | undefined>((item, index) => {
+    .map<ContactMethodDraft | undefined>((item, index) => {
       if (!item || typeof item !== "object") {
         return undefined;
       }

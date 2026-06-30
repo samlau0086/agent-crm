@@ -141,6 +141,19 @@ function mergeContactMethodsForApproval(currentValue: unknown, approvedValue: un
   return [...merged.values()];
 }
 
+function canMergeApprovedContactMethodPatch(currentValue: unknown, approvedValue: unknown): boolean {
+  if (!Array.isArray(approvedValue)) {
+    return false;
+  }
+  const currentMethods = normalizeContactMethodsForApproval(currentValue);
+  const approvedMethods = normalizeContactMethodsForApproval(approvedValue);
+  if (currentMethods.length === 0 || approvedMethods.length < currentMethods.length) {
+    return false;
+  }
+  const approvedIds = new Set(approvedMethods.map((method) => method.id));
+  return currentMethods.every((method) => approvedIds.has(method.id));
+}
+
 function isPrismaUniqueConstraintError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
@@ -4237,14 +4250,17 @@ export class PrismaCrmRepository {
     const previousData = isJsonRecord(previousPatch.data) ? previousPatch.data : {};
     const nextContactMethods = patch.data.contactMethods;
     const previousContactMethods = previousData.contactMethods;
-    if (!isContactMethodsAdditionOnly(previousContactMethods, nextContactMethods)) {
-      return patch;
-    }
     const current = await this.db.crmRecord.findFirst({
       where: { workspaceId: request.workspaceId, objectKey: request.objectKey, id: request.recordId },
       select: { data: true }
     });
     const currentData = isJsonRecord(current?.data) ? current.data : {};
+    const shouldMergeContactMethods =
+      isContactMethodsAdditionOnly(previousContactMethods, nextContactMethods) ||
+      canMergeApprovedContactMethodPatch(currentData.contactMethods, nextContactMethods);
+    if (!shouldMergeContactMethods) {
+      return patch;
+    }
     return {
       ...patch,
       data: {

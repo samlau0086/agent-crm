@@ -1367,6 +1367,13 @@ await run("performance phase one adds indexed CRM record query paths", () => {
   assert.match(repository, /if \(objectKey === "companies"\)[\s\S]*"data"->>'domain'/);
 });
 
+await run("approved contact method patches merge against current database methods", () => {
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+  assert.match(repository, /function canMergeApprovedContactMethodPatch\(currentValue: unknown, approvedValue: unknown\): boolean/);
+  assert.match(repository, /canMergeApprovedContactMethodPatch\(currentData\.contactMethods, nextContactMethods\)/);
+  assert.match(repository, /contactMethods: mergeContactMethodsForApproval\(currentData\.contactMethods, nextContactMethods\)/);
+});
+
 await run("performance phase two adds cursor pagination remote lookup and explain tooling", () => {
   const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
   const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
