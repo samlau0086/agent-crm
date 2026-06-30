@@ -17,7 +17,7 @@ import { ApiError } from "@/lib/api-error";
 import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
-import { stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
+import { isContactMethodsAdditionOnly, previousRecordApprovalPatch, stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
 import { decryptAiProviderConfig, encryptAiProviderConfig, mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
@@ -102,8 +102,43 @@ function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
   return (value ?? {}) as Record<string, unknown>;
 }
 
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function toJsonObject<T>(value: T): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
+}
+
+function normalizeContactMethodsForApproval(value: unknown): Array<Record<string, unknown> & { id: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index) => {
+      if (!isJsonRecord(item)) {
+        return undefined;
+      }
+      const id = typeof item.id === "string" && item.id.trim() ? item.id.trim() : `method-${index}`;
+      return { ...item, id };
+    })
+    .filter((method): method is Record<string, unknown> & { id: string } => Boolean(method));
+}
+
+function mergeContactMethodsForApproval(currentValue: unknown, approvedValue: unknown): unknown {
+  if (!Array.isArray(approvedValue)) {
+    return approvedValue;
+  }
+  const currentMethods = normalizeContactMethodsForApproval(currentValue);
+  const approvedMethods = normalizeContactMethodsForApproval(approvedValue);
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const method of currentMethods) {
+    merged.set(method.id, method);
+  }
+  for (const method of approvedMethods) {
+    merged.set(method.id, method);
+  }
+  return [...merged.values()];
 }
 
 function isPrismaUniqueConstraintError(error: unknown): boolean {
@@ -4162,12 +4197,7 @@ export class PrismaCrmRepository {
     }
 
     if (request.action === "update") {
-      await this.updateRecord(
-        context,
-        request.objectKey,
-        request.recordId,
-        stripRecordApprovalMetadata((request.patch ?? {}) as RecordChangeRequest["patch"])
-      );
+      await this.updateRecord(context, request.objectKey, request.recordId, await this.buildApprovedRecordPatch(request));
     } else if (request.action === "delete" && request.objectKey === "activities") {
       await this.deleteActivity(context, request.recordId);
     } else if (request.action === "delete") {
@@ -4191,6 +4221,37 @@ export class PrismaCrmRepository {
       details: { recordId: request.recordId, action: request.action, reviewNote: input.reviewNote }
     });
     return mapRecordChangeRequest(approved);
+  }
+
+  private async buildApprovedRecordPatch(request: {
+    workspaceId: string;
+    objectKey: string;
+    recordId: string;
+    patch: Prisma.JsonValue | null;
+  }): Promise<Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>> {
+    const patch = stripRecordApprovalMetadata((request.patch ?? {}) as RecordChangeRequest["patch"]);
+    if (request.objectKey !== "contacts" || !isJsonRecord(patch.data) || !Object.prototype.hasOwnProperty.call(patch.data, "contactMethods")) {
+      return patch;
+    }
+    const previousPatch = previousRecordApprovalPatch((request.patch ?? {}) as RecordChangeRequest["patch"]);
+    const previousData = isJsonRecord(previousPatch.data) ? previousPatch.data : {};
+    const nextContactMethods = patch.data.contactMethods;
+    const previousContactMethods = previousData.contactMethods;
+    if (!isContactMethodsAdditionOnly(previousContactMethods, nextContactMethods)) {
+      return patch;
+    }
+    const current = await this.db.crmRecord.findFirst({
+      where: { workspaceId: request.workspaceId, objectKey: request.objectKey, id: request.recordId },
+      select: { data: true }
+    });
+    const currentData = isJsonRecord(current?.data) ? current.data : {};
+    return {
+      ...patch,
+      data: {
+        ...patch.data,
+        contactMethods: mergeContactMethodsForApproval(currentData.contactMethods, nextContactMethods)
+      }
+    };
   }
 
   async listPipelines(context: RequestContext): Promise<Pipeline[]> {

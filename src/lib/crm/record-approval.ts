@@ -65,7 +65,7 @@ export function hasRecordPatchChanges(patch: RecordApprovalPatch | undefined): b
 
 export function stripRecordApprovalMetadata(patch: RecordChangeRequest["patch"] | undefined): RecordApprovalPatch {
   if (!patch) return {};
-  const { previous: _previous, ...recordPatch } = patch;
+  const { previous: _previous, activity: _activity, ...recordPatch } = patch;
   return recordPatch;
 }
 
@@ -78,6 +78,19 @@ export function isEmptyApprovalValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length === 0;
   if (isApprovalRecord(value)) return Object.keys(value).length === 0;
   return false;
+}
+
+export function isContactMethodsAdditionOnly(previousValue: unknown, nextValue: unknown): boolean {
+  const previousMethods = normalizeApprovalContactMethods(previousValue);
+  const nextMethods = normalizeApprovalContactMethods(nextValue);
+  if (previousMethods.length === 0 || nextMethods.length <= previousMethods.length) {
+    return false;
+  }
+  const previousById = new Map(previousMethods.map((method) => [method.id, method]));
+  return previousMethods.every((method) => {
+    const nextMethod = previousById.has(method.id) ? nextMethods.find((candidate) => candidate.id === method.id) : undefined;
+    return Boolean(nextMethod && approvalValueKey(nextMethod) === approvalValueKey(method));
+  });
 }
 
 function splitScalarApprovalValue(
@@ -119,6 +132,10 @@ function splitContactMethodsApprovalValue(
     return {};
   }
   if (previousMethods.length === 0) {
+    return { immediateValue: nextValue };
+  }
+
+  if (isContactMethodsAdditionOnly(previousValue, nextValue)) {
     return { immediateValue: nextValue };
   }
 

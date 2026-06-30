@@ -8,9 +8,10 @@ import { listBackupFiles } from "@/lib/ops/backups";
 
 type CrmPageProps = {
   moduleSegments?: string[];
+  searchParams?: Record<string, string | string[] | undefined>;
 };
 
-export async function CrmPage({ moduleSegments = [] }: CrmPageProps) {
+export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPageProps) {
   const context = await requireAppContext();
   const repository = getCrmRepository();
   const objects = await repository.listObjectDefinitions(context);
@@ -50,6 +51,10 @@ export async function CrmPage({ moduleSegments = [] }: CrmPageProps) {
   const views = await repository.listSavedViews(context);
   const initialObjectKey = route.objectKey;
   const initialRecordList = await repository.queryRecords(context, initialObjectKey, { page: 1, pageSize: 50 });
+  const routeRecordId = getSingleSearchParam(searchParams.recordId);
+  const selectedRecord = routeRecordId
+    ? await repository.getRecord(context, initialObjectKey, routeRecordId).catch(() => undefined)
+    : undefined;
   const referenceObjectKeys = getReferenceObjectKeys(fields, initialObjectKey);
   getRelationObjectKeys(relations, initialObjectKey).forEach((objectKey) => referenceObjectKeys.add(objectKey));
   for (const objectKey of ["products", "quotes", "currencies"]) {
@@ -61,6 +66,7 @@ export async function CrmPage({ moduleSegments = [] }: CrmPageProps) {
     [...referenceObjectKeys].map((objectKey) => repository.queryRecords(context, objectKey, { page: 1, pageSize: 50 }))
   );
   const records = dedupeRecords([
+    ...(selectedRecord ? [selectedRecord] : []),
     ...initialRecordList.records,
     ...dashboardSummary.deals,
     ...referenceRecordLists.flatMap((list) => list.records)
@@ -104,6 +110,13 @@ export async function CrmPage({ moduleSegments = [] }: CrmPageProps) {
       importJobQueueSummary={importJobQueueSummary}
     />
   );
+}
+
+function getSingleSearchParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) {
+    return value[0] ?? "";
+  }
+  return value ?? "";
 }
 
 function getReferenceObjectKeys(fields: FieldDefinition[], objectKey: string): Set<string> {

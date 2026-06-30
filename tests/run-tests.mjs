@@ -71,7 +71,7 @@ import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
-import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, stripRecordApprovalMetadata } from "../src/lib/crm/record-approval.ts";
+import { hasRecordPatchChanges, isContactMethodsAdditionOnly, previousRecordApprovalPatch, splitRecordApprovalPatch, stripRecordApprovalMetadata } from "../src/lib/crm/record-approval.ts";
 import { parseRecordListQuery } from "../src/lib/crm/record-query.ts";
 import { getBackupFile, listBackupFiles, resolveBackupFilePath } from "../src/lib/ops/backups.ts";
 import { getDatabaseObservabilitySnapshot, listRecentApiRequestMetrics, recordApiRequestMetric } from "../src/lib/ops/observability.ts";
@@ -519,6 +519,7 @@ await run("record approval patch treats new contact methods as immediate additio
     { id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: true },
     { id: "method-whatsapp", type: "whatsapp", value: "85265426672", label: "WhatsApp", primary: false }
   ];
+  assert.equal(isContactMethodsAdditionOnly(record.data.contactMethods, nextMethods), true);
   const added = splitRecordApprovalPatch(record, {
     data: {
       contactMethods: nextMethods,
@@ -554,6 +555,7 @@ await run("record approval patch treats new contact methods as immediate additio
       email: "no-reply@mail.instagram.com"
     }
   });
+  assert.equal(isContactMethodsAdditionOnly(record.data.contactMethods, changedExisting.approvalPatch.data.contactMethods), false);
 });
 
 await run("api json helper rejects oversized request bodies", async () => {
@@ -1658,8 +1660,9 @@ await run("crm workspace routes modules through stable paths", () => {
   const rootPage = readFileSync("src/app/page.tsx", "utf8");
   const modulePage = readFileSync("src/app/[...module]/page.tsx", "utf8");
   const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
-  assert.match(rootPage, /return <CrmPage \/>/);
-  assert.match(modulePage, /<CrmPage moduleSegments=\{params\.module \?\? \[\]\} \/>/);
+  assert.match(rootPage, /return <CrmPage searchParams=\{searchParams\} \/>/);
+  assert.match(modulePage, /<CrmPage moduleSegments=\{params\.module \?\? \[\]\} searchParams=\{searchParams\} \/>/);
+  assert.match(readFileSync("src/app/crm-page.tsx", "utf8"), /repository\.getRecord\(context, initialObjectKey, routeRecordId\)/);
   assert.match(workspace, /initialNavKey: NavKey/);
   assert.match(workspace, /useState<NavKey>\(props\.initialNavKey\)/);
   assert.match(workspace, /usePathname\(\)/);
