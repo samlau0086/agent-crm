@@ -1201,6 +1201,64 @@ button {
   padding-bottom: 4px;
 }
 
+.record-view-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+
+.deal-pipeline-workspace {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.deal-pipeline-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.deal-pipeline-board {
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
+  align-items: stretch;
+}
+
+.deal-pipeline-stage {
+  min-height: 320px;
+}
+
+.deal-stage-header {
+  align-items: flex-start;
+}
+
+.deal-pipeline-card {
+  display: grid;
+  gap: 5px;
+}
+
+.deal-card-amount {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.deal-card-meta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.deal-pipeline-empty {
+  margin: 12px;
+  padding: 28px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  text-align: center;
+}
+
 .pipeline-stage {
   min-height: 132px;
 }

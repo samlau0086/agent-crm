@@ -156,6 +156,7 @@ const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "pro
 
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
+type DealWorkspaceView = "pipeline" | "list";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
 type EmailSettingsStep = "identity" | "inbound" | "outbound" | "review";
 type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "scheduled" | "drafts" | "archived" | "trash" | "all";
@@ -1197,6 +1198,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeMode = searchParams.get("mode") ?? "";
   const routeCompanyId = searchParams.get("companyId") ?? "";
   const routeRecordPool = normalizeRecordPool(searchParams.get("pool"));
+  const routeDealView = normalizeDealWorkspaceView(searchParams.get("view"));
   const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
   const [activeObjectKey, setActiveObjectKey] = useState(props.initialObjectKey);
@@ -1211,6 +1213,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordListObjectKey, setRecordListObjectKey] = useState(props.initialObjectKey);
   const [recordList, setRecordList] = useState<RecordListResult>(() => props.initialRecordList);
   const [recordPool, setRecordPool] = useState<RecordPool>(routeRecordPool);
+  const [dealWorkspaceView, setDealWorkspaceView] = useState<DealWorkspaceView>(routeDealView);
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
   const [query, setQuery] = useState("");
@@ -1580,6 +1583,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () => withClosedStages(activePipeline?.stages ?? []),
     [activePipeline?.stages]
   );
+  const isDealPipelineView = activeObject?.key === "deals" && dealWorkspaceView === "pipeline";
   const selectedDealNextStage = useMemo(() => {
     if (!selectedRecord || selectedRecord.objectKey !== "deals" || activePipelineStages.length === 0) {
       return undefined;
@@ -1701,6 +1705,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setRecordPool(routeRecordPool);
   }, [routeRecordPool]);
+
+  useEffect(() => {
+    setDealWorkspaceView(routeDealView);
+  }, [routeDealView]);
 
   useEffect(() => {
     setRecords(mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
@@ -2116,12 +2124,29 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.replace(nextUrl);
   }
 
+  function changeDealWorkspaceView(nextView: DealWorkspaceView) {
+    setDealWorkspaceView(nextView);
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (nextView === "pipeline") {
+      nextParams.delete("view");
+    } else {
+      nextParams.set("view", nextView);
+    }
+    nextParams.delete("recordId");
+    nextParams.delete("mode");
+    const nextUrl = `${pathname}${nextParams.toString() ? `?${nextParams.toString()}` : ""}`;
+    router.replace(nextUrl);
+  }
+
   function openRecord(record: CrmRecord, options: { returnEmailThreadId?: string } = {}) {
     const nextNav = coreObjects.has(record.objectKey) ? (record.objectKey as NavKey) : "records";
     const nextPath = crmPathForNav(nextNav, record.objectKey);
     const detailParams = new URLSearchParams({ recordId: record.id });
     if (isPoolEnabledForObject(record.objectKey, props.poolSettings) && recordPool !== "all") {
       detailParams.set("pool", recordPool);
+    }
+    if (record.objectKey === "deals" && dealWorkspaceView !== "pipeline") {
+      detailParams.set("view", dealWorkspaceView);
     }
     if (options.returnEmailThreadId) {
       detailParams.set("returnEmailThreadId", options.returnEmailThreadId);
@@ -2188,6 +2213,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       const listParams = new URLSearchParams();
       if (activeObjectUsesPool && recordPool !== "all") {
         listParams.set("pool", recordPool);
+      }
+      if (activeObject.key === "deals" && dealWorkspaceView !== "pipeline") {
+        listParams.set("view", dealWorkspaceView);
       }
       const listPath = crmPathForNav(coreObjects.has(activeObject.key) ? activeObject.key : "records", activeObject.key);
       router.push(`${listPath}${listParams.toString() ? `?${listParams.toString()}` : ""}`);
@@ -2704,7 +2732,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function moveDealStage(record: CrmRecord, stageKey: string) {
-    const updated = await fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}`, {
+    const updated = await fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}/stage`, {
       method: "PATCH",
       body: { stageKey }
     });
@@ -3906,6 +3934,42 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           <div className={`workspace-grid ${recordPanelMode !== "closed" ? "has-drawer" : ""}`}>
             {recordPanelMode === "closed" && (
             <section className="table-shell">
+              {activeObject.key === "deals" ? (
+                <div className="record-view-switch" data-testid="deal-view-switch">
+                  <button
+                    className={dealWorkspaceView === "pipeline" ? "primary-button" : "secondary-button"}
+                    data-testid="deal-view-pipeline"
+                    type="button"
+                    onClick={() => changeDealWorkspaceView("pipeline")}
+                  >
+                    <BadgeDollarSign size={16} />
+                    Pipeline
+                  </button>
+                  <button
+                    className={dealWorkspaceView === "list" ? "primary-button" : "secondary-button"}
+                    data-testid="deal-view-list"
+                    type="button"
+                    onClick={() => changeDealWorkspaceView("list")}
+                  >
+                    <LayoutList size={16} />
+                    列表
+                  </button>
+                </div>
+              ) : null}
+              {isDealPipelineView ? (
+                <DealPipelineWorkspace
+                  allRecords={records}
+                  deals={filteredRecords}
+                  disabled={isPending}
+                  pipeline={activePipeline}
+                  stages={activePipelineStages}
+                  users={props.users}
+                  onCreateDeal={() => setRecordPanelMode("create")}
+                  onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
+                  onOpenDeal={openRecord}
+                />
+              ) : (
+              <>
               {activeViews.length > 0 && (
                 <div className="tabs" style={{ padding: "12px 12px 0" }}>
                   {activeViews.map((view) => (
@@ -4058,6 +4122,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 </table>
               </div>
               {filteredRecords.length === 0 && <div className="empty-state">当前对象下还没有记录</div>}
+              </>
+              )}
             </section>
             )}
 
@@ -5325,6 +5391,124 @@ function ContactFollowUpDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function DealPipelineWorkspace({
+  allRecords,
+  deals,
+  disabled,
+  pipeline,
+  stages,
+  users,
+  onCreateDeal,
+  onMoveDealStage,
+  onOpenDeal
+}: {
+  allRecords: CrmRecord[];
+  deals: CrmRecord[];
+  disabled: boolean;
+  pipeline: Pipeline | undefined;
+  stages: Pipeline["stages"];
+  users: User[];
+  onCreateDeal: () => void;
+  onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
+  onOpenDeal: (deal: CrmRecord) => void;
+}) {
+  const [draggedDealId, setDraggedDealId] = useState("");
+
+  function handleDealDragStart(event: DragEvent<HTMLButtonElement>, deal: CrmRecord) {
+    setDraggedDealId(deal.id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", deal.id);
+    event.dataTransfer.setData("application/x-crm-deal-id", deal.id);
+  }
+
+  function handleStageDragOver(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }
+
+  function handleStageDrop(event: DragEvent<HTMLElement>, stageKey: string) {
+    event.preventDefault();
+    const dealId = event.dataTransfer.getData("application/x-crm-deal-id") || event.dataTransfer.getData("text/plain");
+    const deal = deals.find((candidate) => candidate.id === dealId);
+    setDraggedDealId("");
+    if (!deal || deal.stageKey === stageKey || disabled) {
+      return;
+    }
+    onMoveDealStage(deal, stageKey);
+  }
+
+  if (!pipeline || stages.length === 0) {
+    return (
+      <div className="deal-pipeline-empty" data-testid="deal-pipeline-empty">
+        <h2 className="page-title" style={{ fontSize: 18 }}>还没有默认销售管道</h2>
+        <p className="subtle">请到设置中的 CRM 配置里创建并启用交易销售管道。</p>
+      </div>
+    );
+  }
+
+  return (
+    <section className="deal-pipeline-workspace" data-testid="deal-pipeline-workspace">
+      <div className="deal-pipeline-toolbar">
+        <div>
+          <h2 className="page-title" style={{ fontSize: 18 }}>{pipeline.name}</h2>
+          <div className="subtle">拖动交易卡片可直接更新阶段，阶段变更会记录到活动和审计日志。</div>
+        </div>
+        <button className="primary-button" type="button" onClick={onCreateDeal}>
+          <UserRound size={16} />
+          新建交易
+        </button>
+      </div>
+      <div className="pipeline-board deal-pipeline-board">
+        {stages.map((stage) => {
+          const stageDeals = deals.filter((deal) => deal.stageKey === stage.key);
+          const stageTotal = stageDeals.reduce((sum, deal) => sum + Number(deal.data.amount ?? 0), 0);
+          return (
+            <section
+              className={`pipeline-stage deal-pipeline-stage ${draggedDealId ? "drag-active" : ""}`}
+              data-testid={`deal-pipeline-stage-${stage.key}`}
+              key={stage.key}
+              onDragOver={handleStageDragOver}
+              onDrop={(event) => handleStageDrop(event, stage.key)}
+            >
+              <div className="stage-header deal-stage-header">
+                <div>
+                  <strong>{stage.label}</strong>
+                  <div className="subtle">{stageDeals.length} 笔 · {formatCurrency(stageTotal)}</div>
+                </div>
+                <span className="badge">{Math.round(stage.probability * 100)}%</span>
+              </div>
+              {stageDeals.map((deal) => {
+                const company = typeof deal.data.companyId === "string" ? allRecords.find((record) => record.id === deal.data.companyId) : undefined;
+                return (
+                  <button
+                    className={`deal-pill deal-pipeline-card ${draggedDealId === deal.id ? "dragging" : ""}`}
+                    data-testid={`deal-pipeline-deal-${deal.id}`}
+                    draggable={!disabled}
+                    key={deal.id}
+                    type="button"
+                    onClick={() => onOpenDeal(deal)}
+                    onDragEnd={() => setDraggedDealId("")}
+                    onDragStart={(event) => handleDealDragStart(event, deal)}
+                  >
+                    <strong>{deal.title}</strong>
+                    <div className="deal-card-amount">{formatCurrency(deal.data.amount)}</div>
+                    <div className="deal-card-meta">
+                      {company?.title ?? "未关联公司"}
+                      {deal.data.closeDate ? ` · ${formatDate(String(deal.data.closeDate))}` : ""}
+                    </div>
+                    <div className="record-owner-meta">{recordPoolLabel(deal, users)}</div>
+                  </button>
+                );
+              })}
+              {stageDeals.length === 0 ? <div className="empty-state compact-empty">暂无交易</div> : null}
+            </section>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -14212,6 +14396,10 @@ function emptySavedView(objectKey: string): SavedView {
 
 function normalizeRecordPool(value: string | null): RecordPool {
   return value === "public" || value === "private" || value === "all" ? value : "all";
+}
+
+function normalizeDealWorkspaceView(value: string | null): DealWorkspaceView {
+  return value === "list" ? "list" : "pipeline";
 }
 
 function isPoolEnabledForObject(objectKey: string, settings: CrmPoolSettings): boolean {

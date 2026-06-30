@@ -1742,6 +1742,8 @@ await run("record workspace refresh cannot leave create locked behind global pen
 await run("workspace supports deal pipeline drag and email sidebar collapse", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
+  const stageRoute = readFileSync("src/app/api/records/[objectKey]/[recordId]/stage/route.ts", "utf8");
+  const schemas = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
   assert.match(source, /const \[appSidebarCollapsed, setAppSidebarCollapsed\] = useState\(false\)/);
   assert.match(source, /const sidebarCollapsedStorageKey = "ai-agent-crm:sidebar-collapsed"/);
   assert.match(source, /window\.localStorage\.getItem\(sidebarCollapsedStorageKey\)/);
@@ -1758,6 +1760,22 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /view !== "mail" \?/);
   assert.match(source, /className=\{`email-workspace \$\{view === "mail" \? "mail-view" : ""\}`\}/);
   assert.match(source, /function handleDealDragStart/);
+  assert.match(source, /type DealWorkspaceView = "pipeline" \| "list"/);
+  assert.match(source, /const routeDealView = normalizeDealWorkspaceView\(searchParams\.get\("view"\)\)/);
+  assert.match(source, /const \[dealWorkspaceView, setDealWorkspaceView\] = useState<DealWorkspaceView>\(routeDealView\)/);
+  assert.match(source, /function changeDealWorkspaceView\(nextView: DealWorkspaceView\)/);
+  assert.match(source, /nextParams\.set\("view", nextView\)/);
+  assert.match(source, /const isDealPipelineView = activeObject\?\.key === "deals" && dealWorkspaceView === "pipeline"/);
+  assert.match(source, /<DealPipelineWorkspace/);
+  assert.match(source, /data-testid="deal-view-switch"/);
+  assert.match(source, /data-testid="deal-view-pipeline"/);
+  assert.match(source, /data-testid="deal-view-list"/);
+  assert.match(source, /function DealPipelineWorkspace/);
+  assert.match(source, /data-testid="deal-pipeline-workspace"/);
+  assert.match(source, /data-testid=\{`deal-pipeline-stage-\$\{stage\.key\}`\}/);
+  assert.match(source, /data-testid=\{`deal-pipeline-deal-\$\{deal\.id\}`\}/);
+  assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
+  assert.match(source, /\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}\/stage/);
   assert.match(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);
   assert.match(source, /draggable/);
   assert.match(source, /data-testid=\{`pipeline-stage-\$\{stage\.key\}`\}/);
@@ -1774,6 +1792,13 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.gmail-topbar-title \{[\s\S]*align-items: center;/);
   assert.match(styles, /\.email-workspace\.mail-view \{\s*padding: 0;/);
   assert.match(styles, /\.deal-pill\.dragging/);
+  assert.match(styles, /\.record-view-switch/);
+  assert.match(styles, /\.deal-pipeline-workspace/);
+  assert.match(styles, /\.deal-pipeline-board/);
+  assert.match(schemas, /export const recordStageUpdateSchema/);
+  assert.match(stageRoute, /recordStageUpdateSchema/);
+  assert.match(stageRoute, /params\.objectKey !== "deals"/);
+  assert.match(stageRoute, /updateRecord\(context, params\.objectKey, params\.recordId, \{ stageKey: body\.stageKey \?\? undefined \}\)/);
 });
 
 await run("email thread contact linking is driven by sender email and can return to the email", () => {

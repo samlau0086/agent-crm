@@ -133,6 +133,12 @@ export const recordPatchWithReasonSchema = recordWriteSchema
   })
   .strict();
 
+export const recordStageUpdateSchema = z
+  .object({
+    stageKey: optionalIdSchema
+  })
+  .strict();
+
 export const recordDeleteRequestSchema = z
   .object({
     changeReason: changeReasonSchema.optional()
