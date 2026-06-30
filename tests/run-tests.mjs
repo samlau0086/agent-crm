@@ -2225,6 +2225,8 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /function getContactMethodPhone\(methods: ContactMethodDraft\[\]\): string \{[\s\S]*method\.type === "mob" \|\| method\.type === "tel"/);
   assert.doesNotMatch(source, /function getContactMethodPhone\(methods: ContactMethodDraft\[\]\): string \{[\s\S]*method\.type === "whatsapp"[\s\S]*\}/);
   assert.match(source, /if \("pendingApproval" in result\) \{[\s\S]*setRecords\(\(current\) => mergeRecords\(current, \[result\.record\]\)\)/);
+  assert.match(source, /function mergeRecord\(existing: CrmRecord, incoming: CrmRecord\): CrmRecord \{[\s\S]*data: \{[\s\S]*\.\.\.existing\.data,[\s\S]*\.\.\.incoming\.data[\s\S]*\}/);
+  assert.doesNotMatch(source, /new Map\(records\.map\(\(record\) => \[record\.id, record\]\)\)/);
   assert.match(source, /previousRecordApprovalPatch\(patch\)/);
   assert.match(source, /const \[isRecordSavePending, setIsRecordSavePending\] = useState\(false\)/);
   assert.match(source, /setRecordChangeRequests\(\(current\) => mergeRecordChangeRequests\(current, \[result\.request\]\)\)/);

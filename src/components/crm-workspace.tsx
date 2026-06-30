@@ -14383,7 +14383,23 @@ function sampleCsvFor(objectKey: string, fields: FieldDefinition[]): string {
 
 function mergeRecords(...groups: Array<Array<CrmRecord | null | undefined> | null | undefined>): CrmRecord[] {
   const records = groups.flatMap((group) => group ?? []).filter((record): record is CrmRecord => Boolean(record?.id));
-  return [...new Map(records.map((record) => [record.id, record])).values()];
+  const merged = new Map<string, CrmRecord>();
+  for (const record of records) {
+    const existing = merged.get(record.id);
+    merged.set(record.id, existing ? mergeRecord(existing, record) : record);
+  }
+  return [...merged.values()];
+}
+
+function mergeRecord(existing: CrmRecord, incoming: CrmRecord): CrmRecord {
+  return {
+    ...existing,
+    ...incoming,
+    data: {
+      ...existing.data,
+      ...incoming.data
+    }
+  };
 }
 
 function mergeActivities(...groups: Array<Array<Activity | null | undefined> | null | undefined>): Activity[] {
