@@ -1740,7 +1740,8 @@ await run("record change approval actions use local feedback instead of global t
   const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
 
   assert.match(settings, /const \[reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId\] = useState\(""\)/);
-  assert.match(settings, /setReviewingRecordChangeRequestId\(request\.id\)[\s\S]*fetchJson<RecordChangeRequest>\(`\/api\/record-change-requests\/\$\{request\.id\}`/);
+  assert.match(settings, /setReviewingRecordChangeRequestId\(request\.id\)[\s\S]*fetchJson<RecordChangeReviewResponse>\(`\/api\/record-change-requests\/\$\{request\.id\}`/);
+  assert.match(settings, /props\.onRecordsUpdated\?\.\(\[result\.record\]\)/);
   assert.match(settings, /catch \(actionError\)[\s\S]*showError\(actionError instanceof Error \? actionError\.message/);
   assert.match(settings, /finally \{[\s\S]*setReviewingRecordChangeRequestId\(""\)/);
   assert.match(settings, /reviewingRequestId=\{reviewingRecordChangeRequestId\}/);
@@ -2200,9 +2201,14 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(approvalBaselineRecord, updatePatch\)\.approvalPatch\)/);
   assert.match(source, /type RecordApprovalReasonRequiredResponse = \{ approvalReasonRequired: true \}/);
   assert.match(source, /if \("approvalReasonRequired" in result\) \{[\s\S]*const fallbackReason = await requestPrompt\(\{/);
-  assert.match(readFileSync("src/app/api/records/[objectKey]/[recordId]/route.ts", "utf8"), /hasRecordPatchChanges\(approvalPatch\) && !changeReason\?\.trim\(\)[\s\S]*approvalReasonRequired: true/);
+  const recordRoute = readFileSync("src/app/api/records/[objectKey]/[recordId]/route.ts", "utf8");
+  assert.match(recordRoute, /hasRecordPatchChanges\(approvalPatch\) && !changeReason\?\.trim\(\)[\s\S]*approvalReasonRequired: true/);
+  assert.match(recordRoute, /pendingApproval: true, request: approvalRequest, record: updatedRecord/);
   assert.match(source, /const approvalBaselineRecord = await loadRecordForApprovalDecision\(targetRecord\)/);
   assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(approvalBaselineRecord, contactMethodPatch\)\.approvalPatch\)/);
+  assert.match(source, /const contactMethodData: Record<string, unknown> = \{[\s\S]*contactMethods: methods[\s\S]*\}/);
+  assert.match(source, /if \(hasPhoneMethod \|\| hadPhoneMethod\) \{[\s\S]*contactMethodData\.phone = primaryPhone/);
+  assert.match(source, /if \("pendingApproval" in result\) \{[\s\S]*setRecords\(\(current\) => mergeRecords\(current, \[result\.record\]\)\)/);
   assert.match(source, /previousRecordApprovalPatch\(patch\)/);
   assert.match(source, /const \[isRecordSavePending, setIsRecordSavePending\] = useState\(false\)/);
   assert.match(source, /setRecordChangeRequests\(\(current\) => mergeRecordChangeRequests\(current, \[result\.request\]\)\)/);

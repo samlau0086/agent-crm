@@ -32,6 +32,7 @@ interface SettingsAdminProps {
   importJobQueueSummary?: ImportJobQueueSummary;
   poolSettings: CrmPoolSettings;
   recordChangeRequests: RecordChangeRequest[];
+  onRecordsUpdated?: (records: CrmRecord[]) => void;
 }
 
 type ObjectDraft = {
@@ -156,6 +157,7 @@ const fieldTypes: FieldDefinition["type"][] = [
 ];
 
 type SettingsTabKey = "access" | "crm" | "pool" | "integrations" | "operations";
+type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 
 const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
   { key: "access", label: "成员权限", description: "用户、团队、角色与权限矩阵" },
@@ -996,11 +998,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setError(null);
     setReviewingRecordChangeRequestId(request.id);
     try {
-      const updated = await fetchJson<RecordChangeRequest>(`/api/record-change-requests/${request.id}`, {
+      const result = await fetchJson<RecordChangeReviewResponse>(`/api/record-change-requests/${request.id}`, {
         method: "PATCH",
         body: { decision }
       });
-      setRecordChangeRequests((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)).filter((candidate) => candidate.status === "pending"));
+      setRecordChangeRequests((current) => current.map((candidate) => (candidate.id === result.request.id ? result.request : candidate)).filter((candidate) => candidate.status === "pending"));
+      if (result.record) {
+        props.onRecordsUpdated?.([result.record]);
+      }
       setMessage(decision === "approve" ? "\u5ba1\u6279\u5df2\u901a\u8fc7" : "\u5ba1\u6279\u5df2\u62d2\u7edd");
       router.refresh();
     } catch (actionError) {

@@ -171,7 +171,7 @@ type EmailRoutePatch = {
   search?: string;
   threadId?: string;
 };
-type RecordChangeRequestResponse = { pendingApproval: true; request: RecordChangeRequest };
+type RecordChangeRequestResponse = { pendingApproval: true; request: RecordChangeRequest; record?: CrmRecord };
 type RecordApprovalReasonRequiredResponse = { approvalReasonRequired: true };
 type EmailThreadUiState = {
   archived?: boolean;
@@ -2312,6 +2312,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     if ("pendingApproval" in result) {
       setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [result.request]));
+      if (result.record) {
+        setRecords((current) => mergeRecords(current, [result.record]));
+        if (selectedRecord.id === result.record.id) {
+          setEditValues(buildRecordValues(selectedFields, result.record));
+        }
+      }
       showSuccess("修改申请已提交，等待管理员审核");
       router.refresh();
       return;
@@ -2397,17 +2403,27 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
 
     const methods = contactMethodsFromValues({ [contactMethodsValueKey]: contactMethodEditingValue });
+    const previousMethods = contactMethodsFromRecordData(targetRecord);
     const primaryEmail = methods.find((method) => method.type === "email" && method.primary)?.value || methods.find((method) => method.type === "email")?.value || "";
     const primaryPhone =
       methods.find((method) => (method.type === "tel" || method.type === "mob") && method.primary)?.value ||
       methods.find((method) => method.type === "tel" || method.type === "mob")?.value ||
       "";
+    const hadEmailMethod = previousMethods.some((method) => method.type === "email");
+    const hasEmailMethod = methods.some((method) => method.type === "email");
+    const hadPhoneMethod = previousMethods.some((method) => method.type === "tel" || method.type === "mob");
+    const hasPhoneMethod = methods.some((method) => method.type === "tel" || method.type === "mob");
+    const contactMethodData: Record<string, unknown> = {
+      contactMethods: methods
+    };
+    if (hasEmailMethod || hadEmailMethod) {
+      contactMethodData.email = primaryEmail;
+    }
+    if (hasPhoneMethod || hadPhoneMethod) {
+      contactMethodData.phone = primaryPhone;
+    }
     const contactMethodPatch: RecordApprovalPatch = {
-      data: {
-        contactMethods: methods,
-        email: primaryEmail,
-        phone: primaryPhone
-      }
+      data: contactMethodData
     };
     const approvalBaselineRecord = await loadRecordForApprovalDecision(targetRecord);
     const needsApproval =
@@ -2451,6 +2467,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       });
     }
     if ("pendingApproval" in result) {
+      if (result.record) {
+        setRecords((current) => mergeRecords(current, [result.record]));
+        if (selectedRecord?.id === result.record.id) {
+          setEditValues(buildRecordValues(selectedFields, result.record));
+        }
+      }
       closeContactMethodEditor();
       setMessage("联系方式修改申请已提交，等待管理员审核");
       router.refresh();
@@ -5251,6 +5273,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             importJobQueueSummary={props.importJobQueueSummary}
             poolSettings={props.poolSettings}
             recordChangeRequests={recordChangeRequests}
+            onRecordsUpdated={mergeLoadedRecords}
           />
         )}
 

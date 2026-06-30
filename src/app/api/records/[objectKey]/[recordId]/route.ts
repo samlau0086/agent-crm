@@ -50,7 +50,7 @@ async function patchApiMetricsHandler(request: NextRequest, { params }: RoutePar
           { ...approvalPatch, previous: previousPatch },
           changeReason ?? ""
         );
-        return ok({ pendingApproval: true, request: approvalRequest }, { status: 202 });
+        return ok({ pendingApproval: true, request: approvalRequest, record: updatedRecord }, { status: 202 });
       }
       return ok(updatedRecord);
     }

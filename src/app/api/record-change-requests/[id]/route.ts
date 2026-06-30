@@ -9,7 +9,13 @@ async function patchApiMetricsHandler(request: NextRequest, { params }: { params
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, recordChangeRequestReviewSchema);
-    return ok(await getCrmRepository().reviewRecordChangeRequest(context, params.id, body));
+    const repository = getCrmRepository();
+    const reviewedRequest = await repository.reviewRecordChangeRequest(context, params.id, body);
+    const updatedRecord =
+      reviewedRequest.status === "approved" && reviewedRequest.action === "update" && reviewedRequest.objectKey !== "activities"
+        ? await repository.getRecord(context, reviewedRequest.objectKey, reviewedRequest.recordId).catch(() => undefined)
+        : undefined;
+    return ok({ request: reviewedRequest, record: updatedRecord });
   } catch (error) {
     return handleApiError(error, request);
   }
