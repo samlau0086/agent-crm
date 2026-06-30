@@ -1,7 +1,7 @@
 import { canAccessRecordOwner, canManageAllRecords, requirePermission } from "@/lib/auth/rbac";
 import { createApiKeyToken, getApiKeyTokenPrefix, hashApiKeyToken } from "@/lib/auth/api-key";
 import { permissionCatalog } from "@/lib/auth/permissions";
-import { assertValidWebhookEvents, assertValidWebhookUrl, createWebhookSecret, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
+import { assertValidWebhookEvents, assertValidWebhookUrl, createWebhookSecret, expandWebhookEventsForPayload, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
 import { ApiError } from "@/lib/api-error";
 import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
@@ -738,6 +738,12 @@ export class CrmStore {
       summary: `Updated email thread link ${thread.subject}`,
       details: { threadId: thread.id, previousRecordId, recordId: thread.recordId }
     });
+    this.deliverWebhookEvent(context, "email.thread.updated", {
+      threadId: thread.id,
+      subject: thread.subject,
+      previousRecordId,
+      recordId: thread.recordId
+    });
     return clone(this.mergeEmailThreadState(context, thread));
   }
 
@@ -750,6 +756,11 @@ export class CrmStore {
     this.writeAuditLog(context, "delete", "email_thread", thread.id, {
       summary: `Deleted email thread ${thread.subject}`,
       details: { threadId: thread.id, subject: thread.subject }
+    });
+    this.deliverWebhookEvent(context, "email.thread.deleted", {
+      threadId: thread.id,
+      subject: thread.subject,
+      recordId: thread.recordId
     });
   }
 
@@ -1091,6 +1102,15 @@ export class CrmStore {
         aiSourceMessageId: message.aiSourceMessageId,
         aiSourceCount: message.aiSources?.length ?? 0
       }
+    });
+    this.deliverWebhookEvent(context, "email.message.created", {
+      messageId: message.id,
+      threadId: message.threadId,
+      accountId: message.accountId,
+      direction: message.direction,
+      status: message.status,
+      subject: message.subject,
+      recordId: thread.recordId
     });
     this.triggerEmailAutomations(context, message);
     return clone(message);
@@ -1459,11 +1479,14 @@ export class CrmStore {
   }
 
   deliverWebhookEvent(context: RequestContext, event: WebhookEvent, data: Record<string, unknown>): WebhookDelivery[] {
+    const events = expandWebhookEventsForPayload(event, data);
     const webhooks = ((this.data.webhooks ?? []) as StoredWebhookEndpoint[]).filter(
-      (webhook) => webhook.workspaceId === context.workspaceId && webhook.active && webhook.events.includes(event)
+      (webhook) => webhook.workspaceId === context.workspaceId && webhook.active && webhook.events.some((candidate) => events.includes(candidate))
     );
 
-    return webhooks.map((webhook) => this.recordStoreWebhookDelivery(context, webhook, event, data));
+    return webhooks.flatMap((webhook) =>
+      events.filter((candidate) => webhook.events.includes(candidate)).map((matchedEvent) => this.recordStoreWebhookDelivery(context, webhook, matchedEvent, data))
+    );
   }
 
   listTeams(context: RequestContext): Team[] {

@@ -76,7 +76,7 @@ import { getBackupFile, listBackupFiles, resolveBackupFilePath } from "../src/li
 import { getDatabaseObservabilitySnapshot, listRecentApiRequestMetrics, recordApiRequestMetric } from "../src/lib/ops/observability.ts";
 import { assertValidFieldDefinition, validateRecordPayload } from "../src/lib/crm/validation.ts";
 import { compareRecords, findRelatedRecords, matchesSavedView } from "../src/lib/crm/views.ts";
-import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, signWebhookPayload } from "../src/lib/integrations/webhook.ts";
+import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, isValidWebhookEvent, signWebhookPayload } from "../src/lib/integrations/webhook.ts";
 import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailSendJobEnvelope, buildEmailSummarizeJobEnvelope, buildEmailSyncJobEnvelope, buildEmailTranslateJobEnvelope, buildWebhookEventEnvelope, InlineBackgroundJobExecutor, RedisBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
 import { encodeRedisCommand, getDeadLetterQueueName } from "../src/lib/jobs/redis-queue.ts";
 import { buildFailedJobEnvelope, getMaxJobAttempts } from "../src/lib/jobs/worker-policy.ts";
@@ -300,6 +300,9 @@ await run("webhook secrets sign payloads with timestamped hmac headers", () => {
   assert.match(signature, /^[0-9a-f]{64}$/);
   assert.equal(header, `t=123,v1=${signature}`);
   assert.deepEqual(assertValidWebhookEvents(["webhook.test", "record.created", "webhook.test"]), ["webhook.test", "record.created"]);
+  assert.deepEqual(assertValidWebhookEvents(["record.contacts.updated", "email.message.created"]), ["record.contacts.updated", "email.message.created"]);
+  assert.equal(isValidWebhookEvent("record.companies.deleted"), true);
+  assert.deepEqual(expandWebhookEventsForPayload("record.updated", { objectKey: "contacts" }), ["record.updated", "record.contacts.updated"]);
   assert.throws(() => assertValidWebhookEvents(["bad.event"]), /unsupported events/);
   assert.equal(assertValidWebhookUrl("https://example.com/hook", { NODE_ENV: "production" }), "https://example.com/hook");
   assert.equal(assertValidWebhookUrl("http://127.0.0.1:9/hook", { NODE_ENV: "development" }), "http://127.0.0.1:9/hook");
@@ -1638,6 +1641,25 @@ await run("record change approval actions use local feedback instead of global t
   assert.match(settings, /onApprove=\{\(request\) => \{ void reviewRecordChangeRequest\(request, "approve"\); \}\}/);
   assert.match(settings, /disabled=\{Boolean\(reviewingRequestId\)\}/);
   assert.doesNotMatch(settings, /onApprove=\{\(request\) => runAction\(\(\) => reviewRecordChangeRequest\(request, "approve"\)\)\}/);
+});
+
+await run("webhook admin uses scoped events and local action feedback", () => {
+  const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(settings, /const \[webhookActionKey, setWebhookActionKey\] = useState\(""\)/);
+  assert.match(settings, /async function runWebhookAction/);
+  assert.match(settings, /objects=\{props\.objects\}/);
+  assert.match(settings, /actionKey=\{webhookActionKey\}/);
+  assert.match(settings, /record\.\$\{object\.key\}\.created/);
+  assert.match(settings, /email\.message\.created/);
+  assert.match(settings, /className="wide webhook-event-groups"/);
+  assert.match(settings, /onDelete=\{\(webhook\) => \{ void handleDeleteWebhook\(webhook\); \}\}/);
+  assert.match(settings, /onToggle=\{\(webhook\) => \{ void handleToggleWebhook\(webhook\); \}\}/);
+  assert.match(settings, /onTest=\{\(webhook\) => \{ void handleTestWebhook\(webhook\); \}\}/);
+  assert.doesNotMatch(settings, /onDelete=\{\(webhook\) => runAction\(\(\) => deleteWebhook\(webhook\)\)\}/);
+  assert.match(styles, /\.webhook-event-groups/);
+  assert.match(styles, /\.webhook-event-picker/);
 });
 
 await run("record change approval renders readable field diffs instead of raw json", () => {
@@ -3733,6 +3755,42 @@ await run("webhook subscriptions receive record activity and import events", () 
   const beforeInactive = store.listWebhookDeliveries(context, created.webhook.id).length;
   store.createRecord(context, "contacts", { title: "Inactive Hook Contact", data: { email: "inactive-hook@example.com" } });
   assert.equal(store.listWebhookDeliveries(context, created.webhook.id).length, beforeInactive);
+});
+
+await run("webhook subscriptions can target specific crm objects and email messages", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const created = store.createWebhook(context, {
+    name: "Scoped Hook",
+    url: "https://example.com/webhooks/scoped",
+    events: ["record.contacts.created", "record.companies.created", "email.message.created"]
+  });
+
+  const contact = store.createRecord(context, "contacts", { title: "Scoped Contact", data: { email: "scoped-contact@example.com" } });
+  const company = store.createRecord(context, "companies", { title: "Scoped Company", data: { domain: "scoped.example" } });
+  store.createRecord(context, "deals", { title: "Unscoped Deal", data: { amount: 100 } });
+  const account = store.createEmailAccount(context, {
+    name: "Scoped Inbox",
+    emailAddress: "scoped-inbox@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["scoped-inbox@example.com"],
+    subject: "Scoped email",
+    bodyText: "Notify subscribers"
+  });
+
+  const deliveries = store.listWebhookDeliveries(context, created.webhook.id);
+  assert.equal(deliveries.some((delivery) => delivery.event === "record.contacts.created" && delivery.requestBody.data?.recordId === contact.id), true);
+  assert.equal(deliveries.some((delivery) => delivery.event === "record.companies.created" && delivery.requestBody.data?.recordId === company.id), true);
+  assert.equal(deliveries.some((delivery) => delivery.event === "record.deals.created"), false);
+  assert.equal(deliveries.some((delivery) => delivery.event === "email.message.created" && delivery.requestBody.data?.messageId === message.id), true);
 });
 
 await run("webhook delivery filters and retries preserve payload attempts", () => {

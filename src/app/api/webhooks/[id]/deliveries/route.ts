@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import type { WebhookDeliveryStatus } from "@/lib/crm/types";
-import { webhookEvents, type WebhookEvent } from "@/lib/integrations/webhook";
+import { isValidWebhookEvent, type WebhookEvent } from "@/lib/integrations/webhook";
 
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ async function getApiMetricsHandler(request: NextRequest, { params }: { params: 
     return ok(
       await getCrmRepository().listWebhookDeliveries(context, params.id, {
         status: status && deliveryStatuses.has(status) ? status : undefined,
-        event: event && webhookEvents.includes(event) ? event : undefined,
+        event: event && isValidWebhookEvent(event) ? event : undefined,
         limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 50
       })
     );

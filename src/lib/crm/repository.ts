@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { createApiKeyToken, getApiKeyTokenPrefix, hashApiKeyToken } from "@/lib/auth/api-key";
 import { permissionCatalog } from "@/lib/auth/permissions";
-import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
+import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
 import { hashPassword } from "@/lib/auth/password";
 import {
   createPasswordSetupToken,
@@ -1864,6 +1864,12 @@ export class PrismaCrmRepository {
       summary: `Updated email thread link ${thread.subject}`,
       details: { threadId: thread.id, previousRecordId, recordId: updated.recordId ?? undefined }
     });
+    this.emitWebhookEvent(context, "email.thread.updated", {
+      threadId: updated.id,
+      subject: updated.subject,
+      previousRecordId,
+      recordId: updated.recordId ?? undefined
+    });
     const state = await this.db.emailThreadState.findUnique({
       where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: updated.id, userId: context.user.id } }
     });
@@ -1881,6 +1887,11 @@ export class PrismaCrmRepository {
     await this.writeAuditLog(context, "delete", "email_thread", thread.id, {
       summary: `Deleted email thread ${thread.subject}`,
       details: { threadId: thread.id, subject: thread.subject }
+    });
+    this.emitWebhookEvent(context, "email.thread.deleted", {
+      threadId: thread.id,
+      subject: thread.subject,
+      recordId: thread.recordId ?? undefined
     });
   }
 
@@ -2121,6 +2132,15 @@ export class PrismaCrmRepository {
         aiSourceMessageId: mappedMessage.aiSourceMessageId,
         aiSourceCount: mappedMessage.aiSources?.length ?? 0
       }
+    });
+    this.emitWebhookEvent(context, "email.message.created", {
+      messageId: mappedMessage.id,
+      threadId: mappedMessage.threadId,
+      accountId: mappedMessage.accountId,
+      direction: mappedMessage.direction,
+      status: mappedMessage.status,
+      subject: mappedMessage.subject,
+      recordId: linkedRecord?.id
     });
     scheduleEmailAutomationsBestEffort(context, this, getBackgroundJobExecutor(this), mappedMessage, settings);
     return mappedMessage;
@@ -4912,18 +4932,21 @@ export class PrismaCrmRepository {
   }
 
   async deliverWebhookEvent(context: RequestContext, event: WebhookEvent, data: Record<string, unknown>): Promise<WebhookDelivery[]> {
+    const events = expandWebhookEventsForPayload(event, data);
     const webhooks = await this.db.webhookEndpoint.findMany({
       where: {
         workspaceId: context.workspaceId,
         active: true,
-        events: { has: event }
+        events: { hasSome: events }
       },
       orderBy: { createdAt: "asc" }
     });
 
     const deliveries: WebhookDelivery[] = [];
     for (const webhook of webhooks) {
-      deliveries.push(await this.deliverWebhook(context, webhook, event, data));
+      for (const matchedEvent of events.filter((candidate) => webhook.events.includes(candidate))) {
+        deliveries.push(await this.deliverWebhook(context, webhook, matchedEvent, data));
+      }
     }
     return deliveries;
   }

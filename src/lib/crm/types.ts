@@ -73,7 +73,13 @@ export type WebhookEvent =
   | "record.created"
   | "record.updated"
   | "record.deleted"
+  | `record.${string}.created`
+  | `record.${string}.updated`
+  | `record.${string}.deleted`
   | "activity.created"
+  | "email.message.created"
+  | "email.thread.updated"
+  | "email.thread.deleted"
   | "import.completed"
   | "import.failed"
   | "webhook.test";

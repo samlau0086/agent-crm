@@ -3104,6 +3104,26 @@ button {
   line-height: 1.45;
 }
 
+.webhook-event-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.webhook-event-group {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.webhook-event-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
 .audit-panel {
   overflow: hidden;
 }

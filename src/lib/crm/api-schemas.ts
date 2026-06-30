@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { isValidEmailAttachmentBase64, MAX_EMAIL_ATTACHMENT_BASE64_CHARS, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
 import { MAX_OUTBOUND_EMAIL_RECIPIENTS, validateOutboundEmailRecipientPolicy } from "@/lib/email/outbound-policy";
+import { isValidWebhookEvent } from "@/lib/integrations/webhook";
+import type { WebhookEvent } from "@/lib/crm/types";
 
 export const MAX_CSV_IMPORT_CHARS = 5_000_000;
 export const MAX_IMPORT_MAPPING_FIELDS = 200;
@@ -277,7 +279,7 @@ export const apiKeyUpdateSchema = z
   })
   .strict();
 
-export const webhookEventSchema = z.enum(["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"]);
+export const webhookEventSchema = z.custom<WebhookEvent>((event) => typeof event === "string" && isValidWebhookEvent(event.trim()), "Unsupported webhook event");
 
 export const webhookCreateSchema = z
   .object({

@@ -6,13 +6,31 @@ export const webhookEvents = [
   "record.created",
   "record.updated",
   "record.deleted",
+  "record.contacts.created",
+  "record.contacts.updated",
+  "record.contacts.deleted",
+  "record.companies.created",
+  "record.companies.updated",
+  "record.companies.deleted",
+  "record.deals.created",
+  "record.deals.updated",
+  "record.deals.deleted",
+  "record.products.created",
+  "record.products.updated",
+  "record.products.deleted",
+  "record.quotes.created",
+  "record.quotes.updated",
+  "record.quotes.deleted",
   "activity.created",
+  "email.message.created",
+  "email.thread.updated",
+  "email.thread.deleted",
   "import.completed",
   "import.failed",
   "webhook.test"
 ] as const;
 
-export type WebhookEvent = (typeof webhookEvents)[number];
+export type WebhookEvent = (typeof webhookEvents)[number] | `record.${string}.created` | `record.${string}.updated` | `record.${string}.deleted`;
 
 const WEBHOOK_SECRET_BYTES = 32;
 const WEBHOOK_SECRET_PREFIX = "whsec";
@@ -35,15 +53,32 @@ export function buildWebhookSignatureHeader(secret: string, payload: string, tim
 }
 
 export function assertValidWebhookEvents(events: string[]): WebhookEvent[] {
-  const allowed = new Set<string>(webhookEvents);
   const normalized = Array.from(new Set(events.map((event) => event.trim()).filter(Boolean)));
   if (normalized.length === 0) {
     throw new Error("Webhook must subscribe to at least one event");
   }
-  if (normalized.some((event) => !allowed.has(event))) {
+  if (normalized.some((event) => !isValidWebhookEvent(event))) {
     throw new Error("Webhook contains unsupported events");
   }
   return normalized as WebhookEvent[];
+}
+
+export function isValidWebhookEvent(event: string): event is WebhookEvent {
+  return (webhookEvents as readonly string[]).includes(event) || isRecordObjectWebhookEvent(event);
+}
+
+export function expandWebhookEventsForPayload(event: WebhookEvent, data: Record<string, unknown>): WebhookEvent[] {
+  const events = [event];
+  const objectKey = typeof data.objectKey === "string" ? data.objectKey.trim() : "";
+  const recordMatch = /^(record)\.(created|updated|deleted)$/.exec(event);
+  if (recordMatch && objectKey && /^[a-z][a-z0-9-]*s$/.test(objectKey)) {
+    events.push(`record.${objectKey}.${recordMatch[2]}` as WebhookEvent);
+  }
+  return Array.from(new Set(events));
+}
+
+function isRecordObjectWebhookEvent(event: string): boolean {
+  return /^record\.[a-z][a-z0-9-]*s\.(created|updated|deleted)$/.test(event);
 }
 
 export function assertValidWebhookUrl(value: string, env: NodeJS.ProcessEnv = process.env): string {

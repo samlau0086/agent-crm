@@ -138,7 +138,8 @@ type PoolSettingsDraft = {
 type ToastState = { intent: "success" | "error" | "info"; message: string };
 type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
-const availableWebhookEvents: WebhookEvent[] = ["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"];
+const baseWebhookEventOptions: WebhookEvent[] = ["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"];
+const emailWebhookEventOptions: WebhookEvent[] = ["email.message.created", "email.thread.updated", "email.thread.deleted"];
 
 const fieldTypes: FieldDefinition["type"][] = [
   "text",
@@ -169,6 +170,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [webhookActionKey, setWebhookActionKey] = useState("");
   const [reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId] = useState("");
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabKey>("access");
   const [selectedObjectId, setSelectedObjectId] = useState("");
@@ -546,6 +548,20 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     });
   }
 
+  async function runWebhookAction(actionKey: string, action: () => Promise<void>) {
+    setMessage(null);
+    setError(null);
+    setWebhookActionKey(actionKey);
+    try {
+      await action();
+      router.refresh();
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "Webhook 操作失败");
+    } finally {
+      setWebhookActionKey("");
+    }
+  }
+
   async function saveObject() {
     if (selectedObject) {
       await fetchJson(`/api/object-definitions/${selectedObject.id}`, {
@@ -906,6 +922,54 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setWebhookDeliveries((current) => [delivery, ...current.filter((candidate) => candidate.id !== delivery.id)].slice(0, 20));
     setMessage(`Webhook test ${delivery.status}: ${delivery.responseStatus ?? delivery.errorMessage ?? "no response"}`);
   }
+  async function handleSaveWebhook() {
+    await runWebhookAction(selectedWebhookEditId ? `save:${selectedWebhookEditId}` : "create", async () => {
+      if (selectedWebhookEditId) {
+        await fetchJson<WebhookEndpoint>(`/api/webhooks/${selectedWebhookEditId}`, {
+          method: "PATCH",
+          body: webhookDraft
+        });
+        setMessage(`Webhook 已更新：${webhookDraft.name}`);
+        return;
+      }
+      const result = await fetchJson<CreatedWebhookEndpoint>("/api/webhooks", {
+        method: "POST",
+        body: webhookDraft
+      });
+      setCreatedWebhookSecret(result.secret);
+      setMessage(`Created webhook ${result.webhook.name}. Copy the signing secret now; it will not be shown again.`);
+      setWebhookDraft(emptyWebhookDraft());
+    });
+  }
+
+  async function handleDeleteWebhook(webhook: WebhookEndpoint) {
+    if (!(await requestConfirm({ title: "删除 Webhook", message: `确定删除 Webhook“${webhook.name}”？已有投递记录也会被清理。`, confirmLabel: "删除", danger: true }))) return;
+    await runWebhookAction(`delete:${webhook.id}`, async () => {
+      await fetchJson(`/api/webhooks/${webhook.id}`, { method: "DELETE" });
+      if (selectedWebhookEditId === webhook.id) {
+        resetWebhookForm();
+      }
+      setMessage(`Webhook 已删除：${webhook.name}`);
+    });
+  }
+
+  async function handleToggleWebhook(webhook: WebhookEndpoint) {
+    if (webhook.active && !(await requestConfirm({ title: "停用 Webhook", message: `确定停用 Webhook“${webhook.name}”？相关集成将不再收到事件。`, confirmLabel: "停用", danger: true }))) return;
+    await runWebhookAction(`toggle:${webhook.id}`, async () => {
+      await fetchJson(`/api/webhooks/${webhook.id}`, { method: "PATCH", body: { active: !webhook.active } });
+      setMessage(`${webhook.active ? "Disabled" : "Enabled"} webhook ${webhook.name}`);
+    });
+  }
+
+  async function handleTestWebhook(webhook: WebhookEndpoint) {
+    await runWebhookAction(`test:${webhook.id}`, async () => {
+      const delivery = await fetchJson<WebhookDelivery>(`/api/webhooks/${webhook.id}/test`, { method: "POST" });
+      setWebhookDeliveryWebhookId(webhook.id);
+      setWebhookDeliveries((current) => [delivery, ...current.filter((candidate) => candidate.id !== delivery.id)].slice(0, 20));
+      setMessage(`Webhook test ${delivery.status}: ${delivery.responseStatus ?? delivery.errorMessage ?? "no response"}`);
+    });
+  }
+
   async function reviewRecordChangeRequest(request: RecordChangeRequest, decision: "approve" | "reject") {
     const actionLabel = request.action === "delete" ? "\u5220\u9664" : "\u4fee\u6539";
     const confirmed = await requestConfirm(
@@ -1269,6 +1333,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
           <WebhookAdminPanel
             webhooks={props.webhooks}
+            objects={props.objects}
             users={props.users}
             draft={webhookDraft}
             selectedWebhook={selectedWebhookEdit}
@@ -1278,13 +1343,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             statusFilter={webhookDeliveryStatusFilter}
             eventFilter={webhookDeliveryEventFilter}
             isPending={isPending}
+            actionKey={webhookActionKey}
             onDraftChange={(patch) => setWebhookDraft((current) => ({ ...current, ...patch }))}
             onToggleEvent={toggleWebhookEvent}
-            onCreate={() => runAction(saveWebhook)}
+            onCreate={() => { void handleSaveWebhook(); }}
             onEdit={editWebhook}
-            onDelete={(webhook) => runAction(() => deleteWebhook(webhook))}
-            onToggle={(webhook) => runAction(() => toggleWebhook(webhook))}
-            onTest={(webhook) => runAction(() => testWebhook(webhook))}
+            onDelete={(webhook) => { void handleDeleteWebhook(webhook); }}
+            onToggle={(webhook) => { void handleToggleWebhook(webhook); }}
+            onTest={(webhook) => { void handleTestWebhook(webhook); }}
             onRetryDelivery={(delivery) => runAction(() => retryWebhookDelivery(delivery))}
             onSelectDeliveryWebhook={setWebhookDeliveryWebhookId}
             onStatusFilterChange={setWebhookDeliveryStatusFilter}
@@ -2740,6 +2806,7 @@ function ApiKeyAdminPanel({
 
 function WebhookAdminPanel({
   webhooks,
+  objects,
   users,
   draft,
   selectedWebhook,
@@ -2749,6 +2816,7 @@ function WebhookAdminPanel({
   statusFilter,
   eventFilter,
   isPending,
+  actionKey,
   onDraftChange,
   onToggleEvent,
   onCreate,
@@ -2764,6 +2832,7 @@ function WebhookAdminPanel({
   onReset
 }: {
   webhooks: WebhookEndpoint[];
+  objects: ObjectDefinition[];
   users: User[];
   draft: WebhookDraft;
   selectedWebhook?: WebhookEndpoint;
@@ -2773,6 +2842,7 @@ function WebhookAdminPanel({
   statusFilter: "" | WebhookDeliveryStatus;
   eventFilter: "" | WebhookEvent;
   isPending: boolean;
+  actionKey: string;
   onDraftChange: (patch: Partial<WebhookDraft>) => void;
   onToggleEvent: (event: WebhookEvent, enabled: boolean) => void;
   onCreate: () => void;
@@ -2787,6 +2857,48 @@ function WebhookAdminPanel({
   onClearSecret: () => void;
   onReset: () => void;
 }) {
+  const objectWebhookEventOptions = objects.flatMap((object) => [
+    { event: `record.${object.key}.created` as WebhookEvent, label: `${object.label} 创建` },
+    { event: `record.${object.key}.updated` as WebhookEvent, label: `${object.label} 更新` },
+    { event: `record.${object.key}.deleted` as WebhookEvent, label: `${object.label} 删除` }
+  ]);
+  const webhookEventGroups: Array<{ title: string; description: string; options: Array<{ event: WebhookEvent; label: string }> }> = [
+    {
+      title: "通用记录事件",
+      description: "订阅全部 CRM 记录，不区分对象类型。",
+      options: [
+        { event: "record.created", label: "任意记录创建" },
+        { event: "record.updated", label: "任意记录更新" },
+        { event: "record.deleted", label: "任意记录删除" }
+      ]
+    },
+    {
+      title: "对象级记录事件",
+      description: "只订阅指定对象，例如联系人、公司、交易、产品、报价。",
+      options: objectWebhookEventOptions
+    },
+    {
+      title: "邮件事件",
+      description: "订阅邮箱消息和邮件线程变化。",
+      options: [
+        { event: "email.message.created", label: "邮件消息创建" },
+        { event: "email.thread.updated", label: "邮件线程更新" },
+        { event: "email.thread.deleted", label: "邮件线程删除" }
+      ]
+    },
+    {
+      title: "系统事件",
+      description: "导入、活动和测试投递。",
+      options: [
+        { event: "activity.created", label: "活动创建" },
+        { event: "import.completed", label: "导入完成" },
+        { event: "import.failed", label: "导入失败" },
+        { event: "webhook.test", label: "测试事件" }
+      ]
+    }
+  ];
+  const allWebhookEventOptions = webhookEventGroups.flatMap((group) => group.options.map((option) => option.event));
+  const webhookBusy = Boolean(actionKey);
   return (
     <section className="settings-panel">
       <div className="settings-panel-header">
@@ -2828,24 +2940,34 @@ function WebhookAdminPanel({
               <span className="subtle">Active</span>
               <input data-testid="settings-webhook-active" type="checkbox" checked={draft.active} onChange={(event) => onDraftChange({ active: event.target.checked })} />
             </label>
-            <div className="wide permission-picker">
-              {availableWebhookEvents.map((event) => (
-                <label className="permission-option" key={event}>
-                  <input data-testid={`settings-webhook-event-${event}`} type="checkbox" checked={draft.events.includes(event)} onChange={(change) => onToggleEvent(event, change.target.checked)} />
-                  <span>
-                    <strong>{event}</strong>
-                    <small>Deliver when {event.replace(".", " ")}</small>
-                  </span>
-                </label>
+            <div className="wide webhook-event-groups">
+              {webhookEventGroups.map((group) => (
+                <div className="webhook-event-group" key={group.title}>
+                  <div className="stage-header">
+                    <strong>{group.title}</strong>
+                    <span className="subtle">{group.description}</span>
+                  </div>
+                  <div className="permission-picker webhook-event-picker">
+                    {group.options.map(({ event, label }) => (
+                      <label className="permission-option" key={event}>
+                        <input data-testid={`settings-webhook-event-${event}`} type="checkbox" checked={draft.events.includes(event)} onChange={(change) => onToggleEvent(event, change.target.checked)} />
+                        <span>
+                          <strong>{label}</strong>
+                          <small>{event}</small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
-          <button className="primary-button" data-testid="settings-create-webhook" type="button" onClick={onCreate} disabled={isPending || !draft.name.trim() || !draft.url.trim() || draft.events.length === 0} style={{ marginTop: 12 }}>
-            <Save size={16} />
-            {selectedWebhook ? "Save webhook" : "Create webhook"}
+          <button className="primary-button" data-testid="settings-create-webhook" type="button" onClick={onCreate} disabled={isPending || webhookBusy || !draft.name.trim() || !draft.url.trim() || draft.events.length === 0} style={{ marginTop: 12 }}>
+            <Save className={actionKey === "create" || actionKey.startsWith("save:") ? "spin-icon" : undefined} size={16} />
+            {actionKey === "create" || actionKey.startsWith("save:") ? "Saving..." : selectedWebhook ? "Save webhook" : "Create webhook"}
           </button>
           {selectedWebhook ? (
-            <button className="secondary-button" type="button" onClick={onReset} disabled={isPending} style={{ marginTop: 12, marginLeft: 8 }}>
+            <button className="secondary-button" type="button" onClick={onReset} disabled={isPending || webhookBusy} style={{ marginTop: 12, marginLeft: 8 }}>
               <XCircle size={15} />
               Cancel edit
             </button>
@@ -2872,21 +2994,21 @@ function WebhookAdminPanel({
                   </div>
                   {webhook.lastDeliveredAt ? <div className="subtle">Last delivered {formatAuditTime(webhook.lastDeliveredAt)}</div> : null}
                   <div className="toolbar compact-toolbar" style={{ marginTop: 10 }}>
-                    <button className="secondary-button" data-testid={`settings-webhook-edit-${webhook.id}`} type="button" onClick={() => onEdit(webhook)} disabled={isPending}>
+                    <button className="secondary-button" data-testid={`settings-webhook-edit-${webhook.id}`} type="button" onClick={() => onEdit(webhook)} disabled={isPending || webhookBusy}>
                       <Save size={15} />
                       Edit
                     </button>
-                    <button className="secondary-button" data-testid={`settings-webhook-test-${webhook.id}`} type="button" onClick={() => onTest(webhook)} disabled={isPending || !webhook.active}>
-                      <CheckCircle2 size={15} />
-                      Test
+                    <button className="secondary-button" data-testid={`settings-webhook-test-${webhook.id}`} type="button" onClick={() => onTest(webhook)} disabled={isPending || webhookBusy || !webhook.active}>
+                      <CheckCircle2 className={actionKey === `test:${webhook.id}` ? "spin-icon" : undefined} size={15} />
+                      {actionKey === `test:${webhook.id}` ? "Testing..." : "Test"}
                     </button>
-                    <button className={webhook.active ? "danger-button" : "secondary-button"} data-testid={`settings-webhook-toggle-${webhook.id}`} type="button" onClick={() => onToggle(webhook)} disabled={isPending}>
-                      <XCircle size={15} />
-                      {webhook.active ? "Disable" : "Enable"}
+                    <button className={webhook.active ? "danger-button" : "secondary-button"} data-testid={`settings-webhook-toggle-${webhook.id}`} type="button" onClick={() => onToggle(webhook)} disabled={isPending || webhookBusy}>
+                      <XCircle className={actionKey === `toggle:${webhook.id}` ? "spin-icon" : undefined} size={15} />
+                      {actionKey === `toggle:${webhook.id}` ? "Saving..." : webhook.active ? "Disable" : "Enable"}
                     </button>
-                    <button className="danger-button" data-testid={`settings-webhook-delete-${webhook.id}`} type="button" onClick={() => onDelete(webhook)} disabled={isPending}>
-                      <Trash2 size={15} />
-                      Delete
+                    <button className="danger-button" data-testid={`settings-webhook-delete-${webhook.id}`} type="button" onClick={() => onDelete(webhook)} disabled={isPending || webhookBusy}>
+                      <Trash2 className={actionKey === `delete:${webhook.id}` ? "spin-icon" : undefined} size={15} />
+                      {actionKey === `delete:${webhook.id}` ? "Deleting..." : "Delete"}
                     </button>
                   </div>
                 </article>
@@ -2925,7 +3047,7 @@ function WebhookAdminPanel({
             <span className="subtle">Event</span>
             <select className="input" data-testid="settings-webhook-delivery-event" value={eventFilter} onChange={(event) => onEventFilterChange(event.target.value as "" | WebhookEvent)}>
               <option value="">All events</option>
-              {availableWebhookEvents.map((event) => (
+              {allWebhookEventOptions.map((event) => (
                 <option key={event} value={event}>{event}</option>
               ))}
             </select>
@@ -3058,7 +3180,7 @@ function NotificationChannelAdminPanel({
               启用
             </label>
             <div className="wide permission-picker">
-              {availableWebhookEvents.map((event) => (
+              {[...baseWebhookEventOptions, ...emailWebhookEventOptions].map((event) => (
                 <label className="permission-option" key={event}>
                   <input data-testid={`settings-notification-event-${event}`} type="checkbox" checked={draft.events.includes(event)} onChange={(change) => onToggleEvent(event, change.target.checked)} />
                   <span>
