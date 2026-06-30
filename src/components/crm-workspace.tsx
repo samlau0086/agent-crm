@@ -171,6 +171,7 @@ type EmailRoutePatch = {
   threadId?: string;
 };
 type RecordChangeRequestResponse = { pendingApproval: true; request: RecordChangeRequest };
+type RecordApprovalReasonRequiredResponse = { approvalReasonRequired: true };
 type EmailThreadUiState = {
   archived?: boolean;
   category?: EmailCategoryKey;
@@ -2247,13 +2248,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
 
-    const result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
+    let result = await fetchJson<CrmRecord | RecordChangeRequestResponse | RecordApprovalReasonRequiredResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
       method: "PATCH",
       body: {
         ...updatePatch,
         changeReason: changeReason?.trim() || undefined
       }
     });
+    if ("approvalReasonRequired" in result) {
+      const fallbackReason = await requestPrompt({
+        title: "提交修改审批",
+        message: `请填写修改“${selectedRecord.title}”的原因。管理员审核通过后才会正式应用。`,
+        placeholder: "例如：客户更新了公司资料和主要联系方式"
+      });
+      if (!fallbackReason?.trim()) {
+        setMessage("已取消修改审批");
+        return;
+      }
+      result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
+        method: "PATCH",
+        body: {
+          ...updatePatch,
+          changeReason: fallbackReason.trim()
+        }
+      });
+    }
     if ("pendingApproval" in result) {
       setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [result.request]));
       showSuccess("修改申请已提交，等待管理员审核");
@@ -2369,13 +2388,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
 
-    const result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${targetRecord.objectKey}/${targetRecord.id}`, {
+    let result = await fetchJson<CrmRecord | RecordChangeRequestResponse | RecordApprovalReasonRequiredResponse>(`/api/records/${targetRecord.objectKey}/${targetRecord.id}`, {
       method: "PATCH",
       body: {
         ...contactMethodPatch,
         changeReason: changeReason?.trim() || undefined
       }
     });
+    if ("approvalReasonRequired" in result) {
+      const fallbackReason = await requestPrompt({
+        title: "提交联系方式修改审批",
+        message: `请填写修改“${targetRecord.title}”联系方式的原因。管理员审核通过后才会正式应用。`,
+        placeholder: "例如：客户确认了新的主邮箱"
+      });
+      if (!fallbackReason?.trim()) {
+        setMessage("已取消联系方式修改");
+        return;
+      }
+      result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${targetRecord.objectKey}/${targetRecord.id}`, {
+        method: "PATCH",
+        body: {
+          ...contactMethodPatch,
+          changeReason: fallbackReason.trim()
+        }
+      });
+    }
     if ("pendingApproval" in result) {
       closeContactMethodEditor();
       setMessage("联系方式修改申请已提交，等待管理员审核");

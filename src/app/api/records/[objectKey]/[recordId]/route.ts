@@ -35,6 +35,9 @@ async function patchApiMetricsHandler(request: NextRequest, { params }: RoutePar
         ownerId: patch.ownerId ?? undefined
       };
       const { approvalPatch, immediatePatch, previousPatch } = splitRecordApprovalPatch(current, normalizedPatch);
+      if (hasRecordPatchChanges(approvalPatch) && !changeReason?.trim()) {
+        return ok({ approvalReasonRequired: true }, { status: 200 });
+      }
       let updatedRecord = current;
       if (hasRecordPatchChanges(immediatePatch)) {
         updatedRecord = await repository.updateRecord(context, params.objectKey, params.recordId, immediatePatch);

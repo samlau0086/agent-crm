@@ -2089,6 +2089,9 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /fetchJson<CrmRecord>\(`\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}`/);
   assert.match(source, /const approvalBaselineRecord = await loadRecordForApprovalDecision\(selectedRecord\)/);
   assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(approvalBaselineRecord, updatePatch\)\.approvalPatch\)/);
+  assert.match(source, /type RecordApprovalReasonRequiredResponse = \{ approvalReasonRequired: true \}/);
+  assert.match(source, /if \("approvalReasonRequired" in result\) \{[\s\S]*const fallbackReason = await requestPrompt\(\{/);
+  assert.match(readFileSync("src/app/api/records/[objectKey]/[recordId]/route.ts", "utf8"), /hasRecordPatchChanges\(approvalPatch\) && !changeReason\?\.trim\(\)[\s\S]*approvalReasonRequired: true/);
   assert.match(source, /const approvalBaselineRecord = await loadRecordForApprovalDecision\(targetRecord\)/);
   assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(approvalBaselineRecord, contactMethodPatch\)\.approvalPatch\)/);
   assert.match(source, /previousRecordApprovalPatch\(patch\)/);
