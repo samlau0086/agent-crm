@@ -2182,15 +2182,7 @@ export class PrismaCrmRepository {
         aiSourceCount: mappedMessage.aiSources?.length ?? 0
       }
     });
-    this.emitWebhookEvent(context, "email.message.created", {
-      messageId: mappedMessage.id,
-      threadId: mappedMessage.threadId,
-      accountId: mappedMessage.accountId,
-      direction: mappedMessage.direction,
-      status: mappedMessage.status,
-      subject: mappedMessage.subject,
-      recordId: linkedRecord?.id
-    });
+    this.emitEmailMessageEvents(context, mappedMessage, linkedRecord?.id, { includeCreated: true });
     scheduleEmailAutomationsBestEffort(context, this, getBackgroundJobExecutor(this), mappedMessage, settings);
     return mappedMessage;
   }
@@ -2324,6 +2316,10 @@ export class PrismaCrmRepository {
       summary: `Updated email status ${mappedMessage.subject}`,
       details: { status, previousStatus: existing.status, threadId: existing.threadId }
     });
+    if (mappedMessage.status !== existing.status) {
+      const thread = await this.db.emailThread.findUnique({ where: { id: mappedMessage.threadId }, select: { recordId: true } });
+      this.emitEmailMessageEvents(context, mappedMessage, thread?.recordId ?? undefined, { includeCreated: false });
+    }
     if (status === "sent" && existing.status !== "sent") {
       const settings = await this.ensureEmailAiSettings(context.workspaceId);
       scheduleEmailAutomationsBestEffort(context, this, getBackgroundJobExecutor(this), mappedMessage, settings);
@@ -5115,6 +5111,17 @@ export class PrismaCrmRepository {
     this.emitNotificationEvent(context, event, data);
   }
 
+  private emitEmailMessageEvents(context: RequestContext, message: EmailMessage, recordId: string | undefined, options: { includeCreated: boolean }): void {
+    const data = buildEmailMessageEventPayload(message, recordId);
+    if (options.includeCreated) {
+      this.emitWebhookEvent(context, "email.message.created", data);
+    }
+    const lifecycleEvent = emailMessageLifecycleEvent(message);
+    if (lifecycleEvent) {
+      this.emitWebhookEvent(context, lifecycleEvent, data);
+    }
+  }
+
   private emitNotificationEvent(context: RequestContext, event: NotificationEvent, data: Record<string, unknown>): void {
     void this.deliverNotificationEvent(context, event, data).catch((error) => {
       console.error(`Failed to deliver notification event ${event}`, error);
@@ -6842,6 +6849,42 @@ function emailActivityVerb(status: EmailMessage["status"], direction: EmailMessa
     return "Failed";
   }
   return "Sent";
+}
+
+function buildEmailMessageEventPayload(message: EmailMessage, recordId?: string): Record<string, unknown> {
+  return {
+    messageId: message.id,
+    threadId: message.threadId,
+    accountId: message.accountId,
+    direction: message.direction,
+    status: message.status,
+    subject: message.subject,
+    from: message.from,
+    to: message.to,
+    cc: message.cc ?? [],
+    bcc: message.bcc ?? [],
+    sentAt: message.sentAt,
+    receivedAt: message.receivedAt,
+    scheduledSendAt: message.scheduledSendAt,
+    failureReason: message.failureReason,
+    recordId
+  };
+}
+
+function emailMessageLifecycleEvent(message: Pick<EmailMessage, "direction" | "status">): WebhookEvent | undefined {
+  if (message.direction === "inbound" && message.status === "received") {
+    return "email.message.received";
+  }
+  if (message.direction === "outbound" && message.status === "queued") {
+    return "email.message.queued";
+  }
+  if (message.direction === "outbound" && message.status === "sent") {
+    return "email.message.sent";
+  }
+  if (message.direction === "outbound" && message.status === "failed") {
+    return "email.message.failed";
+  }
+  return undefined;
 }
 
 function recordDataHasEmail(data: unknown, emailAddress: string): boolean {

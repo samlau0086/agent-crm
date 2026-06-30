@@ -930,6 +930,10 @@ export class CrmStore {
       summary: `Updated email status ${message.subject}`,
       details: { status, previousStatus, threadId: message.threadId }
     });
+    if (message.status !== previousStatus) {
+      const thread = this.assertEmailThread(context, message.threadId);
+      this.deliverEmailMessageEvents(context, message, thread.recordId, { includeCreated: false });
+    }
     if (status === "sent" && previousStatus !== "sent") {
       this.triggerEmailAutomations(context, message);
     }
@@ -1103,15 +1107,7 @@ export class CrmStore {
         aiSourceCount: message.aiSources?.length ?? 0
       }
     });
-    this.deliverWebhookEvent(context, "email.message.created", {
-      messageId: message.id,
-      threadId: message.threadId,
-      accountId: message.accountId,
-      direction: message.direction,
-      status: message.status,
-      subject: message.subject,
-      recordId: thread.recordId
-    });
+    this.deliverEmailMessageEvents(context, message, thread.recordId, { includeCreated: true });
     this.triggerEmailAutomations(context, message);
     return clone(message);
   }
@@ -1487,6 +1483,17 @@ export class CrmStore {
     return webhooks.flatMap((webhook) =>
       events.filter((candidate) => webhook.events.includes(candidate)).map((matchedEvent) => this.recordStoreWebhookDelivery(context, webhook, matchedEvent, data))
     );
+  }
+
+  private deliverEmailMessageEvents(context: RequestContext, message: EmailMessage, recordId: string | undefined, options: { includeCreated: boolean }): void {
+    const data = buildEmailMessageEventPayload(message, recordId);
+    if (options.includeCreated) {
+      this.deliverWebhookEvent(context, "email.message.created", data);
+    }
+    const lifecycleEvent = emailMessageLifecycleEvent(message);
+    if (lifecycleEvent) {
+      this.deliverWebhookEvent(context, lifecycleEvent, data);
+    }
   }
 
   listTeams(context: RequestContext): Team[] {
@@ -4219,6 +4226,42 @@ function normalizeEmailAccountToggles(provider: EmailAccount["provider"], toggle
     syncEnabled: capability.supportsSync ? toggles.syncEnabled : false,
     sendEnabled: capability.supportsSend ? toggles.sendEnabled : false
   };
+}
+
+function buildEmailMessageEventPayload(message: EmailMessage, recordId?: string): Record<string, unknown> {
+  return {
+    messageId: message.id,
+    threadId: message.threadId,
+    accountId: message.accountId,
+    direction: message.direction,
+    status: message.status,
+    subject: message.subject,
+    from: message.from,
+    to: message.to,
+    cc: message.cc ?? [],
+    bcc: message.bcc ?? [],
+    sentAt: message.sentAt,
+    receivedAt: message.receivedAt,
+    scheduledSendAt: message.scheduledSendAt,
+    failureReason: message.failureReason,
+    recordId
+  };
+}
+
+function emailMessageLifecycleEvent(message: Pick<EmailMessage, "direction" | "status">): WebhookEvent | undefined {
+  if (message.direction === "inbound" && message.status === "received") {
+    return "email.message.received";
+  }
+  if (message.direction === "outbound" && message.status === "queued") {
+    return "email.message.queued";
+  }
+  if (message.direction === "outbound" && message.status === "sent") {
+    return "email.message.sent";
+  }
+  if (message.direction === "outbound" && message.status === "failed") {
+    return "email.message.failed";
+  }
+  return undefined;
 }
 
 function normalizeEmailAiProviderError(value: string | undefined): string | undefined {

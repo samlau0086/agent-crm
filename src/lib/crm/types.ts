@@ -78,6 +78,10 @@ export type WebhookEvent =
   | `record.${string}.deleted`
   | "activity.created"
   | "email.message.created"
+  | "email.message.received"
+  | "email.message.queued"
+  | "email.message.sent"
+  | "email.message.failed"
   | "email.thread.updated"
   | "email.thread.deleted"
   | "import.completed"

@@ -142,7 +142,15 @@ type ToastState = { intent: "success" | "error" | "info"; message: string };
 type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
 const baseWebhookEventOptions: WebhookEvent[] = ["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"];
-const emailWebhookEventOptions: WebhookEvent[] = ["email.message.created", "email.thread.updated", "email.thread.deleted"];
+const emailWebhookEventOptions: WebhookEvent[] = [
+  "email.message.created",
+  "email.message.received",
+  "email.message.queued",
+  "email.message.sent",
+  "email.message.failed",
+  "email.thread.updated",
+  "email.thread.deleted"
+];
 
 const fieldTypes: FieldDefinition["type"][] = [
   "text",
@@ -2890,6 +2898,10 @@ function WebhookAdminPanel({
       description: "订阅邮箱消息和邮件线程变化。",
       options: [
         { event: "email.message.created", label: "邮件消息创建" },
+        { event: "email.message.received", label: "邮件接收" },
+        { event: "email.message.queued", label: "邮件待发送创建" },
+        { event: "email.message.sent", label: "邮件发送成功" },
+        { event: "email.message.failed", label: "邮件发送失败" },
         { event: "email.thread.updated", label: "邮件线程更新" },
         { event: "email.thread.deleted", label: "邮件线程删除" }
       ]

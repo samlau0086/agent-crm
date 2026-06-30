@@ -302,7 +302,9 @@ await run("webhook secrets sign payloads with timestamped hmac headers", () => {
   assert.equal(header, `t=123,v1=${signature}`);
   assert.deepEqual(assertValidWebhookEvents(["webhook.test", "record.created", "webhook.test"]), ["webhook.test", "record.created"]);
   assert.deepEqual(assertValidWebhookEvents(["record.contacts.updated", "email.message.created"]), ["record.contacts.updated", "email.message.created"]);
+  assert.deepEqual(assertValidWebhookEvents(["email.message.received", "email.message.queued", "email.message.sent", "email.message.failed"]), ["email.message.received", "email.message.queued", "email.message.sent", "email.message.failed"]);
   assert.equal(isValidWebhookEvent("record.companies.deleted"), true);
+  assert.equal(isValidWebhookEvent("email.message.sent"), true);
   assert.deepEqual(expandWebhookEventsForPayload("record.updated", { objectKey: "contacts" }), ["record.updated", "record.contacts.updated"]);
   assert.throws(() => assertValidWebhookEvents(["bad.event"]), /unsupported events/);
   assert.equal(assertValidWebhookUrl("https://example.com/hook", { NODE_ENV: "production" }), "https://example.com/hook");
@@ -3983,6 +3985,54 @@ await run("webhook subscriptions can target specific crm objects and email messa
   assert.equal(deliveries.some((delivery) => delivery.event === "record.companies.created" && delivery.requestBody.data?.recordId === company.id), true);
   assert.equal(deliveries.some((delivery) => delivery.event === "record.deals.created"), false);
   assert.equal(deliveries.some((delivery) => delivery.event === "email.message.created" && delivery.requestBody.data?.messageId === message.id), true);
+});
+
+await run("email message lifecycle webhook events distinguish received queued sent and failed", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const created = store.createWebhook(context, {
+    name: "Email Lifecycle Hook",
+    url: "https://example.com/webhooks/email-lifecycle",
+    events: ["email.message.created", "email.message.received", "email.message.queued", "email.message.sent", "email.message.failed"]
+  });
+  const account = store.createEmailAccount(context, {
+    name: "Lifecycle Inbox",
+    emailAddress: "lifecycle@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const inbound = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: ["lifecycle@example.com"],
+    subject: "Inbound inquiry",
+    bodyText: "Please send details"
+  });
+  const queued = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Queued proposal",
+    bodyText: "Queued response"
+  });
+  const failedQueued = store.queueEmailMessage(context, {
+    accountId: account.id,
+    to: ["buyer@example.com"],
+    subject: "Failed proposal",
+    bodyText: "Failed response"
+  });
+  const sent = store.updateEmailMessageStatus(context, queued.id, "sent", { externalMessageId: "sent-1" });
+  const failed = store.updateEmailMessageStatus(context, failedQueued.id, "failed", { failureReason: "SMTP 550" });
+
+  const deliveries = store.listWebhookDeliveries(context, created.webhook.id);
+  assert.equal(deliveries.some((delivery) => delivery.event === "email.message.created" && delivery.requestBody.data?.messageId === inbound.id), true);
+  assert.equal(deliveries.some((delivery) => delivery.event === "email.message.received" && delivery.requestBody.data?.messageId === inbound.id), true);
+  assert.equal(deliveries.some((delivery) => delivery.event === "email.message.queued" && delivery.requestBody.data?.messageId === queued.id), true);
+  assert.equal(deliveries.some((delivery) => delivery.event === "email.message.sent" && delivery.requestBody.data?.messageId === sent.id && delivery.requestBody.data?.status === "sent"), true);
+  assert.equal(deliveries.some((delivery) => delivery.event === "email.message.failed" && delivery.requestBody.data?.messageId === failed.id && delivery.requestBody.data?.failureReason === "SMTP 550"), true);
 });
 
 await run("webhook delivery filters and retries preserve payload attempts", () => {
