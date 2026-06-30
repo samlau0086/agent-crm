@@ -2213,6 +2213,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  async function loadRecordForApprovalDecision(record: CrmRecord): Promise<CrmRecord> {
+    if (!editApprovalObjectKeys.has(record.objectKey)) {
+      return record;
+    }
+    return fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}`, { method: "GET" });
+  }
+
   async function submitUpdateRecord() {
     if (!selectedRecord) {
       return;
@@ -2224,9 +2231,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
       ownerId: editOwnerId || undefined
     };
+    const approvalBaselineRecord = await loadRecordForApprovalDecision(selectedRecord);
     const needsApproval =
       editApprovalObjectKeys.has(selectedRecord.objectKey) &&
-      hasRecordPatchChanges(splitRecordApprovalPatch(selectedRecord, updatePatch).approvalPatch);
+      hasRecordPatchChanges(splitRecordApprovalPatch(approvalBaselineRecord, updatePatch).approvalPatch);
     const changeReason = needsApproval
       ? await requestPrompt({
           title: "提交修改审批",
@@ -2345,9 +2353,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         phone: primaryPhone
       }
     };
+    const approvalBaselineRecord = await loadRecordForApprovalDecision(targetRecord);
     const needsApproval =
       targetRecord.objectKey === "contacts" &&
-      hasRecordPatchChanges(splitRecordApprovalPatch(targetRecord, contactMethodPatch).approvalPatch);
+      hasRecordPatchChanges(splitRecordApprovalPatch(approvalBaselineRecord, contactMethodPatch).approvalPatch);
     const changeReason = needsApproval
       ? await requestPrompt({
           title: "提交联系方式修改审批",

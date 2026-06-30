@@ -2085,8 +2085,12 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /saveLabel=\{editApprovalObjectKeys\.has\(selectedRecord\.objectKey\) \? "提交修改审批" : "保存"\}/);
   assert.match(source, /onSave=\{\(\) => runRecordSaveAction\(submitUpdateRecord\)\}/);
   assert.match(source, /const editApprovalObjectKeys = new Set\(\["contacts", "companies", "deals"\]\)/);
-  assert.match(source, /splitRecordApprovalPatch\(selectedRecord, updatePatch\)\.approvalPatch/);
-  assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(selectedRecord, updatePatch\)\.approvalPatch\)/);
+  assert.match(source, /function loadRecordForApprovalDecision/);
+  assert.match(source, /fetchJson<CrmRecord>\(`\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}`/);
+  assert.match(source, /const approvalBaselineRecord = await loadRecordForApprovalDecision\(selectedRecord\)/);
+  assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(approvalBaselineRecord, updatePatch\)\.approvalPatch\)/);
+  assert.match(source, /const approvalBaselineRecord = await loadRecordForApprovalDecision\(targetRecord\)/);
+  assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(approvalBaselineRecord, contactMethodPatch\)\.approvalPatch\)/);
   assert.match(source, /previousRecordApprovalPatch\(patch\)/);
   assert.match(source, /const \[isRecordSavePending, setIsRecordSavePending\] = useState\(false\)/);
   assert.match(source, /setRecordChangeRequests\(\(current\) => mergeRecordChangeRequests\(current, \[result\.request\]\)\)/);
