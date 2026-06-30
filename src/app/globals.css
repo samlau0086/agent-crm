@@ -567,6 +567,29 @@ button {
   overflow-wrap: anywhere;
 }
 
+.record-name-cell {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.record-owner-meta {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-owner-meta.public {
+  color: #64748b;
+}
+
 .record-title-with-media {
   display: inline-flex;
   align-items: center;

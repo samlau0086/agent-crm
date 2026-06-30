@@ -2067,11 +2067,16 @@ await run("contact and company lists render avatar and logo media fields", () =>
   assert.match(source, /function RecordTitleButton/);
   assert.match(source, /record\.objectKey === "contacts" \? record\.data\.avatarUrl : record\.objectKey === "companies" \? record\.data\.logoUrl/);
   assert.match(source, /<RecordTitleButton record=\{record\} onOpen=\{\(\) => openRecord\(record\)\} \/>/);
+  assert.match(source, /className="record-name-cell"/);
+  assert.match(source, /className=\{`record-owner-meta \$\{record\.ownerId \? "" : "public"\}`\}/);
+  assert.match(source, /return owner \? `私海 · \$\{owner\.name\}` : "私海"/);
   assert.match(source, /field\.objectKey === "contacts" && field\.key === "avatarUrl"/);
   assert.match(source, /field\.objectKey === "companies" && field\.key === "logoUrl"/);
   assert.match(source, /record\.objectKey === "contacts" && column\.field\.key === "avatarUrl"/);
   assert.match(source, /record\.objectKey === "companies" && column\.field\.key === "logoUrl"/);
   assert.match(styles, /\.record-title-with-media/);
+  assert.match(styles, /\.record-name-cell/);
+  assert.match(styles, /\.record-owner-meta/);
   assert.match(styles, /\.record-list-avatar/);
   assert.match(styles, /\.record-list-logo/);
 });

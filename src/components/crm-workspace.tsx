@@ -4039,10 +4039,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     {filteredRecords.map((record) => (
                       <tr key={record.id}>
                         <td>
-                          <div className="stack-compact">
+                          <div className="record-name-cell">
                             <RecordTitleButton record={record} onOpen={() => openRecord(record)} />
                             {activeObjectUsesPool ? (
-                              <span className={record.ownerId ? "status-pill" : "status-pill success"}>
+                              <span className={`record-owner-meta ${record.ownerId ? "" : "public"}`}>
                                 {recordPoolLabel(record, props.users)}
                               </span>
                             ) : null}
@@ -14219,7 +14219,11 @@ function isPoolEnabledForObject(objectKey: string, settings: CrmPoolSettings): b
 }
 
 function recordPoolLabel(record: CrmRecord, users: User[]): string {
-  return record.ownerId ? ownerLabel(record.ownerId, users) : "公海";
+  if (!record.ownerId) {
+    return "公海";
+  }
+  const owner = users.find((user) => user.id === record.ownerId);
+  return owner ? `私海 · ${owner.name}` : "私海";
 }
 
 function buildRecordListUrl(
