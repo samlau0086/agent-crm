@@ -15,6 +15,9 @@ export type Permission =
   | "crm.import"
   | "crm.pool.manage"
   | "crm.admin"
+  | "workflow.read"
+  | "workflow.write"
+  | "workflow.admin"
   | "ai.use"
   | "ai.admin";
 
@@ -86,6 +89,12 @@ export type WebhookEvent =
   | "email.thread.deleted"
   | "import.completed"
   | "import.failed"
+  | "workflow.run_started"
+  | "workflow.run_completed"
+  | "workflow.run_failed"
+  | "workflow.action_approval_requested"
+  | "workflow.action_approved"
+  | "workflow.action_rejected"
   | "webhook.test";
 
 export type WebhookDeliveryStatus = "pending" | "success" | "failed";
@@ -627,7 +636,121 @@ export type AuditAction =
   | "record.change_requested"
   | "record.change_approved"
   | "record.change_rejected"
-  | "record.change_cancelled";
+  | "record.change_cancelled"
+  | "workflow.created"
+  | "workflow.updated"
+  | "workflow.deleted"
+  | "workflow.enabled"
+  | "workflow.disabled"
+  | "workflow.run_started"
+  | "workflow.run_completed"
+  | "workflow.run_failed"
+  | "workflow.action_approval_requested"
+  | "workflow.action_approved"
+  | "workflow.action_rejected";
+
+export type WorkflowStatus = "draft" | "active" | "disabled" | "archived";
+export type WorkflowRunStatus = "running" | "completed" | "failed" | "skipped" | "approval_required";
+export type WorkflowTriggerType = "crm_event" | "email_event" | "task_event" | "schedule" | "manual";
+export type WorkflowConditionType = "field" | "activity" | "email_behavior" | "ai";
+export type WorkflowActionType = "create_activity" | "send_email" | "update_stage" | "update_record" | "notify" | "create_knowledge_article";
+export type WorkflowApprovalStatus = "pending" | "approved" | "rejected";
+
+export interface WorkflowTrigger {
+  type: WorkflowTriggerType;
+  event?: string;
+  objectKey?: string;
+  schedule?: {
+    mode: "daily" | "weekly" | "interval";
+    dailyAt?: string;
+    weekday?: number;
+    intervalMinutes?: number;
+  };
+}
+
+export interface WorkflowCondition {
+  key: string;
+  type: WorkflowConditionType;
+  field?: string;
+  operator?: "equals" | "not_equals" | "contains" | "not_contains" | "gt" | "gte" | "lt" | "lte" | "exists" | "not_exists";
+  value?: unknown;
+  prompt?: string;
+}
+
+export interface WorkflowAction {
+  key: string;
+  type: WorkflowActionType;
+  name: string;
+  requiresApproval?: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface WorkflowDefinition {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description?: string;
+  goal: string;
+  status: WorkflowStatus;
+  trigger: WorkflowTrigger;
+  conditions: WorkflowCondition[];
+  actions: WorkflowAction[];
+  createdById: string;
+  version: number;
+  lastRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workspaceId: string;
+  workflowId: string;
+  status: WorkflowRunStatus;
+  triggerEvent: string;
+  triggerData: Record<string, unknown>;
+  idempotencyKey?: string;
+  conditionResults: Array<{ key: string; passed: boolean; actualValue?: unknown }>;
+  actionResults: Array<{ actionKey: string; status: "completed" | "skipped" | "approval_required" | "failed"; message?: string; approvalId?: string }>;
+  errorMessage?: string;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+}
+
+export interface WorkflowActionApproval {
+  id: string;
+  workspaceId: string;
+  workflowId: string;
+  runId?: string;
+  actionKey: string;
+  actionType: WorkflowActionType;
+  status: WorkflowApprovalStatus;
+  summary: string;
+  payload: Record<string, unknown>;
+  requestedById: string;
+  reviewedById?: string;
+  reviewNote?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
+export interface WorkflowAiGenerationRequest {
+  goal: string;
+  objectKey?: string;
+  audience?: string;
+  constraints?: string;
+}
+
+export interface WorkflowAiGenerationResult {
+  workflow: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt">;
+  explanation: {
+    goal: string;
+    triggerReason: string;
+    expectedOutcome: string;
+    risks: string[];
+  };
+}
 
 export interface RecordPoolActionResult {
   record: CrmRecord;
@@ -819,6 +942,9 @@ export interface CrmSnapshot {
   poolSettings?: CrmPoolSettings[];
   recordChangeRequests?: RecordChangeRequest[];
   mediaAssets?: MediaAsset[];
+  workflowDefinitions?: WorkflowDefinition[];
+  workflowRuns?: WorkflowRun[];
+  workflowActionApprovals?: WorkflowActionApproval[];
 }
 
 export interface RequestContext {

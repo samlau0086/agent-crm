@@ -1,5 +1,15 @@
 import type { PrismaCrmRepository } from "@/lib/crm/repository";
-import type { CsvImportJob, CsvImportMapping, CsvImportStrategy, EmailMessage, EmailThread, RequestContext, WebhookDelivery, WebhookEvent } from "@/lib/crm/types";
+import type {
+  CsvImportJob,
+  CsvImportMapping,
+  CsvImportStrategy,
+  EmailMessage,
+  EmailThread,
+  RequestContext,
+  WebhookDelivery,
+  WebhookEvent,
+  WorkflowRun
+} from "@/lib/crm/types";
 import { requirePermission } from "@/lib/auth/rbac";
 import { analyzeEmailThreadWithAi, type EmailAnalyzeJobPayload, type EmailAnalyzeResult } from "@/lib/email/analysis";
 import { createEmailProviderAdapter, type EmailSyncResult } from "@/lib/email/provider";
@@ -28,6 +38,13 @@ export interface EmailSyncJobPayload {
 
 export interface EmailSendJobPayload {
   messageId: string;
+}
+
+export interface WorkflowRunJobPayload {
+  workflowId?: string;
+  event: string;
+  data: Record<string, unknown>;
+  idempotencyKey?: string;
 }
 
 export interface CsvImportQueuedJobEnvelope {
@@ -101,6 +118,16 @@ export interface EmailSummarizeQueuedJobEnvelope {
   lastError?: string;
 }
 
+export interface WorkflowRunQueuedJobEnvelope {
+  type: "workflow_run";
+  workspaceId: string;
+  userId: string;
+  payload: WorkflowRunJobPayload;
+  enqueuedAt: string;
+  attempts: number;
+  lastError?: string;
+}
+
 export type QueuedJobEnvelope =
   | CsvImportQueuedJobEnvelope
   | WebhookEventQueuedJobEnvelope
@@ -108,7 +135,8 @@ export type QueuedJobEnvelope =
   | EmailSendQueuedJobEnvelope
   | EmailTranslateQueuedJobEnvelope
   | EmailAnalyzeQueuedJobEnvelope
-  | EmailSummarizeQueuedJobEnvelope;
+  | EmailSummarizeQueuedJobEnvelope
+  | WorkflowRunQueuedJobEnvelope;
 
 export interface BackgroundJobExecutor {
   runCsvImportJob(context: RequestContext, jobId: string, payload: CsvImportJobPayload): Promise<CsvImportJob>;
@@ -118,6 +146,7 @@ export interface BackgroundJobExecutor {
   runEmailTranslateJob(context: RequestContext, payload: EmailTranslateJobPayload): Promise<EmailMessage>;
   runEmailAnalyzeJob(context: RequestContext, payload: EmailAnalyzeJobPayload): Promise<EmailAnalyzeResult>;
   runEmailSummarizeJob(context: RequestContext, payload: EmailSummarizeJobPayload): Promise<EmailSummarizeResult>;
+  runWorkflowJob(context: RequestContext, payload: WorkflowRunJobPayload): Promise<WorkflowRun[]>;
 }
 
 export class InlineBackgroundJobExecutor implements BackgroundJobExecutor {
@@ -153,6 +182,10 @@ export class InlineBackgroundJobExecutor implements BackgroundJobExecutor {
 
   async runEmailSummarizeJob(context: RequestContext, payload: EmailSummarizeJobPayload): Promise<EmailSummarizeResult> {
     return summarizeEmailThreadWithAi(context, this.repository, payload);
+  }
+
+  async runWorkflowJob(context: RequestContext, payload: WorkflowRunJobPayload): Promise<WorkflowRun[]> {
+    return this.repository.runWorkflowsForEvent(context, payload.event, payload.data, { workflowId: payload.workflowId, idempotencyKey: payload.idempotencyKey });
   }
 }
 
@@ -227,6 +260,11 @@ export class RedisBackgroundJobExecutor implements BackgroundJobExecutor {
       thread,
       result: buildQueuedEmailSummarizeResult(thread)
     };
+  }
+
+  async runWorkflowJob(context: RequestContext, payload: WorkflowRunJobPayload): Promise<WorkflowRun[]> {
+    await enqueueJob(getJobQueueName(), buildWorkflowRunJobEnvelope(context, payload));
+    return [];
   }
 }
 
@@ -339,6 +377,17 @@ export function buildEmailAnalyzeJobEnvelope(context: RequestContext, payload: E
 export function buildEmailSummarizeJobEnvelope(context: RequestContext, payload: EmailSummarizeJobPayload): EmailSummarizeQueuedJobEnvelope {
   return {
     type: "email_summarize",
+    workspaceId: context.workspaceId,
+    userId: context.user.id,
+    payload,
+    enqueuedAt: new Date().toISOString(),
+    attempts: 0
+  };
+}
+
+export function buildWorkflowRunJobEnvelope(context: RequestContext, payload: WorkflowRunJobPayload): WorkflowRunQueuedJobEnvelope {
+  return {
+    type: "workflow_run",
     workspaceId: context.workspaceId,
     userId: context.user.id,
     payload,

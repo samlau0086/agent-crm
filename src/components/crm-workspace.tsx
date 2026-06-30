@@ -98,7 +98,10 @@ import type {
   SavedView,
   Team,
   User,
-  WebhookEndpoint
+  WebhookEndpoint,
+  WorkflowActionApproval,
+  WorkflowDefinition,
+  WorkflowRun
 } from "@/lib/crm/types";
 import { findRelatedRecords } from "@/lib/crm/views";
 import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/email/attachments";
@@ -147,6 +150,9 @@ interface CrmWorkspaceProps {
   importJobs: CsvImportJob[];
   importPresets: ImportPreset[];
   importJobQueueSummary?: ImportJobQueueSummary;
+  workflows: WorkflowDefinition[];
+  workflowRuns: WorkflowRun[];
+  workflowApprovals: WorkflowActionApproval[];
 }
 
 const recordListRequestTimeoutMs = 15_000;
@@ -5273,6 +5279,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             importJobQueueSummary={props.importJobQueueSummary}
             poolSettings={props.poolSettings}
             recordChangeRequests={recordChangeRequests}
+            workflows={props.workflows}
+            workflowRuns={props.workflowRuns}
+            workflowApprovals={props.workflowApprovals}
             onRecordsUpdated={mergeLoadedRecords}
           />
         )}

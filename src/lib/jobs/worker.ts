@@ -1,5 +1,5 @@
 import { getRequestContextByUserId, getCrmRepository, type PrismaCrmRepository } from "@/lib/crm/repository";
-import type { CsvImportJob, EmailMessage, EmailThread, WebhookDelivery } from "@/lib/crm/types";
+import type { CsvImportJob, EmailMessage, EmailThread, WebhookDelivery, WorkflowRun } from "@/lib/crm/types";
 import type { QueuedJobEnvelope } from "@/lib/jobs/executor";
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { createEmailProviderAdapter, type EmailSyncResult } from "@/lib/email/provider";
@@ -20,6 +20,7 @@ export interface JobWorkerResult {
   emailSync?: EmailSyncResult;
   emailMessage?: EmailMessage;
   emailThread?: EmailThread;
+  workflowRuns?: WorkflowRun[];
 }
 
 export async function runQueuedJobOnce(repository: PrismaCrmRepository = getCrmRepository()): Promise<JobWorkerResult> {
@@ -106,6 +107,14 @@ export async function processQueuedJobEnvelope(
     return { processed: true, jobType: envelope.type, emailThread: result.thread };
   }
 
+  if (envelope.type === "workflow_run") {
+    const workflowRuns = await repository.runWorkflowsForEvent(context, envelope.payload.event, envelope.payload.data, {
+      workflowId: envelope.payload.workflowId,
+      idempotencyKey: envelope.payload.idempotencyKey
+    });
+    return { processed: true, jobType: envelope.type, workflowRuns };
+  }
+
   throw new Error(`Unsupported queued job type: ${(envelope as { type?: string }).type}`);
 }
 
@@ -132,6 +141,9 @@ export function formatJobWorkerResult(result: JobWorkerResult): string | undefin
   }
   if (result.deliveries) {
     return `Processed webhook event with ${result.deliveries.length} deliveries`;
+  }
+  if (result.workflowRuns) {
+    return `Processed workflow run job with ${result.workflowRuns.length} run(s)`;
   }
   if (result.job) {
     return `Processed csv import ${result.job.id} with status ${result.job.status}`;

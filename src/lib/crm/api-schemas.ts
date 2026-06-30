@@ -245,7 +245,7 @@ export const savedViewCreateSchema = z
 
 export const savedViewUpdateSchema = savedViewCreateSchema.partial().strict();
 
-export const permissionSchema = z.enum(["crm.read", "crm.write", "crm.import", "crm.pool.manage", "crm.admin", "ai.use", "ai.admin"]);
+export const permissionSchema = z.enum(["crm.read", "crm.write", "crm.import", "crm.pool.manage", "crm.admin", "workflow.read", "workflow.write", "workflow.admin", "ai.use", "ai.admin"]);
 
 export const roleCreateSchema = z
   .object({
@@ -321,6 +321,81 @@ export const notificationChannelCreateSchema = z
   .strict();
 
 export const notificationChannelUpdateSchema = notificationChannelCreateSchema.partial().strict();
+
+export const workflowTriggerSchema = z
+  .object({
+    type: z.enum(["crm_event", "email_event", "task_event", "schedule", "manual"]),
+    event: z.string().trim().min(1).max(120).optional(),
+    objectKey: objectKeySchema.optional(),
+    schedule: z
+      .object({
+        mode: z.enum(["daily", "weekly", "interval"]),
+        dailyAt: z.string().trim().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+        weekday: z.number().int().min(0).max(6).optional(),
+        intervalMinutes: z.number().int().min(1).max(10080).optional()
+      })
+      .strict()
+      .optional()
+  })
+  .strict();
+
+export const workflowConditionSchema = z
+  .object({
+    key: z.string().trim().min(1).max(120),
+    type: z.enum(["field", "activity", "email_behavior", "ai"]),
+    field: z.string().trim().min(1).max(120).optional(),
+    operator: z.enum(["equals", "not_equals", "contains", "not_contains", "gt", "gte", "lt", "lte", "exists", "not_exists"]).optional(),
+    value: z.unknown().optional(),
+    prompt: z.string().trim().max(2000).optional()
+  })
+  .strict();
+
+export const workflowActionSchema = z
+  .object({
+    key: z.string().trim().min(1).max(120),
+    type: z.enum(["create_activity", "send_email", "update_stage", "update_record", "notify", "create_knowledge_article"]),
+    name: labelSchema,
+    requiresApproval: z.boolean().optional(),
+    config: z.record(z.unknown()).default({})
+  })
+  .strict();
+
+export const workflowCreateSchema = z
+  .object({
+    name: labelSchema,
+    description: optionalTextSchema,
+    goal: z.string().trim().min(1).max(1000),
+    status: z.enum(["draft", "active", "disabled", "archived"]).optional(),
+    trigger: workflowTriggerSchema,
+    conditions: z.array(workflowConditionSchema).max(20).default([]),
+    actions: z.array(workflowActionSchema).min(1).max(20)
+  })
+  .strict();
+
+export const workflowUpdateSchema = workflowCreateSchema.partial().strict();
+
+export const workflowTestSchema = z
+  .object({
+    triggerData: z.record(z.unknown()).optional(),
+    data: z.record(z.unknown()).optional()
+  })
+  .strict();
+
+export const workflowGenerateSchema = z
+  .object({
+    goal: z.string().trim().min(1).max(1000),
+    objectKey: objectKeySchema.optional(),
+    audience: z.string().trim().max(500).optional(),
+    constraints: z.string().trim().max(2000).optional()
+  })
+  .strict();
+
+export const workflowApprovalReviewSchema = z
+  .object({
+    decision: z.enum(["approve", "reject"]),
+    reviewNote: z.string().trim().max(1000).optional()
+  })
+  .strict();
 
 export const emailProviderSchema = z.enum(["smtp_imap", "gmail", "outlook", "custom"]);
 export const emailAccountStatusSchema = z.enum(["draft", "active", "disabled", "error"]);

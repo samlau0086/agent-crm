@@ -31,6 +31,12 @@ export const webhookEvents = [
   "email.thread.deleted",
   "import.completed",
   "import.failed",
+  "workflow.run_started",
+  "workflow.run_completed",
+  "workflow.run_failed",
+  "workflow.action_approval_requested",
+  "workflow.action_approved",
+  "workflow.action_rejected",
   "webhook.test"
 ] as const;
 

@@ -10,6 +10,15 @@ export function hasPermission(context: RequestContext, permission: Permission): 
   if (permission === "ai.use") {
     return context.role.permissions.includes("ai.admin") || context.role.permissions.includes("crm.admin");
   }
+  if (permission === "workflow.admin") {
+    return context.role.permissions.includes("crm.admin");
+  }
+  if (permission === "workflow.write") {
+    return context.role.permissions.includes("workflow.admin") || context.role.permissions.includes("crm.admin");
+  }
+  if (permission === "workflow.read") {
+    return context.role.permissions.includes("workflow.write") || context.role.permissions.includes("workflow.admin") || context.role.permissions.includes("crm.admin");
+  }
   return false;
 }
 

@@ -87,10 +87,27 @@ import type {
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEvent,
-  WebhookDeliveryStatus
+  WebhookDeliveryStatus,
+  WorkflowAction,
+  WorkflowActionApproval,
+  WorkflowAiGenerationRequest,
+  WorkflowAiGenerationResult,
+  WorkflowCondition,
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowTrigger
 } from "@/lib/crm/types";
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
 import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
+import {
+  buildWorkflowDraftFromGoal,
+  buildWorkflowIdempotencyKey,
+  didWorkflowConditionsPass,
+  evaluateWorkflowConditions,
+  isHighRiskWorkflowAction,
+  renderWorkflowTextTemplate,
+  workflowMatchesEvent
+} from "@/lib/workflows/core";
 
 type PrismaContext = typeof prisma;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
@@ -108,6 +125,126 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
 
 function toJsonObject<T>(value: T): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
+}
+
+function toJsonArray<T>(value: T): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? [])) as Prisma.InputJsonValue;
+}
+
+function mapWorkflowDefinition(row: Record<string, unknown>): WorkflowDefinition {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspaceId),
+    name: String(row.name ?? ""),
+    description: typeof row.description === "string" ? row.description : undefined,
+    goal: String(row.goal ?? ""),
+    status: normalizeWorkflowStatus(row.status),
+    trigger: normalizeWorkflowTrigger(row.trigger),
+    conditions: normalizeWorkflowConditions(row.conditions),
+    actions: normalizeWorkflowActions(row.actions),
+    createdById: String(row.createdById ?? ""),
+    version: Number(row.version ?? 1),
+    lastRunAt: row.lastRunAt instanceof Date ? row.lastRunAt.toISOString() : typeof row.lastRunAt === "string" ? row.lastRunAt : undefined,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt ?? new Date().toISOString()),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? new Date().toISOString())
+  };
+}
+
+function mapWorkflowRun(row: Record<string, unknown>): WorkflowRun {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspaceId),
+    workflowId: String(row.workflowId),
+    status: normalizeWorkflowRunStatus(row.status),
+    triggerEvent: String(row.triggerEvent ?? ""),
+    triggerData: isJsonRecord(row.triggerData) ? row.triggerData : {},
+    idempotencyKey: typeof row.idempotencyKey === "string" ? row.idempotencyKey : undefined,
+    conditionResults: Array.isArray(row.conditionResults) ? (row.conditionResults as WorkflowRun["conditionResults"]) : [],
+    actionResults: Array.isArray(row.actionResults) ? (row.actionResults as WorkflowRun["actionResults"]) : [],
+    errorMessage: typeof row.errorMessage === "string" ? row.errorMessage : undefined,
+    startedAt: row.startedAt instanceof Date ? row.startedAt.toISOString() : String(row.startedAt ?? new Date().toISOString()),
+    completedAt: row.completedAt instanceof Date ? row.completedAt.toISOString() : typeof row.completedAt === "string" ? row.completedAt : undefined,
+    durationMs: typeof row.durationMs === "number" ? row.durationMs : undefined
+  };
+}
+
+function mapWorkflowApproval(row: Record<string, unknown>): WorkflowActionApproval {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspaceId),
+    workflowId: String(row.workflowId),
+    runId: typeof row.runId === "string" ? row.runId : undefined,
+    actionKey: String(row.actionKey ?? ""),
+    actionType: String(row.actionType ?? "") as WorkflowActionApproval["actionType"],
+    status: row.status === "approved" || row.status === "rejected" ? row.status : "pending",
+    summary: String(row.summary ?? ""),
+    payload: isJsonRecord(row.payload) ? row.payload : {},
+    requestedById: String(row.requestedById ?? ""),
+    reviewedById: typeof row.reviewedById === "string" ? row.reviewedById : undefined,
+    reviewNote: typeof row.reviewNote === "string" ? row.reviewNote : undefined,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt ?? new Date().toISOString()),
+    reviewedAt: row.reviewedAt instanceof Date ? row.reviewedAt.toISOString() : typeof row.reviewedAt === "string" ? row.reviewedAt : undefined
+  };
+}
+
+function normalizeWorkflowStatus(value: unknown): WorkflowDefinition["status"] {
+  return value === "active" || value === "disabled" || value === "archived" ? value : "draft";
+}
+
+function normalizeWorkflowRunStatus(value: unknown): WorkflowRun["status"] {
+  return value === "completed" || value === "failed" || value === "skipped" || value === "approval_required" ? value : "running";
+}
+
+function normalizeWorkflowTrigger(value: unknown): WorkflowTrigger {
+  if (!isJsonRecord(value)) {
+    return { type: "manual", event: "manual.run" };
+  }
+  const type = value.type === "crm_event" || value.type === "email_event" || value.type === "task_event" || value.type === "schedule" ? value.type : "manual";
+  const event = typeof value.event === "string" ? value.event : "manual.run";
+  return {
+    type,
+    event: event as WorkflowTrigger["event"],
+    objectKey: typeof value.objectKey === "string" ? value.objectKey : undefined,
+    schedule: normalizeWorkflowSchedule(value.schedule)
+  };
+}
+
+function normalizeWorkflowSchedule(value: unknown): WorkflowTrigger["schedule"] | undefined {
+  if (!isJsonRecord(value)) return undefined;
+  const mode = value.mode === "weekly" || value.mode === "interval" ? value.mode : value.mode === "daily" ? "daily" : undefined;
+  if (!mode) return undefined;
+  return {
+    mode,
+    dailyAt: typeof value.dailyAt === "string" ? value.dailyAt : undefined,
+    weekday: typeof value.weekday === "number" ? value.weekday : undefined,
+    intervalMinutes: typeof value.intervalMinutes === "number" ? value.intervalMinutes : undefined
+  };
+}
+
+function normalizeWorkflowConditions(value: unknown): WorkflowCondition[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isJsonRecord).map((condition, index) => ({
+    key: typeof condition.key === "string" ? condition.key : `condition-${index + 1}`,
+    type:
+      condition.type === "activity" || condition.type === "email_behavior" || condition.type === "ai"
+        ? condition.type
+        : "field",
+    field: typeof condition.field === "string" ? condition.field : undefined,
+    operator: typeof condition.operator === "string" ? (condition.operator as WorkflowCondition["operator"]) : "equals",
+    value: condition.value,
+    prompt: typeof condition.prompt === "string" ? condition.prompt : undefined
+  }));
+}
+
+function normalizeWorkflowActions(value: unknown): WorkflowAction[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isJsonRecord).map((action, index) => ({
+    key: typeof action.key === "string" ? action.key : `action-${index + 1}`,
+    type: typeof action.type === "string" ? (action.type as WorkflowAction["type"]) : "create_activity",
+    name: typeof action.name === "string" ? action.name : `Action ${index + 1}`,
+    requiresApproval: typeof action.requiresApproval === "boolean" ? action.requiresApproval : undefined,
+    config: isJsonRecord(action.config) ? action.config : {}
+  }));
 }
 
 function normalizeContactMethodsForApproval(value: unknown): Array<Record<string, unknown> & { id: string }> {
@@ -1488,6 +1625,210 @@ export class PrismaCrmRepository {
       summary: `Deleted webhook ${existing.name}`,
       details: { url: existing.url, events: existing.events }
     });
+  }
+
+  async listWorkflows(context: RequestContext): Promise<WorkflowDefinition[]> {
+    requirePermission(context, "workflow.read");
+    const rows = await this.workflowTables().workflowDefinition.findMany({
+      where: { workspaceId: context.workspaceId },
+      orderBy: [{ updatedAt: "desc" }]
+    });
+    return rows.map((row: Record<string, unknown>) => mapWorkflowDefinition(row));
+  }
+
+  async getWorkflow(context: RequestContext, id: string): Promise<WorkflowDefinition> {
+    requirePermission(context, "workflow.read");
+    const row = await this.workflowTables().workflowDefinition.findFirst({ where: { id, workspaceId: context.workspaceId } });
+    if (!row) {
+      throw new Error("Workflow not found");
+    }
+    return mapWorkflowDefinition(row);
+  }
+
+  async createWorkflow(
+    context: RequestContext,
+    input: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt" | "version" | "lastRunAt" | "status"> & Partial<Pick<WorkflowDefinition, "version" | "status">>
+  ): Promise<WorkflowDefinition> {
+    requirePermission(context, "workflow.write");
+    const row = await this.workflowTables().workflowDefinition.create({
+      data: {
+        workspaceId: context.workspaceId,
+        name: normalizeRequiredText(input.name, "Workflow name"),
+        description: input.description?.trim() || undefined,
+        goal: normalizeRequiredText(input.goal, "Workflow goal"),
+        status: input.status ?? "draft",
+        trigger: toJsonObject(input.trigger),
+        conditions: toJsonArray(input.conditions ?? []),
+        actions: toJsonArray(input.actions ?? []),
+        version: input.version ?? 1,
+        createdById: context.user.id
+      }
+    });
+    const workflow = mapWorkflowDefinition(row);
+    await this.writeAuditLog(context, "workflow.created", "workflow", workflow.id, {
+      summary: `Created workflow ${workflow.name}`,
+      details: { status: workflow.status, trigger: workflow.trigger, actionCount: workflow.actions.length }
+    });
+    return workflow;
+  }
+
+  async updateWorkflow(
+    context: RequestContext,
+    id: string,
+    patch: Partial<Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt" | "lastRunAt">>
+  ): Promise<WorkflowDefinition> {
+    requirePermission(context, "workflow.write");
+    const existing = await this.getWorkflow(context, id);
+    const row = await this.workflowTables().workflowDefinition.update({
+      where: { id },
+      data: {
+        name: patch.name !== undefined ? normalizeRequiredText(patch.name, "Workflow name") : undefined,
+        description: patch.description !== undefined ? patch.description?.trim() || null : undefined,
+        goal: patch.goal !== undefined ? normalizeRequiredText(patch.goal, "Workflow goal") : undefined,
+        status: patch.status,
+        trigger: patch.trigger ? toJsonObject(patch.trigger) : undefined,
+        conditions: patch.conditions ? toJsonArray(patch.conditions) : undefined,
+        actions: patch.actions ? toJsonArray(patch.actions) : undefined,
+        version: patch.version
+      }
+    });
+    const workflow = mapWorkflowDefinition(row);
+    await this.writeAuditLog(context, "workflow.updated", "workflow", workflow.id, {
+      summary: `Updated workflow ${workflow.name}`,
+      details: { previousStatus: existing.status, status: workflow.status }
+    });
+    return workflow;
+  }
+
+  async deleteWorkflow(context: RequestContext, id: string): Promise<void> {
+    requirePermission(context, "workflow.admin");
+    const existing = await this.getWorkflow(context, id);
+    await this.workflowTables().workflowDefinition.delete({ where: { id } });
+    await this.writeAuditLog(context, "workflow.deleted", "workflow", id, {
+      summary: `Deleted workflow ${existing.name}`,
+      details: { status: existing.status }
+    });
+  }
+
+  async enableWorkflow(context: RequestContext, id: string): Promise<WorkflowDefinition> {
+    requirePermission(context, "workflow.admin");
+    const workflow = await this.updateWorkflow(context, id, { status: "active" });
+    await this.writeAuditLog(context, "workflow.enabled", "workflow", id, { summary: `Enabled workflow ${workflow.name}` });
+    return workflow;
+  }
+
+  async disableWorkflow(context: RequestContext, id: string): Promise<WorkflowDefinition> {
+    requirePermission(context, "workflow.admin");
+    const workflow = await this.updateWorkflow(context, id, { status: "disabled" });
+    await this.writeAuditLog(context, "workflow.disabled", "workflow", id, { summary: `Disabled workflow ${workflow.name}` });
+    return workflow;
+  }
+
+  async generateWorkflow(context: RequestContext, input: WorkflowAiGenerationRequest): Promise<WorkflowAiGenerationResult> {
+    requirePermission(context, "workflow.write");
+    return buildWorkflowDraftFromGoal(input);
+  }
+
+  async listWorkflowRuns(context: RequestContext, workflowId?: string): Promise<WorkflowRun[]> {
+    requirePermission(context, "workflow.read");
+    const rows = await this.workflowTables().workflowRun.findMany({
+      where: { workspaceId: context.workspaceId, ...(workflowId ? { workflowId } : {}) },
+      orderBy: { startedAt: "desc" },
+      take: 100
+    });
+    return rows.map((row: Record<string, unknown>) => mapWorkflowRun(row));
+  }
+
+  async listWorkflowApprovals(context: RequestContext): Promise<WorkflowActionApproval[]> {
+    requirePermission(context, "workflow.read");
+    const rows = await this.workflowTables().workflowActionApproval.findMany({
+      where: { workspaceId: context.workspaceId },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    });
+    return rows.map((row: Record<string, unknown>) => mapWorkflowApproval(row));
+  }
+
+  async testWorkflow(context: RequestContext, workflowId: string, data: Record<string, unknown> = {}): Promise<WorkflowRun> {
+    requirePermission(context, "workflow.write");
+    const workflow = await this.getWorkflow(context, workflowId);
+    const run = await this.runSingleWorkflow(context, workflow, "manual.run", data, { test: true });
+    if (!run) {
+      throw new Error("Workflow test did not produce a run");
+    }
+    return run;
+  }
+
+  async runWorkflowsForEvent(
+    context: RequestContext,
+    event: string,
+    data: Record<string, unknown>,
+    options: { workflowId?: string; idempotencyKey?: string; test?: boolean } = {}
+  ): Promise<WorkflowRun[]> {
+    const workflows = options.workflowId
+      ? [
+          await this.workflowTables()
+            .workflowDefinition.findFirst({ where: { id: options.workflowId, workspaceId: context.workspaceId } })
+            .then((row: Record<string, unknown> | null) => {
+              if (!row) throw new Error("Workflow not found");
+              return mapWorkflowDefinition(row);
+            })
+        ]
+      : await this.workflowTables()
+          .workflowDefinition.findMany({ where: { workspaceId: context.workspaceId, status: "active" }, orderBy: { updatedAt: "desc" } })
+          .then((rows: Array<Record<string, unknown>>) => rows.map(mapWorkflowDefinition).filter((workflow) => workflowMatchesEvent(workflow, event, data)));
+    const runs: WorkflowRun[] = [];
+    for (const workflow of workflows) {
+      const run = await this.runSingleWorkflow(context, workflow, event, data, options).catch(async (error) => {
+        const message = error instanceof Error ? error.message : "Workflow run failed";
+        await this.writeAuditLog(context, "workflow.run_failed", "workflow", workflow.id, {
+          summary: `Workflow ${workflow.name} failed: ${message}`,
+          details: { event, data }
+        });
+        return undefined;
+      });
+      if (run) {
+        runs.push(run);
+      }
+    }
+    return runs;
+  }
+
+  async reviewWorkflowApproval(context: RequestContext, approvalId: string, decision: "approved" | "rejected", note?: string): Promise<WorkflowActionApproval> {
+    requirePermission(context, "workflow.admin");
+    const approvalRow = await this.workflowTables().workflowActionApproval.findFirst({ where: { id: approvalId, workspaceId: context.workspaceId } });
+    if (!approvalRow) {
+      throw new Error("Workflow approval not found");
+    }
+    const approval = mapWorkflowApproval(approvalRow);
+    if (approval.status !== "pending") {
+      return approval;
+    }
+    const updatedRow = await this.workflowTables().workflowActionApproval.update({
+      where: { id: approvalId },
+      data: {
+        status: decision,
+        reviewedById: context.user.id,
+        reviewNote: note?.trim() || undefined,
+        reviewedAt: new Date()
+      }
+    });
+    const updated = mapWorkflowApproval(updatedRow);
+    await this.writeAuditLog(context, decision === "approved" ? "workflow.action_approved" : "workflow.action_rejected", "workflow_approval", approvalId, {
+      summary: `${decision === "approved" ? "Approved" : "Rejected"} workflow action ${approval.actionKey}`,
+      details: { workflowId: approval.workflowId, runId: approval.runId, note }
+    });
+    if (decision === "approved") {
+      const payload = approval.payload;
+      const action = isJsonRecord(payload.action) ? normalizeWorkflowActions([payload.action])[0] : undefined;
+      if (action) {
+        const workflow = await this.getWorkflow(context, approval.workflowId);
+        const triggerData = isJsonRecord(payload.triggerData) ? payload.triggerData : {};
+        const record = await this.workflowRecordFromData(context, triggerData);
+        await this.executeWorkflowAction(context, workflow, action, triggerData, record, approval.runId);
+      }
+    }
+    return updated;
   }
 
   async listNotificationChannels(context: RequestContext): Promise<NotificationChannel[]> {
@@ -5102,11 +5443,267 @@ export class PrismaCrmRepository {
     return { job, payload };
   }
 
+  private workflowTables(): {
+    workflowDefinition: {
+      findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
+      findFirst: (args: unknown) => Promise<Record<string, unknown> | null>;
+      create: (args: unknown) => Promise<Record<string, unknown>>;
+      update: (args: unknown) => Promise<Record<string, unknown>>;
+      updateMany: (args: unknown) => Promise<unknown>;
+      delete: (args: unknown) => Promise<Record<string, unknown>>;
+    };
+    workflowRun: {
+      findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
+      findFirst: (args: unknown) => Promise<Record<string, unknown> | null>;
+      create: (args: unknown) => Promise<Record<string, unknown>>;
+      update: (args: unknown) => Promise<Record<string, unknown>>;
+    };
+    workflowActionApproval: {
+      findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
+      findFirst: (args: unknown) => Promise<Record<string, unknown> | null>;
+      create: (args: unknown) => Promise<Record<string, unknown>>;
+      update: (args: unknown) => Promise<Record<string, unknown>>;
+    };
+  } {
+    return this.db as unknown as ReturnType<PrismaCrmRepository["workflowTables"]>;
+  }
+
+  private async runSingleWorkflow(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    event: string,
+    data: Record<string, unknown>,
+    options: { idempotencyKey?: string; test?: boolean } = {}
+  ): Promise<WorkflowRun | undefined> {
+    if (!options.test && !workflowMatchesEvent(workflow, event, data)) {
+      return undefined;
+    }
+    const idempotencyKey = options.idempotencyKey ?? buildWorkflowIdempotencyKey(workflow, event, data);
+    if (!options.test && idempotencyKey) {
+      const existing = await this.workflowTables().workflowRun.findFirst({ where: { workspaceId: context.workspaceId, workflowId: workflow.id, idempotencyKey } });
+      if (existing) {
+        return mapWorkflowRun(existing);
+      }
+    }
+
+    const startedAt = new Date();
+    let run = mapWorkflowRun(
+      await this.workflowTables().workflowRun.create({
+        data: {
+          workspaceId: context.workspaceId,
+          workflowId: workflow.id,
+          status: "running",
+          triggerEvent: event,
+          triggerData: toJsonObject(data),
+          idempotencyKey: options.test ? undefined : idempotencyKey
+        }
+      })
+    );
+    await this.writeAuditLog(context, "workflow.run_started", "workflow", workflow.id, {
+      summary: `Started workflow ${workflow.name}`,
+      details: { runId: run.id, event, test: options.test ?? false }
+    });
+
+    const record = await this.workflowRecordFromData(context, data);
+    const conditionResults = evaluateWorkflowConditions(workflow, data, record);
+    if (!didWorkflowConditionsPass(conditionResults)) {
+      run = mapWorkflowRun(
+        await this.workflowTables().workflowRun.update({
+          where: { id: run.id },
+          data: {
+            status: "skipped",
+            conditionResults: toJsonArray(conditionResults),
+            actionResults: toJsonArray([]),
+            completedAt: new Date(),
+            durationMs: Date.now() - startedAt.getTime()
+          }
+        })
+      );
+      return run;
+    }
+
+    const actionResults: WorkflowRun["actionResults"] = [];
+    for (const action of workflow.actions) {
+      if (options.test) {
+        actionResults.push({ actionKey: action.key, status: isHighRiskWorkflowAction(action) ? "approval_required" : "completed", message: "Test run only; action was not executed." });
+        continue;
+      }
+      if (isHighRiskWorkflowAction(action)) {
+        const approval = await this.createWorkflowActionApproval(context, workflow, run.id, action, data, record);
+        actionResults.push({ actionKey: action.key, status: "approval_required", message: `Approval required: ${approval.id}` });
+        continue;
+      }
+      actionResults.push(await this.executeWorkflowAction(context, workflow, action, data, record, run.id));
+    }
+
+    const finalStatus = actionResults.some((result) => result.status === "failed")
+      ? "failed"
+      : actionResults.some((result) => result.status === "approval_required")
+        ? "approval_required"
+        : "completed";
+    run = mapWorkflowRun(
+      await this.workflowTables().workflowRun.update({
+        where: { id: run.id },
+        data: {
+          status: finalStatus,
+          conditionResults: toJsonArray(conditionResults),
+          actionResults: toJsonArray(actionResults),
+          completedAt: new Date(),
+          durationMs: Date.now() - startedAt.getTime()
+        }
+      })
+    );
+    await this.workflowTables().workflowDefinition.update({ where: { id: workflow.id }, data: { lastRunAt: new Date() } });
+    await this.writeAuditLog(context, finalStatus === "failed" ? "workflow.run_failed" : "workflow.run_completed", "workflow", workflow.id, {
+      summary: `Workflow ${workflow.name} ${finalStatus}`,
+      details: { runId: run.id, event, actionResults }
+    });
+    return run;
+  }
+
+  private async workflowRecordFromData(context: RequestContext, data: Record<string, unknown>): Promise<CrmRecord | undefined> {
+    const recordId = typeof data.recordId === "string" ? data.recordId : undefined;
+    const objectKey = typeof data.objectKey === "string" ? data.objectKey : undefined;
+    if (!recordId || !objectKey) {
+      return undefined;
+    }
+    try {
+      return await this.getRecord(context, objectKey, recordId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async createWorkflowActionApproval(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    runId: string,
+    action: WorkflowAction,
+    triggerData: Record<string, unknown>,
+    record?: CrmRecord
+  ): Promise<WorkflowActionApproval> {
+    const row = await this.workflowTables().workflowActionApproval.create({
+      data: {
+        workspaceId: context.workspaceId,
+        workflowId: workflow.id,
+        runId,
+        actionKey: action.key,
+        actionType: action.type,
+        status: "pending",
+        summary: `${workflow.name}: ${action.name}`,
+        payload: toJsonObject({ action, triggerData, recordId: record?.id, objectKey: record?.objectKey }),
+        requestedById: context.user.id
+      }
+    });
+    const approval = mapWorkflowApproval(row);
+    await this.writeAuditLog(context, "workflow.action_approval_requested", "workflow_approval", approval.id, {
+      summary: `Workflow action requires approval: ${action.name}`,
+      details: { workflowId: workflow.id, runId, actionType: action.type }
+    });
+    return approval;
+  }
+
+  private async executeWorkflowAction(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    action: WorkflowAction,
+    triggerData: Record<string, unknown>,
+    record?: CrmRecord,
+    runId?: string
+  ): Promise<WorkflowRun["actionResults"][number]> {
+    try {
+      if (action.type === "create_activity") {
+        if (!record) throw new Error("Workflow action requires a linked CRM record");
+        const type = typeof action.config.activityType === "string" ? action.config.activityType : "task";
+        const dueInDays = typeof action.config.dueInDays === "number" ? action.config.dueInDays : undefined;
+        const dueAt = dueInDays ? new Date(Date.now() + dueInDays * 24 * 60 * 60 * 1000).toISOString() : undefined;
+        const activity = await this.createActivity(context, {
+          recordId: record.id,
+          type: type as Activity["type"],
+          title: renderWorkflowTextTemplate(action.config.title ?? action.name, triggerData, record) || action.name,
+          body: renderWorkflowTextTemplate(action.config.body, triggerData, record),
+          dueAt
+        });
+        return { actionKey: action.key, status: "completed", message: `Created activity ${activity.id}` };
+      }
+
+      if (action.type === "send_email") {
+        const accountId = typeof action.config.accountId === "string" ? action.config.accountId : undefined;
+        const account = accountId
+          ? await this.assertEmailAccount(context, accountId)
+          : (await this.listEmailAccounts(context)).find((candidate) => candidate.sendEnabled && candidate.status === "active");
+        if (!account) throw new Error("No active send-enabled email account");
+        const to = Array.isArray(action.config.to)
+          ? action.config.to.filter((value): value is string => typeof value === "string")
+          : [typeof triggerData.from === "string" ? triggerData.from : typeof record?.data.email === "string" ? record.data.email : ""].filter(Boolean);
+        if (to.length === 0) throw new Error("No email recipient");
+        const message = await this.recordEmailMessage(context, {
+          accountId: account.id,
+          direction: "outbound",
+          from: account.emailAddress,
+          to,
+          subject: renderWorkflowTextTemplate(action.config.subject ?? `Re: ${record?.title ?? workflow.name}`, triggerData, record),
+          bodyText: renderWorkflowTextTemplate(action.config.bodyText ?? action.config.body ?? "", triggerData, record),
+          bodyHtml: renderWorkflowTextTemplate(action.config.bodyHtml, triggerData, record) || undefined,
+          status: action.config.mode === "draft" ? "draft" : "queued",
+          recordId: record?.id,
+          clientRequestId: runId ? `workflow:${runId}:${action.key}` : undefined,
+          aiAssisted: Boolean(action.config.aiAssisted),
+          skipAutoLink: true
+        });
+        return { actionKey: action.key, status: "completed", message: `Created email ${message.id}` };
+      }
+
+      if (action.type === "update_stage") {
+        if (!record || record.objectKey !== "deals") throw new Error("Stage update requires a deal record");
+        const stageKey = typeof action.config.stageKey === "string" ? action.config.stageKey : undefined;
+        if (!stageKey) throw new Error("stageKey is required");
+        const updated = await this.updateRecord(context, record.objectKey, record.id, { stageKey });
+        return { actionKey: action.key, status: "completed", message: `Updated deal stage to ${updated.stageKey}` };
+      }
+
+      if (action.type === "update_record") {
+        if (!record) throw new Error("Record update requires a linked CRM record");
+        const patch = isJsonRecord(action.config.patch) ? action.config.patch : {};
+        const updated = await this.updateRecord(context, record.objectKey, record.id, {
+          title: typeof patch.title === "string" ? patch.title : undefined,
+          data: isJsonRecord(patch.data) ? patch.data : undefined,
+          ownerId: typeof patch.ownerId === "string" ? patch.ownerId : undefined,
+          stageKey: typeof patch.stageKey === "string" ? patch.stageKey : undefined
+        });
+        return { actionKey: action.key, status: "completed", message: `Updated record ${updated.id}` };
+      }
+
+      if (action.type === "create_knowledge_article") {
+        const article = await this.createKnowledgeArticle(context, {
+          title: renderWorkflowTextTemplate(action.config.title ?? workflow.name, triggerData, record),
+          body: renderWorkflowTextTemplate(action.config.content ?? action.config.body ?? "", triggerData, record),
+          tags: Array.isArray(action.config.tags) ? action.config.tags.filter((tag): tag is string => typeof tag === "string") : ["workflow"]
+        });
+        return { actionKey: action.key, status: "completed", message: `Created knowledge article ${article.id}` };
+      }
+
+      if (action.type === "notify") {
+        this.emitNotificationEvent(context, "workflow.run_completed", { workflowId: workflow.id, actionKey: action.key, ...triggerData });
+        return { actionKey: action.key, status: "completed", message: "Notification dispatched" };
+      }
+
+      return { actionKey: action.key, status: "failed", message: `Unsupported action type ${action.type}` };
+    } catch (error) {
+      return { actionKey: action.key, status: "failed", message: error instanceof Error ? error.message : "Action failed" };
+    }
+  }
+
   private emitWebhookEvent(context: RequestContext, event: WebhookEvent, data: Record<string, unknown>): void {
     void getBackgroundJobExecutor(this)
       .runWebhookEvent(context, { event, data })
       .catch((error) => {
         console.error(`Failed to enqueue webhook event ${event}`, error);
+      });
+    void getBackgroundJobExecutor(this)
+      .runWorkflowJob(context, { event, data })
+      .catch((error) => {
+        console.error(`Failed to enqueue workflow event ${event}`, error);
       });
     this.emitNotificationEvent(context, event, data);
   }

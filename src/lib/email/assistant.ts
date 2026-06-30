@@ -61,6 +61,7 @@ export const emailDraftAgentKey = "email_draft";
 export const emailTranslationAgentKey = "email_translation";
 export const emailContextAnalysisAgentKey = "email_context_analysis";
 export const emailThreadSummaryAgentKey = "email_thread_summary";
+export const workflowDesignerAgentKey = "workflow_designer";
 
 const defaultInboundEmailAgentMarkdown = [
   "# Inbound Email Preprocess Agent",
@@ -113,6 +114,16 @@ const defaultEmailThreadSummaryAgentMarkdown = [
   "Do not modify CRM data."
 ].join("\n");
 
+const defaultWorkflowDesignerAgentMarkdown = [
+  "# Workflow Designer Agent",
+  "",
+  "Design safe workflow automation drafts for a private sales CRM.",
+  "Return only supported triggers, conditions, and actions from the CRM workflow schema.",
+  "High-risk actions such as sending email, changing deal stages, transferring ownership, or bulk follow-up must default to approval_required.",
+  "AI generated workflows must stay in draft until an administrator enables them.",
+  "Do not execute actions or modify CRM data."
+].join("\n");
+
 export function createDefaultAiAgentSettings(): AiAgentSetting[] {
   const model = process.env.AI_MODEL || "gpt-4.1-mini";
   return [
@@ -160,6 +171,15 @@ export function createDefaultAiAgentSettings(): AiAgentSetting[] {
       model,
       agentMarkdown: defaultEmailThreadSummaryAgentMarkdown,
       maxOutputChars: 4000
+    },
+    {
+      key: workflowDesignerAgentKey,
+      name: "Workflow Designer Agent",
+      scenario: "system",
+      enabled: true,
+      model,
+      agentMarkdown: defaultWorkflowDesignerAgentMarkdown,
+      maxOutputChars: 6000
     }
   ];
 }

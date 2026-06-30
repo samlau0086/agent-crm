@@ -39,6 +39,24 @@ export const permissionCatalog = [
     risk: "high"
   },
   {
+    key: "workflow.read",
+    label: "工作流读取",
+    description: "查看自动化工作流、运行日志和审批状态。",
+    risk: "low"
+  },
+  {
+    key: "workflow.write",
+    label: "工作流编辑",
+    description: "创建和编辑自动化工作流草稿、测试运行工作流。",
+    risk: "medium"
+  },
+  {
+    key: "workflow.admin",
+    label: "工作流管理",
+    description: "启用、停用、删除工作流，并审批高风险自动化动作。",
+    risk: "high"
+  },
+  {
     key: "ai.use",
     label: "AI 助手",
     description: "使用只读摘要、下一步建议和自然语言查询。",

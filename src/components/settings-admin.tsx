@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
+import { Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { permissionCatalog } from "@/lib/auth/permissions";
@@ -8,7 +8,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
+import type { Activity, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -32,6 +32,9 @@ interface SettingsAdminProps {
   importJobQueueSummary?: ImportJobQueueSummary;
   poolSettings: CrmPoolSettings;
   recordChangeRequests: RecordChangeRequest[];
+  workflows: WorkflowDefinition[];
+  workflowRuns: WorkflowRun[];
+  workflowApprovals: WorkflowActionApproval[];
   onRecordsUpdated?: (records: CrmRecord[]) => void;
 }
 
@@ -164,7 +167,7 @@ const fieldTypes: FieldDefinition["type"][] = [
   "reference"
 ];
 
-type SettingsTabKey = "access" | "crm" | "pool" | "integrations" | "operations";
+type SettingsTabKey = "access" | "crm" | "pool" | "workflows" | "integrations" | "operations";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 
 const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
@@ -183,6 +186,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const [isPending, startTransition] = useTransition();
   const [webhookActionKey, setWebhookActionKey] = useState("");
+  const [workflowActionKey, setWorkflowActionKey] = useState("");
   const [reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId] = useState("");
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabKey>("access");
   const [selectedObjectId, setSelectedObjectId] = useState("");
@@ -215,6 +219,12 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
     autoReclaimDays: String(props.poolSettings.autoReclaimDays)
   }));
+  const [workflows, setWorkflows] = useState<WorkflowDefinition[]>(props.workflows);
+  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>(props.workflowRuns);
+  const [workflowApprovals, setWorkflowApprovals] = useState<WorkflowActionApproval[]>(props.workflowApprovals);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState(props.workflows[0]?.id ?? "");
+  const [workflowGoal, setWorkflowGoal] = useState("");
+  const [workflowDraftJson, setWorkflowDraftJson] = useState("");
   const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
   const [paymentTermOptionsText, setPaymentTermOptionsText] = useState("");
@@ -348,6 +358,13 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   useEffect(() => {
     setRecordChangeRequests(props.recordChangeRequests);
   }, [props.recordChangeRequests]);
+
+  useEffect(() => {
+    setWorkflows(props.workflows);
+    setWorkflowRuns(props.workflowRuns);
+    setWorkflowApprovals(props.workflowApprovals);
+    setSelectedWorkflowId((current) => (props.workflows.some((workflow) => workflow.id === current) ? current : props.workflows[0]?.id ?? ""));
+  }, [props.workflowApprovals, props.workflowRuns, props.workflows]);
 
   useEffect(() => {
     setSelectedNotificationChannelId((current) => (props.notificationChannels.some((channel) => channel.id === current) ? current : ""));
@@ -571,6 +588,20 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       showError(actionError instanceof Error ? actionError.message : "Webhook 操作失败");
     } finally {
       setWebhookActionKey("");
+    }
+  }
+
+  async function runWorkflowAction(actionKey: string, action: () => Promise<void>) {
+    setMessage(null);
+    setError(null);
+    setWorkflowActionKey(actionKey);
+    try {
+      await action();
+      router.refresh();
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "工作流操作失败");
+    } finally {
+      setWorkflowActionKey("");
     }
   }
 
@@ -1165,6 +1196,81 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setMessage("公海规则已保存");
   }
 
+  async function generateWorkflowDraft() {
+    const goal = workflowGoal.trim();
+    if (!goal) {
+      throw new Error("请先输入自动化目标");
+    }
+    await runWorkflowAction("generate", async () => {
+      const result = await fetchJson<WorkflowAiGenerationResult>("/api/workflows/generate", {
+        method: "POST",
+        body: { goal }
+      });
+      setWorkflowDraftJson(JSON.stringify(result.workflow, null, 2));
+      setMessage(`已生成工作流草稿：${result.workflow.name}`);
+    });
+  }
+
+  async function saveWorkflowDraft() {
+    if (!workflowDraftJson.trim()) {
+      throw new Error("请先生成或粘贴工作流 JSON");
+    }
+    await runWorkflowAction("save", async () => {
+      const parsed = JSON.parse(workflowDraftJson) as WorkflowDefinition;
+      const workflow = await fetchJson<WorkflowDefinition>("/api/workflows", {
+        method: "POST",
+        body: parsed
+      });
+      setWorkflows((current) => [workflow, ...current.filter((item) => item.id !== workflow.id)]);
+      setSelectedWorkflowId(workflow.id);
+      setWorkflowDraftJson("");
+      setMessage(`已保存工作流草稿：${workflow.name}`);
+    });
+  }
+
+  async function toggleWorkflow(workflow: WorkflowDefinition) {
+    await runWorkflowAction(`toggle:${workflow.id}`, async () => {
+      const next = await fetchJson<WorkflowDefinition>(`/api/workflows/${workflow.id}/${workflow.status === "active" ? "disable" : "enable"}`, { method: "POST" });
+      setWorkflows((current) => current.map((item) => (item.id === next.id ? next : item)));
+      setMessage(`${workflow.status === "active" ? "已停用" : "已启用"}工作流：${next.name}`);
+    });
+  }
+
+  async function deleteWorkflow(workflow: WorkflowDefinition) {
+    if (!(await requestConfirm({ title: "删除工作流", message: `确定删除工作流“${workflow.name}”？运行日志和审批记录会一并清理。`, confirmLabel: "删除", danger: true }))) return;
+    await runWorkflowAction(`delete:${workflow.id}`, async () => {
+      await fetchJson(`/api/workflows/${workflow.id}`, { method: "DELETE" });
+      setWorkflows((current) => current.filter((item) => item.id !== workflow.id));
+      setSelectedWorkflowId((current) => (current === workflow.id ? "" : current));
+      setMessage(`已删除工作流：${workflow.name}`);
+    });
+  }
+
+  async function testWorkflow(workflow: WorkflowDefinition) {
+    await runWorkflowAction(`test:${workflow.id}`, async () => {
+      const run = await fetchJson<WorkflowRun>(`/api/workflows/${workflow.id}/test`, {
+        method: "POST",
+        body: {
+          data: {
+            objectKey: workflow.trigger.objectKey ?? "contacts",
+            recordId: props.records.find((record) => record.objectKey === (workflow.trigger.objectKey ?? "contacts"))?.id,
+            title: "Workflow test run"
+          }
+        }
+      });
+      setWorkflowRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+      setMessage(`测试完成：${run.status}`);
+    });
+  }
+
+  async function reviewWorkflowApproval(approval: WorkflowActionApproval, decision: "approve" | "reject") {
+    await runWorkflowAction(`${decision}:${approval.id}`, async () => {
+      const updated = await fetchJson<WorkflowActionApproval>(`/api/workflow-approvals/${approval.id}/${decision}`, { method: "POST", body: { decision } });
+      setWorkflowApprovals((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setMessage(decision === "approve" ? "已通过工作流动作审批" : "已拒绝工作流动作审批");
+    });
+  }
+
   if (!canManage) {
     return (
       <section className="settings-panel">
@@ -1191,6 +1297,16 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               <span>{tab.description}</span>
             </button>
           ))}
+          <button
+            className={`settings-tab-button ${activeSettingsTab === "workflows" ? "active" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={activeSettingsTab === "workflows"}
+            onClick={() => setActiveSettingsTab("workflows")}
+          >
+            <strong>自动化工作流</strong>
+            <span>营销培育、客户跟进、交易推进与审批队列</span>
+          </button>
         </div>
       </section>
 
@@ -1325,6 +1441,151 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 最近回收：
                 {props.poolSettings.lastAutoReclaimAt ? `${props.poolSettings.lastAutoReclaimCount} 条 · ${props.poolSettings.lastAutoReclaimAt}` : "尚未执行"}
               </span>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeSettingsTab === "workflows" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <section className="settings-panel audit-panel">
+            <div className="section-heading">
+              <div>
+                <h2 className="page-title">自动化工作流</h2>
+                <p className="subtle">AI 生成的流程默认保存为草稿；高风险动作默认进入审批队列。</p>
+              </div>
+              <span className="badge">{workflows.length} workflows</span>
+            </div>
+
+            <div className="form-grid">
+              <label className="field wide">
+                <span>AI 一键生成目标</span>
+                <input
+                  className="input"
+                  value={workflowGoal}
+                  onChange={(event) => setWorkflowGoal(event.target.value)}
+                  placeholder="例如：7 天未回复的报价客户自动跟进"
+                />
+              </label>
+              <div className="form-actions wide">
+                <button className="secondary-button" type="button" onClick={() => { void generateWorkflowDraft(); }} disabled={isPending || Boolean(workflowActionKey)}>
+                  <Bot size={15} className={workflowActionKey === "generate" ? "spin-icon" : undefined} />
+                  生成草稿
+                </button>
+                <button className="primary-button" type="button" onClick={() => { void saveWorkflowDraft(); }} disabled={isPending || Boolean(workflowActionKey) || !workflowDraftJson.trim()}>
+                  <Save size={15} />
+                  保存草稿
+                </button>
+              </div>
+              <label className="field wide">
+                <span>工作流 JSON 草稿</span>
+                <textarea
+                  className="textarea code-textarea"
+                  value={workflowDraftJson}
+                  onChange={(event) => setWorkflowDraftJson(event.target.value)}
+                  rows={12}
+                  placeholder="生成后可在这里手动调整触发器、条件、动作和审批策略"
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-panel audit-panel">
+            <div className="section-heading">
+              <h3>工作流列表</h3>
+              <span className="badge">{workflows.filter((workflow) => workflow.status === "active").length} active</span>
+            </div>
+            <div className="activity-list">
+              {workflows.map((workflow) => (
+                <article className="activity-item" key={workflow.id}>
+                  <div className="activity-header-row">
+                    <strong>{workflow.name}</strong>
+                    <span className={workflow.status === "active" ? "badge" : workflow.status === "draft" ? "muted-badge" : "danger-badge"}>{workflow.status}</span>
+                  </div>
+                  <div className="subtle">{workflow.goal}</div>
+                  <div className="subtle">
+                    触发：{workflow.trigger.event}{workflow.trigger.objectKey ? ` · ${workflow.trigger.objectKey}` : ""} · 条件 {workflow.conditions.length} · 动作 {workflow.actions.length}
+                  </div>
+                  <div className="row-actions">
+                    <button className="secondary-button" type="button" onClick={() => setSelectedWorkflowId(workflow.id)}>
+                      <LayoutList size={15} />
+                      查看日志
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => { void testWorkflow(workflow); }} disabled={Boolean(workflowActionKey)}>
+                      <CheckCircle2 className={workflowActionKey === `test:${workflow.id}` ? "spin-icon" : undefined} size={15} />
+                      测试
+                    </button>
+                    <button className={workflow.status === "active" ? "danger-button" : "primary-button"} type="button" onClick={() => { void toggleWorkflow(workflow); }} disabled={Boolean(workflowActionKey)}>
+                      {workflow.status === "active" ? <XCircle size={15} /> : <CheckCircle2 size={15} />}
+                      {workflow.status === "active" ? "停用" : "启用"}
+                    </button>
+                    <button className="danger-button" type="button" onClick={() => { void deleteWorkflow(workflow); }} disabled={Boolean(workflowActionKey)}>
+                      <Trash2 size={15} />
+                      删除
+                    </button>
+                  </div>
+                </article>
+              ))}
+              {workflows.length === 0 ? <div className="empty-state">暂无工作流。可以输入目标让 AI 生成草稿。</div> : null}
+            </div>
+          </section>
+
+          <section className="settings-panel audit-panel">
+            <div className="section-heading">
+              <h3>动作审批</h3>
+              <span className="badge">{workflowApprovals.filter((approval) => approval.status === "pending").length} pending</span>
+            </div>
+            <div className="activity-list">
+              {workflowApprovals.slice(0, 20).map((approval) => (
+                <article className="activity-item" key={approval.id}>
+                  <div className="activity-header-row">
+                    <strong>{approval.summary}</strong>
+                    <span className={approval.status === "pending" ? "warning-badge" : approval.status === "approved" ? "badge" : "danger-badge"}>{approval.status}</span>
+                  </div>
+                  <div className="subtle">{approval.actionType} · {formatAuditTime(approval.createdAt)}</div>
+                  {approval.status === "pending" ? (
+                    <div className="row-actions">
+                      <button className="primary-button" type="button" onClick={() => { void reviewWorkflowApproval(approval, "approve"); }} disabled={Boolean(workflowActionKey)}>
+                        <CheckCircle2 size={15} />
+                        通过
+                      </button>
+                      <button className="danger-button" type="button" onClick={() => { void reviewWorkflowApproval(approval, "reject"); }} disabled={Boolean(workflowActionKey)}>
+                        <XCircle size={15} />
+                        拒绝
+                      </button>
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+              {workflowApprovals.length === 0 ? <div className="empty-state">暂无待审批工作流动作。</div> : null}
+            </div>
+          </section>
+
+          <section className="settings-panel audit-panel">
+            <div className="section-heading">
+              <h3>运行日志</h3>
+              <select className="input" value={selectedWorkflowId} onChange={(event) => setSelectedWorkflowId(event.target.value)}>
+                <option value="">全部工作流</option>
+                {workflows.map((workflow) => (
+                  <option key={workflow.id} value={workflow.id}>{workflow.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="activity-list">
+              {workflowRuns
+                .filter((run) => !selectedWorkflowId || run.workflowId === selectedWorkflowId)
+                .slice(0, 30)
+                .map((run) => (
+                  <article className="activity-item" key={run.id}>
+                    <div className="activity-header-row">
+                      <strong>{workflows.find((workflow) => workflow.id === run.workflowId)?.name ?? run.workflowId}</strong>
+                      <span className={run.status === "completed" ? "badge" : run.status === "failed" ? "danger-badge" : "warning-badge"}>{run.status}</span>
+                    </div>
+                    <div className="subtle">{run.triggerEvent} · {formatAuditTime(run.startedAt)} · {run.durationMs ?? 0}ms</div>
+                    <div className="subtle">条件 {run.conditionResults.filter((result) => result.passed).length}/{run.conditionResults.length} · 动作 {run.actionResults.length}</div>
+                  </article>
+                ))}
+              {workflowRuns.length === 0 ? <div className="empty-state">暂无工作流运行记录。</div> : null}
             </div>
           </section>
         </div>

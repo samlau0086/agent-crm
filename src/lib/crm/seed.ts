@@ -24,7 +24,7 @@ export const seedData: CrmSnapshot = {
       id: "role-admin",
       workspaceId: defaultWorkspaceId,
       name: "管理员",
-      permissions: ["crm.read", "crm.write", "crm.import", "crm.pool.manage", "crm.admin", "ai.use", "ai.admin"]
+      permissions: ["crm.read", "crm.write", "crm.import", "crm.pool.manage", "crm.admin", "workflow.read", "workflow.write", "workflow.admin", "ai.use", "ai.admin"]
     },
     {
       id: "role-sales",
@@ -432,6 +432,9 @@ export const seedData: CrmSnapshot = {
       updatedAt: now
     }
   ],
+  workflowDefinitions: [],
+  workflowRuns: [],
+  workflowActionApprovals: [],
   savedViews: [
     { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "email", "phone", "companyId", "birthday", "gender"], isDefault: true },
     { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "domain", "industry", "billingAddresses", "shippingAddresses"], isDefault: true },

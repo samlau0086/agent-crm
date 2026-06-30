@@ -67,11 +67,28 @@ import type {
   WebhookDelivery,
   WebhookEndpoint,
   WebhookEvent,
-  WebhookDeliveryStatus
+  WebhookDeliveryStatus,
+  WorkflowAction,
+  WorkflowActionApproval,
+  WorkflowAiGenerationRequest,
+  WorkflowAiGenerationResult,
+  WorkflowCondition,
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowTrigger
 } from "@/lib/crm/types";
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
 import { compareRecords, matchesRecordSearch, matchesSavedView } from "@/lib/crm/views";
 import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
+import {
+  buildWorkflowDraftFromGoal,
+  buildWorkflowIdempotencyKey,
+  didWorkflowConditionsPass,
+  evaluateWorkflowConditions,
+  isHighRiskWorkflowAction,
+  renderWorkflowTextTemplate,
+  workflowMatchesEvent
+} from "@/lib/workflows/core";
 
 type GlobalStore = typeof globalThis & { __crmStore?: CrmStore };
 type StoredCsvImportJob = CsvImportJob & { sourcePayload?: CsvImportJobSourcePayload };
@@ -82,6 +99,10 @@ const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function stamp(): string {
@@ -1480,9 +1501,314 @@ export class CrmStore {
       (webhook) => webhook.workspaceId === context.workspaceId && webhook.active && webhook.events.some((candidate) => events.includes(candidate))
     );
 
-    return webhooks.flatMap((webhook) =>
+    const deliveries = webhooks.flatMap((webhook) =>
       events.filter((candidate) => webhook.events.includes(candidate)).map((matchedEvent) => this.recordStoreWebhookDelivery(context, webhook, matchedEvent, data))
     );
+    this.runWorkflowsForEvent(context, event, data);
+    return deliveries;
+  }
+
+  listWorkflows(context: RequestContext): WorkflowDefinition[] {
+    requirePermission(context, "workflow.read");
+    return clone((this.data.workflowDefinitions ?? []).filter((workflow) => workflow.workspaceId === context.workspaceId));
+  }
+
+  getWorkflow(context: RequestContext, id: string): WorkflowDefinition {
+    requirePermission(context, "workflow.read");
+    const workflow = (this.data.workflowDefinitions ?? []).find((candidate) => candidate.id === id && candidate.workspaceId === context.workspaceId);
+    if (!workflow) throw new Error("Workflow not found");
+    return clone(workflow);
+  }
+
+  createWorkflow(
+    context: RequestContext,
+    input: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt" | "version" | "lastRunAt" | "status"> & Partial<Pick<WorkflowDefinition, "version" | "status">>
+  ): WorkflowDefinition {
+    requirePermission(context, "workflow.write");
+    const now = stamp();
+    const workflow: WorkflowDefinition = {
+      id: createId("workflow"),
+      workspaceId: context.workspaceId,
+      name: input.name.trim(),
+      description: input.description?.trim() || undefined,
+      goal: input.goal.trim(),
+      status: input.status ?? "draft",
+      trigger: input.trigger,
+      conditions: input.conditions ?? [],
+      actions: input.actions ?? [],
+      createdById: context.user.id,
+      version: input.version ?? 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    if (!workflow.name || !workflow.goal) throw new Error("Workflow name and goal are required");
+    (this.data.workflowDefinitions ??= []).push(workflow);
+    this.writeAuditLog(context, "workflow.created", "workflow", workflow.id, { summary: `Created workflow ${workflow.name}` });
+    return clone(workflow);
+  }
+
+  updateWorkflow(
+    context: RequestContext,
+    id: string,
+    patch: Partial<Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt" | "lastRunAt">>
+  ): WorkflowDefinition {
+    requirePermission(context, "workflow.write");
+    const index = (this.data.workflowDefinitions ?? []).findIndex((candidate) => candidate.id === id && candidate.workspaceId === context.workspaceId);
+    if (index === -1) throw new Error("Workflow not found");
+    const current = this.data.workflowDefinitions![index];
+    const updated: WorkflowDefinition = {
+      ...current,
+      ...patch,
+      description: patch.description !== undefined ? patch.description?.trim() || undefined : current.description,
+      updatedAt: stamp()
+    };
+    this.data.workflowDefinitions![index] = updated;
+    this.writeAuditLog(context, "workflow.updated", "workflow", id, { summary: `Updated workflow ${updated.name}` });
+    return clone(updated);
+  }
+
+  deleteWorkflow(context: RequestContext, id: string): void {
+    requirePermission(context, "workflow.admin");
+    const workflow = this.getWorkflow(context, id);
+    this.data.workflowDefinitions = (this.data.workflowDefinitions ?? []).filter((candidate) => candidate.id !== id);
+    this.data.workflowRuns = (this.data.workflowRuns ?? []).filter((run) => run.workflowId !== id);
+    this.data.workflowActionApprovals = (this.data.workflowActionApprovals ?? []).filter((approval) => approval.workflowId !== id);
+    this.writeAuditLog(context, "workflow.deleted", "workflow", id, { summary: `Deleted workflow ${workflow.name}` });
+  }
+
+  enableWorkflow(context: RequestContext, id: string): WorkflowDefinition {
+    requirePermission(context, "workflow.admin");
+    const workflow = this.updateWorkflow(context, id, { status: "active" });
+    this.writeAuditLog(context, "workflow.enabled", "workflow", id, { summary: `Enabled workflow ${workflow.name}` });
+    return workflow;
+  }
+
+  disableWorkflow(context: RequestContext, id: string): WorkflowDefinition {
+    requirePermission(context, "workflow.admin");
+    const workflow = this.updateWorkflow(context, id, { status: "disabled" });
+    this.writeAuditLog(context, "workflow.disabled", "workflow", id, { summary: `Disabled workflow ${workflow.name}` });
+    return workflow;
+  }
+
+  generateWorkflow(context: RequestContext, input: WorkflowAiGenerationRequest): WorkflowAiGenerationResult {
+    requirePermission(context, "workflow.write");
+    return buildWorkflowDraftFromGoal(input);
+  }
+
+  listWorkflowRuns(context: RequestContext, workflowId?: string): WorkflowRun[] {
+    requirePermission(context, "workflow.read");
+    return clone((this.data.workflowRuns ?? []).filter((run) => run.workspaceId === context.workspaceId && (!workflowId || run.workflowId === workflowId)));
+  }
+
+  listWorkflowApprovals(context: RequestContext): WorkflowActionApproval[] {
+    requirePermission(context, "workflow.read");
+    return clone((this.data.workflowActionApprovals ?? []).filter((approval) => approval.workspaceId === context.workspaceId));
+  }
+
+  testWorkflow(context: RequestContext, workflowId: string, data: Record<string, unknown> = {}): WorkflowRun {
+    requirePermission(context, "workflow.write");
+    const workflow = this.getWorkflow(context, workflowId);
+    return this.runSingleWorkflow(context, workflow, "manual.run", data, { test: true });
+  }
+
+  runWorkflowsForEvent(context: RequestContext, event: string, data: Record<string, unknown>, options: { workflowId?: string; idempotencyKey?: string; test?: boolean } = {}): WorkflowRun[] {
+    const workflows = options.workflowId
+      ? (this.data.workflowDefinitions ?? []).filter((workflow) => workflow.id === options.workflowId && workflow.workspaceId === context.workspaceId)
+      : (this.data.workflowDefinitions ?? []).filter((workflow) => workflow.workspaceId === context.workspaceId && workflowMatchesEvent(workflow, event, data));
+    return workflows.map((workflow) => this.runSingleWorkflow(context, workflow, event, data, options));
+  }
+
+  reviewWorkflowApproval(context: RequestContext, approvalId: string, decision: "approved" | "rejected", note?: string): WorkflowActionApproval {
+    requirePermission(context, "workflow.admin");
+    const approvals = (this.data.workflowActionApprovals ??= []);
+    const index = approvals.findIndex((approval) => approval.id === approvalId && approval.workspaceId === context.workspaceId);
+    if (index === -1) throw new Error("Workflow approval not found");
+    if (approvals[index].status !== "pending") return clone(approvals[index]);
+    approvals[index] = { ...approvals[index], status: decision, reviewedById: context.user.id, reviewNote: note?.trim() || undefined, reviewedAt: stamp() };
+    this.writeAuditLog(context, decision === "approved" ? "workflow.action_approved" : "workflow.action_rejected", "workflow_approval", approvalId, {
+      summary: `${decision === "approved" ? "Approved" : "Rejected"} workflow action ${approvals[index].actionKey}`
+    });
+    if (decision === "approved") {
+      const action = isJsonRecord(approvals[index].payload.action) ? approvals[index].payload.action as unknown as WorkflowAction : undefined;
+      const triggerData = isJsonRecord(approvals[index].payload.triggerData) ? approvals[index].payload.triggerData : {};
+      const workflow = (this.data.workflowDefinitions ?? []).find((candidate) => candidate.id === approvals[index].workflowId);
+      if (workflow && action) {
+        this.executeWorkflowAction(context, workflow, action, triggerData, this.workflowRecordFromData(context, triggerData), approvals[index].runId);
+      }
+    }
+    return clone(approvals[index]);
+  }
+
+  private runSingleWorkflow(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    event: string,
+    data: Record<string, unknown>,
+    options: { idempotencyKey?: string; test?: boolean } = {}
+  ): WorkflowRun {
+    const idempotencyKey = options.idempotencyKey ?? buildWorkflowIdempotencyKey(workflow, event, data);
+    const existing = !options.test
+      ? (this.data.workflowRuns ?? []).find((run) => run.workspaceId === context.workspaceId && run.workflowId === workflow.id && run.idempotencyKey === idempotencyKey)
+      : undefined;
+    if (existing) return clone(existing);
+    const startedAt = stamp();
+    const record = this.workflowRecordFromData(context, data);
+    const conditionResults = evaluateWorkflowConditions(workflow, data, record);
+    const actionResults: WorkflowRun["actionResults"] = [];
+    if (didWorkflowConditionsPass(conditionResults)) {
+      for (const action of workflow.actions) {
+        if (options.test) {
+          actionResults.push({ actionKey: action.key, status: isHighRiskWorkflowAction(action) ? "approval_required" : "completed", message: "Test run only; action was not executed." });
+        } else if (isHighRiskWorkflowAction(action)) {
+          const approval = this.createWorkflowActionApproval(context, workflow, action, data, record);
+          actionResults.push({ actionKey: action.key, status: "approval_required", message: `Approval required: ${approval.id}` });
+        } else {
+          actionResults.push(this.executeWorkflowAction(context, workflow, action, data, record));
+        }
+      }
+    }
+    const status = !didWorkflowConditionsPass(conditionResults)
+      ? "skipped"
+      : actionResults.some((result) => result.status === "failed")
+        ? "failed"
+        : actionResults.some((result) => result.status === "approval_required")
+          ? "approval_required"
+          : "completed";
+    const run: WorkflowRun = {
+      id: createId("workflow_run"),
+      workspaceId: context.workspaceId,
+      workflowId: workflow.id,
+      status,
+      triggerEvent: event,
+      triggerData: clone(data),
+      idempotencyKey: options.test ? undefined : idempotencyKey,
+      conditionResults,
+      actionResults,
+      startedAt,
+      completedAt: stamp(),
+      durationMs: 0
+    };
+    (this.data.workflowRuns ??= []).push(run);
+    const workflowIndex = (this.data.workflowDefinitions ?? []).findIndex((candidate) => candidate.id === workflow.id);
+    if (workflowIndex !== -1) {
+      this.data.workflowDefinitions![workflowIndex] = { ...this.data.workflowDefinitions![workflowIndex], lastRunAt: run.completedAt, updatedAt: this.data.workflowDefinitions![workflowIndex].updatedAt };
+    }
+    this.writeAuditLog(context, status === "failed" ? "workflow.run_failed" : "workflow.run_completed", "workflow", workflow.id, {
+      summary: `Workflow ${workflow.name} ${status}`,
+      details: { runId: run.id, event, actionResults }
+    });
+    return clone(run);
+  }
+
+  private workflowRecordFromData(context: RequestContext, data: Record<string, unknown>): CrmRecord | undefined {
+    const recordId = typeof data.recordId === "string" ? data.recordId : undefined;
+    const objectKey = typeof data.objectKey === "string" ? data.objectKey : undefined;
+    if (!recordId || !objectKey) return undefined;
+    try {
+      return this.getRecord(context, objectKey, recordId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private createWorkflowActionApproval(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    action: WorkflowAction,
+    triggerData: Record<string, unknown>,
+    record?: CrmRecord
+  ): WorkflowActionApproval {
+    const approval: WorkflowActionApproval = {
+      id: createId("workflow_approval"),
+      workspaceId: context.workspaceId,
+      workflowId: workflow.id,
+      actionKey: action.key,
+      actionType: action.type,
+      status: "pending",
+      summary: `${workflow.name}: ${action.name}`,
+      payload: { action, triggerData, recordId: record?.id, objectKey: record?.objectKey },
+      requestedById: context.user.id,
+      createdAt: stamp()
+    };
+    (this.data.workflowActionApprovals ??= []).push(approval);
+    this.writeAuditLog(context, "workflow.action_approval_requested", "workflow_approval", approval.id, { summary: `Workflow action requires approval: ${action.name}` });
+    return clone(approval);
+  }
+
+  private executeWorkflowAction(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    action: WorkflowAction,
+    triggerData: Record<string, unknown>,
+    record?: CrmRecord,
+    runId?: string
+  ): WorkflowRun["actionResults"][number] {
+    try {
+      if (action.type === "create_activity") {
+        if (!record) throw new Error("Workflow action requires a linked CRM record");
+        const activity = this.createActivity(context, {
+          recordId: record.id,
+          type: typeof action.config.activityType === "string" ? action.config.activityType as Activity["type"] : "task",
+          title: renderWorkflowTextTemplate(action.config.title ?? action.name, triggerData, record) || action.name,
+          body: renderWorkflowTextTemplate(action.config.body, triggerData, record),
+          dueAt: typeof action.config.dueInDays === "number" ? new Date(Date.now() + action.config.dueInDays * 24 * 60 * 60 * 1000).toISOString() : undefined
+        });
+        return { actionKey: action.key, status: "completed", message: `Created activity ${activity.id}` };
+      }
+      if (action.type === "send_email") {
+        const account = typeof action.config.accountId === "string"
+          ? this.assertEmailAccount(context, action.config.accountId)
+          : this.listEmailAccounts(context).find((candidate) => candidate.sendEnabled && candidate.status === "active");
+        if (!account) throw new Error("No active send-enabled email account");
+        const to = Array.isArray(action.config.to)
+          ? action.config.to.filter((value): value is string => typeof value === "string")
+          : [typeof triggerData.from === "string" ? triggerData.from : typeof record?.data.email === "string" ? record.data.email : ""].filter(Boolean);
+        if (to.length === 0) throw new Error("No email recipient");
+        const message = this.recordEmailMessage(context, {
+          accountId: account.id,
+          direction: "outbound",
+          from: account.emailAddress,
+          to,
+          subject: renderWorkflowTextTemplate(action.config.subject ?? `Re: ${record?.title ?? workflow.name}`, triggerData, record),
+          bodyText: renderWorkflowTextTemplate(action.config.bodyText ?? action.config.body ?? "", triggerData, record),
+          bodyHtml: renderWorkflowTextTemplate(action.config.bodyHtml, triggerData, record) || undefined,
+          status: action.config.mode === "draft" ? "draft" : "queued",
+          recordId: record?.id,
+          clientRequestId: runId ? `workflow:${runId}:${action.key}` : undefined,
+          skipAutoLink: true
+        });
+        return { actionKey: action.key, status: "completed", message: `Created email ${message.id}` };
+      }
+      if (action.type === "update_stage") {
+        if (!record || record.objectKey !== "deals") throw new Error("Stage update requires a deal record");
+        const stageKey = typeof action.config.stageKey === "string" ? action.config.stageKey : undefined;
+        if (!stageKey) throw new Error("stageKey is required");
+        const updated = this.updateRecord(context, record.objectKey, record.id, { stageKey });
+        return { actionKey: action.key, status: "completed", message: `Updated deal stage to ${updated.stageKey}` };
+      }
+      if (action.type === "update_record") {
+        if (!record) throw new Error("Record update requires a linked CRM record");
+        const patch = isJsonRecord(action.config.patch) ? action.config.patch : {};
+        const updated = this.updateRecord(context, record.objectKey, record.id, {
+          title: typeof patch.title === "string" ? patch.title : undefined,
+          data: isJsonRecord(patch.data) ? patch.data : undefined,
+          ownerId: typeof patch.ownerId === "string" ? patch.ownerId : undefined,
+          stageKey: typeof patch.stageKey === "string" ? patch.stageKey : undefined
+        });
+        return { actionKey: action.key, status: "completed", message: `Updated record ${updated.id}` };
+      }
+      if (action.type === "create_knowledge_article") {
+        const article = this.createKnowledgeArticle(context, {
+          title: renderWorkflowTextTemplate(action.config.title ?? workflow.name, triggerData, record),
+          body: renderWorkflowTextTemplate(action.config.content ?? action.config.body ?? "", triggerData, record),
+          tags: Array.isArray(action.config.tags) ? action.config.tags.filter((tag): tag is string => typeof tag === "string") : ["workflow"]
+        });
+        return { actionKey: action.key, status: "completed", message: `Created knowledge article ${article.id}` };
+      }
+      return { actionKey: action.key, status: "completed", message: "Notification or no-op action recorded" };
+    } catch (error) {
+      return { actionKey: action.key, status: "failed", message: error instanceof Error ? error.message : "Action failed" };
+    }
   }
 
   private deliverEmailMessageEvents(context: RequestContext, message: EmailMessage, recordId: string | undefined, options: { includeCreated: boolean }): void {

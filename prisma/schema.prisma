@@ -43,6 +43,9 @@ model Workspace {
   poolSettings        CrmPoolSettings?
   mediaAssets         MediaAsset[]
   recordChangeRequests RecordChangeRequest[]
+  workflowDefinitions WorkflowDefinition[]
+  workflowRuns        WorkflowRun[]
+  workflowActionApprovals WorkflowActionApproval[]
 }
 
 model User {
@@ -273,6 +276,76 @@ model RecordChangeRequest {
 
   @@index([workspaceId, status, createdAt])
   @@index([workspaceId, objectKey, recordId])
+  @@index([workspaceId, requestedById, createdAt])
+}
+
+model WorkflowDefinition {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  name          String
+  description   String?
+  goal          String
+  status        String    @default("draft")
+  trigger       Json
+  conditions    Json
+  actions       Json
+  createdById   String
+  version       Int       @default(1)
+  lastRunAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runs          WorkflowRun[]
+  approvals     WorkflowActionApproval[]
+
+  @@index([workspaceId, status, updatedAt])
+  @@index([workspaceId, createdById, updatedAt])
+}
+
+model WorkflowRun {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  workflowId    String
+  status        String
+  triggerEvent  String
+  triggerData   Json
+  idempotencyKey String
+  conditionResults Json?
+  actionResults Json?
+  errorMessage  String?
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+  durationMs    Int?
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workflow      WorkflowDefinition @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  approvals     WorkflowActionApproval[]
+
+  @@unique([workspaceId, workflowId, idempotencyKey])
+  @@index([workspaceId, workflowId, startedAt])
+  @@index([workspaceId, status, startedAt])
+}
+
+model WorkflowActionApproval {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  workflowId    String
+  runId         String?
+  actionKey     String
+  actionType    String
+  status        String    @default("pending")
+  summary       String
+  payload       Json
+  requestedById String
+  reviewedById  String?
+  reviewNote    String?
+  createdAt     DateTime  @default(now())
+  reviewedAt    DateTime?
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workflow      WorkflowDefinition @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  run           WorkflowRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, workflowId, createdAt])
   @@index([workspaceId, requestedById, createdAt])
 }
 

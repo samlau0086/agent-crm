@@ -44,7 +44,8 @@ import {
   MAX_SAVED_VIEW_FILTERS,
   recordDeleteRequestSchema,
   recordPatchWithReasonSchema,
-  savedViewCreateSchema
+  savedViewCreateSchema,
+  workflowCreateSchema
 } from "../src/lib/crm/api-schemas.ts";
 import { defaultWorkspaceId, seedData } from "../src/lib/crm/seed.ts";
 import { CrmStore } from "../src/lib/crm/store.ts";
@@ -78,7 +79,7 @@ import { getDatabaseObservabilitySnapshot, listRecentApiRequestMetrics, recordAp
 import { assertValidFieldDefinition, validateRecordPayload } from "../src/lib/crm/validation.ts";
 import { compareRecords, findRelatedRecords, matchesSavedView } from "../src/lib/crm/views.ts";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, isValidWebhookEvent, signWebhookPayload } from "../src/lib/integrations/webhook.ts";
-import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailSendJobEnvelope, buildEmailSummarizeJobEnvelope, buildEmailSyncJobEnvelope, buildEmailTranslateJobEnvelope, buildWebhookEventEnvelope, InlineBackgroundJobExecutor, RedisBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
+import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailSendJobEnvelope, buildEmailSummarizeJobEnvelope, buildEmailSyncJobEnvelope, buildEmailTranslateJobEnvelope, buildWebhookEventEnvelope, buildWorkflowRunJobEnvelope, InlineBackgroundJobExecutor, RedisBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
 import { encodeRedisCommand, getDeadLetterQueueName } from "../src/lib/jobs/redis-queue.ts";
 import { buildFailedJobEnvelope, getMaxJobAttempts } from "../src/lib/jobs/worker-policy.ts";
 import { formatJobWorkerResult, processQueuedJobEnvelope } from "../src/lib/jobs/worker.ts";
@@ -91,7 +92,7 @@ import { buildEmailAttachmentResponse } from "../src/lib/email/attachment-respon
 import { canOpenEmailAiSource, emailAiSourceKey } from "../src/lib/email/ai-sources.ts";
 import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "../src/lib/email/attachments.ts";
 import { isEmailMessageEligibleForAutomation, runEmailAutomationsBestEffort, scheduleEmailAutomationsBestEffort, shouldRunEmailAutoSummary } from "../src/lib/email/automations.ts";
-import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, emailClassificationAgentKey, emailContextAnalysisAgentKey, emailDraftAgentKey, emailThreadSummaryAgentKey, emailTranslationAgentKey, getAiAgentSetting, getEmailAiPurposeFeature, inboundEmailPreprocessAgentKey, isEmailAiPurposeEnabled, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "../src/lib/email/assistant.ts";
+import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, emailClassificationAgentKey, emailContextAnalysisAgentKey, emailDraftAgentKey, emailThreadSummaryAgentKey, emailTranslationAgentKey, getAiAgentSetting, getEmailAiPurposeFeature, inboundEmailPreprocessAgentKey, isEmailAiPurposeEnabled, normalizeAiAgentSettings, normalizeEmailAiFeatures, workflowDesignerAgentKey } from "../src/lib/email/assistant.ts";
 import { readEmailOAuthCallbackNotice, readEmailOAuthConnectedNotice } from "../src/lib/email/oauth-callback.ts";
 import { getDatabaseConnectionTarget } from "../scripts/database-preflight.ts";
 import { formatDatabasePreflightFailure } from "../scripts/runtime-preflight.mjs";
@@ -263,6 +264,66 @@ await run("record validation rejects missing required value", () => {
   };
 
   assert.throws(() => validateRecordPayload([emailField], {}, []), /Email/);
+});
+
+await run("workflow permissions and designer agent are registered", () => {
+  assert(permissionCatalog.some((permission) => permission.key === "workflow.read"));
+  assert(permissionCatalog.some((permission) => permission.key === "workflow.write"));
+  assert(permissionCatalog.some((permission) => permission.key === "workflow.admin"));
+  const settings = createDefaultEmailAiSettings();
+  assert.equal(getAiAgentSetting(settings, workflowDesignerAgentKey)?.scenario, "system");
+});
+
+await run("workflow schema accepts generated key/name actions", () => {
+  const parsed = workflowCreateSchema.parse({
+    name: "7 day follow up",
+    goal: "7 天未回复自动跟进",
+    status: "draft",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [{ key: "owner-exists", type: "field", field: "ownerId", operator: "exists" }],
+    actions: [{ key: "task", type: "create_activity", name: "创建跟进任务", config: { activityType: "task", title: "跟进客户" } }]
+  });
+  assert.equal(parsed.actions[0].key, "task");
+});
+
+await run("workflow creates low-risk follow-up activity and is idempotent", () => {
+  const store = new CrmStore(seedData);
+  const context = store.getContext();
+  const contact = store.listRecords(context, "contacts")[0];
+  const workflow = store.createWorkflow(context, {
+    name: "Follow up on contact update",
+    goal: "Create a task when a contact is updated",
+    status: "active",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [],
+    actions: [{ key: "create-task", type: "create_activity", name: "Create task", config: { activityType: "task", title: "Workflow task for {{record.title}}" } }]
+  });
+  const eventData = { objectKey: "contacts", recordId: contact.id, title: contact.title, updatedAt: "2026-06-30T00:00:00.000Z" };
+  const firstRuns = store.runWorkflowsForEvent(context, "record.updated", eventData);
+  const secondRuns = store.runWorkflowsForEvent(context, "record.updated", eventData);
+  assert.equal(firstRuns.length, 1);
+  assert.equal(secondRuns.length, 1);
+  assert.equal(store.listWorkflowRuns(context, workflow.id).length, 1);
+  assert(store.listActivities(context, contact.id).some((activity) => activity.title.includes("Workflow task")));
+});
+
+await run("workflow high-risk email action requires approval", () => {
+  const store = new CrmStore(seedData);
+  const context = store.getContext();
+  const contact = store.listRecords(context, "contacts")[0];
+  store.createWorkflow(context, {
+    name: "Draft email approval",
+    goal: "Draft a follow-up email after contact update",
+    status: "active",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [],
+    actions: [{ key: "draft-email", type: "send_email", name: "Draft email", config: { mode: "draft", subject: "Follow up" } }]
+  });
+  const [run] = store.runWorkflowsForEvent(context, "record.updated", { objectKey: "contacts", recordId: contact.id, updatedAt: "2026-06-30T00:01:00.000Z" });
+  assert.equal(run.status, "approval_required");
+  const approvals = store.listWorkflowApprovals(context);
+  assert.equal(approvals.length, 1);
+  assert.equal(approvals[0].status, "pending");
 });
 
 await run("session tokens are random and stored as one-way hashes", () => {
@@ -1714,11 +1775,13 @@ await run("settings admin groups configuration panels by tabs", () => {
   const source = readFileSync("src/components/settings-admin.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "integrations" \| "operations"/);
+  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "workflows" \| "integrations" \| "operations"/);
   assert.match(source, /const settingsTabs/);
   assert.match(source, /公海规则/);
   assert.match(source, /\/api\/pool-settings/);
   assert.match(source, /activeSettingsTab === "pool"[\s\S]*保存公海规则/);
+  assert.match(source, /activeSettingsTab === "workflows"/);
+  assert.match(source, /\/api\/workflows\/generate/);
   assert.match(source, /role="tablist"/);
   assert.match(source, /aria-selected=\{activeSettingsTab === tab\.key\}/);
   assert.match(source, /activeSettingsTab === "access"[\s\S]*UserTeamAdminPanel[\s\S]*RoleAdminPanel[\s\S]*PermissionMatrix/);
