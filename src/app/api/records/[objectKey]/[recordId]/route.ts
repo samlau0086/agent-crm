@@ -1,9 +1,10 @@
-
-export const dynamic = "force-dynamic";
-﻿import type { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok, parseJson, parseOptionalJson, withApiMetrics } from "@/lib/api";
 import { recordDeleteRequestSchema, recordPatchWithReasonSchema } from "@/lib/crm/api-schemas";
+import { hasRecordPatchChanges, splitRecordApprovalPatch } from "@/lib/crm/record-approval";
 import { getCrmRepository } from "@/lib/crm/repository";
+
+export const dynamic = "force-dynamic";
 
 interface RouteParams {
   params: { objectKey: string; recordId: string };
@@ -25,13 +26,30 @@ async function patchApiMetricsHandler(request: NextRequest, { params }: RoutePar
     const context = await getRequestContext(request);
     const body = await parseJson(request, recordPatchWithReasonSchema);
     const { changeReason, ...patch } = body;
-    if (params.objectKey === "contacts" || params.objectKey === "companies") {
-      const approvalRequest = await getCrmRepository().requestRecordUpdate(context, params.objectKey, params.recordId, {
+    if (params.objectKey === "contacts" || params.objectKey === "companies" || params.objectKey === "deals") {
+      const repository = getCrmRepository();
+      const current = await repository.getRecord(context, params.objectKey, params.recordId);
+      const normalizedPatch = {
         ...patch,
         stageKey: patch.stageKey ?? undefined,
         ownerId: patch.ownerId ?? undefined
-      }, changeReason ?? "");
-      return ok({ pendingApproval: true, request: approvalRequest }, { status: 202 });
+      };
+      const { approvalPatch, immediatePatch, previousPatch } = splitRecordApprovalPatch(current, normalizedPatch);
+      let updatedRecord = current;
+      if (hasRecordPatchChanges(immediatePatch)) {
+        updatedRecord = await repository.updateRecord(context, params.objectKey, params.recordId, immediatePatch);
+      }
+      if (hasRecordPatchChanges(approvalPatch)) {
+        const approvalRequest = await repository.requestRecordUpdate(
+          context,
+          params.objectKey,
+          params.recordId,
+          { ...approvalPatch, previous: previousPatch },
+          changeReason ?? ""
+        );
+        return ok({ pendingApproval: true, request: approvalRequest }, { status: 202 });
+      }
+      return ok(updatedRecord);
     }
     return ok(
       await getCrmRepository().updateRecord(context, params.objectKey, params.recordId, {

@@ -71,6 +71,7 @@ import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
+import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, stripRecordApprovalMetadata } from "../src/lib/crm/record-approval.ts";
 import { parseRecordListQuery } from "../src/lib/crm/record-query.ts";
 import { getBackupFile, listBackupFiles, resolveBackupFilePath } from "../src/lib/ops/backups.ts";
 import { getDatabaseObservabilitySnapshot, listRecentApiRequestMetrics, recordApiRequestMetric } from "../src/lib/ops/observability.ts";
@@ -458,6 +459,45 @@ await run("record approval schemas accept short Chinese reasons", async () => {
     { changeReason: "重复" }
   );
   assert.equal(recordPatchWithReasonSchema.parse({ changeReason: "误删" }).changeReason, "误删");
+});
+
+await run("record approval patch splits empty-value additions from non-empty changes", () => {
+  const record = {
+    id: "record-1",
+    workspaceId: "workspace-1",
+    objectKey: "contacts",
+    title: "Instagram",
+    ownerId: "user-1",
+    data: {
+      address: "China",
+      birthday: "",
+      sameValue: "same",
+      emptyList: []
+    },
+    createdAt: "2026-06-30T00:00:00.000Z",
+    updatedAt: "2026-06-30T00:00:00.000Z"
+  };
+
+  const { approvalPatch, immediatePatch, previousPatch } = splitRecordApprovalPatch(record, {
+    title: "Instagram",
+    ownerId: "user-1",
+    data: {
+      address: "Shenzhen, China",
+      birthday: "2026-06-09",
+      sameValue: "same",
+      emptyList: ["new"]
+    }
+  });
+
+  assert.deepEqual(approvalPatch, { data: { address: "Shenzhen, China" } });
+  assert.deepEqual(previousPatch, { data: { address: "China" } });
+  assert.deepEqual(immediatePatch, { data: { birthday: "2026-06-09", emptyList: ["new"] } });
+  assert.equal(hasRecordPatchChanges(approvalPatch), true);
+  assert.equal(hasRecordPatchChanges({}), false);
+
+  const patchWithMetadata = { ...approvalPatch, previous: previousPatch };
+  assert.deepEqual(previousRecordApprovalPatch(patchWithMetadata), previousPatch);
+  assert.deepEqual(stripRecordApprovalMetadata(patchWithMetadata), approvalPatch);
 });
 
 await run("api json helper rejects oversized request bodies", async () => {
@@ -1671,6 +1711,9 @@ await run("record change approval renders readable field diffs instead of raw js
   assert.match(settings, /objects=\{props\.objects\}/);
   assert.match(settings, /records=\{props\.records\}/);
   assert.match(panelSource, /const reviewRows = buildRecordReviewRows\(request, record, requestFields, users\)/);
+  assert.match(panelSource, /previousRecordApprovalPatch\(patch\)/);
+  assert.match(panelSource, /const previousData = isRecordReviewObject\(previousPatch\.data\) \? previousPatch\.data : \{\}/);
+  assert.match(panelSource, /const oldValue = key in previousData \? previousData\[key\] : record\?\.data\[key\]/);
   assert.match(panelSource, /className="record-review-diff-table"/);
   assert.match(panelSource, /className="record-review-value old-value"/);
   assert.match(panelSource, /className="record-review-value new-value"/);
@@ -2041,6 +2084,10 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /<ContactProfileEditor/);
   assert.match(source, /saveLabel=\{editApprovalObjectKeys\.has\(selectedRecord\.objectKey\) \? "提交修改审批" : "保存"\}/);
   assert.match(source, /onSave=\{\(\) => runRecordSaveAction\(submitUpdateRecord\)\}/);
+  assert.match(source, /const editApprovalObjectKeys = new Set\(\["contacts", "companies", "deals"\]\)/);
+  assert.match(source, /splitRecordApprovalPatch\(selectedRecord, updatePatch\)\.approvalPatch/);
+  assert.match(source, /hasRecordPatchChanges\(splitRecordApprovalPatch\(selectedRecord, updatePatch\)\.approvalPatch\)/);
+  assert.match(source, /previousRecordApprovalPatch\(patch\)/);
   assert.match(source, /const \[isRecordSavePending, setIsRecordSavePending\] = useState\(false\)/);
   assert.match(source, /setRecordChangeRequests\(\(current\) => mergeRecordChangeRequests\(current, \[result\.request\]\)\)/);
   assert.match(source, /const selectedRecordPendingUpdateRequest = useMemo/);

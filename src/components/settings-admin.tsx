@@ -7,6 +7,7 @@ import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
+import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
 import type { ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
@@ -3364,11 +3365,12 @@ function buildRecordReviewRows(request: RecordChangeRequest, record: CrmRecord |
   }
 
   const patch = request.patch ?? {};
+  const previousPatch = previousRecordApprovalPatch(patch);
   if ("title" in patch) {
     rows.push({
       key: "title",
       label: "名称",
-      oldValue: record?.title ?? "",
+      oldValue: typeof previousPatch.title === "string" ? previousPatch.title : record?.title ?? "",
       newValue: formatRecordReviewValue(undefined, patch.title, users)
     });
   }
@@ -3376,7 +3378,7 @@ function buildRecordReviewRows(request: RecordChangeRequest, record: CrmRecord |
     rows.push({
       key: "stageKey",
       label: "阶段",
-      oldValue: record?.stageKey ?? "",
+      oldValue: typeof previousPatch.stageKey === "string" ? previousPatch.stageKey : record?.stageKey ?? "",
       newValue: formatRecordReviewValue(undefined, patch.stageKey, users)
     });
   }
@@ -3384,16 +3386,17 @@ function buildRecordReviewRows(request: RecordChangeRequest, record: CrmRecord |
     rows.push({
       key: "ownerId",
       label: "负责人",
-      oldValue: formatRecordReviewOwner(record?.ownerId, users),
+      oldValue: formatRecordReviewOwner(typeof previousPatch.ownerId === "string" ? previousPatch.ownerId : record?.ownerId, users),
       newValue: formatRecordReviewOwner(typeof patch.ownerId === "string" ? patch.ownerId : undefined, users)
     });
   }
 
   const patchData = isRecordReviewObject(patch.data) ? patch.data : {};
+  const previousData = isRecordReviewObject(previousPatch.data) ? previousPatch.data : {};
   const dataKeys = uniqueSorted(Object.keys(patchData));
   for (const key of dataKeys) {
     const field = fieldByKey.get(key);
-    const oldValue = record?.data[key];
+    const oldValue = key in previousData ? previousData[key] : record?.data[key];
     const newValue = patchData[key];
     if (recordReviewValueKey(oldValue) === recordReviewValueKey(newValue)) {
       continue;

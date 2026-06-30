@@ -17,6 +17,7 @@ import { ApiError } from "@/lib/api-error";
 import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
+import { stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
 import { decryptAiProviderConfig, encryptAiProviderConfig, mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
@@ -94,7 +95,7 @@ import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quo
 type PrismaContext = typeof prisma;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
 const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
-const EDIT_APPROVAL_OBJECT_KEYS = ["contacts", "companies"] as const;
+const EDIT_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals"] as const;
 const DELETE_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals", "products", "quotes"] as const;
 
 function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
@@ -3979,9 +3980,9 @@ export class PrismaCrmRepository {
     context: RequestContext,
     objectKey: string,
     recordId: string,
-    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>,
+    patch: RecordChangeRequest["patch"],
     reason: string
-  ): Promise<RecordChangeRequest> {
+  ): Promise<RecordChangeRequest | CrmRecord> {
     requirePermission(context, "crm.write");
     if (!requiresEditApproval(objectKey)) {
       throw new Error("This object does not require update approval");
@@ -3991,7 +3992,7 @@ export class PrismaCrmRepository {
       throw new Error("请填写修改原因");
     }
     const current = await this.getRecord(context, objectKey, recordId);
-    await this.validateRecordPatch(context, objectKey, recordId, current, patch);
+    await this.validateRecordPatch(context, objectKey, recordId, current, stripRecordApprovalMetadata(patch));
     const request = await this.db.recordChangeRequest.create({
       data: {
         workspaceId: context.workspaceId,
@@ -4114,7 +4115,7 @@ export class PrismaCrmRepository {
         context,
         request.objectKey,
         request.recordId,
-        (request.patch ?? {}) as Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>
+        stripRecordApprovalMetadata((request.patch ?? {}) as RecordChangeRequest["patch"])
       );
     } else if (request.action === "delete") {
       await this.deleteRecord(context, request.objectKey, request.recordId);

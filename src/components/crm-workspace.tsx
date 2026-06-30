@@ -59,6 +59,7 @@ import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, ge
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
 import { calculateQuoteTotals, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
+import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, type RecordApprovalPatch } from "@/lib/crm/record-approval";
 import type {
   Activity,
   ApiKey,
@@ -150,7 +151,7 @@ interface CrmWorkspaceProps {
 
 const recordListRequestTimeoutMs = 15_000;
 const routeRefreshTimeoutMs = 10_000;
-const editApprovalObjectKeys = new Set(["contacts", "companies"]);
+const editApprovalObjectKeys = new Set(["contacts", "companies", "deals"]);
 const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "products", "quotes"]);
 
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "email" | "settings";
@@ -2217,14 +2218,23 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
 
-    const changeReason = editApprovalObjectKeys.has(selectedRecord.objectKey)
+    const updatePatch: RecordApprovalPatch = {
+      title: editTitle.trim(),
+      data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
+      stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
+      ownerId: editOwnerId || undefined
+    };
+    const needsApproval =
+      editApprovalObjectKeys.has(selectedRecord.objectKey) &&
+      hasRecordPatchChanges(splitRecordApprovalPatch(selectedRecord, updatePatch).approvalPatch);
+    const changeReason = needsApproval
       ? await requestPrompt({
           title: "提交修改审批",
           message: `请填写修改“${selectedRecord.title}”的原因。管理员审核通过后才会正式应用。`,
           placeholder: "例如：客户更新了公司资料和主要联系方式"
         })
       : "";
-    if (editApprovalObjectKeys.has(selectedRecord.objectKey) && !changeReason?.trim()) {
+    if (needsApproval && !changeReason?.trim()) {
       setMessage("已取消修改审批");
       return;
     }
@@ -2232,10 +2242,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
       method: "PATCH",
       body: {
-        title: editTitle.trim(),
-        data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
-        stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
-        ownerId: editOwnerId || undefined,
+        ...updatePatch,
         changeReason: changeReason?.trim() || undefined
       }
     });
@@ -2331,14 +2338,24 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       methods.find((method) => (method.type === "tel" || method.type === "mob") && method.primary)?.value ||
       methods.find((method) => method.type === "tel" || method.type === "mob")?.value ||
       "";
-    const changeReason = targetRecord.objectKey === "contacts"
+    const contactMethodPatch: RecordApprovalPatch = {
+      data: {
+        contactMethods: methods,
+        email: primaryEmail,
+        phone: primaryPhone
+      }
+    };
+    const needsApproval =
+      targetRecord.objectKey === "contacts" &&
+      hasRecordPatchChanges(splitRecordApprovalPatch(targetRecord, contactMethodPatch).approvalPatch);
+    const changeReason = needsApproval
       ? await requestPrompt({
           title: "提交联系方式修改审批",
           message: `请填写修改“${targetRecord.title}”联系方式的原因。管理员审核通过后才会正式应用。`,
           placeholder: "例如：客户确认了新的主邮箱"
         })
       : "";
-    if (targetRecord.objectKey === "contacts" && !changeReason?.trim()) {
+    if (needsApproval && !changeReason?.trim()) {
       setMessage("已取消联系方式修改");
       return;
     }
@@ -2346,11 +2363,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${targetRecord.objectKey}/${targetRecord.id}`, {
       method: "PATCH",
       body: {
-        data: {
-          contactMethods: methods,
-          email: primaryEmail,
-          phone: primaryPhone
-        },
+        ...contactMethodPatch,
         changeReason: changeReason?.trim() || undefined
       }
     });
@@ -11988,25 +12001,29 @@ type RecordChangeDiff = {
 
 function buildRecordUpdateDiffs(record: CrmRecord, request: RecordChangeRequest, fields: FieldDefinition[], users: User[]): RecordChangeDiff[] {
   const patch = request.patch ?? {};
+  const previousPatch = previousRecordApprovalPatch(patch);
   const diffs: RecordChangeDiff[] = [];
-  if (typeof patch.title === "string" && patch.title !== record.title) {
-    diffs.push({ key: "title", label: "名称", oldValue: record.title, newValue: patch.title });
+  const previousTitle = typeof previousPatch.title === "string" ? previousPatch.title : record.title;
+  if (typeof patch.title === "string" && patch.title !== previousTitle) {
+    diffs.push({ key: "title", label: "名称", oldValue: previousTitle, newValue: patch.title });
   }
-  if ("ownerId" in patch && patch.ownerId !== record.ownerId) {
+  const previousOwnerId = typeof previousPatch.ownerId === "string" ? previousPatch.ownerId : record.ownerId;
+  if ("ownerId" in patch && patch.ownerId !== previousOwnerId) {
     diffs.push({
       key: "ownerId",
       label: "负责人",
-      oldValue: ownerLabel(record.ownerId, users),
+      oldValue: ownerLabel(previousOwnerId, users),
       newValue: ownerLabel(typeof patch.ownerId === "string" ? patch.ownerId : undefined, users)
     });
   }
 
   const patchData = isPlainRecord(patch.data) ? patch.data : {};
+  const previousData = isPlainRecord(previousPatch.data) ? previousPatch.data : {};
   for (const field of fields) {
     if (!(field.key in patchData)) {
       continue;
     }
-    const oldValue = record.data[field.key];
+    const oldValue = field.key in previousData ? previousData[field.key] : record.data[field.key];
     const newValue = patchData[field.key];
     if (recordChangeValueKey(oldValue) === recordChangeValueKey(newValue)) {
       continue;
