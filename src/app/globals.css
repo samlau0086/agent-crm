@@ -3272,6 +3272,48 @@ button {
   box-shadow: var(--shadow-sm);
 }
 
+.workflow-floating-palette {
+  position: sticky;
+  top: 52px;
+  left: 20px;
+  z-index: 12;
+  display: grid;
+  gap: 8px;
+  width: 220px;
+  max-height: calc(100vh - 92px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow-lg);
+}
+
+.workflow-floating-palette-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface-strong);
+  cursor: grab;
+}
+
+.workflow-floating-palette-item:active {
+  cursor: grabbing;
+}
+
+.workflow-floating-palette-item small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .workflow-graph-stage {
   position: relative;
   width: 4200px;
@@ -3477,6 +3519,18 @@ button {
   color: #0f766e;
   border-color: rgba(15, 118, 110, 0.45);
   background: rgba(20, 184, 166, 0.18);
+}
+
+.workflow-node-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(860px, calc(100vh - 48px));
+  overflow: auto;
+}
+
+.workflow-node-modal .workflow-graph-inspector {
+  width: 100%;
+  max-width: none;
+  margin-top: 12px;
 }
 
 .workflow-node-output-handle {

@@ -56,6 +56,7 @@ type AutomationNode =
   | { id: string; kind: "condition"; title: string; subtitle: string; condition: WorkflowCondition }
   | { id: string; kind: "action"; title: string; subtitle: string; action: WorkflowAction };
 type AutomationDraft = Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt"> & Partial<Pick<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt" | "lastRunAt">>;
+type WorkflowGraphPaletteItem = { type: WorkflowNodeType; icon: LucideIcon; description: string };
 
 interface AutomationWorkspaceProps {
   workflows: WorkflowDefinition[];
@@ -126,6 +127,17 @@ const actionTemplates: WorkflowAction[] = [
   }
 ];
 
+const workflowGraphPaletteItems: WorkflowGraphPaletteItem[] = [
+  { type: "if", icon: ShieldCheck, description: "true / false" },
+  { type: "switch", icon: Split, description: "case / default" },
+  { type: "loop", icon: Repeat2, description: "continue / break" },
+  { type: "send_email", icon: Send, description: "send or draft" },
+  { type: "create_task", icon: CheckCircle2, description: "task activity" },
+  { type: "update_deal", icon: BadgeDollarSign, description: "deal stage" },
+  { type: "notify", icon: Mail, description: "notify channel" },
+  { type: "end", icon: PauseCircle, description: "finish path" }
+];
+
 export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns: initialRuns, workflowApprovals: initialApprovals, records, emailAccounts, users }: AutomationWorkspaceProps) {
   const searchParams = useSearchParams();
   const initializedFromUrl = useRef(false);
@@ -145,10 +157,13 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   const [pendingConnection, setPendingConnection] = useState<{ sourceNodeId: string; sourceHandle: string } | null>(null);
   const [quickAdd, setQuickAdd] = useState<{ x: number; y: number; connection: { sourceNodeId: string; sourceHandle: string } } | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<WorkflowDefinition | null>(null);
+  const [nodeModalId, setNodeModalId] = useState("");
+  const [nodeDeleteCandidate, setNodeDeleteCandidate] = useState<WorkflowNode | null>(null);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const graph = useMemo(() => draft.graph ?? legacyWorkflowToGraph(draft as Pick<WorkflowDefinition, "trigger" | "conditions" | "actions">), [draft]);
   const selectedGraphNode = graph.nodes.find((node) => node.id === selectedGraphNodeId) ?? graph.nodes.find((node) => node.type === "start") ?? graph.nodes[0];
+  const modalGraphNode = graph.nodes.find((node) => node.id === nodeModalId);
   const nodes = useMemo(() => workflowToNodes(draft), [draft]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
   const relatedRuns = workflowRuns.filter((run) => !selectedWorkflowId || run.workflowId === selectedWorkflowId).slice(0, 20);
@@ -201,6 +216,8 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     setTargetRecordId(workflowTargetRecordId(workflow));
     setSelectedNodeId("trigger");
     setSelectedGraphNodeId("start");
+    setNodeModalId("");
+    setNodeDeleteCandidate(null);
   }
 
   function createNewWorkflow(objectKey: AutomationObjectKey = activeObjectKey === "all" ? "contacts" : activeObjectKey) {
@@ -210,6 +227,8 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     setSelectedNodeId("trigger");
     setSelectedGraphNodeId("start");
     setPendingConnection(null);
+    setNodeModalId("");
+    setNodeDeleteCandidate(null);
   }
 
   async function runAutomationAction(action: () => Promise<void>) {
@@ -394,6 +413,14 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     updateGraph(nextGraph);
   }
 
+  function addLooseGraphNode(type: WorkflowNodeType, position: WorkflowNode["position"]) {
+    const nextNode = createGraphNode(type, graph.nodes.length, {}, position);
+    updateGraph({ ...graph, nodes: [...graph.nodes, nextNode] });
+    setPendingConnection(null);
+    setQuickAdd(null);
+    setSelectedGraphNodeId(nextNode.id);
+  }
+
   function updateGraphNode(nodeId: string, patch: Partial<WorkflowNode>) {
     updateGraph({
       ...graph,
@@ -407,6 +434,10 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       showToast("info", "Start 和 End 节点不能删除。");
       return;
     }
+    setNodeDeleteCandidate(node);
+  }
+
+  function confirmDeleteGraphNode(nodeId: string) {
     updateGraph({
       ...graph,
       nodes: graph.nodes.filter((candidate) => candidate.id !== nodeId),
@@ -415,6 +446,8 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     setSelectedGraphNodeId("start");
     setPendingConnection(null);
     setQuickAdd(null);
+    setNodeModalId((current) => (current === nodeId ? "" : current));
+    setNodeDeleteCandidate(null);
   }
 
   function connectGraphNode(targetNodeId: string, explicitConnection?: { sourceNodeId: string; sourceHandle: string }) {
@@ -627,10 +660,12 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
               pendingConnection={pendingConnection}
               quickAdd={quickAdd}
               onCompleteConnection={connectGraphNode}
+              onCreateNode={addLooseGraphNode}
               onCreateConnectedNode={(type, position, connection) => addGraphNode(type, position, connection)}
               onDeleteNode={deleteGraphNode}
               onDeleteEdge={deleteGraphEdge}
               onMoveNode={moveGraphNode}
+              onOpenNodeModal={setNodeModalId}
               onOpenQuickAdd={openQuickAdd}
               onSelectNode={setSelectedGraphNodeId}
               onStartConnection={setPendingConnection}
@@ -651,6 +686,48 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
           </div>
         </section>
       </div>
+
+      {modalGraphNode ? (
+        <div className="app-dialog-backdrop" role="presentation">
+          <div className="app-dialog workflow-node-modal" role="dialog" aria-modal="true" aria-labelledby="workflow-node-modal-title">
+            <div className="stage-header">
+              <div>
+                <h3 id="workflow-node-modal-title">节点设置</h3>
+                <p className="subtle">双击节点打开的配置面板，保存草稿后生效。</p>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setNodeModalId("")}>
+                X
+              </button>
+            </div>
+            <WorkflowGraphInspector
+              node={modalGraphNode}
+              graph={graph}
+              emailAccounts={emailAccounts}
+              users={users}
+              onChange={updateGraphNode}
+              onDelete={deleteGraphNode}
+              onGraphChange={updateGraph}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {nodeDeleteCandidate ? (
+        <div className="app-dialog-backdrop" role="presentation">
+          <div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="workflow-node-delete-title">
+            <h3 id="workflow-node-delete-title">删除节点</h3>
+            <p>确定删除节点“{nodeDeleteCandidate.label}”？相关连接线也会一并删除。</p>
+            <div className="dialog-actions">
+              <button className="secondary-button" type="button" onClick={() => setNodeDeleteCandidate(null)}>
+                取消
+              </button>
+              <button className="danger-button" type="button" onClick={() => confirmDeleteGraphNode(nodeDeleteCandidate.id)}>
+                删除节点
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="automation-bottom-grid">
         <section className="section">
@@ -1044,11 +1121,13 @@ function WorkflowGraphCanvas({
   onStartConnection,
   onCompleteConnection,
   onOpenQuickAdd,
+  onCreateNode,
   onCreateConnectedNode,
   onCancelQuickAdd,
   onDeleteNode,
   onDeleteEdge,
-  onMoveNode
+  onMoveNode,
+  onOpenNodeModal
 }: {
   graph: WorkflowGraph;
   selectedNodeId: string;
@@ -1058,11 +1137,13 @@ function WorkflowGraphCanvas({
   onStartConnection: (connection: { sourceNodeId: string; sourceHandle: string } | null) => void;
   onCompleteConnection: (targetNodeId: string, connection?: { sourceNodeId: string; sourceHandle: string }) => void;
   onOpenQuickAdd: (position: WorkflowNode["position"], connection: { sourceNodeId: string; sourceHandle: string }) => void;
+  onCreateNode: (type: WorkflowNodeType, position: WorkflowNode["position"]) => void;
   onCreateConnectedNode: (type: WorkflowNodeType, position: WorkflowNode["position"], connection: { sourceNodeId: string; sourceHandle: string }) => void;
   onCancelQuickAdd: () => void;
   onDeleteNode: (nodeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
   onMoveNode: (nodeId: string, position: WorkflowNode["position"]) => void;
+  onOpenNodeModal: (nodeId: string) => void;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1115,6 +1196,11 @@ function WorkflowGraphCanvas({
     }
   }
 
+  function readNodeType(event: DragEvent<HTMLElement>): WorkflowNodeType | null {
+    const raw = event.dataTransfer.getData("application/x-workflow-node-type");
+    return isWorkflowPaletteNodeType(raw) ? raw : null;
+  }
+
   function canvasPoint(event: DragEvent<HTMLElement>): WorkflowNode["position"] {
     return canvasPointFromClient(event.clientX, event.clientY);
   }
@@ -1139,9 +1225,15 @@ function WorkflowGraphCanvas({
 
   function handleCanvasDrop(event: DragEvent<HTMLDivElement>) {
     const connection = readConnection(event);
-    if (!connection) return;
+    const nodeType = readNodeType(event);
+    if (!connection && !nodeType) return;
     event.preventDefault();
     event.stopPropagation();
+    if (nodeType) {
+      onCreateNode(nodeType, canvasPoint(event));
+      return;
+    }
+    if (!connection) return;
     setConnectionPreview(null);
     onOpenQuickAdd(canvasPoint(event), connection);
   }
@@ -1170,6 +1262,7 @@ function WorkflowGraphCanvas({
       data-testid="automation-node-canvas"
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/x-workflow-connection")) updateConnectionPreview(event);
+        if (event.dataTransfer.types.includes("application/x-workflow-node-type")) event.preventDefault();
       }}
       onDrop={handleCanvasDrop}
       ref={canvasRef}
@@ -1177,6 +1270,39 @@ function WorkflowGraphCanvas({
       <button className="workflow-fullscreen-button icon-button" type="button" onClick={() => setIsFullscreen((current) => !current)}>
         {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
+      {isFullscreen ? (
+        <div className="workflow-floating-palette" data-testid="workflow-floating-palette">
+          <strong>节点库</strong>
+          <span className="subtle">拖拽到画布添加节点</span>
+          {workflowGraphPaletteItems.map((item, index) => {
+            const Icon = item.icon;
+            return (
+              <button
+                className="workflow-floating-palette-item"
+                draggable
+                key={item.type}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCreateNode(item.type, { x: 120, y: 120 + index * 118 });
+                }}
+                onDragStart={(event) => {
+                  event.stopPropagation();
+                  event.dataTransfer.effectAllowed = "copy";
+                  event.dataTransfer.setData("application/x-workflow-node-type", item.type);
+                  event.dataTransfer.setData("text/plain", item.type);
+                }}
+                type="button"
+              >
+                <Icon size={16} />
+                <span>
+                  <strong>{workflowNodeTypeLabel(item.type)}</strong>
+                  <small>{item.description}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
       <div className="workflow-graph-stage">
       <svg className="workflow-graph-edges" aria-label="Workflow connections">
         {edgeViews.map(({ edge, path }) => (
@@ -1222,6 +1348,12 @@ function WorkflowGraphCanvas({
           data-testid={`workflow-node-${node.id}`}
           key={node.id}
           onClick={() => onSelectNode(node.id)}
+          onDoubleClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onSelectNode(node.id);
+            onOpenNodeModal(node.id);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
@@ -1603,6 +1735,10 @@ function quickAddNodeTypesForHandle(handle: string): WorkflowNodeType[] {
   if (handle === "false" || handle === "break" || handle === "default") return ["notify", "create_task", "end"];
   if (handle.startsWith("case:")) return ["send_email", "create_task", "update_deal", "notify", "end"];
   return ["if", "switch", "loop", "send_email", "create_task", "update_deal", "notify", "end"];
+}
+
+function isWorkflowPaletteNodeType(value: string): value is WorkflowNodeType {
+  return workflowGraphPaletteItems.some((item) => item.type === value);
 }
 
 function createGraphEdge(sourceNodeId: string, sourceHandle: string, targetNodeId: string): WorkflowEdge {

@@ -1888,6 +1888,13 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /workflow-node-delete-button/);
   assert.match(automation, /workflow-node-delete-\$\{node\.id\}/);
   assert.match(automation, /Delete workflow node/);
+  assert.match(automation, /onDoubleClick/);
+  assert.match(automation, /workflow-node-modal/);
+  assert.match(automation, /nodeDeleteCandidate/);
+  assert.match(automation, /confirmDeleteGraphNode/);
+  assert.match(automation, /workflow-floating-palette/);
+  assert.match(automation, /application\/x-workflow-node-type/);
+  assert.match(automation, /isWorkflowPaletteNodeType/);
   assert.match(automation, /onPointerDown/);
   assert.match(automation, /pointermove/);
   assert.match(automation, /workflow-node-output/);
@@ -1942,6 +1949,9 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(styles, /\.workflow-quick-add/);
   assert.match(styles, /\.workflow-node-drag-handle/);
   assert.match(styles, /\.workflow-node-delete-button/);
+  assert.match(styles, /\.workflow-node-modal/);
+  assert.match(styles, /\.workflow-floating-palette/);
+  assert.match(styles, /\.workflow-floating-palette-item/);
   assert.match(styles, /\.workflow-node-input::after/);
   assert.match(styles, /\.workflow-node-output/);
   assert.match(styles, /\.workflow-node-port/);
