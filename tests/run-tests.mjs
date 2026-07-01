@@ -377,6 +377,20 @@ await run("workflow schema allows graph drafts without action nodes", () => {
 });
 
 await run("workflow graph supports follow-up wait reply and draft email nodes", () => {
+  const generated = buildWorkflowDraftFromGoal({ goal: "7 天未回复的报价客户自动跟进", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" });
+  assert.equal(generated.workflow.graph.scope.mode, "record");
+  assert.equal(generated.workflow.graph.scope.recordId, "contact-lin");
+  assert.equal(generated.workflow.trigger.type, "email_event");
+  assert.equal(generated.workflow.trigger.event, "email.message.sent");
+  assert(generated.workflow.graph.nodes.some((node) => node.type === "wait_delay"));
+  assert(generated.workflow.graph.nodes.some((node) => node.type === "wait_reply"));
+  assert(generated.workflow.graph.nodes.some((node) => node.type === "create_email_draft"));
+  assert(generated.workflow.graph.nodes.some((node) => node.type === "create_task"));
+  assert(generated.workflow.graph.edges.some((edge) => edge.sourceNodeId === "wait-reply" && edge.sourceHandle === "not_replied" && edge.targetNodeId === "draft-follow-up-email"));
+  assert(generated.workflow.graph.edges.some((edge) => edge.sourceNodeId === "wait-reply" && edge.sourceHandle === "replied" && edge.targetNodeId === "end"));
+  assert.equal(generated.workflow.conditions.some((condition) => condition.type === "email_behavior"), true);
+  assert.equal(generated.workflow.actions.some((action) => action.type === "send_email" && action.config.mode === "draft"), true);
+
   const graph = workflowCreateSchema.parse({
     name: "Reply follow-up workflow",
     goal: "Wait for a reply and draft a follow-up when there is no response",

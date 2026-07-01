@@ -179,9 +179,10 @@ export function graphToLegacyWorkflow(graph: WorkflowGraph): Pick<WorkflowDefini
 
 export function workflowNodeToCondition(node: WorkflowNode): WorkflowCondition {
   const configured = isRecord(node.config.condition) ? node.config.condition : {};
+  const configuredType = isWorkflowConditionType(configured.type) ? configured.type : undefined;
   return {
     key: getString(configured.key) || node.id,
-    type: node.type === "switch" ? "switch" : node.type === "loop" ? "loop" : node.type === "wait_reply" ? "email_behavior" : "if",
+    type: node.type === "switch" ? "switch" : node.type === "loop" ? "loop" : node.type === "wait_reply" ? "email_behavior" : configuredType ?? "if",
     field: getString(node.config.field) || getString(configured.field) || (node.type === "wait_reply" ? "reply" : "recordId"),
     operator: isWorkflowOperator(node.config.operator) ? node.config.operator : isWorkflowOperator(configured.operator) ? configured.operator : "equals",
     value: node.type === "wait_reply" ? true : node.config.value ?? configured.value,
@@ -238,6 +239,7 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
   const goal = input.goal.trim();
   const lowerGoal = goal.toLowerCase();
   const recordTitle = input.recordTitle?.trim();
+  return buildWorkflowDraftFromGoalV2(input, goal, recordTitle);
   const targetObjectKey = input.objectKey ?? (lowerGoal.includes("deal") || lowerGoal.includes("close") || goal.includes("交易") || goal.includes("成交") ? "deals" : "contacts");
   const isEmailGoal = lowerGoal.includes("email") || goal.includes("邮件") || goal.includes("回复") || goal.includes("未回复");
   const isDealGoal = targetObjectKey === "deals" || lowerGoal.includes("close") || goal.includes("成交") || goal.includes("推进");
@@ -351,6 +353,310 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
   };
 }
 
+type WorkflowGenerationIntent = "no_reply_follow_up" | "email_intent" | "deal_close" | "dormant_reactivation" | "generic_follow_up";
+
+function buildWorkflowDraftFromGoalV2(input: WorkflowAiGenerationRequest, goal: string, recordTitle?: string): WorkflowAiGenerationResult {
+  const targetObjectKey = input.objectKey ?? inferGeneratedWorkflowObjectKey(goal);
+  const delayDays = inferGeneratedWorkflowDelayDays(goal);
+  const intent = inferGeneratedWorkflowIntent(goal, targetObjectKey);
+  const trigger = buildGeneratedWorkflowTrigger(intent, targetObjectKey);
+  const scope: WorkflowGraph["scope"] = {
+    mode: input.recordId ? "record" : targetObjectKey ? "object" : "global",
+    objectKey: targetObjectKey,
+    recordId: input.recordId,
+    recordTitle
+  };
+  const scopedTrigger = {
+    ...trigger,
+    config: {
+      ...(trigger.config ?? {}),
+      targetObjectKey,
+      ...(input.recordId ? { targetRecordId: input.recordId, targetRecordTitle: recordTitle } : {})
+    }
+  };
+  const graph = buildGeneratedWorkflowGraph({ goal, intent, trigger: scopedTrigger, scope, delayDays, recordTitle });
+  const legacy = graphToLegacyWorkflow(graph);
+  return {
+    workflow: {
+      name: recordTitle ? `${recordTitle} - ${goal.slice(0, 60)}` : goal.slice(0, 80) || "AI generated workflow",
+      description: recordTitle ? `Workflow Designer Agent generated a record-scoped draft for ${recordTitle}. Review before enabling.` : "Workflow Designer Agent generated a draft. Review before enabling.",
+      goal,
+      status: "draft",
+      trigger: legacy.trigger,
+      conditions: legacy.conditions,
+      actions: legacy.actions,
+      graph,
+      version: 1
+    },
+    explanation: {
+      goal,
+      triggerReason: describeGeneratedWorkflowTrigger(intent, scope, delayDays),
+      expectedOutcome: describeGeneratedWorkflowOutcome(intent, delayDays),
+      risks: describeGeneratedWorkflowRisks(intent)
+    }
+  };
+}
+
+function inferGeneratedWorkflowObjectKey(goal: string): string {
+  const lowerGoal = goal.toLowerCase();
+  if (lowerGoal.includes("deal") || lowerGoal.includes("close") || goal.includes("交易") || goal.includes("成交") || goal.includes("赢单")) return "deals";
+  if (lowerGoal.includes("company") || goal.includes("公司")) return "companies";
+  return "contacts";
+}
+
+function inferGeneratedWorkflowIntent(goal: string, objectKey: string): WorkflowGenerationIntent {
+  const lowerGoal = goal.toLowerCase();
+  const noReply = lowerGoal.includes("no reply") || lowerGoal.includes("not replied") || lowerGoal.includes("unreplied") || goal.includes("未回复") || goal.includes("没回复") || goal.includes("未回");
+  if (noReply) return "no_reply_follow_up";
+  if (lowerGoal.includes("email") || goal.includes("邮件") || goal.includes("回信") || goal.includes("回复")) return "email_intent";
+  if (objectKey === "deals" || lowerGoal.includes("close") || goal.includes("成交") || goal.includes("赢单") || goal.includes("推进")) return "deal_close";
+  if (lowerGoal.includes("dormant") || lowerGoal.includes("inactive") || goal.includes("沉睡") || goal.includes("长期未跟进") || goal.includes("未跟进")) return "dormant_reactivation";
+  return "generic_follow_up";
+}
+
+function inferGeneratedWorkflowDelayDays(goal: string): number {
+  const match = goal.match(/(\d+)\s*(day|days|天|日)/i);
+  if (!match) return 7;
+  const days = Number(match[1]);
+  return Number.isFinite(days) && days > 0 ? Math.min(days, 90) : 7;
+}
+
+function buildGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, objectKey: string): WorkflowDefinition["trigger"] {
+  if (intent === "no_reply_follow_up") return { type: "email_event", event: "email.message.sent" };
+  if (intent === "email_intent") return { type: "email_event", event: "email.message.received" };
+  if (intent === "dormant_reactivation") return { type: "schedule", event: "schedule.daily", schedule: { mode: "daily", dailyAt: "09:00" } };
+  return { type: "crm_event", event: "record.updated", objectKey };
+}
+
+function buildGeneratedWorkflowGraph(input: {
+  goal: string;
+  intent: WorkflowGenerationIntent;
+  trigger: WorkflowDefinition["trigger"];
+  scope: WorkflowGraph["scope"];
+  delayDays: number;
+  recordTitle?: string;
+}): WorkflowGraph {
+  if (input.intent === "no_reply_follow_up") return buildGeneratedNoReplyGraph(input);
+  if (input.intent === "email_intent") return buildGeneratedEmailIntentGraph(input);
+  if (input.intent === "deal_close") return buildGeneratedDealCloseGraph(input);
+  if (input.intent === "dormant_reactivation") return buildGeneratedDormantGraph(input);
+  return buildGeneratedGenericGraph(input);
+}
+
+function generatedStartNode(trigger: WorkflowDefinition["trigger"], scope: WorkflowGraph["scope"], recordTitle?: string): WorkflowNode {
+  return {
+    id: "start",
+    type: "start",
+    label: scope.mode === "record" ? `Start: ${recordTitle || scope.recordTitle || "selected record"}` : "Start",
+    position: { x: 40, y: 160 },
+    config: { trigger }
+  };
+}
+
+function generatedScopeNode(scope: WorkflowGraph["scope"], position: WorkflowNode["position"]): WorkflowNode | null {
+  if (scope.mode !== "record" || !scope.recordId) return null;
+  return {
+    id: "scope-record",
+    type: "if",
+    label: "IF Selected Record",
+    position,
+    config: {
+      condition: {
+        key: "target-record",
+        type: "if",
+        field: "recordId",
+        operator: "equals",
+        value: scope.recordId,
+        config: { targetRecordTitle: scope.recordTitle }
+      }
+    }
+  };
+}
+
+function generatedTaskConfig(goal: string, dueInDays: number, priority: "normal" | "high"): Record<string, unknown> {
+  return {
+    activityType: "task",
+    title: priority === "high" ? "High priority follow-up" : "Follow up customer",
+    body: goal,
+    dueInDays,
+    assigneeMode: "record_owner",
+    priority,
+    preventDuplicate: true
+  };
+}
+
+function generatedEmailDraftConfig(goal: string): Record<string, unknown> {
+  return {
+    mode: "draft",
+    to: ["{{record.data.email}}"],
+    subject: "Follow up {{record.title}}",
+    bodyText: `Draft a concise follow-up based on this workflow goal: ${goal}. Use CRM context, recent communication, and knowledge base. Do not include a signature or source footer.`,
+    aiAssisted: true
+  };
+}
+
+function generatedEdge(sourceNodeId: string, sourceHandle: string, targetNodeId: string): WorkflowEdge {
+  return {
+    id: `edge:${sourceNodeId}:${sourceHandle}:${targetNodeId}`,
+    sourceNodeId,
+    sourceHandle,
+    targetNodeId
+  };
+}
+
+function compactNodes(nodes: Array<WorkflowNode | null>): WorkflowNode[] {
+  return nodes.filter((node): node is WorkflowNode => Boolean(node));
+}
+
+function generatedFirstNodeAfterStart(scope: WorkflowGraph["scope"], fallbackNodeId: string): string {
+  return scope.mode === "record" ? "scope-record" : fallbackNodeId;
+}
+
+function generatedScopeEdges(scope: WorkflowGraph["scope"], targetNodeId: string): WorkflowEdge[] {
+  return scope.mode === "record" ? [generatedEdge("scope-record", "true", targetNodeId), generatedEdge("scope-record", "false", "end")] : [];
+}
+
+function buildGeneratedNoReplyGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; delayDays: number; recordTitle?: string }): WorkflowGraph {
+  const nodes = compactNodes([
+    generatedStartNode(input.trigger, input.scope, input.recordTitle),
+    generatedScopeNode(input.scope, { x: 300, y: 160 }),
+    { id: "wait-delay", type: "wait_delay", label: `Wait ${input.delayDays} days`, position: { x: 560, y: 160 }, config: { delayAmount: input.delayDays, delayUnit: "days" } },
+    { id: "wait-reply", type: "wait_reply", label: "Wait for Reply", position: { x: 820, y: 160 }, config: { lookbackDays: input.delayDays, replySource: "email" } },
+    { id: "draft-follow-up-email", type: "create_email_draft", label: "Draft Follow-up Email", position: { x: 1080, y: 60 }, config: generatedEmailDraftConfig(input.goal) },
+    { id: "create-follow-up-task", type: "create_task", label: "Create Follow-up Task", position: { x: 1080, y: 260 }, config: generatedTaskConfig(input.goal, 1, "high") },
+    { id: "end", type: "end", label: "End", position: { x: 1360, y: 160 }, config: {} }
+  ]);
+  return {
+    scope: input.scope,
+    nodes,
+    edges: [
+      generatedEdge("start", "main", generatedFirstNodeAfterStart(input.scope, "wait-delay")),
+      ...generatedScopeEdges(input.scope, "wait-delay"),
+      generatedEdge("wait-delay", "after_delay", "wait-reply"),
+      generatedEdge("wait-reply", "replied", "end"),
+      generatedEdge("wait-reply", "not_replied", "draft-follow-up-email"),
+      generatedEdge("draft-follow-up-email", "main", "create-follow-up-task"),
+      generatedEdge("create-follow-up-task", "main", "end")
+    ]
+  };
+}
+
+function buildGeneratedEmailIntentGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; recordTitle?: string }): WorkflowGraph {
+  const nodes = compactNodes([
+    generatedStartNode(input.trigger, input.scope, input.recordTitle),
+    generatedScopeNode(input.scope, { x: 300, y: 160 }),
+    { id: "ai-high-intent", type: "if", label: "IF High Intent", position: { x: 560, y: 160 }, config: { condition: { key: "ai-high-intent", type: "ai", prompt: "Judge whether the email shows buying intent, urgency, pricing interest, quote intent, demo request, or close risk.", operator: "equals", value: true } } },
+    { id: "create-sales-task", type: "create_task", label: "Create Sales Task", position: { x: 820, y: 60 }, config: generatedTaskConfig(input.goal, 1, "high") },
+    { id: "draft-reply-email", type: "create_email_draft", label: "Draft Reply Email", position: { x: 1080, y: 60 }, config: generatedEmailDraftConfig(input.goal) },
+    { id: "end", type: "end", label: "End", position: { x: 1360, y: 160 }, config: {} }
+  ]);
+  return {
+    scope: input.scope,
+    nodes,
+    edges: [
+      generatedEdge("start", "main", generatedFirstNodeAfterStart(input.scope, "ai-high-intent")),
+      ...generatedScopeEdges(input.scope, "ai-high-intent"),
+      generatedEdge("ai-high-intent", "true", "create-sales-task"),
+      generatedEdge("ai-high-intent", "false", "end"),
+      generatedEdge("create-sales-task", "main", "draft-reply-email"),
+      generatedEdge("draft-reply-email", "main", "end")
+    ]
+  };
+}
+
+function buildGeneratedDealCloseGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; recordTitle?: string }): WorkflowGraph {
+  const nodes = compactNodes([
+    generatedStartNode(input.trigger, input.scope, input.recordTitle),
+    generatedScopeNode(input.scope, { x: 300, y: 160 }),
+    { id: "if-deal-stage", type: "if", label: "IF Deal Has Stage", position: { x: 560, y: 160 }, config: { condition: { key: "deal-stage-exists", type: "field", field: "stageKey", operator: "exists", value: true } } },
+    { id: "create-close-task", type: "create_task", label: "Create Close Task", position: { x: 820, y: 80 }, config: generatedTaskConfig(input.goal, 1, "high") },
+    { id: "notify-owner", type: "notify", label: "Notify Owner", position: { x: 1080, y: 80 }, config: { title: "Deal close follow-up", content: input.goal, channel: "in_app" } },
+    { id: "end", type: "end", label: "End", position: { x: 1340, y: 160 }, config: {} }
+  ]);
+  return {
+    scope: input.scope,
+    nodes,
+    edges: [
+      generatedEdge("start", "main", generatedFirstNodeAfterStart(input.scope, "if-deal-stage")),
+      ...generatedScopeEdges(input.scope, "if-deal-stage"),
+      generatedEdge("if-deal-stage", "true", "create-close-task"),
+      generatedEdge("if-deal-stage", "false", "end"),
+      generatedEdge("create-close-task", "main", "notify-owner"),
+      generatedEdge("notify-owner", "main", "end")
+    ]
+  };
+}
+
+function buildGeneratedDormantGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; recordTitle?: string }): WorkflowGraph {
+  const nodes = compactNodes([
+    generatedStartNode(input.trigger, input.scope, input.recordTitle),
+    generatedScopeNode(input.scope, { x: 300, y: 160 }),
+    { id: "if-owner-exists", type: "if", label: "IF Has Owner", position: { x: 560, y: 160 }, config: { condition: { key: "owner-exists", type: "field", field: "ownerId", operator: "exists", value: true } } },
+    { id: "draft-reactivation-email", type: "create_email_draft", label: "Draft Reactivation Email", position: { x: 820, y: 60 }, config: generatedEmailDraftConfig(input.goal) },
+    { id: "create-reactivation-task", type: "create_task", label: "Create Reactivation Task", position: { x: 820, y: 260 }, config: generatedTaskConfig(input.goal, 2, "normal") },
+    { id: "end", type: "end", label: "End", position: { x: 1100, y: 160 }, config: {} }
+  ]);
+  return {
+    scope: input.scope,
+    nodes,
+    edges: [
+      generatedEdge("start", "main", generatedFirstNodeAfterStart(input.scope, "if-owner-exists")),
+      ...generatedScopeEdges(input.scope, "if-owner-exists"),
+      generatedEdge("if-owner-exists", "true", "draft-reactivation-email"),
+      generatedEdge("if-owner-exists", "false", "end"),
+      generatedEdge("draft-reactivation-email", "main", "create-reactivation-task"),
+      generatedEdge("create-reactivation-task", "main", "end")
+    ]
+  };
+}
+
+function buildGeneratedGenericGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; recordTitle?: string }): WorkflowGraph {
+  const nodes = compactNodes([
+    generatedStartNode(input.trigger, input.scope, input.recordTitle),
+    generatedScopeNode(input.scope, { x: 300, y: 160 }),
+    { id: "if-owner-exists", type: "if", label: "IF Has Owner", position: { x: 560, y: 160 }, config: { condition: { key: "owner-exists", type: "field", field: "ownerId", operator: "exists", value: true } } },
+    { id: "create-follow-up-task", type: "create_task", label: "Create Follow-up Task", position: { x: 820, y: 120 }, config: generatedTaskConfig(input.goal, 2, "normal") },
+    { id: "end", type: "end", label: "End", position: { x: 1080, y: 160 }, config: {} }
+  ]);
+  return {
+    scope: input.scope,
+    nodes,
+    edges: [
+      generatedEdge("start", "main", generatedFirstNodeAfterStart(input.scope, "if-owner-exists")),
+      ...generatedScopeEdges(input.scope, "if-owner-exists"),
+      generatedEdge("if-owner-exists", "true", "create-follow-up-task"),
+      generatedEdge("if-owner-exists", "false", "end"),
+      generatedEdge("create-follow-up-task", "main", "end")
+    ]
+  };
+}
+
+function describeGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, scope: WorkflowGraph["scope"], delayDays: number): string {
+  const scopeText = scope.mode === "record" ? `This workflow is scoped to only ${scope.recordTitle || "the selected record"}.` : scope.mode === "object" ? `This workflow applies to ${scope.objectKey}.` : "This workflow is global.";
+  if (intent === "no_reply_follow_up") return `${scopeText} It starts from sent email activity, waits ${delayDays} day(s), then checks whether a reply arrived before drafting follow-up.`;
+  if (intent === "email_intent") return `${scopeText} It starts when an email is received and uses an AI condition to classify buying intent before creating actions.`;
+  if (intent === "deal_close") return `${scopeText} It starts on deal updates and only continues when the deal has a stage, then creates close follow-up work.`;
+  if (intent === "dormant_reactivation") return `${scopeText} It runs on a daily schedule to prepare reactivation follow-up work.`;
+  return `${scopeText} It starts on CRM record updates and creates a guarded follow-up task.`;
+}
+
+function describeGeneratedWorkflowOutcome(intent: WorkflowGenerationIntent, delayDays: number): string {
+  if (intent === "no_reply_follow_up") return `After ${delayDays} day(s), replied paths end quietly; not-replied paths create an AI-assisted email draft and a follow-up task.`;
+  if (intent === "email_intent") return "High-intent inbound emails create a sales task and AI-assisted reply draft; low-intent paths stop.";
+  if (intent === "deal_close") return "Qualified deal changes create a close task and notify the owner without automatically changing the deal stage.";
+  if (intent === "dormant_reactivation") return "Dormant customer paths create a reactivation email draft and a task for the owner.";
+  return "The workflow creates one deduplicated follow-up task for the record owner.";
+}
+
+function describeGeneratedWorkflowRisks(intent: WorkflowGenerationIntent): string[] {
+  const common = "Generated workflow is saved as draft and must be reviewed before enabling.";
+  if (intent === "no_reply_follow_up" || intent === "email_intent" || intent === "dormant_reactivation") {
+    return [common, "Email-related nodes create drafts by default; they do not send directly.", "Wait nodes describe the intended timing path; production delayed resume depends on the background scheduler."];
+  }
+  if (intent === "deal_close") return [common, "The workflow creates tasks and notifications only; it does not automatically mark deals won or lost."];
+  return [common, "The workflow avoids direct critical CRM field updates."];
+}
+
 export function buildDefaultWorkflowGraph(trigger: WorkflowDefinition["trigger"], conditions: WorkflowCondition[], actions: WorkflowAction[], scope?: WorkflowGraph["scope"]): WorkflowGraph {
   const graph = legacyWorkflowToGraph({ trigger: { ...trigger, config: { ...(trigger.config ?? {}), ...(scope ?? {}) } }, conditions, actions });
   return scope ? { ...graph, scope } : graph;
@@ -446,10 +752,11 @@ function normalizeWorkflowScope(value: unknown, trigger: WorkflowDefinition["tri
 function normalizeTriggerFromStart(start: WorkflowNode | undefined, scope: WorkflowGraph["scope"]): WorkflowDefinition["trigger"] {
   const configuredTrigger = isRecord(start?.config.trigger) ? start?.config.trigger : undefined;
   if (configuredTrigger) {
+    const triggerType = configuredTrigger.type === "email_event" || configuredTrigger.type === "task_event" || configuredTrigger.type === "schedule" || configuredTrigger.type === "manual" ? configuredTrigger.type : "crm_event";
     return {
-      type: configuredTrigger.type === "email_event" || configuredTrigger.type === "task_event" || configuredTrigger.type === "schedule" || configuredTrigger.type === "manual" ? configuredTrigger.type : "crm_event",
+      type: triggerType,
       event: getString(configuredTrigger.event) || (scope.mode === "global" ? "manual.run" : "record.updated"),
-      objectKey: getString(configuredTrigger.objectKey) || scope.objectKey,
+      objectKey: getString(configuredTrigger.objectKey) || (triggerType === "email_event" ? undefined : scope.objectKey),
       config: { ...(isRecord(configuredTrigger.config) ? configuredTrigger.config : {}), ...scope },
       schedule: isRecord(configuredTrigger.schedule) ? configuredTrigger.schedule as WorkflowDefinition["trigger"]["schedule"] : undefined
     };
@@ -475,6 +782,10 @@ function isWorkflowNodeType(value: unknown): value is WorkflowNode["type"] {
 
 function isWorkflowOperator(value: unknown): value is WorkflowCondition["operator"] {
   return value === "equals" || value === "not_equals" || value === "contains" || value === "not_contains" || value === "gt" || value === "gte" || value === "lt" || value === "lte" || value === "exists" || value === "not_exists";
+}
+
+function isWorkflowConditionType(value: unknown): value is WorkflowCondition["type"] {
+  return value === "field" || value === "activity" || value === "email_behavior" || value === "ai" || value === "if" || value === "switch" || value === "loop";
 }
 
 function conditionLabel(condition: WorkflowCondition): string {
