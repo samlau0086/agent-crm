@@ -77,6 +77,10 @@ export function buildWorkflowIdempotencyKey(workflow: WorkflowDefinition, event:
   return [workflow.id, event, sourceId, eventVersion].filter(Boolean).join(":");
 }
 
+export function buildWorkflowTestIdempotencyKey(workflow: WorkflowDefinition, event: string): string {
+  return [workflow.id, event, "test", Date.now().toString(36), Math.random().toString(36).slice(2, 10)].join(":");
+}
+
 export function evaluateWorkflowConditions(workflow: WorkflowDefinition, data: Record<string, unknown>, record?: CrmRecord): WorkflowRun["conditionResults"] {
   return workflow.conditions.map((condition) => {
     const actualValue = readConditionValue(condition, data, record);

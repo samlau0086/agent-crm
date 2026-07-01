@@ -83,6 +83,7 @@ import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quo
 import {
   buildWorkflowDraftFromGoal,
   buildWorkflowIdempotencyKey,
+  buildWorkflowTestIdempotencyKey,
   didWorkflowConditionsPass,
   evaluateWorkflowCondition,
   evaluateWorkflowConditions,
@@ -1677,7 +1678,9 @@ export class CrmStore {
     data: Record<string, unknown>,
     options: { idempotencyKey?: string; test?: boolean } = {}
   ): WorkflowRun {
-    const idempotencyKey = options.idempotencyKey ?? buildWorkflowIdempotencyKey(workflow, event, data);
+    const idempotencyKey = options.test
+      ? buildWorkflowTestIdempotencyKey(workflow, event)
+      : options.idempotencyKey ?? buildWorkflowIdempotencyKey(workflow, event, data);
     const existing = !options.test
       ? (this.data.workflowRuns ?? []).find((run) => run.workspaceId === context.workspaceId && run.workflowId === workflow.id && run.idempotencyKey === idempotencyKey)
       : undefined;
@@ -1700,7 +1703,7 @@ export class CrmStore {
         status,
         triggerEvent: event,
         triggerData: clone(data),
-        idempotencyKey: options.test ? undefined : idempotencyKey,
+        idempotencyKey,
         conditionResults: graphResults.conditionResults,
         actionResults: graphResults.actionResults,
         nodeResults: graphResults.nodeResults,
@@ -1747,7 +1750,7 @@ export class CrmStore {
       status,
       triggerEvent: event,
       triggerData: clone(data),
-      idempotencyKey: options.test ? undefined : idempotencyKey,
+      idempotencyKey,
       conditionResults,
       actionResults,
       startedAt,

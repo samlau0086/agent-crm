@@ -441,6 +441,26 @@ await run("workflow creates low-risk follow-up activity and is idempotent", () =
   assert(store.listActivities(context, contact.id).some((activity) => activity.title.includes("Workflow task")));
 });
 
+await run("workflow test runs always persist unique idempotency keys", () => {
+  const store = new CrmStore(seedData);
+  const context = store.getContext();
+  const contact = store.listRecords(context, "contacts")[0];
+  const workflow = store.createWorkflow(context, {
+    name: "Testable follow up",
+    goal: "Allow repeated manual tests",
+    status: "draft",
+    trigger: { type: "manual", event: "manual.run", objectKey: "contacts" },
+    conditions: [],
+    actions: [{ key: "create-task", type: "create_activity", name: "Create task", config: { activityType: "task", title: "Test task" } }]
+  });
+  const firstRun = store.testWorkflow(context, workflow.id, { objectKey: "contacts", recordId: contact.id, title: contact.title });
+  const secondRun = store.testWorkflow(context, workflow.id, { objectKey: "contacts", recordId: contact.id, title: contact.title });
+  assert.match(firstRun.idempotencyKey ?? "", /^.+:manual\.run:test:/);
+  assert.match(secondRun.idempotencyKey ?? "", /^.+:manual\.run:test:/);
+  assert.notEqual(firstRun.idempotencyKey, secondRun.idempotencyKey);
+  assert.equal(store.listWorkflowRuns(context, workflow.id).length, 2);
+});
+
 await run("workflow graph routes branches and records node results", () => {
   const store = new CrmStore(seedData);
   const context = store.getContext();

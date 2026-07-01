@@ -102,6 +102,7 @@ import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quo
 import {
   buildWorkflowDraftFromGoal,
   buildWorkflowIdempotencyKey,
+  buildWorkflowTestIdempotencyKey,
   didWorkflowConditionsPass,
   evaluateWorkflowCondition,
   evaluateWorkflowConditions,
@@ -5527,7 +5528,9 @@ export class PrismaCrmRepository {
     if (!options.test && !workflowMatchesEvent(workflow, event, data)) {
       return undefined;
     }
-    const idempotencyKey = options.idempotencyKey ?? buildWorkflowIdempotencyKey(workflow, event, data);
+    const idempotencyKey = options.test
+      ? buildWorkflowTestIdempotencyKey(workflow, event)
+      : options.idempotencyKey ?? buildWorkflowIdempotencyKey(workflow, event, data);
     if (!options.test && idempotencyKey) {
       const existing = await this.workflowTables().workflowRun.findFirst({ where: { workspaceId: context.workspaceId, workflowId: workflow.id, idempotencyKey } });
       if (existing) {
@@ -5544,7 +5547,7 @@ export class PrismaCrmRepository {
           status: "running",
           triggerEvent: event,
           triggerData: toJsonObject(data),
-          idempotencyKey: options.test ? undefined : idempotencyKey
+          idempotencyKey
         }
       })
     );
