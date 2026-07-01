@@ -2051,6 +2051,7 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /workflow-node-drag-handle/);
   assert.match(automation, /workflow-node-delete-button/);
   assert.match(automation, /workflow-node-delete-\$\{node\.id\}/);
+  assert.match(automation, /onPointerDown=\{\(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*onClick=\{\(event\) => \{[\s\S]*onDeleteNode\(node\.id\)/);
   assert.match(automation, /onPointerDown=\{\(event\) => startNodeMove\(event, node\)\}/);
   assert.match(automation, /shouldIgnoreNodeMove/);
   assert.match(automation, /data-no-node-drag="true"/);
@@ -2092,6 +2093,9 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /sourceHandle/);
   assert.match(automation, /continue/);
   assert.match(automation, /break/);
+  assert.match(automation, /workflow-loop-help/);
+  assert.match(automation, /workflow-loop-port-guide/);
+  assert.match(automation, /Connect the last node back to this Loop/);
   assert.match(automation, /wait_delay/);
   assert.match(automation, /wait_reply/);
   assert.match(automation, /create_email_draft/);
@@ -2138,7 +2142,10 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(styles, /\.workflow-quick-add/);
   assert.match(styles, /\.workflow-node-drag-handle/);
   assert.match(styles, /\.workflow-node-delete-button/);
+  assert.match(styles, /z-index:\s*8/);
   assert.match(styles, /\.workflow-node-modal/);
+  assert.match(styles, /\.workflow-node-help/);
+  assert.match(styles, /\.workflow-loop-port-guide/);
   assert.match(styles, /\.workflow-node-dialog-backdrop/);
   assert.match(styles, /\.app-dialog-backdrop/);
   assert.match(styles, /\.workflow-floating-palette/);

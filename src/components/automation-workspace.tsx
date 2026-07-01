@@ -130,7 +130,7 @@ const actionTemplates: WorkflowAction[] = [
 const workflowGraphPaletteItems: WorkflowGraphPaletteItem[] = [
   { type: "if", icon: ShieldCheck, description: "true / false" },
   { type: "switch", icon: Split, description: "case / default" },
-  { type: "loop", icon: Repeat2, description: "continue / break" },
+  { type: "loop", icon: Repeat2, description: "for each item" },
   { type: "wait_delay", icon: CalendarClock, description: "wait then continue" },
   { type: "wait_reply", icon: Mail, description: "replied / not replied" },
   { type: "create_email_draft", icon: Mail, description: "draft for review" },
@@ -447,6 +447,9 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       showToast("info", "Start 和 End 节点不能删除。");
       return;
     }
+    setPendingConnection(null);
+    setQuickAdd(null);
+    setNodeModalId("");
     setNodeDeleteCandidate(node);
   }
 
@@ -748,6 +751,9 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
           <div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="workflow-node-delete-title">
             <h3 id="workflow-node-delete-title">删除节点</h3>
             <p>确定删除节点“{nodeDeleteCandidate.label}”？相关连接线也会一并删除。</p>
+            <p className="subtle">
+              Related edges: {(draft.graph ?? graph).edges.filter((edge) => edge.sourceNodeId === nodeDeleteCandidate.id || edge.targetNodeId === nodeDeleteCandidate.id).length}
+            </p>
             <div className="dialog-actions">
               <button className="secondary-button" type="button" onClick={() => setNodeDeleteCandidate(null)}>
                 取消
@@ -1487,6 +1493,10 @@ function WorkflowGraphCanvas({
               className="workflow-node-delete-button"
               data-no-node-drag="true"
               data-testid={`workflow-node-delete-${node.id}`}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1705,6 +1715,12 @@ function WorkflowGraphInspector({
 
       {node.type === "loop" ? (
         <>
+          <div className="workflow-node-help" data-testid="workflow-loop-help">
+            <strong>Loop usage</strong>
+            <span>Use this node when one workflow needs to process a list, such as contactMethods, quote line items, or a prepared items array.</span>
+            <span><b>continue</b>: run the branch for the current item. Connect the last node back to this Loop if you need the next item.</span>
+            <span><b>break</b>: exit the loop when there are no more items or the maximum iteration limit is reached.</span>
+          </div>
           <label>
             <span className="subtle">循环集合字段</span>
             <input className="input" value={String(config.collectionField ?? config.field ?? "items")} onChange={(event) => updateConfig("collectionField", event.target.value)} />
@@ -1713,6 +1729,12 @@ function WorkflowGraphInspector({
             <span className="subtle">最大循环次数</span>
             <input className="input" type="number" min={1} max={100} value={String(config.maxIterations ?? 50)} onChange={(event) => updateConfig("maxIterations", Number(event.target.value))} />
           </label>
+          <div className="workflow-loop-port-guide" data-testid="workflow-loop-port-guide">
+            <span className="badge">continue</span>
+            <span>Connect to the actions that run for each item.</span>
+            <span className="badge">break</span>
+            <span>Connect to the next step after the loop, usually Notify or End.</span>
+          </div>
         </>
       ) : null}
 
@@ -1968,7 +1990,7 @@ function defaultGraphNodeConfig(type: WorkflowNodeType, config: Record<string, u
   if (Object.keys(config).length > 0) return config;
   if (type === "if") return { field: "recordId", operator: "equals", value: "" };
   if (type === "switch") return { field: "stageKey", cases: ["new", "qualified"], operator: "exists" };
-  if (type === "loop") return { collectionField: "items", maxIterations: 50 };
+  if (type === "loop") return { collectionField: "items", maxIterations: 50, continueLabel: "Process current item", breakLabel: "Exit loop" };
   if (type === "wait_delay") return { delayAmount: 2, delayUnit: "days" };
   if (type === "wait_reply") return { lookbackDays: 7, replySource: "email" };
   if (type === "create_email_draft") return { mode: "draft", to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "", aiAssisted: true };
