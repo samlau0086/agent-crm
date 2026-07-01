@@ -3237,8 +3237,8 @@ button {
 
 .workflow-graph-canvas {
   position: relative;
-  min-height: min(78vh, 900px);
-  height: min(78vh, 900px);
+  min-height: min(82vh, 980px);
+  height: min(82vh, 980px);
   min-width: 0;
   overflow: auto;
   padding: 18px;
@@ -3251,15 +3251,15 @@ button {
 
 .workflow-graph-stage {
   position: relative;
-  width: 2600px;
-  height: 1500px;
+  width: 4200px;
+  height: 2400px;
 }
 
 .workflow-graph-edges {
   position: absolute;
   inset: 0;
-  width: 2600px;
-  height: 1500px;
+  width: 4200px;
+  height: 2400px;
   pointer-events: none;
 }
 
@@ -3272,19 +3272,29 @@ button {
 .workflow-graph-node {
   position: absolute;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
+  grid-template-columns: 26px minmax(0, 1fr) 86px;
+  grid-template-rows: auto auto;
   gap: 6px 10px;
-  width: 230px;
-  min-height: 96px;
-  padding: 12px;
+  width: 270px;
+  min-height: 98px;
+  padding: 12px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
   text-align: left;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.workflow-node-drag-handle {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  color: var(--muted);
   cursor: grab;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .workflow-graph-node.selected {
@@ -3299,54 +3309,87 @@ button {
 }
 
 .workflow-node-input {
-  grid-row: 1 / span 3;
+  position: relative;
+  grid-row: 1 / span 2;
   align-self: center;
-  justify-self: center;
-  width: 24px;
-  min-height: 24px;
-  border: 1px solid var(--line);
+  justify-self: start;
+  width: 22px;
+  min-height: 22px;
+  border: 2px solid rgba(100, 116, 139, 0.6);
   border-radius: 999px;
-  color: var(--muted);
-  font-size: 11px;
+  color: transparent;
+  font-size: 0;
   text-align: center;
-  line-height: 22px;
+  line-height: 18px;
   background: var(--surface-strong);
+  cursor: crosshair;
+}
+
+.workflow-node-input::after {
+  content: "in";
+  position: absolute;
+  margin-left: 26px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 20px;
+  text-transform: uppercase;
 }
 
 .workflow-node-title {
+  grid-column: 2;
   font-weight: 800;
 }
 
 .workflow-node-type {
+  grid-column: 2;
   color: var(--muted);
   font-size: 12px;
 }
 
 .workflow-node-outputs {
-  display: flex;
-  flex-wrap: wrap;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  display: grid;
   gap: 6px;
+  align-content: center;
+  justify-items: end;
+}
+
+.workflow-node-output {
+  display: grid;
+  grid-template-columns: auto 14px auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
 }
 
 .workflow-node-port {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid rgba(37, 99, 235, 0.24);
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(37, 99, 235, 0.65);
   border-radius: 999px;
   color: #2563eb;
-  font-size: 11px;
-  font-weight: 700;
   background: rgba(37, 99, 235, 0.08);
   cursor: crosshair;
   user-select: none;
 }
 
-.workflow-node-port.active {
+.workflow-node-output.active .workflow-node-port {
   color: #0f766e;
   border-color: rgba(15, 118, 110, 0.45);
   background: rgba(20, 184, 166, 0.18);
+}
+
+.workflow-node-output-handle {
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
 }
 
 .workflow-edge-list {

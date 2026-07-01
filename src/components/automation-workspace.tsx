@@ -1062,7 +1062,7 @@ function WorkflowGraphCanvas({
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
 
-  function handleDragEnd(event: DragEvent<HTMLButtonElement>, node: WorkflowNode) {
+  function handleDragEnd(event: DragEvent<HTMLElement>, node: WorkflowNode) {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     onMoveNode(node.id, {
@@ -1116,7 +1116,7 @@ function WorkflowGraphCanvas({
           const source = nodeById.get(edge.sourceNodeId);
           const target = nodeById.get(edge.targetNodeId);
           if (!source || !target) return null;
-          const startX = source.position.x + 230;
+          const startX = source.position.x + 270;
           const startY = source.position.y + 50 + outputHandleOffset(edge.sourceHandle);
           const endX = target.position.x;
           const endY = target.position.y + 50;
@@ -1132,18 +1132,39 @@ function WorkflowGraphCanvas({
       </svg>
 
       {graph.nodes.map((node) => (
-        <button
+        <div
           className={`workflow-graph-node ${selectedNodeId === node.id ? "selected" : ""} ${node.type}`}
           data-testid={`workflow-node-${node.id}`}
-          draggable
           key={node.id}
           onClick={() => onSelectNode(node.id)}
-          onDragEnd={(event) => handleDragEnd(event, node)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelectNode(node.id);
+            }
+          }}
+          role="button"
           style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
-          type="button"
+          tabIndex={0}
         >
           <span
+            aria-label="Move node"
+            className="workflow-node-drag-handle"
+            draggable
+            onClick={(event) => event.stopPropagation()}
+            onDragEnd={(event) => handleDragEnd(event, node)}
+            onDragStart={(event) => {
+              event.stopPropagation();
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", `move:${node.id}`);
+            }}
+            title="拖动移动节点"
+          >
+            ⋮⋮
+          </span>
+          <span
             className="workflow-node-input"
+            data-testid={`workflow-input-${node.id}`}
             onClick={(event) => { event.stopPropagation(); onCompleteConnection(node.id); }}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
@@ -1161,28 +1182,32 @@ function WorkflowGraphCanvas({
           <span className="workflow-node-outputs">
             {defaultGraphOutputHandles(node.type).map((handle) => (
               <span
-                className={`workflow-node-port ${pendingConnection?.sourceNodeId === node.id && pendingConnection.sourceHandle === handle ? "active" : ""}`}
+                className={`workflow-node-output ${pendingConnection?.sourceNodeId === node.id && pendingConnection.sourceHandle === handle ? "active" : ""}`}
                 data-testid={`workflow-port-${node.id}-${handle}`}
-                draggable
                 key={handle}
                 onClick={(event) => {
                   event.stopPropagation();
                   onStartConnection({ sourceNodeId: node.id, sourceHandle: handle });
                 }}
-                onDragStart={(event) => {
-                  const connection = { sourceNodeId: node.id, sourceHandle: handle };
-                  event.stopPropagation();
-                  event.dataTransfer.effectAllowed = "copyMove";
-                  event.dataTransfer.setData("application/x-workflow-connection", JSON.stringify(connection));
-                  event.dataTransfer.setData("text/plain", `${node.id}:${handle}`);
-                  onStartConnection(connection);
-                }}
               >
-                {handle}
+                <span className="workflow-node-output-label">out</span>
+                <span
+                  className="workflow-node-port"
+                  draggable
+                  onDragStart={(event) => {
+                    const connection = { sourceNodeId: node.id, sourceHandle: handle };
+                    event.stopPropagation();
+                    event.dataTransfer.effectAllowed = "copyMove";
+                    event.dataTransfer.setData("application/x-workflow-connection", JSON.stringify(connection));
+                    event.dataTransfer.setData("text/plain", `${node.id}:${handle}`);
+                    onStartConnection(connection);
+                  }}
+                />
+                <span className="workflow-node-output-handle">{handle}</span>
               </span>
             ))}
           </span>
-        </button>
+        </div>
       ))}
 
       {quickAdd ? (

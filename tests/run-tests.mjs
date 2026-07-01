@@ -1884,6 +1884,9 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /WorkflowGraphCanvas/);
   assert.match(automation, /WorkflowGraphInspector/);
   assert.match(automation, /workflow-graph-node/);
+  assert.match(automation, /workflow-node-drag-handle/);
+  assert.match(automation, /workflow-node-output/);
+  assert.match(automation, /workflow-input-\$\{node\.id\}/);
   assert.match(automation, /workflow-port-\$\{node\.id\}-\$\{handle\}/);
   assert.match(automation, /application\/x-workflow-connection/);
   assert.match(automation, /workflow-quick-add/);
@@ -1917,7 +1920,11 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(styles, /\.workflow-graph-canvas/);
   assert.match(styles, /\.workflow-graph-stage/);
   assert.match(styles, /\.workflow-quick-add/);
+  assert.match(styles, /\.workflow-node-drag-handle/);
+  assert.match(styles, /\.workflow-node-input::after/);
+  assert.match(styles, /\.workflow-node-output/);
   assert.match(styles, /\.workflow-node-port/);
+  assert.match(styles, /\.workflow-node-output\.active \.workflow-node-port/);
   assert.match(styles, /\.workflow-graph-node\.selected/);
   assert.match(styles, /\.record-workflow-list/);
   assert.doesNotMatch(automation, /window\.(alert|prompt|confirm)/);
