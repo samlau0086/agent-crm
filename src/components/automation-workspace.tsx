@@ -1124,6 +1124,23 @@ function WorkflowGraphCanvas({
     onOpenQuickAdd(canvasPoint(event), connection);
   }
 
+  const edgeViews = graph.edges.flatMap((edge) => {
+    const source = nodeById.get(edge.sourceNodeId);
+    const target = nodeById.get(edge.targetNodeId);
+    if (!source || !target) return [];
+    const startX = source.position.x + 270;
+    const startY = source.position.y + 50 + outputHandleOffset(edge.sourceHandle);
+    const endX = target.position.x;
+    const endY = target.position.y + 50;
+    const midX = Math.round((startX + endX) / 2);
+    const midY = Math.round((startY + endY) / 2);
+    return [{
+      edge,
+      path: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`,
+      midpoint: { x: midX, y: midY }
+    }];
+  });
+
   return (
     <div
       className={`workflow-graph-canvas ${isFullscreen ? "fullscreen" : ""}`}
@@ -1138,25 +1155,42 @@ function WorkflowGraphCanvas({
         {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
       <div className="workflow-graph-stage">
-      <svg className="workflow-graph-edges" aria-hidden="true">
-        {graph.edges.map((edge) => {
-          const source = nodeById.get(edge.sourceNodeId);
-          const target = nodeById.get(edge.targetNodeId);
-          if (!source || !target) return null;
-          const startX = source.position.x + 270;
-          const startY = source.position.y + 50 + outputHandleOffset(edge.sourceHandle);
-          const endX = target.position.x;
-          const endY = target.position.y + 50;
-          const midX = Math.round((startX + endX) / 2);
-          return (
+      <svg className="workflow-graph-edges" aria-label="Workflow connections">
+        {edgeViews.map(({ edge, path }) => (
+          <g className="workflow-graph-edge" key={edge.id}>
+            <path d={path} className="workflow-graph-edge-path" />
             <path
-              d={`M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`}
-              key={edge.id}
-              className="workflow-graph-edge-path"
+              aria-label="Delete workflow connection"
+              className="workflow-graph-edge-hit"
+              d={path}
+              onClick={() => onDeleteEdge(edge.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onDeleteEdge(edge.id);
+                }
+              }}
+              role="button"
+              tabIndex={0}
             />
-          );
-        })}
+          </g>
+        ))}
       </svg>
+
+      {edgeViews.map(({ edge, midpoint }) => (
+        <button
+          aria-label="Delete workflow connection"
+          className="workflow-edge-delete-button"
+          data-testid={`workflow-edge-delete-${edge.id}`}
+          key={`delete-${edge.id}`}
+          onClick={() => onDeleteEdge(edge.id)}
+          style={{ transform: `translate(${midpoint.x - 12}px, ${midpoint.y - 12}px)` }}
+          title="删除连接"
+          type="button"
+        >
+          ×
+        </button>
+      ))}
 
       {graph.nodes.map((node) => (
         <div

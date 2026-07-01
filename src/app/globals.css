@@ -3283,13 +3283,48 @@ button {
   inset: 0;
   width: 4200px;
   height: 2400px;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .workflow-graph-edge-path {
   fill: none;
   stroke: rgba(37, 99, 235, 0.55);
   stroke-width: 2;
+}
+
+.workflow-graph-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.workflow-graph-edge:hover .workflow-graph-edge-path,
+.workflow-graph-edge:focus-within .workflow-graph-edge-path {
+  stroke: rgba(220, 38, 38, 0.75);
+  stroke-width: 3;
+}
+
+.workflow-edge-delete-button {
+  position: absolute;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: 999px;
+  color: #dc2626;
+  font-weight: 800;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.workflow-edge-delete-button:hover {
+  border-color: rgba(220, 38, 38, 0.7);
+  background: rgba(254, 226, 226, 0.95);
 }
 
 .workflow-graph-node {
