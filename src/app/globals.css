@@ -3237,7 +3237,8 @@ button {
 
 .workflow-graph-canvas {
   position: relative;
-  min-height: 620px;
+  min-height: min(78vh, 900px);
+  height: min(78vh, 900px);
   min-width: 0;
   overflow: auto;
   padding: 18px;
@@ -3248,11 +3249,17 @@ button {
     radial-gradient(circle at 1px 1px, rgba(100, 116, 139, 0.25) 1px, transparent 0) 0 0 / 18px 18px;
 }
 
+.workflow-graph-stage {
+  position: relative;
+  width: 2600px;
+  height: 1500px;
+}
+
 .workflow-graph-edges {
   position: absolute;
   inset: 0;
-  width: 1400px;
-  height: 720px;
+  width: 2600px;
+  height: 1500px;
   pointer-events: none;
 }
 
@@ -3333,6 +3340,7 @@ button {
   font-weight: 700;
   background: rgba(37, 99, 235, 0.08);
   cursor: crosshair;
+  user-select: none;
 }
 
 .workflow-node-port.active {
@@ -3354,6 +3362,23 @@ button {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.workflow-quick-add {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  gap: 6px;
+  width: 230px;
+  padding: 10px;
+  border: 1px solid rgba(37, 99, 235, 0.38);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.workflow-quick-add .automation-palette-item {
+  min-height: 32px;
 }
 
 .workflow-edge-chip {

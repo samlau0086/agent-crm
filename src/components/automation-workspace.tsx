@@ -141,6 +141,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   const [draggedNodeId, setDraggedNodeId] = useState("");
   const [selectedGraphNodeId, setSelectedGraphNodeId] = useState("start");
   const [pendingConnection, setPendingConnection] = useState<{ sourceNodeId: string; sourceHandle: string } | null>(null);
+  const [quickAdd, setQuickAdd] = useState<{ x: number; y: number; connection: { sourceNodeId: string; sourceHandle: string } } | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<WorkflowDefinition | null>(null);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
@@ -368,12 +369,13 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     setDraft((current) => withWorkflowGraph(current, nextGraph));
   }
 
-  function addGraphNode(type: WorkflowNodeType) {
-    const nextNode = createGraphNode(type, graph.nodes.length);
-    const source = pendingConnection?.sourceNodeId
-      ? graph.nodes.find((node) => node.id === pendingConnection.sourceNodeId)
+  function addGraphNode(type: WorkflowNodeType, position?: WorkflowNode["position"], explicitConnection?: { sourceNodeId: string; sourceHandle: string }) {
+    const nextNode = createGraphNode(type, graph.nodes.length, {}, position);
+    const connection = explicitConnection ?? pendingConnection;
+    const source = connection?.sourceNodeId
+      ? graph.nodes.find((node) => node.id === connection.sourceNodeId)
       : selectedGraphNode;
-    const sourceHandle = pendingConnection?.sourceHandle ?? defaultGraphOutputHandles(source?.type ?? "start")[0] ?? "main";
+    const sourceHandle = connection?.sourceHandle ?? defaultGraphOutputHandles(source?.type ?? "start")[0] ?? "main";
     const nextGraph: WorkflowGraph = {
       ...graph,
       nodes: [...graph.nodes, nextNode],
@@ -385,6 +387,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
         : graph.edges
     };
     setPendingConnection(null);
+    setQuickAdd(null);
     setSelectedGraphNodeId(nextNode.id);
     updateGraph(nextGraph);
   }
@@ -409,22 +412,25 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     });
     setSelectedGraphNodeId("start");
     setPendingConnection(null);
+    setQuickAdd(null);
   }
 
-  function connectGraphNode(targetNodeId: string) {
-    if (!pendingConnection) return;
-    if (pendingConnection.sourceNodeId === targetNodeId) {
+  function connectGraphNode(targetNodeId: string, explicitConnection?: { sourceNodeId: string; sourceHandle: string }) {
+    const connection = explicitConnection ?? pendingConnection;
+    if (!connection) return;
+    if (connection.sourceNodeId === targetNodeId) {
       setPendingConnection(null);
       return;
     }
     updateGraph({
       ...graph,
       edges: [
-        ...graph.edges.filter((edge) => !(edge.sourceNodeId === pendingConnection.sourceNodeId && edge.sourceHandle === pendingConnection.sourceHandle)),
-        createGraphEdge(pendingConnection.sourceNodeId, pendingConnection.sourceHandle, targetNodeId)
+        ...graph.edges.filter((edge) => !(edge.sourceNodeId === connection.sourceNodeId && edge.sourceHandle === connection.sourceHandle)),
+        createGraphEdge(connection.sourceNodeId, connection.sourceHandle, targetNodeId)
       ]
     });
     setPendingConnection(null);
+    setQuickAdd(null);
   }
 
   function deleteGraphEdge(edgeId: string) {
@@ -436,6 +442,11 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       ...graph,
       nodes: graph.nodes.map((node) => (node.id === nodeId ? { ...node, position } : node))
     });
+  }
+
+  function openQuickAdd(position: WorkflowNode["position"], connection: { sourceNodeId: string; sourceHandle: string }) {
+    setPendingConnection(connection);
+    setQuickAdd({ ...position, connection });
   }
 
   return (
@@ -612,11 +623,15 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
               graph={graph}
               selectedNodeId={selectedGraphNode?.id ?? ""}
               pendingConnection={pendingConnection}
+              quickAdd={quickAdd}
               onCompleteConnection={connectGraphNode}
+              onCreateConnectedNode={(type, position, connection) => addGraphNode(type, position, connection)}
               onDeleteEdge={deleteGraphEdge}
               onMoveNode={moveGraphNode}
+              onOpenQuickAdd={openQuickAdd}
               onSelectNode={setSelectedGraphNodeId}
               onStartConnection={setPendingConnection}
+              onCancelQuickAdd={() => { setQuickAdd(null); setPendingConnection(null); }}
             />
 
             {selectedGraphNode ? (
@@ -1021,18 +1036,26 @@ function WorkflowGraphCanvas({
   graph,
   selectedNodeId,
   pendingConnection,
+  quickAdd,
   onSelectNode,
   onStartConnection,
   onCompleteConnection,
+  onOpenQuickAdd,
+  onCreateConnectedNode,
+  onCancelQuickAdd,
   onDeleteEdge,
   onMoveNode
 }: {
   graph: WorkflowGraph;
   selectedNodeId: string;
   pendingConnection: { sourceNodeId: string; sourceHandle: string } | null;
+  quickAdd: { x: number; y: number; connection: { sourceNodeId: string; sourceHandle: string } } | null;
   onSelectNode: (nodeId: string) => void;
   onStartConnection: (connection: { sourceNodeId: string; sourceHandle: string } | null) => void;
-  onCompleteConnection: (targetNodeId: string) => void;
+  onCompleteConnection: (targetNodeId: string, connection?: { sourceNodeId: string; sourceHandle: string }) => void;
+  onOpenQuickAdd: (position: WorkflowNode["position"], connection: { sourceNodeId: string; sourceHandle: string }) => void;
+  onCreateConnectedNode: (type: WorkflowNodeType, position: WorkflowNode["position"], connection: { sourceNodeId: string; sourceHandle: string }) => void;
+  onCancelQuickAdd: () => void;
   onDeleteEdge: (edgeId: string) => void;
   onMoveNode: (nodeId: string, position: WorkflowNode["position"]) => void;
 }) {
@@ -1048,8 +1071,46 @@ function WorkflowGraphCanvas({
     });
   }
 
+  function readConnection(event: DragEvent<HTMLElement>): { sourceNodeId: string; sourceHandle: string } | null {
+    const raw = event.dataTransfer.getData("application/x-workflow-connection");
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { sourceNodeId?: unknown; sourceHandle?: unknown };
+      return typeof parsed.sourceNodeId === "string" && typeof parsed.sourceHandle === "string"
+        ? { sourceNodeId: parsed.sourceNodeId, sourceHandle: parsed.sourceHandle }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function canvasPoint(event: DragEvent<HTMLElement>): WorkflowNode["position"] {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    return {
+      x: Math.max(20, Math.round(event.clientX - (rect?.left ?? 0) - 110)),
+      y: Math.max(20, Math.round(event.clientY - (rect?.top ?? 0) - 48))
+    };
+  }
+
+  function handleCanvasDrop(event: DragEvent<HTMLDivElement>) {
+    const connection = readConnection(event);
+    if (!connection) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onOpenQuickAdd(canvasPoint(event), connection);
+  }
+
   return (
-    <div className="workflow-graph-canvas" data-testid="automation-node-canvas" ref={canvasRef}>
+    <div
+      className="workflow-graph-canvas"
+      data-testid="automation-node-canvas"
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("application/x-workflow-connection")) event.preventDefault();
+      }}
+      onDrop={handleCanvasDrop}
+      ref={canvasRef}
+    >
+      <div className="workflow-graph-stage">
       <svg className="workflow-graph-edges" aria-hidden="true">
         {graph.edges.map((edge) => {
           const source = nodeById.get(edge.sourceNodeId);
@@ -1081,7 +1142,18 @@ function WorkflowGraphCanvas({
           style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
           type="button"
         >
-          <span className="workflow-node-input" onClick={(event) => { event.stopPropagation(); onCompleteConnection(node.id); }}>
+          <span
+            className="workflow-node-input"
+            onClick={(event) => { event.stopPropagation(); onCompleteConnection(node.id); }}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              const connection = readConnection(event);
+              if (!connection) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onCompleteConnection(node.id, connection);
+            }}
+          >
             in
           </span>
           <span className="workflow-node-title">{node.label}</span>
@@ -1091,10 +1163,19 @@ function WorkflowGraphCanvas({
               <span
                 className={`workflow-node-port ${pendingConnection?.sourceNodeId === node.id && pendingConnection.sourceHandle === handle ? "active" : ""}`}
                 data-testid={`workflow-port-${node.id}-${handle}`}
+                draggable
                 key={handle}
                 onClick={(event) => {
                   event.stopPropagation();
                   onStartConnection({ sourceNodeId: node.id, sourceHandle: handle });
+                }}
+                onDragStart={(event) => {
+                  const connection = { sourceNodeId: node.id, sourceHandle: handle };
+                  event.stopPropagation();
+                  event.dataTransfer.effectAllowed = "copyMove";
+                  event.dataTransfer.setData("application/x-workflow-connection", JSON.stringify(connection));
+                  event.dataTransfer.setData("text/plain", `${node.id}:${handle}`);
+                  onStartConnection(connection);
                 }}
               >
                 {handle}
@@ -1104,6 +1185,25 @@ function WorkflowGraphCanvas({
         </button>
       ))}
 
+      {quickAdd ? (
+        <div className="workflow-quick-add" data-testid="workflow-quick-add" style={{ transform: `translate(${quickAdd.x}px, ${quickAdd.y}px)` }}>
+          <div className="stage-header">
+            <strong>添加下级节点</strong>
+            <button className="icon-button" type="button" onClick={onCancelQuickAdd}>×</button>
+          </div>
+          {quickAddNodeTypesForHandle(quickAdd.connection.sourceHandle).map((type) => (
+            <button
+              className="automation-palette-item"
+              key={type}
+              type="button"
+              onClick={() => onCreateConnectedNode(type, { x: quickAdd.x, y: quickAdd.y }, quickAdd.connection)}
+            >
+              {workflowNodeTypeLabel(type)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="workflow-edge-list">
         <strong>Edges</strong>
         {graph.edges.map((edge) => (
@@ -1112,6 +1212,7 @@ function WorkflowGraphCanvas({
           </button>
         ))}
         {pendingConnection ? <span className="subtle">选择目标节点左侧 in 端口完成连接。</span> : null}
+      </div>
       </div>
     </div>
   );
@@ -1325,17 +1426,23 @@ function withWorkflowGraph(draft: AutomationDraft, graph: WorkflowGraph): Automa
   return { ...draft, ...legacy, graph };
 }
 
-function createGraphNode(type: WorkflowNodeType, index: number, config: Record<string, unknown> = {}): WorkflowNode {
+function createGraphNode(type: WorkflowNodeType, index: number, config: Record<string, unknown> = {}, position?: WorkflowNode["position"]): WorkflowNode {
   return {
     id: `${type}:${Date.now().toString(36)}:${index}`,
     type,
     label: defaultGraphNodeLabel(type),
     position: {
-      x: 60 + (index % 4) * 260,
-      y: 80 + Math.floor(index / 4) * 150
+      x: position?.x ?? 60 + (index % 4) * 260,
+      y: position?.y ?? 80 + Math.floor(index / 4) * 150
     },
     config: defaultGraphNodeConfig(type, config)
   };
+}
+
+function quickAddNodeTypesForHandle(handle: string): WorkflowNodeType[] {
+  if (handle === "false" || handle === "break" || handle === "default") return ["notify", "create_task", "end"];
+  if (handle.startsWith("case:")) return ["send_email", "create_task", "update_deal", "notify", "end"];
+  return ["if", "switch", "loop", "send_email", "create_task", "update_deal", "notify", "end"];
 }
 
 function createGraphEdge(sourceNodeId: string, sourceHandle: string, targetNodeId: string): WorkflowEdge {

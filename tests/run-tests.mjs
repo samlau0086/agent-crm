@@ -1885,6 +1885,11 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /WorkflowGraphInspector/);
   assert.match(automation, /workflow-graph-node/);
   assert.match(automation, /workflow-port-\$\{node\.id\}-\$\{handle\}/);
+  assert.match(automation, /application\/x-workflow-connection/);
+  assert.match(automation, /workflow-quick-add/);
+  assert.match(automation, /quickAddNodeTypesForHandle/);
+  assert.match(automation, /onCreateConnectedNode/);
+  assert.match(automation, /onOpenQuickAdd/);
   assert.match(automation, /sourceHandle/);
   assert.match(automation, /continue/);
   assert.match(automation, /break/);
@@ -1910,6 +1915,8 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(workspace, /crmPathForNav\("automation"\)\}\?\$\{nextParams\.toString\(\)\}/);
   assert.match(styles, /\.automation-layout/);
   assert.match(styles, /\.workflow-graph-canvas/);
+  assert.match(styles, /\.workflow-graph-stage/);
+  assert.match(styles, /\.workflow-quick-add/);
   assert.match(styles, /\.workflow-node-port/);
   assert.match(styles, /\.workflow-graph-node\.selected/);
   assert.match(styles, /\.record-workflow-list/);
