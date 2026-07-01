@@ -653,10 +653,10 @@ export type WorkflowStatus = "draft" | "active" | "disabled" | "archived";
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "skipped" | "approval_required";
 export type WorkflowTriggerType = "crm_event" | "email_event" | "task_event" | "schedule" | "manual";
 export type WorkflowConditionType = "field" | "activity" | "email_behavior" | "ai" | "if" | "switch" | "loop";
-export type WorkflowActionType = "create_activity" | "send_email" | "update_stage" | "update_record" | "notify" | "create_knowledge_article";
+export type WorkflowActionType = "create_activity" | "send_email" | "update_stage" | "update_record" | "notify" | "create_knowledge_article" | "run_ai_agent";
 export type WorkflowApprovalStatus = "pending" | "approved" | "rejected";
 export type WorkflowScopeMode = "record" | "object" | "global";
-export type WorkflowNodeType = "start" | "if" | "switch" | "loop" | "wait_delay" | "wait_reply" | "send_email" | "create_email_draft" | "create_task" | "update_deal" | "notify" | "end";
+export type WorkflowNodeType = "start" | "if" | "switch" | "loop" | "wait_delay" | "wait_reply" | "ai_agent" | "send_email" | "create_email_draft" | "create_task" | "update_deal" | "notify" | "end";
 
 export interface WorkflowScope {
   mode: WorkflowScopeMode;

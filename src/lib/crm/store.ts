@@ -1843,6 +1843,9 @@ export class CrmStore {
         actionResults.push(actionResult);
         status = actionResult.status;
         message = actionResult.message ?? "";
+        if (node.type === "ai_agent") {
+          outputHandle = status === "failed" ? "failed" : status === "approval_required" || action.config.requireHumanReview !== false ? "needs_review" : "done";
+        }
       }
 
       nodeResults.push({ nodeId: node.id, status, outputHandle, message, startedAt, completedAt: stamp() });
@@ -1896,6 +1899,28 @@ export class CrmStore {
     runId?: string
   ): WorkflowRun["actionResults"][number] {
     try {
+      if (action.type === "run_ai_agent") {
+        const goal = renderWorkflowTextTemplate(action.config.goal ?? action.name, triggerData, record) || action.name;
+        const allowedTools = Array.isArray(action.config.allowedTools)
+          ? action.config.allowedTools.filter((tool): tool is string => typeof tool === "string")
+          : ["create_task", "create_email_draft", "notify"];
+        const plan = [
+          `AI Agent plan: ${goal}`,
+          `Context: ${record ? `${record.objectKey}/${record.title}` : "no linked record"}`,
+          `Knowledge base: ${action.config.useKnowledge === false ? "disabled" : "enabled"}`,
+          `Allowed tools: ${allowedTools.join(", ")}`,
+          action.config.autoExecuteTools === true ? "Tool execution: automatic tools require approval policy." : "Tool execution: plan only; downstream nodes should perform actions."
+        ].join("\n");
+        if (record) {
+          this.createActivity(context, {
+            recordId: record.id,
+            type: "note",
+            title: "AI Agent plan",
+            body: plan
+          });
+        }
+        return { actionKey: action.key, status: "completed", message: plan };
+      }
       if (action.type === "create_activity") {
         if (!record) throw new Error("Workflow action requires a linked CRM record");
         const type = typeof action.config.activityType === "string" ? action.config.activityType as Activity["type"] : "task";

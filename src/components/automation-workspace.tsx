@@ -133,6 +133,7 @@ const workflowGraphPaletteItems: WorkflowGraphPaletteItem[] = [
   { type: "loop", icon: Repeat2, description: "for each item" },
   { type: "wait_delay", icon: CalendarClock, description: "wait then continue" },
   { type: "wait_reply", icon: Mail, description: "replied / not replied" },
+  { type: "ai_agent", icon: Bot, description: "plan and use tools" },
   { type: "create_email_draft", icon: Mail, description: "draft for review" },
   { type: "send_email", icon: Send, description: "send or queue" },
   { type: "create_task", icon: CheckCircle2, description: "follow-up task" },
@@ -1774,6 +1775,36 @@ function WorkflowGraphInspector({
         </>
       ) : null}
 
+      {node.type === "ai_agent" ? (
+        <>
+          <div className="workflow-node-help" data-testid="workflow-ai-agent-help">
+            <strong>AI Agent node</strong>
+            <span>Use this node to reason over the current record, communication history, timeline, and knowledge base before choosing the next workflow action.</span>
+            <span>Allowed tools are a safety allowlist. Keep auto execution off unless the workflow has been reviewed.</span>
+          </div>
+          <label>
+            <span className="subtle">Agent goal</span>
+            <textarea className="textarea" value={String(config.goal ?? "")} onChange={(event) => updateConfig("goal", event.target.value)} />
+          </label>
+          <label>
+            <span className="subtle">Allowed tools（逗号分隔）</span>
+            <input className="input" value={joinConfigList(config.allowedTools)} onChange={(event) => updateConfig("allowedTools", splitConfigList(event.target.value))} />
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={config.useKnowledge !== false} onChange={(event) => updateConfig("useKnowledge", event.target.checked)} />
+            Use knowledge base
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={Boolean(config.requireHumanReview ?? true)} onChange={(event) => updateConfig("requireHumanReview", event.target.checked)} />
+            Require human review for generated plan
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={Boolean(config.autoExecuteTools)} onChange={(event) => updateConfig("autoExecuteTools", event.target.checked)} />
+            Auto execute allowed tools
+          </label>
+        </>
+      ) : null}
+
       {node.type === "send_email" || node.type === "create_email_draft" ? (
         <>
           <label>
@@ -1968,9 +1999,11 @@ function quickAddNodeTypesForHandle(handle: string): WorkflowNodeType[] {
   if (handle === "not_replied") return ["create_email_draft", "create_task", "notify", "end"];
   if (handle === "replied") return ["create_task", "update_deal", "notify", "end"];
   if (handle === "false" || handle === "break" || handle === "default") return ["notify", "create_task", "end"];
-  if (handle === "after_delay") return ["wait_reply", "create_email_draft", "create_task", "notify", "end"];
-  if (handle.startsWith("case:")) return ["create_email_draft", "send_email", "create_task", "update_deal", "notify", "end"];
-  return ["if", "switch", "loop", "wait_delay", "wait_reply", "create_email_draft", "send_email", "create_task", "update_deal", "notify", "end"];
+  if (handle === "after_delay") return ["wait_reply", "ai_agent", "create_email_draft", "create_task", "notify", "end"];
+  if (handle === "needs_review") return ["create_task", "notify", "end"];
+  if (handle === "failed") return ["notify", "create_task", "end"];
+  if (handle.startsWith("case:")) return ["ai_agent", "create_email_draft", "send_email", "create_task", "update_deal", "notify", "end"];
+  return ["if", "switch", "loop", "wait_delay", "wait_reply", "ai_agent", "create_email_draft", "send_email", "create_task", "update_deal", "notify", "end"];
 }
 
 function isWorkflowPaletteNodeType(value: string): value is WorkflowNodeType {
@@ -1993,6 +2026,7 @@ function defaultGraphNodeConfig(type: WorkflowNodeType, config: Record<string, u
   if (type === "loop") return { collectionField: "items", maxIterations: 50, continueLabel: "Process current item", breakLabel: "Exit loop" };
   if (type === "wait_delay") return { delayAmount: 2, delayUnit: "days" };
   if (type === "wait_reply") return { lookbackDays: 7, replySource: "email" };
+  if (type === "ai_agent") return { goal: "Analyze context and choose the next best follow-up action.", useKnowledge: true, allowedTools: ["create_task", "create_email_draft", "notify"], autoExecuteTools: false, requireHumanReview: true };
   if (type === "create_email_draft") return { mode: "draft", to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "", aiAssisted: true };
   if (type === "send_email") return { mode: "queued", to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "" };
   if (type === "create_task") return { activityType: "task", title: "Follow up", body: "", dueInDays: 2, assigneeMode: "record_owner", priority: "normal", preventDuplicate: true };
@@ -2008,6 +2042,7 @@ function defaultGraphNodeLabel(type: WorkflowNodeType): string {
   if (type === "loop") return "LOOP";
   if (type === "wait_delay") return "Wait / Delay";
   if (type === "wait_reply") return "Wait for Reply";
+  if (type === "ai_agent") return "AI Agent";
   if (type === "create_email_draft") return "Create Email Draft";
   if (type === "send_email") return "Send Email";
   if (type === "create_task") return "Create Task";
@@ -2026,13 +2061,17 @@ function defaultGraphOutputHandles(type: WorkflowNodeType): string[] {
   if (type === "loop") return ["continue", "break"];
   if (type === "wait_delay") return ["after_delay"];
   if (type === "wait_reply") return ["replied", "not_replied"];
+  if (type === "ai_agent") return ["done", "needs_review", "failed"];
   if (type === "end") return [];
   return ["main"];
 }
 
 function outputHandleOffset(handle: string): number {
   if (handle === "false" || handle === "break" || handle === "default" || handle === "not_replied") return 22;
+  if (handle === "needs_review") return 0;
+  if (handle === "failed") return 22;
   if (handle === "replied") return -18;
+  if (handle === "done") return -18;
   if (handle.startsWith("case:")) return -18;
   return 0;
 }
@@ -2262,14 +2301,16 @@ function conditionLabel(condition: WorkflowCondition): string {
 }
 
 function actionTypeLabel(type: WorkflowAction["type"]): string {
-  return {
+  const labels: Record<string, string> = {
     create_activity: "创建活动",
     send_email: "邮件动作",
     update_stage: "修改阶段",
     update_record: "更新记录",
     notify: "通知",
-    create_knowledge_article: "RAG 知识"
-  }[type];
+    create_knowledge_article: "RAG 知识",
+    run_ai_agent: "AI Agent"
+  };
+  return labels[type] ?? type;
 }
 
 function workflowStatusLabel(status: WorkflowDefinition["status"]): string {

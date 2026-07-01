@@ -304,6 +304,12 @@ await run("workflow schema supports control nodes and record-scoped generation",
         type: "send_email",
         name: "Send follow up",
         config: { mode: "queued", accountId: "account-1", to: ["buyer@example.com"], cc: ["manager@example.com"], bcc: ["archive@example.com"], subject: "Follow up", bodyHtml: "<p>Hello</p>" }
+      },
+      {
+        key: "ai-agent",
+        type: "run_ai_agent",
+        name: "AI Agent",
+        config: { goal: "Pick the next best action", allowedTools: ["create_task", "create_email_draft"], useKnowledge: true, autoExecuteTools: false }
       }
     ],
     graph: {
@@ -311,12 +317,15 @@ await run("workflow schema supports control nodes and record-scoped generation",
       nodes: [
         { id: "start", type: "start", label: "Start: 林晓", position: { x: 0, y: 0 }, config: { trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" } } },
         { id: "if-target", type: "if", label: "IF target", position: { x: 260, y: 0 }, config: { field: "recordId", operator: "equals", value: "contact-lin" } },
+        { id: "agent", type: "ai_agent", label: "AI Agent", position: { x: 390, y: 0 }, config: { goal: "Pick the next best action", allowedTools: ["create_task"], useKnowledge: true } },
         { id: "task", type: "create_task", label: "Task", position: { x: 520, y: 0 }, config: { title: "Follow up" } },
         { id: "end", type: "end", label: "End", position: { x: 780, y: 0 }, config: {} }
       ],
       edges: [
         { id: "edge-start-if", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "if-target" },
-        { id: "edge-if-task", sourceNodeId: "if-target", sourceHandle: "true", targetNodeId: "task" },
+        { id: "edge-if-agent", sourceNodeId: "if-target", sourceHandle: "true", targetNodeId: "agent" },
+        { id: "edge-agent-review-task", sourceNodeId: "agent", sourceHandle: "needs_review", targetNodeId: "task" },
+        { id: "edge-agent-done-task", sourceNodeId: "agent", sourceHandle: "done", targetNodeId: "task" },
         { id: "edge-if-end", sourceNodeId: "if-target", sourceHandle: "false", targetNodeId: "end" },
         { id: "edge-task-end", sourceNodeId: "task", sourceHandle: "main", targetNodeId: "end" }
       ]
@@ -324,7 +333,9 @@ await run("workflow schema supports control nodes and record-scoped generation",
   });
   assert.deepEqual(parsed.conditions.map((condition) => condition.type), ["if", "switch", "loop"]);
   assert.equal(parsed.graph.scope.mode, "record");
-  assert.deepEqual(parsed.graph.edges.map((edge) => edge.sourceHandle), ["main", "true", "false", "main"]);
+  assert(parsed.graph.nodes.some((node) => node.type === "ai_agent"));
+  assert(parsed.actions.some((action) => action.type === "run_ai_agent"));
+  assert.deepEqual(parsed.graph.edges.map((edge) => edge.sourceHandle), ["main", "true", "needs_review", "done", "false", "main"]);
   assert.equal(parsed.actions[0].config.mode, "queued");
   const draft = buildWorkflowDraftFromGoal({ goal: "联系人更新后自动跟进", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" });
   assert.match(draft.workflow.name, /林晓/);
@@ -2098,6 +2109,11 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /Connect the last node back to this Loop/);
   assert.match(automation, /wait_delay/);
   assert.match(automation, /wait_reply/);
+  assert.match(automation, /ai_agent/);
+  assert.match(automation, /workflow-ai-agent-help/);
+  assert.match(automation, /autoExecuteTools/);
+  assert.match(automation, /needs_review/);
+  assert.match(automation, /Allowed tools/);
   assert.match(automation, /create_email_draft/);
   assert.match(automation, /after_delay/);
   assert.match(automation, /not_replied/);
@@ -2145,6 +2161,7 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(styles, /z-index:\s*8/);
   assert.match(styles, /\.workflow-node-modal/);
   assert.match(styles, /\.workflow-node-help/);
+  assert.match(styles, /\.workflow-graph-node\.ai_agent/);
   assert.match(styles, /\.workflow-loop-port-guide/);
   assert.match(styles, /\.workflow-node-dialog-backdrop/);
   assert.match(styles, /\.app-dialog-backdrop/);

@@ -3494,6 +3494,11 @@ button {
   border-color: rgba(245, 158, 11, 0.5);
 }
 
+.workflow-graph-node.ai_agent {
+  border-color: rgba(124, 58, 237, 0.55);
+  background: color-mix(in srgb, var(--surface) 92%, rgba(124, 58, 237, 0.16));
+}
+
 .workflow-node-input {
   position: relative;
   grid-row: 1 / span 2;

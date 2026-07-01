@@ -32,6 +32,7 @@ export const supportedWorkflowTriggerEvents = [
 const highRiskWorkflowActions = new Set<WorkflowAction["type"]>(["send_email", "update_stage", "update_record"]);
 
 export function isHighRiskWorkflowAction(action: WorkflowAction): boolean {
+  if (action.type === "run_ai_agent") return action.requiresApproval ?? action.config.autoExecuteTools === true;
   return action.requiresApproval ?? highRiskWorkflowActions.has(action.type);
 }
 
@@ -172,7 +173,7 @@ export function graphToLegacyWorkflow(graph: WorkflowGraph): Pick<WorkflowDefini
     .filter((node) => node.type === "if" || node.type === "switch" || node.type === "loop" || node.type === "wait_reply")
     .map((node) => workflowNodeToCondition(node));
   const actions: WorkflowAction[] = graph.nodes
-    .filter((node) => node.type === "send_email" || node.type === "create_email_draft" || node.type === "create_task" || node.type === "update_deal" || node.type === "notify")
+    .filter((node) => node.type === "ai_agent" || node.type === "send_email" || node.type === "create_email_draft" || node.type === "create_task" || node.type === "update_deal" || node.type === "notify")
     .map((node) => workflowNodeToAction(node));
   return { trigger, conditions, actions };
 }
@@ -213,6 +214,7 @@ export function workflowNodeToAction(node: WorkflowNode): WorkflowAction {
     };
   }
   const type =
+    node.type === "ai_agent" ? "run_ai_agent" :
     node.type === "send_email" || node.type === "create_email_draft" ? "send_email" :
     node.type === "update_deal" ? "update_stage" :
     node.type === "notify" ? "notify" :
@@ -222,12 +224,13 @@ export function workflowNodeToAction(node: WorkflowNode): WorkflowAction {
     key: node.id,
     type,
     name: getString(node.label) || fallbackName,
-    requiresApproval: node.type === "create_email_draft" ? false : type === "send_email" || type === "update_stage" ? true : undefined,
+    requiresApproval: node.type === "create_email_draft" ? false : type === "send_email" || type === "update_stage" ? true : node.type === "ai_agent" ? Boolean(config.autoExecuteTools) : undefined,
     config
   };
 }
 
 function defaultWorkflowActionName(type: WorkflowNode["type"]): string {
+  if (type === "ai_agent") return "AI Agent";
   if (type === "send_email") return "Send Email";
   if (type === "create_email_draft") return "Create Email Draft";
   if (type === "update_deal") return "Update Deal";
@@ -824,6 +827,7 @@ function normalizeTriggerFromStart(start: WorkflowNode | undefined, scope: Workf
 }
 
 function workflowActionToNodeType(action: WorkflowAction): WorkflowNode["type"] {
+  if (action.type === "run_ai_agent") return "ai_agent";
   if (action.type === "send_email") return action.config.mode === "draft" ? "create_email_draft" : "send_email";
   if (action.type === "update_stage" || action.type === "update_record") return "update_deal";
   if (action.type === "notify") return "notify";
@@ -831,7 +835,7 @@ function workflowActionToNodeType(action: WorkflowAction): WorkflowNode["type"] 
 }
 
 function isWorkflowNodeType(value: unknown): value is WorkflowNode["type"] {
-  return value === "start" || value === "if" || value === "switch" || value === "loop" || value === "wait_delay" || value === "wait_reply" || value === "send_email" || value === "create_email_draft" || value === "create_task" || value === "update_deal" || value === "notify" || value === "end";
+  return value === "start" || value === "if" || value === "switch" || value === "loop" || value === "wait_delay" || value === "wait_reply" || value === "ai_agent" || value === "send_email" || value === "create_email_draft" || value === "create_task" || value === "update_deal" || value === "notify" || value === "end";
 }
 
 function isWorkflowOperator(value: unknown): value is WorkflowCondition["operator"] {

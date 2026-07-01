@@ -355,7 +355,7 @@ export const workflowConditionSchema = z
 export const workflowActionSchema = z
   .object({
     key: z.string().trim().min(1).max(120),
-    type: z.enum(["create_activity", "send_email", "update_stage", "update_record", "notify", "create_knowledge_article"]),
+    type: z.enum(["create_activity", "send_email", "update_stage", "update_record", "notify", "create_knowledge_article", "run_ai_agent"]),
     name: labelSchema,
     requiresApproval: z.boolean().optional(),
     config: z.record(z.unknown()).default({})
@@ -374,7 +374,7 @@ export const workflowScopeSchema = z
 export const workflowNodeSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
-    type: z.enum(["start", "if", "switch", "loop", "wait_delay", "wait_reply", "send_email", "create_email_draft", "create_task", "update_deal", "notify", "end"]),
+    type: z.enum(["start", "if", "switch", "loop", "wait_delay", "wait_reply", "ai_agent", "send_email", "create_email_draft", "create_task", "update_deal", "notify", "end"]),
     label: z.string().trim().min(1).max(200),
     position: z.object({ x: z.number(), y: z.number() }).strict(),
     config: z.record(z.unknown()).default({})
