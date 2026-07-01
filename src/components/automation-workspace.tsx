@@ -11,6 +11,8 @@ import {
   Copy,
   GitBranch,
   Mail,
+  Maximize2,
+  Minimize2,
   MousePointer2,
   PauseCircle,
   PlayCircle,
@@ -1060,16 +1062,38 @@ function WorkflowGraphCanvas({
   onMoveNode: (nodeId: string, position: WorkflowNode["position"]) => void;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [movingNode, setMovingNode] = useState<{
+    nodeId: string;
+    offsetX: number;
+    offsetY: number;
+    pointerId: number;
+  } | null>(null);
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
 
-  function handleDragEnd(event: DragEvent<HTMLElement>, node: WorkflowNode) {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    onMoveNode(node.id, {
-      x: Math.max(12, Math.round(event.clientX - rect.left - 110)),
-      y: Math.max(12, Math.round(event.clientY - rect.top - 42))
-    });
-  }
+  useEffect(() => {
+    if (!movingNode) return;
+    const activeMove = movingNode;
+    function handlePointerMove(event: PointerEvent) {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      onMoveNode(activeMove.nodeId, {
+        x: Math.max(12, Math.round(event.clientX - rect.left + (canvasRef.current?.scrollLeft ?? 0) - activeMove.offsetX)),
+        y: Math.max(12, Math.round(event.clientY - rect.top + (canvasRef.current?.scrollTop ?? 0) - activeMove.offsetY))
+      });
+    }
+    function handlePointerUp() {
+      setMovingNode(null);
+    }
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", handlePointerUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [movingNode, onMoveNode]);
 
   function readConnection(event: DragEvent<HTMLElement>): { sourceNodeId: string; sourceHandle: string } | null {
     const raw = event.dataTransfer.getData("application/x-workflow-connection");
@@ -1087,8 +1111,8 @@ function WorkflowGraphCanvas({
   function canvasPoint(event: DragEvent<HTMLElement>): WorkflowNode["position"] {
     const rect = canvasRef.current?.getBoundingClientRect();
     return {
-      x: Math.max(20, Math.round(event.clientX - (rect?.left ?? 0) - 110)),
-      y: Math.max(20, Math.round(event.clientY - (rect?.top ?? 0) - 48))
+      x: Math.max(20, Math.round(event.clientX - (rect?.left ?? 0) + (canvasRef.current?.scrollLeft ?? 0) - 110)),
+      y: Math.max(20, Math.round(event.clientY - (rect?.top ?? 0) + (canvasRef.current?.scrollTop ?? 0) - 48))
     };
   }
 
@@ -1102,7 +1126,7 @@ function WorkflowGraphCanvas({
 
   return (
     <div
-      className="workflow-graph-canvas"
+      className={`workflow-graph-canvas ${isFullscreen ? "fullscreen" : ""}`}
       data-testid="automation-node-canvas"
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/x-workflow-connection")) event.preventDefault();
@@ -1110,6 +1134,9 @@ function WorkflowGraphCanvas({
       onDrop={handleCanvasDrop}
       ref={canvasRef}
     >
+      <button className="workflow-fullscreen-button icon-button" type="button" onClick={() => setIsFullscreen((current) => !current)}>
+        {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+      </button>
       <div className="workflow-graph-stage">
       <svg className="workflow-graph-edges" aria-hidden="true">
         {graph.edges.map((edge) => {
@@ -1150,13 +1177,19 @@ function WorkflowGraphCanvas({
           <span
             aria-label="Move node"
             className="workflow-node-drag-handle"
-            draggable
             onClick={(event) => event.stopPropagation()}
-            onDragEnd={(event) => handleDragEnd(event, node)}
-            onDragStart={(event) => {
+            onPointerDown={(event) => {
               event.stopPropagation();
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", `move:${node.id}`);
+              event.preventDefault();
+              const target = event.currentTarget.closest(".workflow-graph-node") as HTMLElement | null;
+              const rect = target?.getBoundingClientRect();
+              setMovingNode({
+                nodeId: node.id,
+                offsetX: rect ? event.clientX - rect.left : 110,
+                offsetY: rect ? event.clientY - rect.top : 42,
+                pointerId: event.pointerId
+              });
+              event.currentTarget.setPointerCapture?.(event.pointerId);
             }}
             title="拖动移动节点"
           >

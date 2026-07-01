@@ -3249,6 +3249,29 @@ button {
     radial-gradient(circle at 1px 1px, rgba(100, 116, 139, 0.25) 1px, transparent 0) 0 0 / 18px 18px;
 }
 
+.workflow-graph-canvas.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  min-height: 100vh;
+  border-radius: 0;
+  border: 0;
+  padding: 24px;
+}
+
+.workflow-fullscreen-button {
+  position: sticky;
+  top: 0;
+  left: calc(100% - 42px);
+  z-index: 10;
+  margin-bottom: -36px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
 .workflow-graph-stage {
   position: relative;
   width: 4200px;
@@ -3293,8 +3316,13 @@ button {
   right: 8px;
   color: var(--muted);
   cursor: grab;
+  touch-action: none;
   font-size: 13px;
   line-height: 1;
+}
+
+.workflow-node-drag-handle:active {
+  cursor: grabbing;
 }
 
 .workflow-graph-node.selected {
