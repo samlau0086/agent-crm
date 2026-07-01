@@ -1994,6 +1994,9 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /break/);
   assert.match(automation, /graphToLegacyWorkflow/);
   assert.match(automation, /legacyWorkflowToGraph/);
+  assert.match(automation, /function stripWorkflowReadonlyFields/);
+  assert.doesNotMatch(automation, /version: workflow\.version/);
+  assert.match(automation, /typeof payload\?\.error === "string"/);
   assert.match(automation, /automation-target-record/);
   assert.match(automation, /recordId: selectedTargetRecord\?\.id/);
   assert.match(automation, /workflowTargetRecordId/);

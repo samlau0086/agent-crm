@@ -1987,8 +1987,7 @@ function stripWorkflowReadonlyFields(workflow: AutomationDraft) {
     trigger: workflow.trigger,
     conditions: workflow.conditions,
     actions: workflow.actions,
-    graph: workflow.graph,
-    version: workflow.version
+    graph: workflow.graph
   };
 }
 
@@ -2108,6 +2107,9 @@ async function fetchAutomationJson<T = unknown>(url: string, init: { method?: st
     body: init.body === undefined ? undefined : JSON.stringify(init.body)
   });
   const payload = await response.json().catch(() => ({}));
+  if (!response.ok && typeof payload?.error === "string") {
+    throw new Error(payload.error);
+  }
   if (!response.ok) {
     const message = typeof payload?.error?.message === "string" ? payload.error.message : "请求失败";
     throw new Error(message);
