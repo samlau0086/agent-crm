@@ -3242,6 +3242,19 @@ button {
   flex: 0 0 auto;
 }
 
+.automation-node-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+}
+
+.automation-node-stack.control {
+  padding: 8px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.06);
+}
+
 .automation-node {
   display: grid;
   grid-template-columns: auto minmax(150px, 1fr);
@@ -3263,6 +3276,10 @@ button {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
+.automation-node.control {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
 .automation-node.trigger .automation-node-icon {
   color: #2563eb;
 }
@@ -3282,6 +3299,74 @@ button {
   color: var(--muted);
 }
 
+.automation-control-map {
+  display: grid;
+  gap: 6px;
+  width: 230px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.automation-branch-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.automation-branch-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface-strong);
+}
+
+.automation-branch-pill.true {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.16);
+}
+
+.automation-branch-pill.false {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.automation-branch-pill.switch {
+  color: #6d28d9;
+  background: rgba(124, 58, 237, 0.14);
+}
+
+.automation-branch-pill.loop {
+  color: #0369a1;
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.automation-branch-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-loop-return {
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .automation-inspector label {
   display: grid;
   gap: 5px;
@@ -3291,6 +3376,39 @@ button {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.record-workflow-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.record-workflow-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+}
+
+.record-workflow-card span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.record-workflow-card small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-tab-panel {

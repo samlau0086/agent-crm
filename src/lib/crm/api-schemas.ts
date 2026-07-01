@@ -327,6 +327,7 @@ export const workflowTriggerSchema = z
     type: z.enum(["crm_event", "email_event", "task_event", "schedule", "manual"]),
     event: z.string().trim().min(1).max(120).optional(),
     objectKey: objectKeySchema.optional(),
+    config: z.record(z.unknown()).optional(),
     schedule: z
       .object({
         mode: z.enum(["daily", "weekly", "interval"]),

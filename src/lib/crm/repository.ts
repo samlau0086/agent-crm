@@ -205,6 +205,7 @@ function normalizeWorkflowTrigger(value: unknown): WorkflowTrigger {
     type,
     event: event as WorkflowTrigger["event"],
     objectKey: typeof value.objectKey === "string" ? value.objectKey : undefined,
+    config: isJsonRecord(value.config) ? value.config : undefined,
     schedule: normalizeWorkflowSchedule(value.schedule)
   };
 }
@@ -226,13 +227,19 @@ function normalizeWorkflowConditions(value: unknown): WorkflowCondition[] {
   return value.filter(isJsonRecord).map((condition, index) => ({
     key: typeof condition.key === "string" ? condition.key : `condition-${index + 1}`,
     type:
-      condition.type === "activity" || condition.type === "email_behavior" || condition.type === "ai"
+      condition.type === "activity" ||
+      condition.type === "email_behavior" ||
+      condition.type === "ai" ||
+      condition.type === "if" ||
+      condition.type === "switch" ||
+      condition.type === "loop"
         ? condition.type
         : "field",
     field: typeof condition.field === "string" ? condition.field : undefined,
     operator: typeof condition.operator === "string" ? (condition.operator as WorkflowCondition["operator"]) : "equals",
     value: condition.value,
-    prompt: typeof condition.prompt === "string" ? condition.prompt : undefined
+    prompt: typeof condition.prompt === "string" ? condition.prompt : undefined,
+    config: isJsonRecord(condition.config) ? condition.config : undefined
   }));
 }
 

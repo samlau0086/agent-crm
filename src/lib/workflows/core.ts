@@ -43,6 +43,10 @@ export function workflowMatchesEvent(workflow: WorkflowDefinition, event: string
   if (objectKey && getString(data.objectKey) !== objectKey) {
     return false;
   }
+  const targetRecordId = getString(workflow.trigger.config?.targetRecordId);
+  if (targetRecordId && getString(data.recordId) !== targetRecordId) {
+    return false;
+  }
   return true;
 }
 
@@ -88,6 +92,16 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
     : isDormantGoal
       ? { type: "schedule" as const, event: "schedule.daily" as const, schedule: { mode: "daily" as const, dailyAt: "09:00" } }
       : { type: "crm_event" as const, event: "record.updated" as const, objectKey: targetObjectKey };
+  const scopedTrigger = input.recordId
+    ? {
+        ...trigger,
+        config: {
+          targetRecordId: input.recordId,
+          targetRecordTitle: recordTitle,
+          targetObjectKey
+        }
+      }
+    : trigger;
 
   const conditions: WorkflowCondition[] = input.recordId
     ? [
@@ -157,7 +171,7 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
     description: recordTitle ? `由 Workflow Designer Agent 基于“${recordTitle}”生成的定向草稿，需要管理员确认后启用。` : "由 Workflow Designer Agent 生成的草稿，需要管理员确认后启用。",
     goal,
     status: "draft",
-    trigger,
+    trigger: scopedTrigger,
     conditions,
     actions,
     version: 1

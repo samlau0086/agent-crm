@@ -136,7 +136,6 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   const [draggedNodeId, setDraggedNodeId] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<WorkflowDefinition | null>(null);
 
-  const filteredWorkflows = useMemo(() => workflows.filter((workflow) => activeObjectKey === "all" || workflowTargetKey(workflow) === activeObjectKey), [activeObjectKey, workflows]);
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const nodes = useMemo(() => workflowToNodes(draft), [draft]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
@@ -152,19 +151,30 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     [records, targetObjectKey]
   );
   const selectedTargetRecord = targetRecords.find((record) => record.id === targetRecordId);
+  const filteredWorkflows = useMemo(() => {
+    const objectScoped = workflows.filter((workflow) => activeObjectKey === "all" || workflowTargetKey(workflow) === activeObjectKey);
+    return targetRecordId ? objectScoped.filter((workflow) => workflowTargetRecordId(workflow) === targetRecordId) : objectScoped;
+  }, [activeObjectKey, targetRecordId, workflows]);
 
   useEffect(() => {
     if (initializedFromUrl.current) return;
     initializedFromUrl.current = true;
     const objectKey = searchParams.get("objectKey");
     const recordId = searchParams.get("recordId");
+    const workflowId = searchParams.get("workflowId");
     if ((objectKey === "contacts" || objectKey === "companies" || objectKey === "deals") && recordId) {
       setActiveObjectKey(objectKey);
       setTargetRecordId(recordId);
-      setSelectedWorkflowId("");
-      setDraft(createWorkflowDraft(objectKey));
+      const workflow = workflowId ? workflows.find((candidate) => candidate.id === workflowId) : undefined;
+      if (workflow) {
+        setSelectedWorkflowId(workflow.id);
+        setDraft(workflow);
+      } else {
+        setSelectedWorkflowId("");
+        setDraft(createWorkflowDraft(objectKey));
+      }
     }
-  }, [searchParams]);
+  }, [searchParams, workflows]);
 
   function showToast(intent: "success" | "error" | "info", message: string) {
     setToast({ intent, message });
@@ -176,6 +186,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   function selectWorkflow(workflow: WorkflowDefinition) {
     setSelectedWorkflowId(workflow.id);
     setDraft(workflow);
+    setTargetRecordId(workflowTargetRecordId(workflow));
     setSelectedNodeId("trigger");
   }
 
@@ -213,7 +224,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
         }
       });
       setSelectedWorkflowId("");
-      setDraft(result.workflow);
+      setDraft(applyWorkflowRecordScope(result.workflow, selectedTargetRecord));
       setSelectedNodeId("trigger");
       showToast("success", `已生成草稿：${result.workflow.name}`);
     });
@@ -225,7 +236,8 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       return;
     }
     await runAutomationAction(async () => {
-      const payload = stripWorkflowReadonlyFields(draft);
+      const scopedDraft = applyWorkflowRecordScope(draft, selectedTargetRecord);
+      const payload = stripWorkflowReadonlyFields(scopedDraft);
       const saved = draft.id
         ? await fetchAutomationJson<WorkflowDefinition>(`/api/workflows/${draft.id}`, { method: "PATCH", body: payload })
         : await fetchAutomationJson<WorkflowDefinition>("/api/workflows", { method: "POST", body: payload });
@@ -507,21 +519,14 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
             <div className="automation-canvas" data-testid="automation-node-canvas">
               {nodes.map((node, index) => (
                 <div className="automation-node-wrap" key={node.id}>
-                  <button
-                    className={`automation-node ${selectedNodeId === node.id ? "selected" : ""} ${node.kind}`}
-                    draggable={node.kind !== "trigger"}
-                    type="button"
+                  <AutomationCanvasNode
+                    node={node}
+                    selected={selectedNodeId === node.id}
                     onClick={() => setSelectedNodeId(node.id)}
                     onDragStart={() => setDraggedNodeId(node.id)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => handleNodeDrop(event, node.id)}
-                  >
-                    <span className="automation-node-icon">{nodeIcon(node.kind)}</span>
-                    <span>
-                      <strong>{node.title}</strong>
-                      <small>{node.subtitle}</small>
-                    </span>
-                  </button>
+                  />
                   {index < nodes.length - 1 ? (
                     <div className="automation-node-edge">
                       <ChevronRight size={18} />
@@ -616,6 +621,81 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function AutomationCanvasNode({
+  node,
+  selected,
+  onClick,
+  onDragStart,
+  onDragOver,
+  onDrop
+}: {
+  node: AutomationNode;
+  selected: boolean;
+  onClick: () => void;
+  onDragStart: () => void;
+  onDragOver: (event: DragEvent<HTMLDivElement>) => void;
+  onDrop: (event: DragEvent<HTMLDivElement>) => void;
+}) {
+  const isControl = node.kind === "condition" && isControlCondition(node.condition);
+  return (
+    <div className={`automation-node-stack ${isControl ? "control" : ""}`} onDragOver={onDragOver} onDrop={onDrop}>
+      <button
+        className={`automation-node ${selected ? "selected" : ""} ${node.kind} ${isControl ? "control" : ""}`}
+        type="button"
+        draggable={node.kind !== "trigger"}
+        onClick={onClick}
+        onDragStart={onDragStart}
+      >
+        <span className="automation-node-icon">{nodeIcon(node.kind)}</span>
+        <span>
+          <strong>{node.title}</strong>
+          <small>{node.subtitle}</small>
+        </span>
+      </button>
+      {isControl ? <AutomationControlMap condition={node.condition} /> : null}
+    </div>
+  );
+}
+
+function AutomationControlMap({ condition }: { condition: WorkflowCondition }) {
+  if (condition.type === "if") {
+    return (
+      <div className="automation-control-map" data-testid="automation-if-branches">
+        <AutomationBranchRow tone="true" label="TRUE" value={conditionConfigText(condition.config?.trueLabel, conditionConfigText(condition.config?.branch, "Continue"))} />
+        <AutomationBranchRow tone="false" label="FALSE" value={conditionConfigText(condition.config?.falseLabel, "Stop / Skip")} />
+      </div>
+    );
+  }
+  if (condition.type === "switch") {
+    const cases = switchCasesFromConfig(condition.config?.cases);
+    return (
+      <div className="automation-control-map" data-testid="automation-switch-branches">
+        {(cases.length ? cases : ["case A", "case B"]).slice(0, 4).map((item) => (
+          <AutomationBranchRow key={item} tone="switch" label="CASE" value={item} />
+        ))}
+        <AutomationBranchRow tone="false" label="DEFAULT" value={conditionConfigText(condition.config?.defaultLabel, "Fallback")} />
+      </div>
+    );
+  }
+  return (
+    <div className="automation-control-map" data-testid="automation-loop-branches">
+      <AutomationBranchRow tone="loop" label="ENTRY" value={conditionConfigText(condition.config?.collectionField, condition.field ?? "items")} />
+      <AutomationBranchRow tone="true" label="CONTINUE" value={conditionConfigText(condition.config?.continueLabel, "Next item")} />
+      <AutomationBranchRow tone="false" label="BREAK" value={conditionConfigText(condition.config?.breakLabel, "Exit loop")} />
+      <div className="automation-loop-return">max {conditionConfigText(condition.config?.maxIterations, "50")} iterations</div>
+    </div>
+  );
+}
+
+function AutomationBranchRow({ tone, label, value }: { tone: "true" | "false" | "switch" | "loop"; label: string; value: string }) {
+  return (
+    <div className="automation-branch-row">
+      <span className={`automation-branch-pill ${tone}`}>{label}</span>
+      <span className="automation-branch-value">{value}</span>
     </div>
   );
 }
@@ -738,6 +818,10 @@ function AutomationNodeInspector({
           <label>
             <span className="subtle">分支名称</span>
             <input className="input" value={String(condition.config?.branch ?? "")} onChange={(event) => updateConditionConfig(draft, condition.key, "branch", event.target.value, onChange)} />
+            <span className="subtle">TRUE / 命中后</span>
+            <input className="input" value={String(condition.config?.trueLabel ?? "Continue")} onChange={(event) => updateConditionConfig(draft, condition.key, "trueLabel", event.target.value, onChange)} />
+            <span className="subtle">FALSE / 未命中后</span>
+            <input className="input" value={String(condition.config?.falseLabel ?? "Stop / Skip")} onChange={(event) => updateConditionConfig(draft, condition.key, "falseLabel", event.target.value, onChange)} />
           </label>
         ) : null}
         {condition.type === "switch" ? (
@@ -755,6 +839,10 @@ function AutomationNodeInspector({
             <label>
               <span className="subtle">最大循环次数</span>
               <input className="input" type="number" min={1} max={500} value={String(condition.config?.maxIterations ?? 50)} onChange={(event) => updateConditionConfig(draft, condition.key, "maxIterations", Number(event.target.value), onChange)} />
+              <span className="subtle">CONTINUE / 继续条件说明</span>
+              <input className="input" value={String(condition.config?.continueLabel ?? "Next item")} onChange={(event) => updateConditionConfig(draft, condition.key, "continueLabel", event.target.value, onChange)} />
+              <span className="subtle">BREAK / 退出条件说明</span>
+              <input className="input" value={String(condition.config?.breakLabel ?? "Exit loop")} onChange={(event) => updateConditionConfig(draft, condition.key, "breakLabel", event.target.value, onChange)} />
             </label>
           </>
         ) : null}
@@ -888,6 +976,66 @@ function workflowTargetKey(workflow: WorkflowDefinition): AutomationObjectKey {
   if (workflow.trigger.type === "task_event" || workflow.trigger.event?.startsWith("task.")) return "tasks";
   if (workflow.trigger.objectKey === "contacts" || workflow.trigger.objectKey === "companies" || workflow.trigger.objectKey === "deals") return workflow.trigger.objectKey;
   return "contacts";
+}
+
+function isControlCondition(condition: WorkflowCondition): boolean {
+  return condition.type === "if" || condition.type === "switch" || condition.type === "loop";
+}
+
+function conditionConfigText(value: unknown, fallback = ""): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return fallback;
+}
+
+function switchCasesFromConfig(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  }
+  if (typeof value === "string") {
+    return value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function workflowTargetRecordId(workflow: Pick<WorkflowDefinition, "trigger" | "conditions">): string {
+  const configuredTarget = workflow.trigger.config?.targetRecordId;
+  if (typeof configuredTarget === "string" && configuredTarget.trim()) return configuredTarget.trim();
+  const targetCondition = workflow.conditions.find((condition) => condition.key === "target-record" && condition.field === "recordId");
+  return typeof targetCondition?.value === "string" ? targetCondition.value : "";
+}
+
+function applyWorkflowRecordScope(draft: AutomationDraft, targetRecord?: CrmRecord): AutomationDraft {
+  if (!targetRecord) return draft;
+  const targetCondition: WorkflowCondition = {
+    key: "target-record",
+    type: "if",
+    field: "recordId",
+    operator: "equals",
+    value: targetRecord.id,
+    config: {
+      label: `仅当触发记录是 ${targetRecord.title}`,
+      branch: "matched",
+      trueLabel: "命中此记录",
+      falseLabel: "不是此记录，停止"
+    }
+  };
+  const conditions = [targetCondition, ...draft.conditions.filter((condition) => condition.key !== "target-record")];
+  return {
+    ...draft,
+    trigger: {
+      ...draft.trigger,
+      objectKey: targetRecord.objectKey,
+      config: {
+        ...(draft.trigger.config ?? {}),
+        targetRecordId: targetRecord.id,
+        targetRecordTitle: targetRecord.title,
+        targetObjectKey: targetRecord.objectKey
+      }
+    },
+    conditions
+  };
 }
 
 function stripWorkflowReadonlyFields(workflow: AutomationDraft) {

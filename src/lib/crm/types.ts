@@ -660,6 +660,7 @@ export interface WorkflowTrigger {
   type: WorkflowTriggerType;
   event?: string;
   objectKey?: string;
+  config?: Record<string, unknown>;
   schedule?: {
     mode: "daily" | "weekly" | "interval";
     dailyAt?: string;

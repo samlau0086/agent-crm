@@ -1469,6 +1469,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       objectRecords[0],
     [activeObject?.key, filteredRecords, objectRecords, records, selectedRecordId]
   );
+  const selectedRecordWorkflows = useMemo(
+    () => (selectedRecord ? props.workflows.filter((workflow) => isWorkflowScopedToRecord(workflow, selectedRecord)) : []),
+    [props.workflows, selectedRecord]
+  );
   const selectedRecordPendingDeleteRequest = useMemo(
     () =>
       selectedRecord
@@ -2192,8 +2196,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecordPanelMode("detail");
   }
 
-  function openAutomationForRecord(record: CrmRecord) {
+  function openAutomationForRecord(record: CrmRecord, workflowId?: string) {
     const nextParams = new URLSearchParams({ objectKey: record.objectKey, recordId: record.id });
+    if (workflowId) {
+      nextParams.set("workflowId", workflowId);
+    }
     setActiveNav("automation");
     router.push(`${crmPathForNav("automation")}?${nextParams.toString()}`);
   }
@@ -4339,6 +4346,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             为此记录创建自动化
                           </button>
                         </div>
+                        {selectedRecordWorkflows.length ? (
+                          <div className="record-workflow-list">
+                            {selectedRecordWorkflows.map((workflow) => (
+                              <button className="record-workflow-card" key={workflow.id} type="button" onClick={() => openAutomationForRecord(selectedRecord, workflow.id)}>
+                                <span>
+                                  <strong>{workflow.name}</strong>
+                                  <small>{workflow.goal}</small>
+                                </span>
+                                <span className={workflow.status === "active" ? "badge" : "subtle-badge"}>{workflow.status}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
+                        )}
                       </div>
                     ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
@@ -15166,6 +15188,17 @@ function buildEmailConnectionConfig(draft: EmailAccountDraft) {
     outboundServices,
     defaultOutboundServiceId: draft.defaultOutboundServiceId || outboundServices[0]?.id
   };
+}
+
+function workflowTargetRecordIdFromDefinition(workflow: WorkflowDefinition): string {
+  const configuredTarget = workflow.trigger.config?.targetRecordId;
+  if (typeof configuredTarget === "string" && configuredTarget.trim()) return configuredTarget.trim();
+  const targetCondition = workflow.conditions.find((condition) => condition.key === "target-record" && condition.field === "recordId");
+  return typeof targetCondition?.value === "string" ? targetCondition.value : "";
+}
+
+function isWorkflowScopedToRecord(workflow: WorkflowDefinition, record: CrmRecord): boolean {
+  return workflow.trigger.objectKey === record.objectKey && workflowTargetRecordIdFromDefinition(workflow) === record.id;
 }
 
 async function fetchJson<T = unknown>(
