@@ -389,7 +389,11 @@ await run("workflow graph supports follow-up wait reply and draft email nodes", 
   assert(generated.workflow.graph.edges.some((edge) => edge.sourceNodeId === "wait-reply" && edge.sourceHandle === "not_replied" && edge.targetNodeId === "draft-follow-up-email"));
   assert(generated.workflow.graph.edges.some((edge) => edge.sourceNodeId === "wait-reply" && edge.sourceHandle === "replied" && edge.targetNodeId === "end"));
   assert.equal(generated.workflow.conditions.some((condition) => condition.type === "email_behavior"), true);
-  assert.equal(generated.workflow.actions.some((action) => action.type === "send_email" && action.config.mode === "draft"), true);
+  const draftAction = generated.workflow.actions.find((action) => action.type === "send_email" && action.config.mode === "draft");
+  assert(draftAction);
+  assert.match(String(draftAction.config.bodyText), /您好 \{\{record\.title\}\}/);
+  assert.doesNotMatch(String(draftAction.config.bodyText), /Draft a concise|Use CRM context|knowledge base|source footer/i);
+  assert.match(String(draftAction.config.aiInstructions), /CRM context/);
 
   const graph = workflowCreateSchema.parse({
     name: "Reply follow-up workflow",

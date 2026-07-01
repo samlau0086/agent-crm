@@ -485,12 +485,66 @@ function generatedTaskConfig(goal: string, dueInDays: number, priority: "normal"
   };
 }
 
+function generatedEmailBody(goal: string): string {
+  const normalizedGoal = goal.toLowerCase();
+  const isColdOutreach = /cold|冷|开发|陌生|初次/.test(normalizedGoal);
+  const isNoReplyFollowUp = /no reply|未回复|没有回复|follow.?up|跟进/.test(normalizedGoal);
+  const isQuoteFollowUp = /quote|proposal|报价|方案/.test(normalizedGoal);
+
+  if (isColdOutreach) {
+    return [
+      "您好 {{record.title}}，",
+      "",
+      "想和您简要沟通一下贵司近期是否有相关采购、合作或业务增长需求。我们可以根据您的实际场景补充产品资料、报价方案或落地建议。",
+      "",
+      "如果方便，请回复您当前最关注的问题或合适的沟通时间，我会据此准备下一步资料。"
+    ].join("\n");
+  }
+
+  if (isQuoteFollowUp) {
+    return [
+      "您好 {{record.title}}，",
+      "",
+      "想跟进一下之前发送的报价或方案。请问您这边是否已经有初步反馈，或者还需要我补充产品参数、交付周期、付款条款等信息？",
+      "",
+      "如果您方便，我可以根据目前的评估进展整理一版更贴近需求的下一步建议。"
+    ].join("\n");
+  }
+
+  if (isNoReplyFollowUp) {
+    return [
+      "您好 {{record.title}}，",
+      "",
+      "想跟进一下之前沟通的事项。请问您这边是否仍在评估，或者目前是否有需要我们配合补充的信息？",
+      "",
+      "如果优先级有变化也没有关系，您可以简单回复当前状态，我会据此安排后续跟进。"
+    ].join("\n");
+  }
+
+  return [
+    "您好 {{record.title}}，",
+    "",
+    "想跟进一下我们之前沟通的事项，并确认您当前最需要推进的下一步。若您有新的问题或决策信息，也可以直接回复我。",
+    "",
+    "我会根据您的反馈整理后续资料或安排下一次沟通。"
+  ].join("\n");
+}
+
+function generatedEmailAiInstructions(goal: string): string {
+  return [
+    `Workflow goal: ${goal}`,
+    "Before sending, refine the draft with CRM context, recent communication, activity timeline, and knowledge base.",
+    "Do not include a signature, source footer, or internal reasoning in the final email body."
+  ].join("\n");
+}
+
 function generatedEmailDraftConfig(goal: string): Record<string, unknown> {
   return {
     mode: "draft",
     to: ["{{record.data.email}}"],
     subject: "Follow up {{record.title}}",
-    bodyText: `Draft a concise follow-up based on this workflow goal: ${goal}. Use CRM context, recent communication, and knowledge base. Do not include a signature or source footer.`,
+    bodyText: generatedEmailBody(goal),
+    aiInstructions: generatedEmailAiInstructions(goal),
     aiAssisted: true
   };
 }
