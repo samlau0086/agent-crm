@@ -688,7 +688,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       </div>
 
       {modalGraphNode ? (
-        <div className="app-dialog-backdrop" role="presentation">
+        <div className="app-dialog-backdrop workflow-node-dialog-backdrop" role="presentation">
           <div className="app-dialog workflow-node-modal" role="dialog" aria-modal="true" aria-labelledby="workflow-node-modal-title">
             <div className="stage-header">
               <div>
@@ -713,7 +713,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       ) : null}
 
       {nodeDeleteCandidate ? (
-        <div className="app-dialog-backdrop" role="presentation">
+        <div className="app-dialog-backdrop workflow-node-dialog-backdrop" role="presentation">
           <div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby="workflow-node-delete-title">
             <h3 id="workflow-node-delete-title">删除节点</h3>
             <p>确定删除节点“{nodeDeleteCandidate.label}”？相关连接线也会一并删除。</p>
