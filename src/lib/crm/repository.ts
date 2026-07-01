@@ -100,7 +100,6 @@ import type {
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
 import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
 import {
-  buildWorkflowDraftFromGoal,
   buildWorkflowIdempotencyKey,
   buildWorkflowTestIdempotencyKey,
   didWorkflowConditionsPass,
@@ -114,6 +113,7 @@ import {
   workflowNodeToCondition,
   workflowMatchesEvent
 } from "@/lib/workflows/core";
+import { generateWorkflowWithAiDesigner } from "@/lib/workflows/ai-designer";
 
 type PrismaContext = typeof prisma;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
@@ -1776,7 +1776,9 @@ export class PrismaCrmRepository {
       });
       recordTitle = record?.title;
     }
-    return buildWorkflowDraftFromGoal({ ...input, recordTitle });
+    const settings = await this.ensureEmailAiSettings(context.workspaceId);
+    const providerConfig = await this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+    return generateWorkflowWithAiDesigner({ ...input, recordTitle }, { settings, providerConfig });
   }
 
   async listWorkflowRuns(context: RequestContext, workflowId?: string): Promise<WorkflowRun[]> {

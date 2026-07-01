@@ -70,6 +70,7 @@ import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.t
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
+import { generateWorkflowWithAiDesigner } from "../src/lib/workflows/ai-designer.ts";
 import { buildWorkflowDraftFromGoal, graphToLegacyWorkflow, legacyWorkflowToGraph, workflowMatchesEvent } from "../src/lib/workflows/core.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
@@ -485,6 +486,158 @@ await run("workflow generator creates a cold outreach until reply sequence", () 
   assert.equal(scopedIfNodes.length, 1);
   assert.equal(scopedIfNodes[0].id, "scope-record");
   assert.equal(scopedIfNodes[0].config.condition?.value, "contact-lin");
+});
+
+await run("workflow AI designer asks the model for graph logic instead of only using templates", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  const fetchCalls = [];
+  const aiGraph = {
+    scope: { mode: "object", objectKey: "contacts" },
+    nodes: [
+      {
+        id: "start",
+        type: "start",
+        label: "Start: new cold prospect",
+        position: { x: 40, y: 160 },
+        config: { trigger: { type: "crm_event", event: "record.created", objectKey: "contacts" } }
+      },
+      {
+        id: "draft-intro-from-ai",
+        type: "create_email_draft",
+        label: "Draft personalized cold email",
+        position: { x: 340, y: 80 },
+        config: {
+          to: "{{record.data.email}}",
+          subject: "Quick question for {{record.title}}",
+          body: "Hi {{record.title}}, I noticed your company may be exploring automation. Would it be useful to compare your current follow-up process with a lightweight CRM workflow?",
+          requiresApproval: true
+        }
+      },
+      { id: "wait-three-days", type: "wait_delay", label: "Wait 3 days", position: { x: 640, y: 160 }, config: { delayAmount: 3, delayUnit: "days" } },
+      { id: "check-reply", type: "wait_reply", label: "Check for reply", position: { x: 940, y: 160 }, config: { lookbackDays: 3, replySource: "email" } },
+      {
+        id: "task-handle-reply",
+        type: "create_task",
+        label: "Sales review replied lead",
+        position: { x: 1240, y: 40 },
+        config: { activityType: "task", title: "Review reply from {{record.title}}", body: "客户已回复，检查意向并决定下一步。", dueInDays: 0 }
+      },
+      {
+        id: "draft-second-followup",
+        type: "create_email_draft",
+        label: "Draft second follow-up",
+        position: { x: 1240, y: 260 },
+        config: {
+          to: "{{record.data.email}}",
+          subject: "Following up on automation",
+          body: "Hi {{record.title}}, just following up in case this is relevant. If timing is not right, I can close the loop.",
+          requiresApproval: true
+        }
+      },
+      { id: "end", type: "end", label: "End", position: { x: 1540, y: 160 }, config: {} }
+    ],
+    edges: [
+      { id: "edge-start-draft", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "draft-intro-from-ai" },
+      { id: "edge-draft-wait", sourceNodeId: "draft-intro-from-ai", sourceHandle: "main", targetNodeId: "wait-three-days" },
+      { id: "edge-wait-check", sourceNodeId: "wait-three-days", sourceHandle: "after_delay", targetNodeId: "check-reply" },
+      { id: "edge-replied-task", sourceNodeId: "check-reply", sourceHandle: "replied", targetNodeId: "task-handle-reply" },
+      { id: "edge-no-reply-followup", sourceNodeId: "check-reply", sourceHandle: "not_replied", targetNodeId: "draft-second-followup" },
+      { id: "edge-task-end", sourceNodeId: "task-handle-reply", sourceHandle: "main", targetNodeId: "end" },
+      { id: "edge-followup-end", sourceNodeId: "draft-second-followup", sourceHandle: "main", targetNodeId: "end" }
+    ]
+  };
+  const fetchImpl = async (url, init) => {
+    fetchCalls.push({ url, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              name: "AI designed cold outreach",
+              description: "Cold email sequence that waits for a reply and branches.",
+              goal: "冷邮件联系直到客户回复为止",
+              trigger: { type: "crm_event", event: "record.created", objectKey: "contacts" },
+              graph: aiGraph,
+              explanation: {
+                triggerReason: "New contacts should enter the outreach sequence.",
+                expectedOutcome: "A human-reviewed cold email and follow-up are drafted until the contact replies.",
+                risks: ["Email drafts require review before sending."]
+              }
+            })
+          }
+        }
+      ]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  const generated = await generateWorkflowWithAiDesigner(
+    { goal: "冷邮件联系直到客户回复为止", objectKey: "contacts" },
+    {
+      settings,
+      providerConfig: { provider: "openai", baseUrl: "https://ai.example/v1", apiKey: "test-key", model: "test-model", timeoutMs: 10000 },
+      fetchImpl
+    }
+  );
+
+  assert.equal(fetchCalls.length, 1);
+  assert.match(fetchCalls[0].url, /https:\/\/ai\.example\/v1\/chat\/completions/);
+  const systemPrompt = fetchCalls[0].body.messages[0].content;
+  assert.match(systemPrompt, /Do not use fixed templates blindly/);
+  assert.match(systemPrompt, /wait_reply/);
+  assert.match(systemPrompt, /replied and not_replied/);
+  assert.match(systemPrompt, /Supported node types and output handles/);
+  assert.equal(generated.workflow.name, "AI designed cold outreach");
+  assert.equal(generated.workflow.graph.nodes.some((node) => node.id === "draft-intro-from-ai"), true);
+  assert.equal(generated.workflow.graph.nodes.some((node) => node.id === "draft-cold-email"), false);
+  assert.equal(generated.workflow.graph.edges.some((edge) => edge.sourceNodeId === "check-reply" && edge.sourceHandle === "not_replied" && edge.targetNodeId === "draft-second-followup"), true);
+  assert.equal(generated.workflow.actions.filter((action) => action.type === "send_email").length, 2);
+  assert.equal(generated.workflow.conditions.some((condition) => condition.type === "email_behavior"), true);
+});
+
+await run("workflow AI designer enforces record scope returned by record pages", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  const fetchImpl = async () => new Response(JSON.stringify({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            name: "Bad scope from model",
+            goal: "只跟进林晓",
+            trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+            graph: {
+              scope: { mode: "object", objectKey: "contacts" },
+              nodes: [
+                { id: "start", type: "start", label: "Start", position: { x: 40, y: 160 }, config: { trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" } } },
+                { id: "end", type: "end", label: "End", position: { x: 320, y: 160 }, config: {} }
+              ],
+              edges: [{ id: "edge-start-end", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "end" }]
+            }
+          })
+        }
+      }
+    ]
+  }), { status: 200, headers: { "content-type": "application/json" } });
+
+  const generated = await generateWorkflowWithAiDesigner(
+    { goal: "只跟进林晓", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" },
+    {
+      settings,
+      providerConfig: { provider: "openai", baseUrl: "https://ai.example/v1", apiKey: "test-key", model: "test-model", timeoutMs: 10000 },
+      fetchImpl
+    }
+  );
+
+  const start = generated.workflow.graph.nodes.find((node) => node.id === "start");
+  assert.equal(generated.workflow.graph.scope.mode, "record");
+  assert.equal(generated.workflow.graph.scope.recordId, "contact-lin");
+  assert.equal(start?.config.trigger?.config?.targetRecordId, "contact-lin");
+});
+
+await run("Prisma workflow generation uses the Workflow Designer Agent provider", () => {
+  const repositorySource = readFileSync("src/lib/crm/repository.ts", "utf8");
+  assert.match(repositorySource, /generateWorkflowWithAiDesigner/);
+  assert.match(repositorySource, /ensureEmailAiSettings\(context\.workspaceId\)/);
+  assert.match(repositorySource, /getEmailAiProviderConfigForWorkspace\(context\.workspaceId\)/);
 });
 
 await run("workflow graph conversion fills blank action labels before save", () => {
