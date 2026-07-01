@@ -677,6 +677,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
               onMoveNode={moveGraphNode}
               onOpenNodeModal={setNodeModalId}
               onOpenQuickAdd={openQuickAdd}
+              onSave={() => { void saveDraft(); }}
               onSelectNode={setSelectedGraphNodeId}
               onStartConnection={setPendingConnection}
               onCancelQuickAdd={() => { setQuickAdd(null); setPendingConnection(null); }}
@@ -706,9 +707,15 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
                 <h3 id="workflow-node-modal-title">节点设置</h3>
                 <p className="subtle">双击节点打开的配置面板，保存草稿后生效。</p>
               </div>
-              <button className="icon-button" type="button" onClick={() => setNodeModalId("")}>
-                X
-              </button>
+              <div className="toolbar">
+                <button className="primary-button" type="button" onClick={() => { void saveDraft(); }} disabled={isBusy}>
+                  <Save size={16} />
+                  保存草稿
+                </button>
+                <button className="icon-button" type="button" onClick={() => setNodeModalId("")}>
+                  X
+                </button>
+              </div>
             </div>
             <WorkflowGraphInspector
               node={modalGraphNode}
@@ -1139,7 +1146,8 @@ function WorkflowGraphCanvas({
   onDeleteNode,
   onDeleteEdge,
   onMoveNode,
-  onOpenNodeModal
+  onOpenNodeModal,
+  onSave
 }: {
   graph: WorkflowGraph;
   selectedNodeId: string;
@@ -1156,6 +1164,7 @@ function WorkflowGraphCanvas({
   onDeleteEdge: (edgeId: string) => void;
   onMoveNode: (nodeId: string, position: WorkflowNode["position"]) => void;
   onOpenNodeModal: (nodeId: string) => void;
+  onSave: () => void;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1282,6 +1291,12 @@ function WorkflowGraphCanvas({
       <button className="workflow-fullscreen-button icon-button" type="button" onClick={() => setIsFullscreen((current) => !current)}>
         {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
+      {isFullscreen ? (
+        <button className="workflow-fullscreen-save-button primary-button" data-testid="workflow-fullscreen-save" type="button" onClick={onSave}>
+          <Save size={16} />
+          保存草稿
+        </button>
+      ) : null}
       {isFullscreen ? (
         <div className="workflow-floating-palette" data-testid="workflow-floating-palette">
           <strong>节点库</strong>

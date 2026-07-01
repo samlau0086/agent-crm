@@ -3293,6 +3293,15 @@ button {
   box-shadow: var(--shadow-sm);
 }
 
+.workflow-fullscreen-save-button {
+  position: sticky;
+  top: 0;
+  left: calc(100% - 176px);
+  z-index: 10;
+  margin-bottom: -36px;
+  box-shadow: var(--shadow-sm);
+}
+
 .workflow-floating-palette {
   position: sticky;
   top: 52px;

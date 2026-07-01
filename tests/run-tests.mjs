@@ -1891,6 +1891,8 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /onDoubleClick/);
   assert.match(automation, /workflow-node-modal/);
   assert.match(automation, /workflow-node-dialog-backdrop/);
+  assert.match(automation, /workflow-fullscreen-save/);
+  assert.match(automation, /onSave=\{\(\) => \{ void saveDraft\(\); \}\}/);
   assert.match(automation, /nodeDeleteCandidate/);
   assert.match(automation, /confirmDeleteGraphNode/);
   assert.match(automation, /workflow-floating-palette/);
@@ -1947,6 +1949,7 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(styles, /\.workflow-graph-stage/);
   assert.match(styles, /\.workflow-graph-canvas\.fullscreen/);
   assert.match(styles, /\.workflow-fullscreen-button/);
+  assert.match(styles, /\.workflow-fullscreen-save-button/);
   assert.match(styles, /\.workflow-graph-edge-hit/);
   assert.match(styles, /\.workflow-graph-edge-preview/);
   assert.match(styles, /\.workflow-edge-delete-button/);
