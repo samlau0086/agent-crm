@@ -131,8 +131,11 @@ const workflowGraphPaletteItems: WorkflowGraphPaletteItem[] = [
   { type: "if", icon: ShieldCheck, description: "true / false" },
   { type: "switch", icon: Split, description: "case / default" },
   { type: "loop", icon: Repeat2, description: "continue / break" },
-  { type: "send_email", icon: Send, description: "send or draft" },
-  { type: "create_task", icon: CheckCircle2, description: "task activity" },
+  { type: "wait_delay", icon: CalendarClock, description: "wait then continue" },
+  { type: "wait_reply", icon: Mail, description: "replied / not replied" },
+  { type: "create_email_draft", icon: Mail, description: "draft for review" },
+  { type: "send_email", icon: Send, description: "send or queue" },
+  { type: "create_task", icon: CheckCircle2, description: "follow-up task" },
   { type: "update_deal", icon: BadgeDollarSign, description: "deal stage" },
   { type: "notify", icon: Mail, description: "notify channel" },
   { type: "end", icon: PauseCircle, description: "finish path" }
@@ -1126,7 +1129,6 @@ function AutomationNodeInspector({
           <textarea className="textarea" value={String(action.config.bodyHtml ?? "")} onChange={(event) => updateActionConfig(draft, action.key, "bodyHtml", event.target.value, onChange)} />
         </label>
       ) : null}
-      {users.length ? <div className="subtle">可用负责人：{users.slice(0, 3).map((user) => user.name).join("、")}</div> : null}
     </aside>
   );
 }
@@ -1645,7 +1647,43 @@ function WorkflowGraphInspector({
         </>
       ) : null}
 
-      {node.type === "send_email" ? (
+      {node.type === "wait_delay" ? (
+        <>
+          <label>
+            <span className="subtle">等待时长</span>
+            <input className="input" type="number" min={1} max={365} value={String(config.delayAmount ?? 2)} onChange={(event) => updateConfig("delayAmount", Number(event.target.value))} />
+          </label>
+          <label>
+            <span className="subtle">时间单位</span>
+            <select className="select" value={String(config.delayUnit ?? "days")} onChange={(event) => updateConfig("delayUnit", event.target.value)}>
+              <option value="minutes">分钟</option>
+              <option value="hours">小时</option>
+              <option value="days">天</option>
+            </select>
+          </label>
+          <div className="subtle">测试时会直接记录等待点；接入后台调度后将按此时间恢复执行。</div>
+        </>
+      ) : null}
+
+      {node.type === "wait_reply" ? (
+        <>
+          <label>
+            <span className="subtle">等待回复窗口（天）</span>
+            <input className="input" type="number" min={1} max={365} value={String(config.lookbackDays ?? 7)} onChange={(event) => updateConfig("lookbackDays", Number(event.target.value))} />
+          </label>
+          <label>
+            <span className="subtle">回复来源</span>
+            <select className="select" value={String(config.replySource ?? "email")} onChange={(event) => updateConfig("replySource", event.target.value)}>
+              <option value="email">邮件回复</option>
+              <option value="activity">活动记录</option>
+              <option value="any">任意沟通</option>
+            </select>
+          </label>
+          <div className="subtle">此节点输出 replied / not_replied 两个分支。</div>
+        </>
+      ) : null}
+
+      {node.type === "send_email" || node.type === "create_email_draft" ? (
         <>
           <label>
             <span className="subtle">发件账户</span>
@@ -1675,7 +1713,56 @@ function WorkflowGraphInspector({
         </>
       ) : null}
 
-      {node.type === "create_task" || node.type === "notify" ? (
+      {node.type === "create_task" ? (
+        <>
+          <label>
+            <span className="subtle">任务标题</span>
+            <input className="input" value={String(config.title ?? "")} onChange={(event) => updateConfig("title", event.target.value)} />
+          </label>
+          <label>
+            <span className="subtle">任务说明</span>
+            <textarea className="textarea" value={String(config.body ?? "")} onChange={(event) => updateConfig("body", event.target.value)} />
+          </label>
+          <label>
+            <span className="subtle">指派给</span>
+            <select className="select" value={String(config.assigneeMode ?? "record_owner")} onChange={(event) => updateConfig("assigneeMode", event.target.value)}>
+              <option value="record_owner">当前记录负责人</option>
+              <option value="current_user">当前运行用户</option>
+              <option value="specific_user">指定用户</option>
+            </select>
+          </label>
+          {config.assigneeMode === "specific_user" ? (
+            <label>
+              <span className="subtle">指定用户</span>
+              <select className="select" value={String(config.assigneeUserId ?? "")} onChange={(event) => updateConfig("assigneeUserId", event.target.value || undefined)}>
+                <option value="">请选择用户</option>
+                {users.map((user) => (
+                  <option key={user.id} value={user.id}>{user.name} - {user.email}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <label>
+            <span className="subtle">截止时间（几天后）</span>
+            <input className="input" type="number" min={0} max={365} value={String(config.dueInDays ?? 2)} onChange={(event) => updateConfig("dueInDays", Number(event.target.value))} />
+          </label>
+          <label>
+            <span className="subtle">优先级</span>
+            <select className="select" value={String(config.priority ?? "normal")} onChange={(event) => updateConfig("priority", event.target.value)}>
+              <option value="low">低</option>
+              <option value="normal">普通</option>
+              <option value="high">高</option>
+              <option value="urgent">紧急</option>
+            </select>
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={Boolean(config.preventDuplicate ?? true)} onChange={(event) => updateConfig("preventDuplicate", event.target.checked)} />
+            已有同名未完成任务时不重复创建
+          </label>
+        </>
+      ) : null}
+
+      {node.type === "notify" ? (
         <>
           <label>
             <span className="subtle">标题</span>
@@ -1695,7 +1782,6 @@ function WorkflowGraphInspector({
         </label>
       ) : null}
 
-      {users.length ? <div className="subtle">可用负责人：{users.slice(0, 3).map((user) => user.name).join("、")}</div> : null}
     </aside>
   );
 }
@@ -1788,9 +1874,12 @@ function createGraphNode(type: WorkflowNodeType, index: number, config: Record<s
 }
 
 function quickAddNodeTypesForHandle(handle: string): WorkflowNodeType[] {
+  if (handle === "not_replied") return ["create_email_draft", "create_task", "notify", "end"];
+  if (handle === "replied") return ["create_task", "update_deal", "notify", "end"];
   if (handle === "false" || handle === "break" || handle === "default") return ["notify", "create_task", "end"];
-  if (handle.startsWith("case:")) return ["send_email", "create_task", "update_deal", "notify", "end"];
-  return ["if", "switch", "loop", "send_email", "create_task", "update_deal", "notify", "end"];
+  if (handle === "after_delay") return ["wait_reply", "create_email_draft", "create_task", "notify", "end"];
+  if (handle.startsWith("case:")) return ["create_email_draft", "send_email", "create_task", "update_deal", "notify", "end"];
+  return ["if", "switch", "loop", "wait_delay", "wait_reply", "create_email_draft", "send_email", "create_task", "update_deal", "notify", "end"];
 }
 
 function isWorkflowPaletteNodeType(value: string): value is WorkflowNodeType {
@@ -1811,8 +1900,11 @@ function defaultGraphNodeConfig(type: WorkflowNodeType, config: Record<string, u
   if (type === "if") return { field: "recordId", operator: "equals", value: "" };
   if (type === "switch") return { field: "stageKey", cases: ["new", "qualified"], operator: "exists" };
   if (type === "loop") return { collectionField: "items", maxIterations: 50 };
-  if (type === "send_email") return { mode: "draft", to: ["{{record.email}}"], subject: "Follow up {{record.title}}", bodyText: "" };
-  if (type === "create_task") return { activityType: "task", title: "Follow up", body: "", dueInDays: 2 };
+  if (type === "wait_delay") return { delayAmount: 2, delayUnit: "days" };
+  if (type === "wait_reply") return { lookbackDays: 7, replySource: "email" };
+  if (type === "create_email_draft") return { mode: "draft", to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "", aiAssisted: true };
+  if (type === "send_email") return { mode: "queued", to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "" };
+  if (type === "create_task") return { activityType: "task", title: "Follow up", body: "", dueInDays: 2, assigneeMode: "record_owner", priority: "normal", preventDuplicate: true };
   if (type === "update_deal") return { stageKey: "" };
   if (type === "notify") return { title: "Workflow notification", content: "" };
   return {};
@@ -1823,6 +1915,9 @@ function defaultGraphNodeLabel(type: WorkflowNodeType): string {
   if (type === "if") return "IF";
   if (type === "switch") return "SWITCH";
   if (type === "loop") return "LOOP";
+  if (type === "wait_delay") return "Wait / Delay";
+  if (type === "wait_reply") return "Wait for Reply";
+  if (type === "create_email_draft") return "Create Email Draft";
   if (type === "send_email") return "Send Email";
   if (type === "create_task") return "Create Task";
   if (type === "update_deal") return "Update Deal";
@@ -1838,12 +1933,15 @@ function defaultGraphOutputHandles(type: WorkflowNodeType): string[] {
   if (type === "if") return ["true", "false"];
   if (type === "switch") return ["case:new", "case:qualified", "default"];
   if (type === "loop") return ["continue", "break"];
+  if (type === "wait_delay") return ["after_delay"];
+  if (type === "wait_reply") return ["replied", "not_replied"];
   if (type === "end") return [];
   return ["main"];
 }
 
 function outputHandleOffset(handle: string): number {
-  if (handle === "false" || handle === "break" || handle === "default") return 22;
+  if (handle === "false" || handle === "break" || handle === "default" || handle === "not_replied") return 22;
+  if (handle === "replied") return -18;
   if (handle.startsWith("case:")) return -18;
   return 0;
 }

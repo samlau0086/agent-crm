@@ -5677,6 +5677,19 @@ export class PrismaCrmRepository {
 
       if (node.type === "start") {
         message = graph.scope.mode === "record" ? `Record scoped: ${graph.scope.recordTitle ?? graph.scope.recordId}` : graph.scope.mode === "object" ? `Object scoped: ${graph.scope.objectKey}` : "Global workflow";
+      } else if (node.type === "wait_delay") {
+        const amount = Math.max(1, Math.min(Number(node.config.delayAmount ?? 1) || 1, 365));
+        const unit = node.config.delayUnit === "hours" || node.config.delayUnit === "minutes" ? node.config.delayUnit : "days";
+        outputHandle = "after_delay";
+        message = options.test
+          ? `Test run: would wait ${amount} ${unit}.`
+          : `Delay checkpoint reached immediately; scheduler support can resume after ${amount} ${unit}.`;
+      } else if (node.type === "wait_reply") {
+        const condition = workflowNodeToCondition(node);
+        const result = evaluateWorkflowCondition(condition, triggerData, record);
+        conditionResults.push({ key: condition.key, passed: result.passed, actualValue: result.actualValue });
+        outputHandle = result.passed ? "replied" : "not_replied";
+        message = result.passed ? "Reply detected." : "No reply detected.";
       } else if (node.type === "if" || node.type === "switch" || node.type === "loop") {
         const condition = workflowNodeToCondition(node);
         const result = evaluateWorkflowCondition(condition, triggerData, record);
@@ -5769,11 +5782,21 @@ export class PrismaCrmRepository {
         const type = typeof action.config.activityType === "string" ? action.config.activityType : "task";
         const dueInDays = typeof action.config.dueInDays === "number" ? action.config.dueInDays : undefined;
         const dueAt = dueInDays ? new Date(Date.now() + dueInDays * 24 * 60 * 60 * 1000).toISOString() : undefined;
+        const title = renderWorkflowTextTemplate(action.config.title ?? action.name, triggerData, record) || action.name;
+        if (type === "task" && action.config.preventDuplicate !== false) {
+          const existingTask = (await this.listActivities(context, record.id)).find((activity) => activity.type === "task" && !activity.completedAt && !activity.archivedAt && activity.title === title);
+          if (existingTask) {
+            return { actionKey: action.key, status: "skipped", message: `Skipped duplicate task ${existingTask.id}` };
+          }
+        }
+        const ownerHint = typeof action.config.assigneeMode === "string" ? `Assignee: ${action.config.assigneeMode}${typeof action.config.assigneeUserId === "string" ? ` (${action.config.assigneeUserId})` : ""}` : "";
+        const priorityHint = typeof action.config.priority === "string" ? `Priority: ${action.config.priority}` : "";
+        const body = [renderWorkflowTextTemplate(action.config.body, triggerData, record), ownerHint, priorityHint].filter(Boolean).join("\n");
         const activity = await this.createActivity(context, {
           recordId: record.id,
           type: type as Activity["type"],
-          title: renderWorkflowTextTemplate(action.config.title ?? action.name, triggerData, record) || action.name,
-          body: renderWorkflowTextTemplate(action.config.body, triggerData, record),
+          title,
+          body,
           dueAt
         });
         return { actionKey: action.key, status: "completed", message: `Created activity ${activity.id}` };
@@ -5786,10 +5809,10 @@ export class PrismaCrmRepository {
           : (await this.listEmailAccounts(context)).find((candidate) => candidate.sendEnabled && candidate.status === "active");
         if (!account) throw new Error("No active send-enabled email account");
         const to = Array.isArray(action.config.to)
-          ? action.config.to.filter((value): value is string => typeof value === "string")
+          ? action.config.to.filter((value): value is string => typeof value === "string").map((value) => renderWorkflowTextTemplate(value, triggerData, record)).filter(Boolean)
           : [typeof triggerData.from === "string" ? triggerData.from : typeof record?.data.email === "string" ? record.data.email : ""].filter(Boolean);
-        const cc = Array.isArray(action.config.cc) ? action.config.cc.filter((value): value is string => typeof value === "string") : undefined;
-        const bcc = Array.isArray(action.config.bcc) ? action.config.bcc.filter((value): value is string => typeof value === "string") : undefined;
+        const cc = Array.isArray(action.config.cc) ? action.config.cc.filter((value): value is string => typeof value === "string").map((value) => renderWorkflowTextTemplate(value, triggerData, record)).filter(Boolean) : undefined;
+        const bcc = Array.isArray(action.config.bcc) ? action.config.bcc.filter((value): value is string => typeof value === "string").map((value) => renderWorkflowTextTemplate(value, triggerData, record)).filter(Boolean) : undefined;
         if (to.length === 0) throw new Error("No email recipient");
         const message = await this.recordEmailMessage(context, {
           accountId: account.id,

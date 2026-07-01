@@ -376,6 +376,61 @@ await run("workflow schema allows graph drafts without action nodes", () => {
   assert.equal(parsed.graph.scope.mode, "record");
 });
 
+await run("workflow graph supports follow-up wait reply and draft email nodes", () => {
+  const graph = workflowCreateSchema.parse({
+    name: "Reply follow-up workflow",
+    goal: "Wait for a reply and draft a follow-up when there is no response",
+    status: "draft",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [],
+    actions: [],
+    graph: {
+      scope: { mode: "record", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" },
+      nodes: [
+        { id: "start", type: "start", label: "Start: 林晓", position: { x: 40, y: 160 }, config: {} },
+        { id: "wait-delay", type: "wait_delay", label: "Wait 2 days", position: { x: 300, y: 160 }, config: { delayAmount: 2, delayUnit: "days" } },
+        { id: "wait-reply", type: "wait_reply", label: "Wait for reply", position: { x: 560, y: 160 }, config: { lookbackDays: 7, replySource: "email" } },
+        { id: "draft-email", type: "create_email_draft", label: "Draft email", position: { x: 820, y: 60 }, config: { to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "Checking in." } },
+        { id: "task", type: "create_task", label: "Create task", position: { x: 820, y: 260 }, config: { activityType: "task", title: "Reply received task", assigneeMode: "record_owner", priority: "high", preventDuplicate: true } },
+        { id: "end", type: "end", label: "End", position: { x: 1080, y: 160 }, config: {} }
+      ],
+      edges: [
+        { id: "edge-start-delay", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "wait-delay" },
+        { id: "edge-delay-reply", sourceNodeId: "wait-delay", sourceHandle: "after_delay", targetNodeId: "wait-reply" },
+        { id: "edge-reply-task", sourceNodeId: "wait-reply", sourceHandle: "replied", targetNodeId: "task" },
+        { id: "edge-no-reply-draft", sourceNodeId: "wait-reply", sourceHandle: "not_replied", targetNodeId: "draft-email" },
+        { id: "edge-draft-end", sourceNodeId: "draft-email", sourceHandle: "main", targetNodeId: "end" },
+        { id: "edge-task-end", sourceNodeId: "task", sourceHandle: "main", targetNodeId: "end" }
+      ]
+    }
+  }).graph;
+  const legacy = graphToLegacyWorkflow(graph);
+  assert.equal(legacy.conditions[0].type, "email_behavior");
+  assert.equal(legacy.actions.find((action) => action.key === "draft-email")?.type, "send_email");
+  assert.equal(legacy.actions.find((action) => action.key === "draft-email")?.requiresApproval, false);
+  assert.equal(legacy.actions.find((action) => action.key === "draft-email")?.config.mode, "draft");
+
+  const store = new CrmStore(seedData);
+  const context = store.getContext();
+  const contact = store.listRecords(context, "contacts")[0];
+  const workflow = store.createWorkflow(context, {
+    name: "Reply follow-up workflow",
+    goal: "Wait for a reply and draft a follow-up when there is no response",
+    status: "active",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: legacy.conditions,
+    actions: legacy.actions,
+    graph: { ...graph, scope: { mode: "record", objectKey: "contacts", recordId: contact.id, recordTitle: contact.title } }
+  });
+  const noReplyRun = store.testWorkflow(context, workflow.id, { objectKey: "contacts", recordId: contact.id, title: contact.title });
+  assert.equal(noReplyRun.nodeResults?.some((result) => result.nodeId === "wait-delay" && result.outputHandle === "after_delay"), true);
+  assert.equal(noReplyRun.nodeResults?.some((result) => result.nodeId === "wait-reply" && result.outputHandle === "not_replied"), true);
+  assert.equal(noReplyRun.actionResults.find((result) => result.actionKey === "draft-email")?.status, "completed");
+
+  const replyRun = store.testWorkflow(context, workflow.id, { objectKey: "contacts", recordId: contact.id, title: contact.title, direction: "inbound" });
+  assert.equal(replyRun.nodeResults?.some((result) => result.nodeId === "wait-reply" && result.outputHandle === "replied"), true);
+});
+
 await run("workflow graph conversion fills blank action labels before save", () => {
   const graph = legacyWorkflowToGraph({
     trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
@@ -2012,6 +2067,13 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /sourceHandle/);
   assert.match(automation, /continue/);
   assert.match(automation, /break/);
+  assert.match(automation, /wait_delay/);
+  assert.match(automation, /wait_reply/);
+  assert.match(automation, /create_email_draft/);
+  assert.match(automation, /after_delay/);
+  assert.match(automation, /not_replied/);
+  assert.match(automation, /assigneeMode/);
+  assert.match(automation, /preventDuplicate/);
   assert.match(automation, /graphToLegacyWorkflow/);
   assert.match(automation, /legacyWorkflowToGraph/);
   assert.match(automation, /function stripWorkflowReadonlyFields/);

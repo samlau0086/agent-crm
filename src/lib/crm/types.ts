@@ -656,7 +656,7 @@ export type WorkflowConditionType = "field" | "activity" | "email_behavior" | "a
 export type WorkflowActionType = "create_activity" | "send_email" | "update_stage" | "update_record" | "notify" | "create_knowledge_article";
 export type WorkflowApprovalStatus = "pending" | "approved" | "rejected";
 export type WorkflowScopeMode = "record" | "object" | "global";
-export type WorkflowNodeType = "start" | "if" | "switch" | "loop" | "send_email" | "create_task" | "update_deal" | "notify" | "end";
+export type WorkflowNodeType = "start" | "if" | "switch" | "loop" | "wait_delay" | "wait_reply" | "send_email" | "create_email_draft" | "create_task" | "update_deal" | "notify" | "end";
 
 export interface WorkflowScope {
   mode: WorkflowScopeMode;

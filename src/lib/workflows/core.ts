@@ -169,10 +169,10 @@ export function graphToLegacyWorkflow(graph: WorkflowGraph): Pick<WorkflowDefini
   const start = graph.nodes.find((node) => node.type === "start");
   const trigger = normalizeTriggerFromStart(start, graph.scope);
   const conditions: WorkflowCondition[] = graph.nodes
-    .filter((node) => node.type === "if" || node.type === "switch" || node.type === "loop")
+    .filter((node) => node.type === "if" || node.type === "switch" || node.type === "loop" || node.type === "wait_reply")
     .map((node) => workflowNodeToCondition(node));
   const actions: WorkflowAction[] = graph.nodes
-    .filter((node) => node.type === "send_email" || node.type === "create_task" || node.type === "update_deal" || node.type === "notify")
+    .filter((node) => node.type === "send_email" || node.type === "create_email_draft" || node.type === "create_task" || node.type === "update_deal" || node.type === "notify")
     .map((node) => workflowNodeToAction(node));
   return { trigger, conditions, actions };
 }
@@ -181,10 +181,10 @@ export function workflowNodeToCondition(node: WorkflowNode): WorkflowCondition {
   const configured = isRecord(node.config.condition) ? node.config.condition : {};
   return {
     key: getString(configured.key) || node.id,
-    type: node.type === "switch" ? "switch" : node.type === "loop" ? "loop" : "if",
-    field: getString(node.config.field) || getString(configured.field) || "recordId",
+    type: node.type === "switch" ? "switch" : node.type === "loop" ? "loop" : node.type === "wait_reply" ? "email_behavior" : "if",
+    field: getString(node.config.field) || getString(configured.field) || (node.type === "wait_reply" ? "reply" : "recordId"),
     operator: isWorkflowOperator(node.config.operator) ? node.config.operator : isWorkflowOperator(configured.operator) ? configured.operator : "equals",
-    value: node.config.value ?? configured.value,
+    value: node.type === "wait_reply" ? true : node.config.value ?? configured.value,
     prompt: getString(node.config.prompt) || getString(configured.prompt) || undefined,
     config: { ...(isRecord(configured.config) ? configured.config : {}), ...node.config }
   };
@@ -212,21 +212,23 @@ export function workflowNodeToAction(node: WorkflowNode): WorkflowAction {
     };
   }
   const type =
-    node.type === "send_email" ? "send_email" :
+    node.type === "send_email" || node.type === "create_email_draft" ? "send_email" :
     node.type === "update_deal" ? "update_stage" :
     node.type === "notify" ? "notify" :
     "create_activity";
+  const config = node.type === "create_email_draft" ? { ...node.config, mode: "draft" } : node.config;
   return {
     key: node.id,
     type,
     name: getString(node.label) || fallbackName,
-    requiresApproval: type === "send_email" || type === "update_stage" ? true : undefined,
-    config: node.config
+    requiresApproval: node.type === "create_email_draft" ? false : type === "send_email" || type === "update_stage" ? true : undefined,
+    config
   };
 }
 
 function defaultWorkflowActionName(type: WorkflowNode["type"]): string {
   if (type === "send_email") return "Send Email";
+  if (type === "create_email_draft") return "Create Email Draft";
   if (type === "update_deal") return "Update Deal";
   if (type === "notify") return "Notify";
   return "Create Task";
@@ -383,6 +385,13 @@ function readConditionValue(condition: WorkflowCondition, data: Record<string, u
     }
     return text.length > 0;
   }
+  if (condition.type === "email_behavior") {
+    return data.replied === true ||
+      data.hasReply === true ||
+      data.direction === "inbound" ||
+      data.event === "email.message.received" ||
+      data.triggerEvent === "email.message.received";
+  }
 
   const field = condition.field ?? condition.key;
   if (field.startsWith("data.")) {
@@ -454,14 +463,14 @@ function normalizeTriggerFromStart(start: WorkflowNode | undefined, scope: Workf
 }
 
 function workflowActionToNodeType(action: WorkflowAction): WorkflowNode["type"] {
-  if (action.type === "send_email") return "send_email";
+  if (action.type === "send_email") return action.config.mode === "draft" ? "create_email_draft" : "send_email";
   if (action.type === "update_stage" || action.type === "update_record") return "update_deal";
   if (action.type === "notify") return "notify";
   return "create_task";
 }
 
 function isWorkflowNodeType(value: unknown): value is WorkflowNode["type"] {
-  return value === "start" || value === "if" || value === "switch" || value === "loop" || value === "send_email" || value === "create_task" || value === "update_deal" || value === "notify" || value === "end";
+  return value === "start" || value === "if" || value === "switch" || value === "loop" || value === "wait_delay" || value === "wait_reply" || value === "send_email" || value === "create_email_draft" || value === "create_task" || value === "update_deal" || value === "notify" || value === "end";
 }
 
 function isWorkflowOperator(value: unknown): value is WorkflowCondition["operator"] {
