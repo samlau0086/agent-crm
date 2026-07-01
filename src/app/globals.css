@@ -61,7 +61,12 @@ button:disabled {
 }
 
 button {
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
+}
+
+.workflow-graph-node:active {
+  cursor: grabbing;
 }
 
 .app-shell {
@@ -3435,8 +3440,7 @@ button {
   top: 7px;
   right: 8px;
   color: var(--muted);
-  cursor: grab;
-  touch-action: none;
+  cursor: inherit;
   font-size: 13px;
   line-height: 1;
 }

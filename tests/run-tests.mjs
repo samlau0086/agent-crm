@@ -2033,6 +2033,9 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /workflow-node-drag-handle/);
   assert.match(automation, /workflow-node-delete-button/);
   assert.match(automation, /workflow-node-delete-\$\{node\.id\}/);
+  assert.match(automation, /onPointerDown=\{\(event\) => startNodeMove\(event, node\)\}/);
+  assert.match(automation, /shouldIgnoreNodeMove/);
+  assert.match(automation, /data-no-node-drag="true"/);
   assert.match(automation, /Delete workflow node/);
   assert.match(automation, /onDoubleClick/);
   assert.match(automation, /workflow-node-modal/);

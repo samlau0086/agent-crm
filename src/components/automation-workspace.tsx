@@ -28,7 +28,7 @@ import {
   Workflow as WorkflowIcon,
   type LucideIcon
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import type {
   CrmRecord,
@@ -1256,6 +1256,26 @@ function WorkflowGraphCanvas({
     });
   }
 
+  function shouldIgnoreNodeMove(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    return Boolean(target.closest("button, input, select, textarea, a, [data-no-node-drag]"));
+  }
+
+  function startNodeMove(event: ReactPointerEvent<HTMLElement>, node: WorkflowNode) {
+    if (event.button !== 0 || shouldIgnoreNodeMove(event.target)) return;
+    event.preventDefault();
+    onSelectNode(node.id);
+    const target = event.currentTarget.closest(".workflow-graph-node") as HTMLElement | null;
+    const rect = target?.getBoundingClientRect();
+    setMovingNode({
+      nodeId: node.id,
+      offsetX: rect ? event.clientX - rect.left : 110,
+      offsetY: rect ? event.clientY - rect.top : 42,
+      pointerId: event.pointerId
+    });
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
   function handleCanvasDrop(event: DragEvent<HTMLDivElement>) {
     const connection = readConnection(event);
     const nodeType = readNodeType(event);
@@ -1399,6 +1419,7 @@ function WorkflowGraphCanvas({
               onSelectNode(node.id);
             }
           }}
+          onPointerDown={(event) => startNodeMove(event, node)}
           role="button"
           style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
           tabIndex={0}
@@ -1406,20 +1427,6 @@ function WorkflowGraphCanvas({
           <span
             aria-label="Move node"
             className="workflow-node-drag-handle"
-            onClick={(event) => event.stopPropagation()}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              event.preventDefault();
-              const target = event.currentTarget.closest(".workflow-graph-node") as HTMLElement | null;
-              const rect = target?.getBoundingClientRect();
-              setMovingNode({
-                nodeId: node.id,
-                offsetX: rect ? event.clientX - rect.left : 110,
-                offsetY: rect ? event.clientY - rect.top : 42,
-                pointerId: event.pointerId
-              });
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-            }}
             title="拖动移动节点"
           >
             ⋮⋮
@@ -1428,6 +1435,7 @@ function WorkflowGraphCanvas({
             <button
               aria-label="Delete workflow node"
               className="workflow-node-delete-button"
+              data-no-node-drag="true"
               data-testid={`workflow-node-delete-${node.id}`}
               onClick={(event) => {
                 event.preventDefault();
@@ -1442,6 +1450,7 @@ function WorkflowGraphCanvas({
           ) : null}
           <span
             className="workflow-node-input"
+            data-no-node-drag="true"
             data-testid={`workflow-input-${node.id}`}
             onClick={(event) => { event.stopPropagation(); onCompleteConnection(node.id); }}
             onDragOver={(event) => event.preventDefault()}
@@ -1462,6 +1471,7 @@ function WorkflowGraphCanvas({
             {defaultGraphOutputHandles(node.type).map((handle) => (
               <span
                 className={`workflow-node-output ${pendingConnection?.sourceNodeId === node.id && pendingConnection.sourceHandle === handle ? "active" : ""}`}
+                data-no-node-drag="true"
                 data-testid={`workflow-port-${node.id}-${handle}`}
                 key={handle}
                 onClick={(event) => {
