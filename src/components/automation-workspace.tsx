@@ -628,6 +628,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
               quickAdd={quickAdd}
               onCompleteConnection={connectGraphNode}
               onCreateConnectedNode={(type, position, connection) => addGraphNode(type, position, connection)}
+              onDeleteNode={deleteGraphNode}
               onDeleteEdge={deleteGraphEdge}
               onMoveNode={moveGraphNode}
               onOpenQuickAdd={openQuickAdd}
@@ -1045,6 +1046,7 @@ function WorkflowGraphCanvas({
   onOpenQuickAdd,
   onCreateConnectedNode,
   onCancelQuickAdd,
+  onDeleteNode,
   onDeleteEdge,
   onMoveNode
 }: {
@@ -1058,6 +1060,7 @@ function WorkflowGraphCanvas({
   onOpenQuickAdd: (position: WorkflowNode["position"], connection: { sourceNodeId: string; sourceHandle: string }) => void;
   onCreateConnectedNode: (type: WorkflowNodeType, position: WorkflowNode["position"], connection: { sourceNodeId: string; sourceHandle: string }) => void;
   onCancelQuickAdd: () => void;
+  onDeleteNode: (nodeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
   onMoveNode: (nodeId: string, position: WorkflowNode["position"]) => void;
 }) {
@@ -1250,6 +1253,22 @@ function WorkflowGraphCanvas({
           >
             ⋮⋮
           </span>
+          {node.type !== "start" && node.type !== "end" ? (
+            <button
+              aria-label="Delete workflow node"
+              className="workflow-node-delete-button"
+              data-testid={`workflow-node-delete-${node.id}`}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onDeleteNode(node.id);
+              }}
+              title="删除节点"
+              type="button"
+            >
+              <Trash2 size={13} />
+            </button>
+          ) : null}
           <span
             className="workflow-node-input"
             data-testid={`workflow-input-${node.id}`}

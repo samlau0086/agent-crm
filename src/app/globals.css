@@ -3369,6 +3369,29 @@ button {
   cursor: grabbing;
 }
 
+.workflow-node-delete-button {
+  position: absolute;
+  top: 4px;
+  right: 30px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  border-radius: 999px;
+  color: #dc2626;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.workflow-node-delete-button:hover {
+  border-color: rgba(220, 38, 38, 0.7);
+  background: rgba(254, 226, 226, 0.96);
+}
+
 .workflow-graph-node.selected {
   border-color: rgba(37, 99, 235, 0.65);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
