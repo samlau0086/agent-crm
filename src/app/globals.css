@@ -3389,6 +3389,8 @@ button {
 
 .workflow-edge-delete-button {
   position: absolute;
+  top: 0;
+  left: 0;
   z-index: 4;
   display: inline-flex;
   align-items: center;
@@ -3410,6 +3412,8 @@ button {
 
 .workflow-graph-node {
   position: absolute;
+  top: 0;
+  left: 0;
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) 86px;
   grid-template-rows: auto auto;
@@ -3588,6 +3592,8 @@ button {
 
 .workflow-quick-add {
   position: absolute;
+  top: 0;
+  left: 0;
   z-index: 6;
   display: grid;
   gap: 6px;
