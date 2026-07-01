@@ -61,12 +61,7 @@ button:disabled {
 }
 
 button {
-  cursor: grab;
-  touch-action: none;
-}
-
-.workflow-graph-node:active {
-  cursor: grabbing;
+  cursor: pointer;
 }
 
 .app-shell {
@@ -3420,19 +3415,24 @@ button {
   top: 0;
   left: 0;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 86px;
-  grid-template-rows: auto auto;
-  gap: 6px 10px;
+  grid-template-columns: 30px minmax(0, 1fr) 96px;
+  grid-template-rows: minmax(22px, auto) minmax(18px, auto);
+  gap: 4px 10px;
   width: 270px;
   min-height: 98px;
-  padding: 12px 10px;
+  padding: 16px 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
   text-align: left;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
+}
+
+.workflow-graph-node:active {
+  cursor: grabbing;
 }
 
 .workflow-node-drag-handle {
@@ -3501,24 +3501,29 @@ button {
 }
 
 .workflow-node-input::after {
-  content: "in";
-  position: absolute;
-  margin-left: 26px;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 20px;
-  text-transform: uppercase;
+  content: none;
 }
 
 .workflow-node-title {
   grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
   font-weight: 800;
+  line-height: 1.25;
+  padding-right: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workflow-node-type {
   grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workflow-node-outputs {
