@@ -349,6 +349,33 @@ await run("workflow schema supports control nodes and record-scoped generation",
   assert.equal(workflowMatchesEvent(scopedWorkflow, "record.updated", { objectKey: "contacts", recordId: "other-contact" }), false);
 });
 
+await run("workflow schema allows graph drafts without action nodes", () => {
+  const parsed = workflowCreateSchema.parse({
+    name: "Draft branch workflow",
+    goal: "保存仍在编排中的图形化工作流草稿",
+    status: "draft",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [{ key: "if-record", type: "if", field: "recordId", operator: "exists" }],
+    actions: [],
+    graph: {
+      scope: { mode: "record", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" },
+      nodes: [
+        { id: "start", type: "start", label: "Start: 林晓", position: { x: 40, y: 160 }, config: {} },
+        { id: "condition:if-record", type: "if", label: "IF", position: { x: 320, y: 160 }, config: { field: "recordId", operator: "exists" } },
+        { id: "end", type: "end", label: "End", position: { x: 620, y: 160 }, config: {} }
+      ],
+      edges: [
+        { id: "edge:start:main:if", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "condition:if-record" },
+        { id: "edge:if:true:end", sourceNodeId: "condition:if-record", sourceHandle: "true", targetNodeId: "end" },
+        { id: "edge:if:false:end", sourceNodeId: "condition:if-record", sourceHandle: "false", targetNodeId: "end" }
+      ]
+    }
+  });
+
+  assert.deepEqual(parsed.actions, []);
+  assert.equal(parsed.graph.scope.mode, "record");
+});
+
 await run("workflow creates low-risk follow-up activity and is idempotent", () => {
   const store = new CrmStore(seedData);
   const context = store.getContext();

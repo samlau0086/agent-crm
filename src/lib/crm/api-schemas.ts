@@ -406,7 +406,7 @@ export const workflowCreateSchema = z
     status: z.enum(["draft", "active", "disabled", "archived"]).optional(),
     trigger: workflowTriggerSchema,
     conditions: z.array(workflowConditionSchema).max(20).default([]),
-    actions: z.array(workflowActionSchema).min(1).max(20),
+    actions: z.array(workflowActionSchema).max(20).default([]),
     graph: workflowGraphSchema.optional()
   })
   .strict();
