@@ -356,7 +356,7 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
   };
 }
 
-type WorkflowGenerationIntent = "no_reply_follow_up" | "email_intent" | "deal_close" | "dormant_reactivation" | "generic_follow_up";
+type WorkflowGenerationIntent = "cold_outreach_until_reply" | "no_reply_follow_up" | "email_intent" | "deal_close" | "dormant_reactivation" | "generic_follow_up";
 
 function buildWorkflowDraftFromGoalV2(input: WorkflowAiGenerationRequest, goal: string, recordTitle?: string): WorkflowAiGenerationResult {
   const targetObjectKey = input.objectKey ?? inferGeneratedWorkflowObjectKey(goal);
@@ -409,7 +409,10 @@ function inferGeneratedWorkflowObjectKey(goal: string): string {
 
 function inferGeneratedWorkflowIntent(goal: string, objectKey: string): WorkflowGenerationIntent {
   const lowerGoal = goal.toLowerCase();
-  const noReply = lowerGoal.includes("no reply") || lowerGoal.includes("not replied") || lowerGoal.includes("unreplied") || goal.includes("未回复") || goal.includes("没回复") || goal.includes("未回");
+  const coldOutreach = /cold|outreach/.test(lowerGoal) || /冷邮件|冷启动|开发信|陌生|初次联系/.test(goal);
+  const untilReply = /until.*(reply|respond|response)/.test(lowerGoal) || /直到.*(回复|回信|回应)|直到客户回复|回复为止/.test(goal);
+  if (coldOutreach && untilReply) return "cold_outreach_until_reply";
+  const noReply = lowerGoal.includes("no reply") || lowerGoal.includes("not replied") || lowerGoal.includes("unreplied") || untilReply || goal.includes("未回复") || goal.includes("没回复") || goal.includes("未回");
   if (noReply) return "no_reply_follow_up";
   if (lowerGoal.includes("email") || goal.includes("邮件") || goal.includes("回信") || goal.includes("回复")) return "email_intent";
   if (objectKey === "deals" || lowerGoal.includes("close") || goal.includes("成交") || goal.includes("赢单") || goal.includes("推进")) return "deal_close";
@@ -425,6 +428,7 @@ function inferGeneratedWorkflowDelayDays(goal: string): number {
 }
 
 function buildGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, objectKey: string): WorkflowDefinition["trigger"] {
+  if (intent === "cold_outreach_until_reply") return { type: "crm_event", event: "record.created", objectKey };
   if (intent === "no_reply_follow_up") return { type: "email_event", event: "email.message.sent" };
   if (intent === "email_intent") return { type: "email_event", event: "email.message.received" };
   if (intent === "dormant_reactivation") return { type: "schedule", event: "schedule.daily", schedule: { mode: "daily", dailyAt: "09:00" } };
@@ -439,6 +443,7 @@ function buildGeneratedWorkflowGraph(input: {
   delayDays: number;
   recordTitle?: string;
 }): WorkflowGraph {
+  if (input.intent === "cold_outreach_until_reply") return buildGeneratedColdOutreachUntilReplyGraph(input);
   if (input.intent === "no_reply_follow_up") return buildGeneratedNoReplyGraph(input);
   if (input.intent === "email_intent") return buildGeneratedEmailIntentGraph(input);
   if (input.intent === "deal_close") return buildGeneratedDealCloseGraph(input);
@@ -598,6 +603,44 @@ function buildGeneratedNoReplyGraph(input: { goal: string; trigger: WorkflowDefi
   };
 }
 
+function buildGeneratedColdOutreachUntilReplyGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; delayDays: number; recordTitle?: string }): WorkflowGraph {
+  const firstDelay = Math.max(2, Math.min(input.delayDays, 7));
+  const secondDelay = Math.max(firstDelay + 2, Math.min(input.delayDays + 3, 14));
+  const nodes = compactNodes([
+    generatedStartNode(input.trigger, input.scope, input.recordTitle),
+    generatedScopeNode(input.scope, { x: 300, y: 220 }),
+    { id: "draft-cold-email", type: "create_email_draft", label: "Draft Cold Email", position: { x: 560, y: 120 }, config: { ...generatedEmailDraftConfig(input.goal), subject: "Quick question for {{record.title}}" } },
+    { id: "wait-first-delay", type: "wait_delay", label: `Wait ${firstDelay} days`, position: { x: 820, y: 220 }, config: { delayAmount: firstDelay, delayUnit: "days" } },
+    { id: "wait-first-reply", type: "wait_reply", label: "Check Reply", position: { x: 1080, y: 220 }, config: { lookbackDays: firstDelay, replySource: "email" } },
+    { id: "draft-follow-up-1", type: "create_email_draft", label: "Draft Follow-up 1", position: { x: 1340, y: 80 }, config: { ...generatedEmailDraftConfig(input.goal), subject: "Following up {{record.title}}" } },
+    { id: "create-reply-task", type: "create_task", label: "Create Reply Handling Task", position: { x: 1340, y: 360 }, config: { ...generatedTaskConfig("客户已回复，检查邮件内容并安排下一步销售动作。", 0, "high"), title: "Handle customer reply" } },
+    { id: "wait-second-delay", type: "wait_delay", label: `Wait ${secondDelay} days`, position: { x: 1600, y: 220 }, config: { delayAmount: secondDelay, delayUnit: "days" } },
+    { id: "wait-second-reply", type: "wait_reply", label: "Check Reply Again", position: { x: 1860, y: 220 }, config: { lookbackDays: secondDelay, replySource: "email" } },
+    { id: "draft-follow-up-2", type: "create_email_draft", label: "Draft Follow-up 2", position: { x: 2120, y: 80 }, config: { ...generatedEmailDraftConfig(input.goal), subject: "Last follow-up for {{record.title}}" } },
+    { id: "create-review-task", type: "create_task", label: "Create Manual Review Task", position: { x: 2120, y: 360 }, config: { ...generatedTaskConfig("多轮冷邮件后仍未回复，请人工判断是否继续、换渠道或停止触达。", 1, "normal"), title: "Review cold outreach sequence" } },
+    { id: "end", type: "end", label: "End", position: { x: 2380, y: 220 }, config: {} }
+  ]);
+  return {
+    scope: input.scope,
+    nodes,
+    edges: [
+      generatedEdge("start", "main", generatedFirstNodeAfterStart(input.scope, "draft-cold-email")),
+      ...generatedScopeEdges(input.scope, "draft-cold-email"),
+      generatedEdge("draft-cold-email", "main", "wait-first-delay"),
+      generatedEdge("wait-first-delay", "after_delay", "wait-first-reply"),
+      generatedEdge("wait-first-reply", "replied", "create-reply-task"),
+      generatedEdge("wait-first-reply", "not_replied", "draft-follow-up-1"),
+      generatedEdge("draft-follow-up-1", "main", "wait-second-delay"),
+      generatedEdge("wait-second-delay", "after_delay", "wait-second-reply"),
+      generatedEdge("wait-second-reply", "replied", "create-reply-task"),
+      generatedEdge("wait-second-reply", "not_replied", "draft-follow-up-2"),
+      generatedEdge("draft-follow-up-2", "main", "create-review-task"),
+      generatedEdge("create-reply-task", "main", "end"),
+      generatedEdge("create-review-task", "main", "end")
+    ]
+  };
+}
+
 function buildGeneratedEmailIntentGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; recordTitle?: string }): WorkflowGraph {
   const nodes = compactNodes([
     generatedStartNode(input.trigger, input.scope, input.recordTitle),
@@ -690,6 +733,7 @@ function buildGeneratedGenericGraph(input: { goal: string; trigger: WorkflowDefi
 
 function describeGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, scope: WorkflowGraph["scope"], delayDays: number): string {
   const scopeText = scope.mode === "record" ? `This workflow is scoped to only ${scope.recordTitle || "the selected record"}.` : scope.mode === "object" ? `This workflow applies to ${scope.objectKey}.` : "This workflow is global.";
+  if (intent === "cold_outreach_until_reply") return `${scopeText} It starts from a new CRM record, drafts the first cold email, waits, checks replies, and continues staged follow-ups until a reply path is reached or manual review is needed.`;
   if (intent === "no_reply_follow_up") return `${scopeText} It starts from sent email activity, waits ${delayDays} day(s), then checks whether a reply arrived before drafting follow-up.`;
   if (intent === "email_intent") return `${scopeText} It starts when an email is received and uses an AI condition to classify buying intent before creating actions.`;
   if (intent === "deal_close") return `${scopeText} It starts on deal updates and only continues when the deal has a stage, then creates close follow-up work.`;
@@ -698,6 +742,7 @@ function describeGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, scop
 }
 
 function describeGeneratedWorkflowOutcome(intent: WorkflowGenerationIntent, delayDays: number): string {
+  if (intent === "cold_outreach_until_reply") return "The workflow drafts an initial cold email, checks for replies after each wait, drafts staged follow-ups when there is no reply, and creates a handling task once the customer replies.";
   if (intent === "no_reply_follow_up") return `After ${delayDays} day(s), replied paths end quietly; not-replied paths create an AI-assisted email draft and a follow-up task.`;
   if (intent === "email_intent") return "High-intent inbound emails create a sales task and AI-assisted reply draft; low-intent paths stop.";
   if (intent === "deal_close") return "Qualified deal changes create a close task and notify the owner without automatically changing the deal stage.";
@@ -707,6 +752,9 @@ function describeGeneratedWorkflowOutcome(intent: WorkflowGenerationIntent, dela
 
 function describeGeneratedWorkflowRisks(intent: WorkflowGenerationIntent): string[] {
   const common = "Generated workflow is saved as draft and must be reviewed before enabling.";
+  if (intent === "cold_outreach_until_reply") {
+    return [common, "Cold outreach emails are generated as drafts for review, not sent automatically.", "The sequence uses bounded staged follow-ups instead of an infinite loop to avoid accidental repeated outreach."];
+  }
   if (intent === "no_reply_follow_up" || intent === "email_intent" || intent === "dormant_reactivation") {
     return [common, "Email-related nodes create drafts by default; they do not send directly.", "Wait nodes describe the intended timing path; production delayed resume depends on the background scheduler."];
   }

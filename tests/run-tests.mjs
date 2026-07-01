@@ -460,6 +460,33 @@ await run("workflow graph supports follow-up wait reply and draft email nodes", 
   assert.equal(replyRun.nodeResults?.some((result) => result.nodeId === "wait-reply" && result.outputHandle === "replied"), true);
 });
 
+await run("workflow generator creates a cold outreach until reply sequence", () => {
+  const generated = buildWorkflowDraftFromGoal({ goal: "冷邮件联系直到客户回复为止", objectKey: "contacts" });
+  const nodes = generated.workflow.graph.nodes;
+  const edges = generated.workflow.graph.edges;
+  assert.equal(generated.workflow.trigger.type, "crm_event");
+  assert.equal(generated.workflow.trigger.event, "record.created");
+  assert.equal(generated.workflow.graph.scope.mode, "object");
+  assert.equal(nodes.filter((node) => node.type === "if").length, 0);
+  assert.equal(nodes.some((node) => node.type === "if" && node.config?.field === "recordId" && node.config?.value === ""), false);
+  assert.equal(nodes.filter((node) => node.type === "wait_reply").length, 2);
+  assert(nodes.some((node) => node.id === "draft-cold-email" && node.type === "create_email_draft"));
+  assert(nodes.some((node) => node.id === "draft-follow-up-1" && node.type === "create_email_draft"));
+  assert(nodes.some((node) => node.id === "draft-follow-up-2" && node.type === "create_email_draft"));
+  assert(edges.some((edge) => edge.sourceNodeId === "wait-first-reply" && edge.sourceHandle === "not_replied" && edge.targetNodeId === "draft-follow-up-1"));
+  assert(edges.some((edge) => edge.sourceNodeId === "wait-first-reply" && edge.sourceHandle === "replied" && edge.targetNodeId === "create-reply-task"));
+  assert(edges.some((edge) => edge.sourceNodeId === "wait-second-reply" && edge.sourceHandle === "not_replied" && edge.targetNodeId === "draft-follow-up-2"));
+  assert(edges.some((edge) => edge.sourceNodeId === "wait-second-reply" && edge.sourceHandle === "replied" && edge.targetNodeId === "create-reply-task"));
+  assert.match(generated.explanation.expectedOutcome, /initial cold email|cold email/i);
+
+  const scoped = buildWorkflowDraftFromGoal({ goal: "冷邮件联系直到客户回复为止", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" });
+  const scopedIfNodes = scoped.workflow.graph.nodes.filter((node) => node.type === "if");
+  assert.equal(scoped.workflow.graph.scope.mode, "record");
+  assert.equal(scopedIfNodes.length, 1);
+  assert.equal(scopedIfNodes[0].id, "scope-record");
+  assert.equal(scopedIfNodes[0].config.condition?.value, "contact-lin");
+});
+
 await run("workflow graph conversion fills blank action labels before save", () => {
   const graph = legacyWorkflowToGraph({
     trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
