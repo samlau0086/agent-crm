@@ -1190,6 +1190,12 @@ function WorkflowGraphCanvas({
     offsetY: number;
     pointerId: number;
   } | null>(null);
+  const [panningCanvas, setPanningCanvas] = useState<{
+    startX: number;
+    startY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
 
   useEffect(() => {
@@ -1215,6 +1221,28 @@ function WorkflowGraphCanvas({
       window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [movingNode, onMoveNode]);
+
+  useEffect(() => {
+    if (!panningCanvas) return;
+    const activePan = panningCanvas;
+    function handlePointerMove(event: PointerEvent) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      canvas.scrollLeft = activePan.scrollLeft - (event.clientX - activePan.startX);
+      canvas.scrollTop = activePan.scrollTop - (event.clientY - activePan.startY);
+    }
+    function handlePointerUp() {
+      setPanningCanvas(null);
+    }
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", handlePointerUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [panningCanvas]);
 
   function readConnection(event: DragEvent<HTMLElement>): { sourceNodeId: string; sourceHandle: string } | null {
     const raw = event.dataTransfer.getData("application/x-workflow-connection");
@@ -1259,6 +1287,26 @@ function WorkflowGraphCanvas({
   function shouldIgnoreNodeMove(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
     return Boolean(target.closest("button, input, select, textarea, a, [data-no-node-drag]"));
+  }
+
+  function shouldIgnoreCanvasPan(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    return Boolean(target.closest("button, input, select, textarea, a"));
+  }
+
+  function startCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 2 || shouldIgnoreCanvasPan(event.target)) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setPanningCanvas({
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: canvas.scrollLeft,
+      scrollTop: canvas.scrollTop
+    });
+    event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
   function startNodeMove(event: ReactPointerEvent<HTMLElement>, node: WorkflowNode) {
@@ -1311,13 +1359,15 @@ function WorkflowGraphCanvas({
 
   return (
     <div
-      className={`workflow-graph-canvas ${isFullscreen ? "fullscreen" : ""}`}
+      className={`workflow-graph-canvas ${isFullscreen ? "fullscreen" : ""} ${panningCanvas ? "canvas-panning" : ""}`}
       data-testid="automation-node-canvas"
+      onContextMenu={(event) => event.preventDefault()}
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("application/x-workflow-connection")) updateConnectionPreview(event);
         if (event.dataTransfer.types.includes("application/x-workflow-node-type")) event.preventDefault();
       }}
       onDrop={handleCanvasDrop}
+      onPointerDown={startCanvasPan}
       ref={canvasRef}
     >
       <button className="workflow-fullscreen-button icon-button" type="button" onClick={() => setIsFullscreen((current) => !current)}>

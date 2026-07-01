@@ -2067,6 +2067,10 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /isWorkflowPaletteNodeType/);
   assert.match(automation, /onPointerDown/);
   assert.match(automation, /pointermove/);
+  assert.match(automation, /panningCanvas/);
+  assert.match(automation, /startCanvasPan/);
+  assert.match(automation, /event\.button !== 2/);
+  assert.match(automation, /onContextMenu=\{\(event\) => event\.preventDefault\(\)\}/);
   assert.match(automation, /workflow-node-output/);
   assert.match(automation, /workflow-fullscreen-button/);
   assert.match(automation, /workflow-edge-delete-button/);
@@ -2123,6 +2127,7 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(workspace, /crmPathForNav\("automation"\)\}\?\$\{nextParams\.toString\(\)\}/);
   assert.match(styles, /\.automation-layout/);
   assert.match(styles, /\.workflow-graph-canvas/);
+  assert.match(styles, /\.workflow-graph-canvas\.canvas-panning/);
   assert.match(styles, /\.workflow-graph-stage/);
   assert.match(styles, /\.workflow-graph-canvas\.fullscreen/);
   assert.match(styles, /\.workflow-fullscreen-button/);

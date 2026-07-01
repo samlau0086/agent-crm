@@ -3270,6 +3270,15 @@ button {
     radial-gradient(circle at 1px 1px, rgba(100, 116, 139, 0.25) 1px, transparent 0) 0 0 / 18px 18px;
 }
 
+.workflow-graph-canvas.canvas-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.workflow-graph-canvas.canvas-panning * {
+  cursor: grabbing !important;
+}
+
 .workflow-graph-canvas.fullscreen {
   position: fixed;
   inset: 0;
