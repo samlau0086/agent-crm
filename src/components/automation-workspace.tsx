@@ -1980,9 +1980,9 @@ function applyWorkflowRecordScope(draft: AutomationDraft, targetRecord?: CrmReco
 
 function stripWorkflowReadonlyFields(workflow: AutomationDraft) {
   return {
-    name: workflow.name,
-    description: workflow.description,
-    goal: workflow.goal,
+    name: nonEmptyText(workflow.name, "Untitled workflow"),
+    description: nonEmptyText(workflow.description, undefined),
+    goal: nonEmptyText(workflow.goal, "Draft workflow goal"),
     status: workflow.status,
     trigger: workflow.trigger,
     conditions: workflow.conditions,
@@ -1990,6 +1990,10 @@ function stripWorkflowReadonlyFields(workflow: AutomationDraft) {
     graph: workflow.graph,
     version: workflow.version
   };
+}
+
+function nonEmptyText(value: unknown, fallback: string | undefined): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
 function updateCondition(draft: AutomationDraft, key: string, patch: Partial<WorkflowCondition>, onChange: (draft: AutomationDraft) => void) {

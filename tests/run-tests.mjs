@@ -376,6 +376,50 @@ await run("workflow schema allows graph drafts without action nodes", () => {
   assert.equal(parsed.graph.scope.mode, "record");
 });
 
+await run("workflow graph conversion fills blank action labels before save", () => {
+  const graph = legacyWorkflowToGraph({
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [],
+    actions: []
+  });
+  const legacy = graphToLegacyWorkflow({
+    ...graph,
+    nodes: [
+      { id: "start", type: "start", label: "Start", position: { x: 40, y: 160 }, config: {} },
+      {
+        id: "action:create-follow-up-task",
+        type: "create_task",
+        label: "   ",
+        position: { x: 320, y: 160 },
+        config: {
+          action: {
+            key: "create-follow-up-task",
+            type: "create_activity",
+            name: "   ",
+            requiresApproval: false,
+            config: { activityType: "task", title: "   ", body: "   ", dueInDays: 2 }
+          }
+        }
+      },
+      { id: "end", type: "end", label: "End", position: { x: 620, y: 160 }, config: {} }
+    ],
+    edges: [
+      { id: "edge:start:main:task", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "action:create-follow-up-task" },
+      { id: "edge:task:main:end", sourceNodeId: "action:create-follow-up-task", sourceHandle: "main", targetNodeId: "end" }
+    ]
+  });
+
+  assert.equal(legacy.actions[0].name, "Create Task");
+  assert.equal(legacy.actions[0].config.title, "Create Task");
+  workflowCreateSchema.parse({
+    name: "Workflow",
+    goal: "Save draft",
+    status: "draft",
+    ...legacy,
+    graph
+  });
+});
+
 await run("workflow creates low-risk follow-up activity and is idempotent", () => {
   const store = new CrmStore(seedData);
   const context = store.getContext();

@@ -187,17 +187,24 @@ export function workflowNodeToCondition(node: WorkflowNode): WorkflowCondition {
 }
 
 export function workflowNodeToAction(node: WorkflowNode): WorkflowAction {
+  const fallbackName = defaultWorkflowActionName(node.type);
   if (isRecord(node.config.action)) {
     const configured = node.config.action as unknown as WorkflowAction;
     const { action: _action, ...directConfig } = node.config;
+    const actionName = getString(node.label) || getString(configured.name) || fallbackName;
+    const configuredConfig = isRecord(configured.config) ? configured.config : {};
+    const nextConfig = {
+      ...configuredConfig,
+      ...directConfig
+    };
+    if ((configured.type === "create_activity" || node.type === "create_task") && !getString(nextConfig.title)) {
+      nextConfig.title = actionName;
+    }
     return {
       ...configured,
-      name: node.label || configured.name,
+      name: actionName,
       requiresApproval: typeof directConfig.requiresApproval === "boolean" ? directConfig.requiresApproval : configured.requiresApproval,
-      config: {
-        ...(isRecord(configured.config) ? configured.config : {}),
-        ...directConfig
-      }
+      config: nextConfig
     };
   }
   const type =
@@ -208,10 +215,17 @@ export function workflowNodeToAction(node: WorkflowNode): WorkflowAction {
   return {
     key: node.id,
     type,
-    name: node.label,
+    name: getString(node.label) || fallbackName,
     requiresApproval: type === "send_email" || type === "update_stage" ? true : undefined,
     config: node.config
   };
+}
+
+function defaultWorkflowActionName(type: WorkflowNode["type"]): string {
+  if (type === "send_email") return "Send Email";
+  if (type === "update_deal") return "Update Deal";
+  if (type === "notify") return "Notify";
+  return "Create Task";
 }
 
 export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): WorkflowAiGenerationResult {
