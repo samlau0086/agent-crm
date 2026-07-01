@@ -197,11 +197,12 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
         setSelectedWorkflowId(workflow.id);
         setDraft(workflow);
       } else {
+        const targetRecord = records.find((record) => record.id === recordId && record.objectKey === objectKey);
         setSelectedWorkflowId("");
-        setDraft(createWorkflowDraft(objectKey));
+        setDraft(applyWorkflowRecordScope(createWorkflowDraft(objectKey), targetRecord));
       }
     }
-  }, [searchParams, workflows]);
+  }, [records, searchParams, workflows]);
 
   function showToast(intent: "success" | "error" | "info", message: string) {
     setToast({ intent, message });
@@ -222,13 +223,22 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
 
   function createNewWorkflow(objectKey: AutomationObjectKey = activeObjectKey === "all" ? "contacts" : activeObjectKey) {
     setSelectedWorkflowId("");
-    setDraft(createWorkflowDraft(objectKey));
-    setTargetRecordId("");
+    const scopedRecord = selectedTargetRecord?.objectKey === objectKey ? selectedTargetRecord : undefined;
+    setDraft(applyWorkflowRecordScope(createWorkflowDraft(objectKey), scopedRecord));
+    setTargetRecordId(scopedRecord?.id ?? "");
     setSelectedNodeId("trigger");
     setSelectedGraphNodeId("start");
     setPendingConnection(null);
     setNodeModalId("");
     setNodeDeleteCandidate(null);
+  }
+
+  function handleTargetRecordChange(recordId: string) {
+    setTargetRecordId(recordId);
+    const record = targetRecords.find((candidate) => candidate.id === recordId);
+    if (!record) return;
+    setDraft((current) => applyWorkflowRecordScope(current, record));
+    setSelectedGraphNodeId("start");
   }
 
   async function runAutomationAction(action: () => Promise<void>) {
@@ -547,7 +557,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
             className="select"
             data-testid="automation-target-record"
             value={targetRecordId}
-            onChange={(event) => setTargetRecordId(event.target.value)}
+            onChange={(event) => handleTargetRecordChange(event.target.value)}
             disabled={!targetObjectKey}
           >
             <option value="">不绑定具体记录</option>
@@ -677,6 +687,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
                 node={selectedGraphNode}
                 graph={graph}
                 emailAccounts={emailAccounts}
+                records={records}
                 users={users}
                 onChange={updateGraphNode}
                 onDelete={deleteGraphNode}
@@ -703,6 +714,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
               node={modalGraphNode}
               graph={graph}
               emailAccounts={emailAccounts}
+              records={records}
               users={users}
               onChange={updateGraphNode}
               onDelete={deleteGraphNode}
@@ -1497,6 +1509,7 @@ function WorkflowGraphInspector({
   node,
   graph,
   emailAccounts,
+  records,
   users,
   onChange,
   onDelete,
@@ -1505,25 +1518,40 @@ function WorkflowGraphInspector({
   node: WorkflowNode;
   graph: WorkflowGraph;
   emailAccounts: EmailAccount[];
+  records: CrmRecord[];
   users: User[];
   onChange: (nodeId: string, patch: Partial<WorkflowNode>) => void;
   onDelete: (nodeId: string) => void;
   onGraphChange: (graph: WorkflowGraph) => void;
 }) {
   const config = node.config;
+  const scopedRecords = records.filter((record) =>
+    graph.scope.objectKey ? record.objectKey === graph.scope.objectKey : record.objectKey === "contacts" || record.objectKey === "companies" || record.objectKey === "deals"
+  );
 
   function updateConfig(key: string, value: unknown) {
     onChange(node.id, { config: { ...config, [key]: value } });
   }
 
   function updateStartScope(patch: Partial<WorkflowGraph["scope"]>) {
-    const scope = { ...graph.scope, ...patch } as WorkflowGraph["scope"];
+    const nextScope = { ...graph.scope, ...patch } as WorkflowGraph["scope"];
+    const selectedRecord = nextScope.recordId ? records.find((record) => record.id === nextScope.recordId) : undefined;
+    const scope = {
+      ...nextScope,
+      objectKey: selectedRecord?.objectKey ?? nextScope.objectKey,
+      recordTitle: selectedRecord?.title ?? nextScope.recordTitle
+    } as WorkflowGraph["scope"];
     const trigger = graphToLegacyWorkflow({ ...graph, scope }).trigger;
     onGraphChange({
       ...graph,
       scope,
       nodes: graph.nodes.map((candidate) => candidate.id === node.id ? { ...candidate, label: startNodeLabel(scope), config: { ...candidate.config, trigger } } : candidate)
     });
+  }
+
+  function selectStartRecord(recordId: string) {
+    const record = records.find((candidate) => candidate.id === recordId);
+    updateStartScope(record ? { mode: "record", objectKey: record.objectKey, recordId: record.id, recordTitle: record.title } : { mode: "record", recordId: undefined, recordTitle: undefined });
   }
 
   return (
@@ -1551,7 +1579,7 @@ function WorkflowGraphInspector({
           </label>
           <label>
             <span className="subtle">对象</span>
-            <select className="select" value={graph.scope.objectKey ?? ""} onChange={(event) => updateStartScope({ objectKey: event.target.value || undefined })}>
+            <select className="select" value={graph.scope.objectKey ?? ""} onChange={(event) => updateStartScope({ objectKey: event.target.value || undefined, recordId: undefined, recordTitle: undefined })}>
               <option value="">不限定</option>
               <option value="contacts">联系人</option>
               <option value="companies">公司</option>
@@ -1560,6 +1588,18 @@ function WorkflowGraphInspector({
           </label>
           {graph.scope.mode === "record" ? <div className="workflow-scope-card">仅此记录：{graph.scope.recordTitle ?? graph.scope.recordId}</div> : null}
         </>
+      ) : null}
+
+      {node.type === "start" && graph.scope.mode === "record" ? (
+        <label>
+          <span className="subtle">记录</span>
+          <select className="select" data-testid="workflow-start-record-select" value={graph.scope.recordId ?? ""} onChange={(event) => selectStartRecord(event.target.value)}>
+            <option value="">请选择具体记录</option>
+            {scopedRecords.map((record) => (
+              <option key={record.id} value={record.id}>{record.title} · {automationObjectLabel(record.objectKey as AutomationObjectKey)}</option>
+            ))}
+          </select>
+        </label>
       ) : null}
 
       {node.type === "if" ? (

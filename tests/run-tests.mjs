@@ -1925,6 +1925,9 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /recordId: selectedTargetRecord\?\.id/);
   assert.match(automation, /workflowTargetRecordId/);
   assert.match(automation, /applyWorkflowRecordScope/);
+  assert.match(automation, /workflow-start-record-select/);
+  assert.match(automation, /selectStartRecord/);
+  assert.match(automation, /applyWorkflowRecordScope\(createWorkflowDraft\(objectKey\), targetRecord\)/);
   assert.match(automation, /IF 条件分支/);
   assert.match(automation, /SWITCH 多分支/);
   assert.match(automation, /LOOP 循环/);
