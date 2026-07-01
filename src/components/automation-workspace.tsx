@@ -1063,6 +1063,10 @@ function WorkflowGraphCanvas({
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [connectionPreview, setConnectionPreview] = useState<{
+    connection: { sourceNodeId: string; sourceHandle: string };
+    point: WorkflowNode["position"];
+  } | null>(null);
   const [movingNode, setMovingNode] = useState<{
     nodeId: string;
     offsetX: number;
@@ -1109,11 +1113,25 @@ function WorkflowGraphCanvas({
   }
 
   function canvasPoint(event: DragEvent<HTMLElement>): WorkflowNode["position"] {
+    return canvasPointFromClient(event.clientX, event.clientY);
+  }
+
+  function canvasPointFromClient(clientX: number, clientY: number): WorkflowNode["position"] {
     const rect = canvasRef.current?.getBoundingClientRect();
     return {
-      x: Math.max(20, Math.round(event.clientX - (rect?.left ?? 0) + (canvasRef.current?.scrollLeft ?? 0) - 110)),
-      y: Math.max(20, Math.round(event.clientY - (rect?.top ?? 0) + (canvasRef.current?.scrollTop ?? 0) - 48))
+      x: Math.max(20, Math.round(clientX - (rect?.left ?? 0) + (canvasRef.current?.scrollLeft ?? 0) - 110)),
+      y: Math.max(20, Math.round(clientY - (rect?.top ?? 0) + (canvasRef.current?.scrollTop ?? 0) - 48))
     };
+  }
+
+  function updateConnectionPreview(event: DragEvent<HTMLElement>, connection?: { sourceNodeId: string; sourceHandle: string } | null) {
+    const activeConnection = connection ?? pendingConnection ?? readConnection(event);
+    if (!activeConnection) return;
+    event.preventDefault();
+    setConnectionPreview({
+      connection: activeConnection,
+      point: canvasPointFromClient(event.clientX, event.clientY)
+    });
   }
 
   function handleCanvasDrop(event: DragEvent<HTMLDivElement>) {
@@ -1121,6 +1139,7 @@ function WorkflowGraphCanvas({
     if (!connection) return;
     event.preventDefault();
     event.stopPropagation();
+    setConnectionPreview(null);
     onOpenQuickAdd(canvasPoint(event), connection);
   }
 
@@ -1140,13 +1159,14 @@ function WorkflowGraphCanvas({
       midpoint: { x: midX, y: midY }
     }];
   });
+  const previewEdge = connectionPreview ? buildWorkflowPreviewEdge(connectionPreview.connection, connectionPreview.point, nodeById) : null;
 
   return (
     <div
       className={`workflow-graph-canvas ${isFullscreen ? "fullscreen" : ""}`}
       data-testid="automation-node-canvas"
       onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("application/x-workflow-connection")) event.preventDefault();
+        if (event.dataTransfer.types.includes("application/x-workflow-connection")) updateConnectionPreview(event);
       }}
       onDrop={handleCanvasDrop}
       ref={canvasRef}
@@ -1175,6 +1195,7 @@ function WorkflowGraphCanvas({
             />
           </g>
         ))}
+        {previewEdge ? <path d={previewEdge.path} className="workflow-graph-edge-preview" /> : null}
       </svg>
 
       {edgeViews.map(({ edge, midpoint }) => (
@@ -1239,6 +1260,7 @@ function WorkflowGraphCanvas({
               if (!connection) return;
               event.preventDefault();
               event.stopPropagation();
+              setConnectionPreview(null);
               onCompleteConnection(node.id, connection);
             }}
           >
@@ -1268,6 +1290,16 @@ function WorkflowGraphCanvas({
                     event.dataTransfer.setData("application/x-workflow-connection", JSON.stringify(connection));
                     event.dataTransfer.setData("text/plain", `${node.id}:${handle}`);
                     onStartConnection(connection);
+                    setConnectionPreview({
+                      connection,
+                      point: { x: node.position.x + 300, y: node.position.y + 50 + outputHandleOffset(handle) }
+                    });
+                  }}
+                  onDrag={(event) => {
+                    if (event.clientX !== 0 || event.clientY !== 0) updateConnectionPreview(event, { sourceNodeId: node.id, sourceHandle: handle });
+                  }}
+                  onDragEnd={() => {
+                    setConnectionPreview(null);
                   }}
                 />
                 <span className="workflow-node-output-handle">{handle}</span>
@@ -1459,6 +1491,23 @@ function WorkflowGraphInspector({
       {users.length ? <div className="subtle">可用负责人：{users.slice(0, 3).map((user) => user.name).join("、")}</div> : null}
     </aside>
   );
+}
+
+function buildWorkflowPreviewEdge(
+  connection: { sourceNodeId: string; sourceHandle: string },
+  point: WorkflowNode["position"],
+  nodeById: Map<string, WorkflowNode>
+): { path: string } | null {
+  const source = nodeById.get(connection.sourceNodeId);
+  if (!source) return null;
+  const startX = source.position.x + 270;
+  const startY = source.position.y + 50 + outputHandleOffset(connection.sourceHandle);
+  const endX = point.x + 110;
+  const endY = point.y + 48;
+  const midX = Math.round((startX + endX) / 2);
+  return {
+    path: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`
+  };
 }
 
 function ConditionFields({ config, onChange }: { config: Record<string, unknown>; onChange: (key: string, value: unknown) => void }) {

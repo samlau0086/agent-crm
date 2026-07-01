@@ -3292,6 +3292,15 @@ button {
   stroke-width: 2;
 }
 
+.workflow-graph-edge-preview {
+  fill: none;
+  stroke: rgba(37, 99, 235, 0.75);
+  stroke-dasharray: 8 6;
+  stroke-linecap: round;
+  stroke-width: 3;
+  pointer-events: none;
+}
+
 .workflow-graph-edge-hit {
   fill: none;
   stroke: transparent;

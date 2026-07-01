@@ -1891,6 +1891,10 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /workflow-fullscreen-button/);
   assert.match(automation, /workflow-edge-delete-button/);
   assert.match(automation, /workflow-graph-edge-hit/);
+  assert.match(automation, /workflow-graph-edge-preview/);
+  assert.match(automation, /connectionPreview/);
+  assert.match(automation, /updateConnectionPreview/);
+  assert.match(automation, /buildWorkflowPreviewEdge/);
   assert.match(automation, /Delete workflow connection/);
   assert.match(automation, /Maximize2/);
   assert.match(automation, /Minimize2/);
@@ -1930,6 +1934,7 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(styles, /\.workflow-graph-canvas\.fullscreen/);
   assert.match(styles, /\.workflow-fullscreen-button/);
   assert.match(styles, /\.workflow-graph-edge-hit/);
+  assert.match(styles, /\.workflow-graph-edge-preview/);
   assert.match(styles, /\.workflow-edge-delete-button/);
   assert.match(styles, /\.workflow-quick-add/);
   assert.match(styles, /\.workflow-node-drag-handle/);
