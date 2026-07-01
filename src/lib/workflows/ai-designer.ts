@@ -113,7 +113,7 @@ function parseWorkflowDesignerResponse(content: string, input: WorkflowAiGenerat
     conditions: fallback.workflow.conditions,
     actions: fallback.workflow.actions
   });
-  const graphWithScope = enforceRequestedScope(graph, input);
+  const graphWithScope = ensureDistinctEmailTouches(enforceRequestedScope(graph, input));
   const legacy = graphToLegacyWorkflow(graphWithScope);
   const workflow: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt"> = {
     name: stringValue(parsed.name, fallback.workflow.name),
@@ -165,6 +165,9 @@ function buildWorkflowDesignerSystemPrompt(agentMarkdown?: string): string {
     "- Generated workflows must be draft.",
     "- Prefer create_email_draft over send_email for outreach unless the user explicitly requests automatic sending.",
     "- For 'until reply' goals, include wait_reply branches: replied path should handle/stop, not_replied path should continue follow-up or review.",
+    "- For multi-touch email sequences, every create_email_draft/send_email node must have a distinct subject, body, purpose, and timing. Do not copy the same body across rounds.",
+    "- Later follow-up email nodes must explicitly account for previous sent emails and no-reply context. Include config fields such as touchIndex, previousTouchCount, lastEmailSummary, replyStatus, and messageGoal when useful.",
+    "- Multi-round outreach should progress logically: initial value proposition, first follow-up with a different angle, later follow-up with objection/risk handling or a graceful close-the-loop. Do not repeat the first email.",
     "- Do not create duplicate IF nodes with empty recordId. Only use recordId equals when an actual recordId is provided.",
     "- Avoid infinite loops; every loop must have a break path and maxIterations.",
     "",
@@ -190,6 +193,7 @@ function buildWorkflowDesignerUserPrompt(input: WorkflowAiGenerationRequest, fal
         ? { mode: "object", objectKey: input.objectKey }
         : { mode: "global" },
     instruction: "Design a workflow graph that best satisfies the user goal. The graph may differ from the fallback example when the goal requires a different structure."
+      + " If the workflow creates more than one email, each email node must be materially different and must include touchIndex/messageGoal plus context about prior sent emails or no-reply state."
   });
 }
 
@@ -223,6 +227,84 @@ function enforceRequestedScope(graph: WorkflowGraph, input: WorkflowAiGeneration
         })()
       : node)
   };
+}
+
+function ensureDistinctEmailTouches(graph: WorkflowGraph): WorkflowGraph {
+  const emailNodes = graph.nodes.filter((node) => node.type === "create_email_draft" || node.type === "send_email");
+  if (emailNodes.length <= 1) {
+    return graph;
+  }
+  const seenBodies = new Map<string, number>();
+  let touchIndex = 0;
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      if (node.type !== "create_email_draft" && node.type !== "send_email") {
+        return node;
+      }
+      touchIndex += 1;
+      const bodyKey = getEmailBodyKey(node.config);
+      const originalBody = bodyKey ? stringValue(node.config[bodyKey]) : "";
+      const normalizedBody = normalizeEmailBodyForComparison(originalBody);
+      const duplicateCount = normalizedBody ? seenBodies.get(normalizedBody) ?? 0 : 0;
+      if (normalizedBody) {
+        seenBodies.set(normalizedBody, duplicateCount + 1);
+      }
+      const messageGoal = stringValue(node.config.messageGoal, defaultEmailTouchGoal(touchIndex));
+      const nextConfig: Record<string, unknown> = {
+        ...node.config,
+        touchIndex,
+        previousTouchCount: touchIndex - 1,
+        messageGoal,
+        replyStatus: touchIndex === 1 ? "initial_outreach" : "no_reply_yet"
+      };
+      if (duplicateCount > 0 || !normalizedBody) {
+        nextConfig.bodyText = buildDistinctFollowUpBody(touchIndex, messageGoal);
+      }
+      if (!stringValue(nextConfig.subject)) {
+        nextConfig.subject = touchIndex === 1 ? "Quick question for {{record.title}}" : `Follow-up ${touchIndex} for {{record.title}}`;
+      }
+      return { ...node, config: nextConfig };
+    })
+  };
+}
+
+function getEmailBodyKey(config: Record<string, unknown>): "bodyText" | "body" | "bodyHtml" | undefined {
+  if (typeof config.bodyText === "string") return "bodyText";
+  if (typeof config.body === "string") return "body";
+  if (typeof config.bodyHtml === "string") return "bodyHtml";
+  return undefined;
+}
+
+function normalizeEmailBodyForComparison(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function defaultEmailTouchGoal(touchIndex: number): string {
+  if (touchIndex <= 1) return "Introduce the relevant value proposition and ask for permission to discuss.";
+  if (touchIndex === 2) return "Follow up from a different angle because the previous email received no reply.";
+  if (touchIndex === 3) return "Handle likely objections or offer a smaller next step after prior non-response.";
+  return "Close the loop politely or ask whether another channel/timing is better.";
+}
+
+function buildDistinctFollowUpBody(touchIndex: number, messageGoal: string): string {
+  if (touchIndex <= 1) {
+    return [
+      "Hi {{record.title}},",
+      "",
+      "I am reaching out because there may be a relevant opportunity based on your CRM profile and recent context.",
+      "",
+      "Would it be useful to compare your current process and see whether there is a practical next step?"
+    ].join("\n");
+  }
+  return [
+    "Hi {{record.title}},",
+    "",
+    `Following up on my previous message. This is touch ${touchIndex}, so do not repeat the earlier email.`,
+    `Message goal: ${messageGoal}`,
+    "",
+    "Use the CRM background, previous sent email summary, and no-reply status to write a concise follow-up with a different angle and a clear next step."
+  ].join("\n");
 }
 
 function normalizeTrigger(value: Record<string, unknown>, fallback: WorkflowDefinition["trigger"]): WorkflowDefinition["trigger"] {

@@ -3133,6 +3133,19 @@ button {
   flex: 1 1 420px;
 }
 
+.automation-ai-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(37, 99, 235, 0.08);
+  white-space: nowrap;
+}
+
 .automation-object-tabs {
   display: grid;
   grid-template-columns: repeat(6, minmax(130px, 1fr));

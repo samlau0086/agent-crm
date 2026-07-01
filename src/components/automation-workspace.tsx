@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Copy,
   GitBranch,
+  Loader2,
   Mail,
   Maximize2,
   Minimize2,
@@ -154,6 +155,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   const [selectedNodeId, setSelectedNodeId] = useState("trigger");
   const [goal, setGoal] = useState("7 天未回复的报价客户自动跟进");
   const [isBusy, setIsBusy] = useState(false);
+  const [isGeneratingWorkflow, setIsGeneratingWorkflow] = useState(false);
   const [toast, setToast] = useState<{ intent: "success" | "error" | "info"; message: string } | null>(null);
   const [targetRecordId, setTargetRecordId] = useState("");
   const [draggedNodeId, setDraggedNodeId] = useState("");
@@ -257,10 +259,15 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   }
 
   async function generateDraft() {
+    if (isGeneratingWorkflow) {
+      return;
+    }
     if (!goal.trim()) {
       showToast("error", "请先输入自动化目标");
       return;
     }
+    setIsGeneratingWorkflow(true);
+    showToast("info", "AI 正在理解目标并生成工作流草稿...");
     await runAutomationAction(async () => {
       const result = await fetchAutomationJson<WorkflowAiGenerationResult>("/api/workflows/generate", {
         method: "POST",
@@ -278,6 +285,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       setPendingConnection(null);
       showToast("success", `已生成草稿：${result.workflow.name}`);
     });
+    setIsGeneratingWorkflow(false);
   }
 
   async function saveDraft() {
@@ -556,7 +564,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       <section className="automation-ai-strip section">
         <label>
           <span className="subtle">AI 一键生成工作流目标</span>
-          <input className="input" data-testid="automation-ai-goal" value={goal} onChange={(event) => setGoal(event.target.value)} />
+          <input className="input" data-testid="automation-ai-goal" value={goal} onChange={(event) => setGoal(event.target.value)} disabled={isGeneratingWorkflow} />
         </label>
         <label>
           <span className="subtle">目标记录</span>
@@ -565,7 +573,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
             data-testid="automation-target-record"
             value={targetRecordId}
             onChange={(event) => handleTargetRecordChange(event.target.value)}
-            disabled={!targetObjectKey}
+            disabled={!targetObjectKey || isGeneratingWorkflow}
           >
             <option value="">不绑定具体记录</option>
             {targetRecords.map((record) => (
@@ -573,10 +581,16 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
             ))}
           </select>
         </label>
-        <button className="secondary-button" data-testid="automation-ai-generate" type="button" onClick={() => { void generateDraft(); }} disabled={isBusy}>
-          <Sparkles size={16} />
-          生成流程草稿
+        <button className="secondary-button" data-testid="automation-ai-generate" type="button" onClick={() => { void generateDraft(); }} disabled={isBusy || isGeneratingWorkflow} aria-busy={isGeneratingWorkflow}>
+          {isGeneratingWorkflow ? <Loader2 className="spin-icon" size={16} /> : <Sparkles size={16} />}
+          {isGeneratingWorkflow ? "AI 正在生成..." : "生成流程草稿"}
         </button>
+        {isGeneratingWorkflow ? (
+          <div className="automation-ai-loading" role="status" aria-live="polite">
+            <Loader2 className="spin-icon" size={16} />
+            <span>AI 正在规划触发器、分支、等待节点和执行动作。</span>
+          </div>
+        ) : null}
       </section>
 
       <div className="automation-layout">

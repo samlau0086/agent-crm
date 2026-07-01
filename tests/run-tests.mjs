@@ -633,6 +633,59 @@ await run("workflow AI designer enforces record scope returned by record pages",
   assert.equal(start?.config.trigger?.config?.targetRecordId, "contact-lin");
 });
 
+await run("workflow AI designer makes repeated email touches distinct", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  const repeatedBody = "Hi {{record.title}}, I wanted to follow up about automation. Would you like to talk?";
+  const fetchImpl = async () => new Response(JSON.stringify({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            name: "Repeated email draft sequence",
+            goal: "冷邮件联系直到客户回复为止",
+            trigger: { type: "crm_event", event: "record.created", objectKey: "contacts" },
+            graph: {
+              scope: { mode: "object", objectKey: "contacts" },
+              nodes: [
+                { id: "start", type: "start", label: "Start", position: { x: 40, y: 160 }, config: { trigger: { type: "crm_event", event: "record.created", objectKey: "contacts" } } },
+                { id: "email-1", type: "create_email_draft", label: "Email 1", position: { x: 320, y: 120 }, config: { subject: "Intro", bodyText: repeatedBody } },
+                { id: "wait-1", type: "wait_reply", label: "Wait reply", position: { x: 600, y: 120 }, config: { lookbackDays: 3 } },
+                { id: "email-2", type: "create_email_draft", label: "Email 2", position: { x: 880, y: 80 }, config: { subject: "Follow up", bodyText: repeatedBody } },
+                { id: "end", type: "end", label: "End", position: { x: 1160, y: 120 }, config: {} }
+              ],
+              edges: [
+                { id: "edge-start-email-1", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "email-1" },
+                { id: "edge-email-1-wait", sourceNodeId: "email-1", sourceHandle: "main", targetNodeId: "wait-1" },
+                { id: "edge-wait-email-2", sourceNodeId: "wait-1", sourceHandle: "not_replied", targetNodeId: "email-2" },
+                { id: "edge-wait-end", sourceNodeId: "wait-1", sourceHandle: "replied", targetNodeId: "end" },
+                { id: "edge-email-2-end", sourceNodeId: "email-2", sourceHandle: "main", targetNodeId: "end" }
+              ]
+            }
+          })
+        }
+      }
+    ]
+  }), { status: 200, headers: { "content-type": "application/json" } });
+
+  const generated = await generateWorkflowWithAiDesigner(
+    { goal: "冷邮件联系直到客户回复为止", objectKey: "contacts" },
+    {
+      settings,
+      providerConfig: { provider: "openai", baseUrl: "https://ai.example/v1", apiKey: "test-key", model: "test-model", timeoutMs: 10000 },
+      fetchImpl
+    }
+  );
+
+  const emailOne = generated.workflow.graph.nodes.find((node) => node.id === "email-1");
+  const emailTwo = generated.workflow.graph.nodes.find((node) => node.id === "email-2");
+  assert.equal(emailOne?.config.touchIndex, 1);
+  assert.equal(emailTwo?.config.touchIndex, 2);
+  assert.equal(emailTwo?.config.previousTouchCount, 1);
+  assert.notEqual(emailTwo?.config.bodyText, repeatedBody);
+  assert.match(String(emailTwo?.config.bodyText), /do not repeat the earlier email/i);
+  assert.match(String(emailTwo?.config.messageGoal), /different angle/i);
+});
+
 await run("Prisma workflow generation uses the Workflow Designer Agent provider", () => {
   const repositorySource = readFileSync("src/lib/crm/repository.ts", "utf8");
   assert.match(repositorySource, /generateWorkflowWithAiDesigner/);
@@ -2318,6 +2371,10 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /bodyHtml/);
   assert.match(automation, /splitConfigList/);
   assert.match(automation, /\/api\/workflows\/generate/);
+  assert.match(automation, /isGeneratingWorkflow/);
+  assert.match(automation, /aria-busy=\{isGeneratingWorkflow\}/);
+  assert.match(automation, /automation-ai-loading/);
+  assert.match(automation, /Loader2 className="spin-icon"/);
   assert.match(automation, /\/api\/workflows\/\$\{workflow\.id\}\/test/);
   assert.match(workspace, /import \{ AutomationWorkspace \} from "@\/components\/automation-workspace"/);
   assert.match(workspace, /emailAccounts=\{props\.emailAccounts\}/);
@@ -2326,6 +2383,7 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(workspace, /workflowId/);
   assert.match(workspace, /crmPathForNav\("automation"\)\}\?\$\{nextParams\.toString\(\)\}/);
   assert.match(styles, /\.automation-layout/);
+  assert.match(styles, /\.automation-ai-loading/);
   assert.match(styles, /\.workflow-graph-canvas/);
   assert.match(styles, /\.workflow-graph-canvas\.canvas-panning/);
   assert.match(styles, /\.workflow-graph-stage/);
