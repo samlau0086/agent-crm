@@ -70,7 +70,7 @@ import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.t
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
-import { buildWorkflowDraftFromGoal, workflowMatchesEvent } from "../src/lib/workflows/core.ts";
+import { buildWorkflowDraftFromGoal, graphToLegacyWorkflow, legacyWorkflowToGraph, workflowMatchesEvent } from "../src/lib/workflows/core.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
 import { hasRecordPatchChanges, isContactMethodsAdditionOnly, previousRecordApprovalPatch, splitRecordApprovalPatch, stripRecordApprovalMetadata } from "../src/lib/crm/record-approval.ts";
@@ -305,15 +305,37 @@ await run("workflow schema supports control nodes and record-scoped generation",
         name: "Send follow up",
         config: { mode: "queued", accountId: "account-1", to: ["buyer@example.com"], cc: ["manager@example.com"], bcc: ["archive@example.com"], subject: "Follow up", bodyHtml: "<p>Hello</p>" }
       }
-    ]
+    ],
+    graph: {
+      scope: { mode: "record", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" },
+      nodes: [
+        { id: "start", type: "start", label: "Start: 林晓", position: { x: 0, y: 0 }, config: { trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" } } },
+        { id: "if-target", type: "if", label: "IF target", position: { x: 260, y: 0 }, config: { field: "recordId", operator: "equals", value: "contact-lin" } },
+        { id: "task", type: "create_task", label: "Task", position: { x: 520, y: 0 }, config: { title: "Follow up" } },
+        { id: "end", type: "end", label: "End", position: { x: 780, y: 0 }, config: {} }
+      ],
+      edges: [
+        { id: "edge-start-if", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "if-target" },
+        { id: "edge-if-task", sourceNodeId: "if-target", sourceHandle: "true", targetNodeId: "task" },
+        { id: "edge-if-end", sourceNodeId: "if-target", sourceHandle: "false", targetNodeId: "end" },
+        { id: "edge-task-end", sourceNodeId: "task", sourceHandle: "main", targetNodeId: "end" }
+      ]
+    }
   });
   assert.deepEqual(parsed.conditions.map((condition) => condition.type), ["if", "switch", "loop"]);
+  assert.equal(parsed.graph.scope.mode, "record");
+  assert.deepEqual(parsed.graph.edges.map((edge) => edge.sourceHandle), ["main", "true", "false", "main"]);
   assert.equal(parsed.actions[0].config.mode, "queued");
   const draft = buildWorkflowDraftFromGoal({ goal: "联系人更新后自动跟进", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" });
   assert.match(draft.workflow.name, /林晓/);
+  assert.equal(draft.workflow.graph.scope.mode, "record");
+  assert.equal(draft.workflow.graph.scope.recordId, "contact-lin");
   assert.equal(draft.workflow.trigger.config.targetRecordId, "contact-lin");
   assert.equal(draft.workflow.conditions[0].type, "if");
   assert.equal(draft.workflow.conditions[0].value, "contact-lin");
+  const converted = legacyWorkflowToGraph(draft.workflow);
+  const legacy = graphToLegacyWorkflow(converted);
+  assert.equal(legacy.trigger.config.targetRecordId, "contact-lin");
   const scopedWorkflow = {
     ...draft.workflow,
     id: "workflow-scoped",
@@ -346,6 +368,49 @@ await run("workflow creates low-risk follow-up activity and is idempotent", () =
   assert.equal(secondRuns.length, 1);
   assert.equal(store.listWorkflowRuns(context, workflow.id).length, 1);
   assert(store.listActivities(context, contact.id).some((activity) => activity.title.includes("Workflow task")));
+});
+
+await run("workflow graph routes branches and records node results", () => {
+  const store = new CrmStore(seedData);
+  const context = store.getContext();
+  const contact = store.listRecords(context, "contacts")[0];
+  const otherContact = store.listRecords(context, "contacts").find((record) => record.id !== contact.id);
+  const workflow = store.createWorkflow(context, {
+    name: "Graph scoped follow up",
+    goal: "Only run for one contact",
+    status: "active",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [],
+    actions: [],
+    graph: {
+      scope: { mode: "record", objectKey: "contacts", recordId: contact.id, recordTitle: contact.title },
+      nodes: [
+        { id: "start", type: "start", label: `Start: ${contact.title}`, position: { x: 0, y: 0 }, config: { trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" } } },
+        { id: "if-target", type: "if", label: "IF target", position: { x: 240, y: 0 }, config: { field: "recordId", operator: "equals", value: contact.id } },
+        { id: "switch-stage", type: "switch", label: "Switch stage", position: { x: 480, y: 0 }, config: { field: "stageKey", cases: ["qualified"] } },
+        { id: "task", type: "create_task", label: "Graph task", position: { x: 720, y: 0 }, config: { activityType: "task", title: "Graph task for {{record.title}}" } },
+        { id: "end", type: "end", label: "End", position: { x: 960, y: 0 }, config: {} }
+      ],
+      edges: [
+        { id: "edge-start-if", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "if-target" },
+        { id: "edge-if-switch", sourceNodeId: "if-target", sourceHandle: "true", targetNodeId: "switch-stage" },
+        { id: "edge-if-end", sourceNodeId: "if-target", sourceHandle: "false", targetNodeId: "end" },
+        { id: "edge-switch-task", sourceNodeId: "switch-stage", sourceHandle: "case:qualified", targetNodeId: "task" },
+        { id: "edge-switch-end", sourceNodeId: "switch-stage", sourceHandle: "default", targetNodeId: "end" },
+        { id: "edge-task-end", sourceNodeId: "task", sourceHandle: "main", targetNodeId: "end" }
+      ]
+    }
+  });
+  const [run] = store.runWorkflowsForEvent(context, "record.updated", { objectKey: "contacts", recordId: contact.id, stageKey: "qualified", title: contact.title, updatedAt: "2026-06-30T00:02:00.000Z" });
+  assert.equal(run.workflowId, workflow.id);
+  assert.equal(run.nodeResults.some((result) => result.nodeId === "if-target" && result.outputHandle === "true"), true);
+  assert.equal(run.nodeResults.some((result) => result.nodeId === "switch-stage" && result.outputHandle === "case:qualified"), true);
+  assert.equal(run.actionResults[0].status, "completed");
+  assert(store.listActivities(context, contact.id).some((activity) => activity.title.includes("Graph task")));
+  if (otherContact) {
+    const otherRuns = store.runWorkflowsForEvent(context, "record.updated", { objectKey: "contacts", recordId: otherContact.id, stageKey: "qualified", updatedAt: "2026-06-30T00:03:00.000Z" });
+    assert.equal(otherRuns.length, 0);
+  }
 });
 
 await run("workflow high-risk email action requires approval", () => {
@@ -1816,11 +1881,15 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /deals/);
   assert.match(automation, /email/);
   assert.match(automation, /automation-node-canvas/);
-  assert.match(automation, /AutomationCanvasNode/);
-  assert.match(automation, /automation-control-map/);
-  assert.match(automation, /CONTINUE/);
-  assert.match(automation, /BREAK/);
-  assert.match(automation, /AutomationNodeInspector/);
+  assert.match(automation, /WorkflowGraphCanvas/);
+  assert.match(automation, /WorkflowGraphInspector/);
+  assert.match(automation, /workflow-graph-node/);
+  assert.match(automation, /workflow-port-\$\{node\.id\}-\$\{handle\}/);
+  assert.match(automation, /sourceHandle/);
+  assert.match(automation, /continue/);
+  assert.match(automation, /break/);
+  assert.match(automation, /graphToLegacyWorkflow/);
+  assert.match(automation, /legacyWorkflowToGraph/);
   assert.match(automation, /automation-target-record/);
   assert.match(automation, /recordId: selectedTargetRecord\?\.id/);
   assert.match(automation, /workflowTargetRecordId/);
@@ -1840,9 +1909,9 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(workspace, /workflowId/);
   assert.match(workspace, /crmPathForNav\("automation"\)\}\?\$\{nextParams\.toString\(\)\}/);
   assert.match(styles, /\.automation-layout/);
-  assert.match(styles, /\.automation-canvas/);
-  assert.match(styles, /\.automation-control-map/);
-  assert.match(styles, /\.automation-node\.selected/);
+  assert.match(styles, /\.workflow-graph-canvas/);
+  assert.match(styles, /\.workflow-node-port/);
+  assert.match(styles, /\.workflow-graph-node\.selected/);
   assert.match(styles, /\.record-workflow-list/);
   assert.doesNotMatch(automation, /window\.(alert|prompt|confirm)/);
 });

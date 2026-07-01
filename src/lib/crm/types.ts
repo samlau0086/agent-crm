@@ -655,6 +655,36 @@ export type WorkflowTriggerType = "crm_event" | "email_event" | "task_event" | "
 export type WorkflowConditionType = "field" | "activity" | "email_behavior" | "ai" | "if" | "switch" | "loop";
 export type WorkflowActionType = "create_activity" | "send_email" | "update_stage" | "update_record" | "notify" | "create_knowledge_article";
 export type WorkflowApprovalStatus = "pending" | "approved" | "rejected";
+export type WorkflowScopeMode = "record" | "object" | "global";
+export type WorkflowNodeType = "start" | "if" | "switch" | "loop" | "send_email" | "create_task" | "update_deal" | "notify" | "end";
+
+export interface WorkflowScope {
+  mode: WorkflowScopeMode;
+  objectKey?: string;
+  recordId?: string;
+  recordTitle?: string;
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: WorkflowNodeType;
+  label: string;
+  position: { x: number; y: number };
+  config: Record<string, unknown>;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  sourceNodeId: string;
+  sourceHandle: string;
+  targetNodeId: string;
+}
+
+export interface WorkflowGraph {
+  scope: WorkflowScope;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+}
 
 export interface WorkflowTrigger {
   type: WorkflowTriggerType;
@@ -697,6 +727,7 @@ export interface WorkflowDefinition {
   trigger: WorkflowTrigger;
   conditions: WorkflowCondition[];
   actions: WorkflowAction[];
+  graph?: WorkflowGraph;
   createdById: string;
   version: number;
   lastRunAt?: string;
@@ -714,6 +745,7 @@ export interface WorkflowRun {
   idempotencyKey?: string;
   conditionResults: Array<{ key: string; passed: boolean; actualValue?: unknown }>;
   actionResults: Array<{ actionKey: string; status: "completed" | "skipped" | "approval_required" | "failed"; message?: string; approvalId?: string }>;
+  nodeResults?: Array<{ nodeId: string; status: "completed" | "skipped" | "approval_required" | "failed"; outputHandle?: string; message?: string; startedAt: string; completedAt?: string }>;
   errorMessage?: string;
   startedAt: string;
   completedAt?: string;

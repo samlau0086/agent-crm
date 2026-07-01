@@ -289,6 +289,7 @@ model WorkflowDefinition {
   trigger       Json
   conditions    Json
   actions       Json
+  graph         Json?
   createdById   String
   version       Int       @default(1)
   lastRunAt     DateTime?
@@ -312,6 +313,7 @@ model WorkflowRun {
   idempotencyKey String
   conditionResults Json?
   actionResults Json?
+  nodeResults   Json?
   errorMessage  String?
   startedAt     DateTime  @default(now())
   completedAt   DateTime?

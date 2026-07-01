@@ -103,9 +103,14 @@ import {
   buildWorkflowDraftFromGoal,
   buildWorkflowIdempotencyKey,
   didWorkflowConditionsPass,
+  evaluateWorkflowCondition,
   evaluateWorkflowConditions,
+  graphToLegacyWorkflow,
   isHighRiskWorkflowAction,
+  normalizeWorkflowGraph,
   renderWorkflowTextTemplate,
+  workflowNodeToAction,
+  workflowNodeToCondition,
   workflowMatchesEvent
 } from "@/lib/workflows/core";
 
@@ -123,6 +128,20 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function findWorkflowEdge<T extends { sourceNodeId: string; sourceHandle: string; targetNodeId: string }>(edges: T[], nodeId: string, handle: string): T | undefined {
+  return edges.find((edge) => edge.sourceNodeId === nodeId && edge.sourceHandle === handle);
+}
+
+function switchOutputHandle(node: { config: Record<string, unknown> }, value: unknown): string {
+  const actual = String(value ?? "").trim();
+  const cases = Array.isArray(node.config.cases)
+    ? node.config.cases.filter((item): item is string => typeof item === "string")
+    : typeof node.config.cases === "string"
+      ? node.config.cases.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean)
+      : [];
+  return cases.includes(actual) ? `case:${actual}` : "default";
+}
+
 function toJsonObject<T>(value: T): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
 }
@@ -132,6 +151,9 @@ function toJsonArray<T>(value: T): Prisma.InputJsonValue {
 }
 
 function mapWorkflowDefinition(row: Record<string, unknown>): WorkflowDefinition {
+  const trigger = normalizeWorkflowTrigger(row.trigger);
+  const conditions = normalizeWorkflowConditions(row.conditions);
+  const actions = normalizeWorkflowActions(row.actions);
   return {
     id: String(row.id),
     workspaceId: String(row.workspaceId),
@@ -139,9 +161,10 @@ function mapWorkflowDefinition(row: Record<string, unknown>): WorkflowDefinition
     description: typeof row.description === "string" ? row.description : undefined,
     goal: String(row.goal ?? ""),
     status: normalizeWorkflowStatus(row.status),
-    trigger: normalizeWorkflowTrigger(row.trigger),
-    conditions: normalizeWorkflowConditions(row.conditions),
-    actions: normalizeWorkflowActions(row.actions),
+    trigger,
+    conditions,
+    actions,
+    graph: normalizeWorkflowGraph(row.graph, { trigger, conditions, actions }),
     createdById: String(row.createdById ?? ""),
     version: Number(row.version ?? 1),
     lastRunAt: row.lastRunAt instanceof Date ? row.lastRunAt.toISOString() : typeof row.lastRunAt === "string" ? row.lastRunAt : undefined,
@@ -161,6 +184,7 @@ function mapWorkflowRun(row: Record<string, unknown>): WorkflowRun {
     idempotencyKey: typeof row.idempotencyKey === "string" ? row.idempotencyKey : undefined,
     conditionResults: Array.isArray(row.conditionResults) ? (row.conditionResults as WorkflowRun["conditionResults"]) : [],
     actionResults: Array.isArray(row.actionResults) ? (row.actionResults as WorkflowRun["actionResults"]) : [],
+    nodeResults: Array.isArray(row.nodeResults) ? (row.nodeResults as WorkflowRun["nodeResults"]) : undefined,
     errorMessage: typeof row.errorMessage === "string" ? row.errorMessage : undefined,
     startedAt: row.startedAt instanceof Date ? row.startedAt.toISOString() : String(row.startedAt ?? new Date().toISOString()),
     completedAt: row.completedAt instanceof Date ? row.completedAt.toISOString() : typeof row.completedAt === "string" ? row.completedAt : undefined,
@@ -1657,6 +1681,8 @@ export class PrismaCrmRepository {
     input: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt" | "version" | "lastRunAt" | "status"> & Partial<Pick<WorkflowDefinition, "version" | "status">>
   ): Promise<WorkflowDefinition> {
     requirePermission(context, "workflow.write");
+    const graph = input.graph ? normalizeWorkflowGraph(input.graph, input) : undefined;
+    const legacy = graph ? graphToLegacyWorkflow(graph) : input;
     const row = await this.workflowTables().workflowDefinition.create({
       data: {
         workspaceId: context.workspaceId,
@@ -1664,9 +1690,10 @@ export class PrismaCrmRepository {
         description: input.description?.trim() || undefined,
         goal: normalizeRequiredText(input.goal, "Workflow goal"),
         status: input.status ?? "draft",
-        trigger: toJsonObject(input.trigger),
-        conditions: toJsonArray(input.conditions ?? []),
-        actions: toJsonArray(input.actions ?? []),
+        trigger: toJsonObject(legacy.trigger),
+        conditions: toJsonArray(legacy.conditions ?? []),
+        actions: toJsonArray(legacy.actions ?? []),
+        graph: graph ? toJsonObject(graph) : undefined,
         version: input.version ?? 1,
         createdById: context.user.id
       }
@@ -1686,6 +1713,8 @@ export class PrismaCrmRepository {
   ): Promise<WorkflowDefinition> {
     requirePermission(context, "workflow.write");
     const existing = await this.getWorkflow(context, id);
+    const graph = patch.graph ? normalizeWorkflowGraph(patch.graph, patch.trigger && patch.conditions && patch.actions ? patch as Pick<WorkflowDefinition, "trigger" | "conditions" | "actions"> : existing) : undefined;
+    const legacy = graph ? graphToLegacyWorkflow(graph) : undefined;
     const row = await this.workflowTables().workflowDefinition.update({
       where: { id },
       data: {
@@ -1693,9 +1722,10 @@ export class PrismaCrmRepository {
         description: patch.description !== undefined ? patch.description?.trim() || null : undefined,
         goal: patch.goal !== undefined ? normalizeRequiredText(patch.goal, "Workflow goal") : undefined,
         status: patch.status,
-        trigger: patch.trigger ? toJsonObject(patch.trigger) : undefined,
-        conditions: patch.conditions ? toJsonArray(patch.conditions) : undefined,
-        actions: patch.actions ? toJsonArray(patch.actions) : undefined,
+        trigger: legacy ? toJsonObject(legacy.trigger) : patch.trigger ? toJsonObject(patch.trigger) : undefined,
+        conditions: legacy ? toJsonArray(legacy.conditions) : patch.conditions ? toJsonArray(patch.conditions) : undefined,
+        actions: legacy ? toJsonArray(legacy.actions) : patch.actions ? toJsonArray(patch.actions) : undefined,
+        graph: graph ? toJsonObject(graph) : undefined,
         version: patch.version
       }
     });
@@ -5524,6 +5554,35 @@ export class PrismaCrmRepository {
     });
 
     const record = await this.workflowRecordFromData(context, data);
+    if (workflow.graph) {
+      const graphResults = await this.runWorkflowGraph(context, workflow, data, record, run.id, options);
+      const finalStatus = graphResults.actionResults.some((result) => result.status === "failed") || graphResults.nodeResults.some((result) => result.status === "failed")
+        ? "failed"
+        : graphResults.actionResults.some((result) => result.status === "approval_required") || graphResults.nodeResults.some((result) => result.status === "approval_required")
+          ? "approval_required"
+          : graphResults.nodeResults.some((result) => result.status === "completed")
+            ? "completed"
+            : "skipped";
+      run = mapWorkflowRun(
+        await this.workflowTables().workflowRun.update({
+          where: { id: run.id },
+          data: {
+            status: finalStatus,
+            conditionResults: toJsonArray(graphResults.conditionResults),
+            actionResults: toJsonArray(graphResults.actionResults),
+            nodeResults: toJsonArray(graphResults.nodeResults),
+            completedAt: new Date(),
+            durationMs: Date.now() - startedAt.getTime()
+          }
+        })
+      );
+      await this.workflowTables().workflowDefinition.update({ where: { id: workflow.id }, data: { lastRunAt: new Date() } });
+      await this.writeAuditLog(context, finalStatus === "failed" ? "workflow.run_failed" : "workflow.run_completed", "workflow", workflow.id, {
+        summary: `Workflow ${workflow.name} ${finalStatus}`,
+        details: { runId: run.id, event, nodeResults: graphResults.nodeResults, actionResults: graphResults.actionResults }
+      });
+      return run;
+    }
     const conditionResults = evaluateWorkflowConditions(workflow, data, record);
     if (!didWorkflowConditionsPass(conditionResults)) {
       run = mapWorkflowRun(
@@ -5578,6 +5637,77 @@ export class PrismaCrmRepository {
       details: { runId: run.id, event, actionResults }
     });
     return run;
+  }
+
+  private async runWorkflowGraph(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    triggerData: Record<string, unknown>,
+    record: CrmRecord | undefined,
+    runId: string,
+    options: { test?: boolean } = {}
+  ): Promise<{
+    conditionResults: WorkflowRun["conditionResults"];
+    actionResults: WorkflowRun["actionResults"];
+    nodeResults: NonNullable<WorkflowRun["nodeResults"]>;
+  }> {
+    const graph = workflow.graph ? normalizeWorkflowGraph(workflow.graph, workflow) : normalizeWorkflowGraph(undefined, workflow);
+    const conditionResults: WorkflowRun["conditionResults"] = [];
+    const actionResults: WorkflowRun["actionResults"] = [];
+    const nodeResults: NonNullable<WorkflowRun["nodeResults"]> = [];
+    const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+    const visits = new Map<string, number>();
+    let current = graph.nodes.find((node) => node.type === "start")?.id ?? "start";
+    for (let step = 0; step < 200 && current; step += 1) {
+      const node = nodeById.get(current);
+      if (!node) break;
+      const startedAt = new Date().toISOString();
+      let outputHandle = "main";
+      let status: NonNullable<WorkflowRun["nodeResults"]>[number]["status"] = "completed";
+      let message = "";
+      visits.set(node.id, (visits.get(node.id) ?? 0) + 1);
+
+      if (node.type === "end") {
+        nodeResults.push({ nodeId: node.id, status, outputHandle: "end", message: "Ended workflow", startedAt, completedAt: new Date().toISOString() });
+        break;
+      }
+
+      if (node.type === "start") {
+        message = graph.scope.mode === "record" ? `Record scoped: ${graph.scope.recordTitle ?? graph.scope.recordId}` : graph.scope.mode === "object" ? `Object scoped: ${graph.scope.objectKey}` : "Global workflow";
+      } else if (node.type === "if" || node.type === "switch" || node.type === "loop") {
+        const condition = workflowNodeToCondition(node);
+        const result = evaluateWorkflowCondition(condition, triggerData, record);
+        conditionResults.push({ key: condition.key, passed: result.passed, actualValue: result.actualValue });
+        if (node.type === "switch") {
+          outputHandle = switchOutputHandle(node, result.actualValue);
+        } else if (node.type === "loop") {
+          const maxIterations = Math.min(Number(node.config.maxIterations ?? condition.config?.maxIterations ?? 100) || 100, 100);
+          outputHandle = (visits.get(node.id) ?? 1) >= maxIterations || !result.passed ? "break" : "continue";
+        } else {
+          outputHandle = result.passed ? "true" : "false";
+        }
+        message = `Output: ${outputHandle}`;
+      } else {
+        const action = workflowNodeToAction(node);
+        let actionResult: WorkflowRun["actionResults"][number];
+        if (options.test) {
+          actionResult = { actionKey: action.key, status: isHighRiskWorkflowAction(action) ? "approval_required" : "completed", message: "Test run only; action was not executed." };
+        } else if (isHighRiskWorkflowAction(action)) {
+          const approval = await this.createWorkflowActionApproval(context, workflow, runId, action, triggerData, record);
+          actionResult = { actionKey: action.key, status: "approval_required", message: `Approval required: ${approval.id}` };
+        } else {
+          actionResult = await this.executeWorkflowAction(context, workflow, action, triggerData, record, runId);
+        }
+        actionResults.push(actionResult);
+        status = actionResult.status;
+        message = actionResult.message ?? "";
+      }
+
+      nodeResults.push({ nodeId: node.id, status, outputHandle, message, startedAt, completedAt: new Date().toISOString() });
+      const nextEdge = findWorkflowEdge(graph.edges, node.id, outputHandle) ?? findWorkflowEdge(graph.edges, node.id, "main") ?? findWorkflowEdge(graph.edges, node.id, "default");
+      current = nextEdge?.targetNodeId ?? "";
+    }
+    return { conditionResults, actionResults, nodeResults };
   }
 
   private async workflowRecordFromData(context: RequestContext, data: Record<string, unknown>): Promise<CrmRecord | undefined> {

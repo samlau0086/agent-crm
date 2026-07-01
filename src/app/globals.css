@@ -3235,6 +3235,144 @@ button {
     radial-gradient(circle at 1px 1px, rgba(100, 116, 139, 0.25) 1px, transparent 0) 0 0 / 18px 18px;
 }
 
+.workflow-graph-canvas {
+  position: relative;
+  min-height: 620px;
+  min-width: 0;
+  overflow: auto;
+  padding: 18px;
+  border: 1px dashed rgba(100, 116, 139, 0.55);
+  border-radius: 8px;
+  background:
+    linear-gradient(var(--surface-strong), var(--surface-strong)) padding-box,
+    radial-gradient(circle at 1px 1px, rgba(100, 116, 139, 0.25) 1px, transparent 0) 0 0 / 18px 18px;
+}
+
+.workflow-graph-edges {
+  position: absolute;
+  inset: 0;
+  width: 1400px;
+  height: 720px;
+  pointer-events: none;
+}
+
+.workflow-graph-edge-path {
+  fill: none;
+  stroke: rgba(37, 99, 235, 0.55);
+  stroke-width: 2;
+}
+
+.workflow-graph-node {
+  position: absolute;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  gap: 6px 10px;
+  width: 230px;
+  min-height: 96px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+}
+
+.workflow-graph-node.selected {
+  border-color: rgba(37, 99, 235, 0.65);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.workflow-graph-node.if,
+.workflow-graph-node.switch,
+.workflow-graph-node.loop {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.workflow-node-input {
+  grid-row: 1 / span 3;
+  align-self: center;
+  justify-self: center;
+  width: 24px;
+  min-height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  line-height: 22px;
+  background: var(--surface-strong);
+}
+
+.workflow-node-title {
+  font-weight: 800;
+}
+
+.workflow-node-type {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workflow-node-outputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workflow-node-port {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  border-radius: 999px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(37, 99, 235, 0.08);
+  cursor: crosshair;
+}
+
+.workflow-node-port.active {
+  color: #0f766e;
+  border-color: rgba(15, 118, 110, 0.45);
+  background: rgba(20, 184, 166, 0.18);
+}
+
+.workflow-edge-list {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: min(620px, calc(100% - 28px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.workflow-edge-chip {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-strong);
+}
+
+.workflow-scope-card {
+  padding: 10px;
+  border: 1px solid rgba(20, 184, 166, 0.28);
+  border-radius: 8px;
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.1);
+}
+
 .automation-node-wrap {
   display: flex;
   align-items: center;

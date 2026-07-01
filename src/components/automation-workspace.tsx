@@ -37,9 +37,14 @@ import type {
   WorkflowAiGenerationResult,
   WorkflowCondition,
   WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowGraph,
+  WorkflowNode,
+  WorkflowNodeType,
   WorkflowRun,
   WorkflowTrigger
 } from "@/lib/crm/types";
+import { graphToLegacyWorkflow, legacyWorkflowToGraph } from "@/lib/workflows/core";
 import { formatDateTimeSeconds } from "@/lib/utils/format";
 
 type AutomationObjectKey = "all" | "contacts" | "companies" | "deals" | "email" | "tasks";
@@ -134,9 +139,13 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   const [toast, setToast] = useState<{ intent: "success" | "error" | "info"; message: string } | null>(null);
   const [targetRecordId, setTargetRecordId] = useState("");
   const [draggedNodeId, setDraggedNodeId] = useState("");
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState("start");
+  const [pendingConnection, setPendingConnection] = useState<{ sourceNodeId: string; sourceHandle: string } | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<WorkflowDefinition | null>(null);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
+  const graph = useMemo(() => draft.graph ?? legacyWorkflowToGraph(draft as Pick<WorkflowDefinition, "trigger" | "conditions" | "actions">), [draft]);
+  const selectedGraphNode = graph.nodes.find((node) => node.id === selectedGraphNodeId) ?? graph.nodes.find((node) => node.type === "start") ?? graph.nodes[0];
   const nodes = useMemo(() => workflowToNodes(draft), [draft]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
   const relatedRuns = workflowRuns.filter((run) => !selectedWorkflowId || run.workflowId === selectedWorkflowId).slice(0, 20);
@@ -188,6 +197,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     setDraft(workflow);
     setTargetRecordId(workflowTargetRecordId(workflow));
     setSelectedNodeId("trigger");
+    setSelectedGraphNodeId("start");
   }
 
   function createNewWorkflow(objectKey: AutomationObjectKey = activeObjectKey === "all" ? "contacts" : activeObjectKey) {
@@ -195,6 +205,8 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     setDraft(createWorkflowDraft(objectKey));
     setTargetRecordId("");
     setSelectedNodeId("trigger");
+    setSelectedGraphNodeId("start");
+    setPendingConnection(null);
   }
 
   async function runAutomationAction(action: () => Promise<void>) {
@@ -226,6 +238,8 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       setSelectedWorkflowId("");
       setDraft(applyWorkflowRecordScope(result.workflow, selectedTargetRecord));
       setSelectedNodeId("trigger");
+      setSelectedGraphNodeId("start");
+      setPendingConnection(null);
       showToast("success", `已生成草稿：${result.workflow.name}`);
     });
   }
@@ -306,15 +320,19 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   }
 
   function addCondition(template = conditionTemplates[0]) {
-    const condition = { ...template, key: uniqueNodeKey(template.key, draft.conditions.map((item) => item.key)) };
-    setDraft((current) => ({ ...current, conditions: [...current.conditions, condition] }));
-    setSelectedNodeId(`condition:${condition.key}`);
+    const condition = { ...template, key: uniqueNodeKey(template.key, graph.nodes.map((item) => item.id)) };
+    const type: WorkflowNodeType = condition.type === "switch" ? "switch" : condition.type === "loop" ? "loop" : "if";
+    const node = createGraphNode(type, graph.nodes.length, { condition });
+    updateGraph({ ...graph, nodes: [...graph.nodes, { ...node, id: `condition:${condition.key}`, label: conditionLabel(condition) }] });
+    setSelectedGraphNodeId(`condition:${condition.key}`);
   }
 
   function addAction(template = actionTemplates[0]) {
-    const action = { ...template, key: uniqueNodeKey(template.key, draft.actions.map((item) => item.key)), config: { ...template.config } };
-    setDraft((current) => ({ ...current, actions: [...current.actions, action] }));
-    setSelectedNodeId(`action:${action.key}`);
+    const action = { ...template, key: uniqueNodeKey(template.key, graph.nodes.map((item) => item.id)), config: { ...template.config } };
+    const type: WorkflowNodeType = action.type === "send_email" ? "send_email" : action.type === "update_stage" ? "update_deal" : action.type === "notify" ? "notify" : "create_task";
+    const node = createGraphNode(type, graph.nodes.length, { action });
+    updateGraph({ ...graph, nodes: [...graph.nodes, { ...node, id: `action:${action.key}`, label: action.name }] });
+    setSelectedGraphNodeId(`action:${action.key}`);
   }
 
   function removeNode(node: AutomationNode) {
@@ -344,6 +362,80 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
       if (target.kind !== "action") return;
       setDraft((current) => ({ ...current, actions: reorderByKey(current.actions, source.action.key, target.action.key) }));
     }
+  }
+
+  function updateGraph(nextGraph: WorkflowGraph) {
+    setDraft((current) => withWorkflowGraph(current, nextGraph));
+  }
+
+  function addGraphNode(type: WorkflowNodeType) {
+    const nextNode = createGraphNode(type, graph.nodes.length);
+    const source = pendingConnection?.sourceNodeId
+      ? graph.nodes.find((node) => node.id === pendingConnection.sourceNodeId)
+      : selectedGraphNode;
+    const sourceHandle = pendingConnection?.sourceHandle ?? defaultGraphOutputHandles(source?.type ?? "start")[0] ?? "main";
+    const nextGraph: WorkflowGraph = {
+      ...graph,
+      nodes: [...graph.nodes, nextNode],
+      edges: source && source.type !== "end"
+        ? [
+            ...graph.edges.filter((edge) => !(edge.sourceNodeId === source.id && edge.sourceHandle === sourceHandle && nextNode.type !== "end")),
+            createGraphEdge(source.id, sourceHandle, nextNode.id)
+          ]
+        : graph.edges
+    };
+    setPendingConnection(null);
+    setSelectedGraphNodeId(nextNode.id);
+    updateGraph(nextGraph);
+  }
+
+  function updateGraphNode(nodeId: string, patch: Partial<WorkflowNode>) {
+    updateGraph({
+      ...graph,
+      nodes: graph.nodes.map((node) => (node.id === nodeId ? { ...node, ...patch, config: patch.config ?? node.config } : node))
+    });
+  }
+
+  function deleteGraphNode(nodeId: string) {
+    const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type === "start" || node.type === "end") {
+      showToast("info", "Start 和 End 节点不能删除。");
+      return;
+    }
+    updateGraph({
+      ...graph,
+      nodes: graph.nodes.filter((candidate) => candidate.id !== nodeId),
+      edges: graph.edges.filter((edge) => edge.sourceNodeId !== nodeId && edge.targetNodeId !== nodeId)
+    });
+    setSelectedGraphNodeId("start");
+    setPendingConnection(null);
+  }
+
+  function connectGraphNode(targetNodeId: string) {
+    if (!pendingConnection) return;
+    if (pendingConnection.sourceNodeId === targetNodeId) {
+      setPendingConnection(null);
+      return;
+    }
+    updateGraph({
+      ...graph,
+      edges: [
+        ...graph.edges.filter((edge) => !(edge.sourceNodeId === pendingConnection.sourceNodeId && edge.sourceHandle === pendingConnection.sourceHandle)),
+        createGraphEdge(pendingConnection.sourceNodeId, pendingConnection.sourceHandle, targetNodeId)
+      ]
+    });
+    setPendingConnection(null);
+  }
+
+  function deleteGraphEdge(edgeId: string) {
+    updateGraph({ ...graph, edges: graph.edges.filter((edge) => edge.id !== edgeId) });
+  }
+
+  function moveGraphNode(nodeId: string, position: WorkflowNode["position"]) {
+    updateGraph({
+      ...graph,
+      nodes: graph.nodes.map((node) => (node.id === nodeId ? { ...node, position } : node))
+    });
   }
 
   return (
@@ -516,34 +608,28 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
               ))}
             </div>
 
-            <div className="automation-canvas" data-testid="automation-node-canvas">
-              {nodes.map((node, index) => (
-                <div className="automation-node-wrap" key={node.id}>
-                  <AutomationCanvasNode
-                    node={node}
-                    selected={selectedNodeId === node.id}
-                    onClick={() => setSelectedNodeId(node.id)}
-                    onDragStart={() => setDraggedNodeId(node.id)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => handleNodeDrop(event, node.id)}
-                  />
-                  {index < nodes.length - 1 ? (
-                    <div className="automation-node-edge">
-                      <ChevronRight size={18} />
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-
-            <AutomationNodeInspector
-              node={selectedNode}
-              draft={draft}
-              emailAccounts={emailAccounts}
-              users={users}
-              onChange={setDraft}
-              onRemove={removeNode}
+            <WorkflowGraphCanvas
+              graph={graph}
+              selectedNodeId={selectedGraphNode?.id ?? ""}
+              pendingConnection={pendingConnection}
+              onCompleteConnection={connectGraphNode}
+              onDeleteEdge={deleteGraphEdge}
+              onMoveNode={moveGraphNode}
+              onSelectNode={setSelectedGraphNodeId}
+              onStartConnection={setPendingConnection}
             />
+
+            {selectedGraphNode ? (
+              <WorkflowGraphInspector
+                node={selectedGraphNode}
+                graph={graph}
+                emailAccounts={emailAccounts}
+                users={users}
+                onChange={updateGraphNode}
+                onDelete={deleteGraphNode}
+                onGraphChange={updateGraph}
+              />
+            ) : null}
           </div>
         </section>
       </div>
@@ -931,18 +1017,382 @@ function AutomationNodeInspector({
   );
 }
 
+function WorkflowGraphCanvas({
+  graph,
+  selectedNodeId,
+  pendingConnection,
+  onSelectNode,
+  onStartConnection,
+  onCompleteConnection,
+  onDeleteEdge,
+  onMoveNode
+}: {
+  graph: WorkflowGraph;
+  selectedNodeId: string;
+  pendingConnection: { sourceNodeId: string; sourceHandle: string } | null;
+  onSelectNode: (nodeId: string) => void;
+  onStartConnection: (connection: { sourceNodeId: string; sourceHandle: string } | null) => void;
+  onCompleteConnection: (targetNodeId: string) => void;
+  onDeleteEdge: (edgeId: string) => void;
+  onMoveNode: (nodeId: string, position: WorkflowNode["position"]) => void;
+}) {
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+
+  function handleDragEnd(event: DragEvent<HTMLButtonElement>, node: WorkflowNode) {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    onMoveNode(node.id, {
+      x: Math.max(12, Math.round(event.clientX - rect.left - 110)),
+      y: Math.max(12, Math.round(event.clientY - rect.top - 42))
+    });
+  }
+
+  return (
+    <div className="workflow-graph-canvas" data-testid="automation-node-canvas" ref={canvasRef}>
+      <svg className="workflow-graph-edges" aria-hidden="true">
+        {graph.edges.map((edge) => {
+          const source = nodeById.get(edge.sourceNodeId);
+          const target = nodeById.get(edge.targetNodeId);
+          if (!source || !target) return null;
+          const startX = source.position.x + 230;
+          const startY = source.position.y + 50 + outputHandleOffset(edge.sourceHandle);
+          const endX = target.position.x;
+          const endY = target.position.y + 50;
+          const midX = Math.round((startX + endX) / 2);
+          return (
+            <path
+              d={`M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`}
+              key={edge.id}
+              className="workflow-graph-edge-path"
+            />
+          );
+        })}
+      </svg>
+
+      {graph.nodes.map((node) => (
+        <button
+          className={`workflow-graph-node ${selectedNodeId === node.id ? "selected" : ""} ${node.type}`}
+          data-testid={`workflow-node-${node.id}`}
+          draggable
+          key={node.id}
+          onClick={() => onSelectNode(node.id)}
+          onDragEnd={(event) => handleDragEnd(event, node)}
+          style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
+          type="button"
+        >
+          <span className="workflow-node-input" onClick={(event) => { event.stopPropagation(); onCompleteConnection(node.id); }}>
+            in
+          </span>
+          <span className="workflow-node-title">{node.label}</span>
+          <span className="workflow-node-type">{workflowNodeTypeLabel(node.type)}</span>
+          <span className="workflow-node-outputs">
+            {defaultGraphOutputHandles(node.type).map((handle) => (
+              <span
+                className={`workflow-node-port ${pendingConnection?.sourceNodeId === node.id && pendingConnection.sourceHandle === handle ? "active" : ""}`}
+                data-testid={`workflow-port-${node.id}-${handle}`}
+                key={handle}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onStartConnection({ sourceNodeId: node.id, sourceHandle: handle });
+                }}
+              >
+                {handle}
+              </span>
+            ))}
+          </span>
+        </button>
+      ))}
+
+      <div className="workflow-edge-list">
+        <strong>Edges</strong>
+        {graph.edges.map((edge) => (
+          <button className="workflow-edge-chip" key={edge.id} type="button" onClick={() => onDeleteEdge(edge.id)}>
+            {edge.sourceNodeId} / {edge.sourceHandle} → {edge.targetNodeId}
+          </button>
+        ))}
+        {pendingConnection ? <span className="subtle">选择目标节点左侧 in 端口完成连接。</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowGraphInspector({
+  node,
+  graph,
+  emailAccounts,
+  users,
+  onChange,
+  onDelete,
+  onGraphChange
+}: {
+  node: WorkflowNode;
+  graph: WorkflowGraph;
+  emailAccounts: EmailAccount[];
+  users: User[];
+  onChange: (nodeId: string, patch: Partial<WorkflowNode>) => void;
+  onDelete: (nodeId: string) => void;
+  onGraphChange: (graph: WorkflowGraph) => void;
+}) {
+  const config = node.config;
+
+  function updateConfig(key: string, value: unknown) {
+    onChange(node.id, { config: { ...config, [key]: value } });
+  }
+
+  function updateStartScope(patch: Partial<WorkflowGraph["scope"]>) {
+    const scope = { ...graph.scope, ...patch } as WorkflowGraph["scope"];
+    const trigger = graphToLegacyWorkflow({ ...graph, scope }).trigger;
+    onGraphChange({
+      ...graph,
+      scope,
+      nodes: graph.nodes.map((candidate) => candidate.id === node.id ? { ...candidate, label: startNodeLabel(scope), config: { ...candidate.config, trigger } } : candidate)
+    });
+  }
+
+  return (
+    <aside className="automation-inspector workflow-graph-inspector">
+      <div className="stage-header">
+        <strong>{workflowNodeTypeLabel(node.type)}</strong>
+        {node.type !== "start" && node.type !== "end" ? (
+          <button className="text-button" type="button" onClick={() => onDelete(node.id)}>删除节点</button>
+        ) : <span className="badge">固定</span>}
+      </div>
+      <label>
+        <span className="subtle">节点名称</span>
+        <input className="input" value={node.label} onChange={(event) => onChange(node.id, { label: event.target.value })} />
+      </label>
+
+      {node.type === "start" ? (
+        <>
+          <label>
+            <span className="subtle">Scope</span>
+            <select className="select" value={graph.scope.mode} onChange={(event) => updateStartScope({ mode: event.target.value as WorkflowGraph["scope"]["mode"] })}>
+              <option value="record">仅此记录</option>
+              <option value="object">当前对象</option>
+              <option value="global">全局</option>
+            </select>
+          </label>
+          <label>
+            <span className="subtle">对象</span>
+            <select className="select" value={graph.scope.objectKey ?? ""} onChange={(event) => updateStartScope({ objectKey: event.target.value || undefined })}>
+              <option value="">不限定</option>
+              <option value="contacts">联系人</option>
+              <option value="companies">公司</option>
+              <option value="deals">交易</option>
+            </select>
+          </label>
+          {graph.scope.mode === "record" ? <div className="workflow-scope-card">仅此记录：{graph.scope.recordTitle ?? graph.scope.recordId}</div> : null}
+        </>
+      ) : null}
+
+      {node.type === "if" ? (
+        <ConditionFields config={config} onChange={updateConfig} />
+      ) : null}
+
+      {node.type === "switch" ? (
+        <>
+          <ConditionFields config={config} onChange={updateConfig} />
+          <label>
+            <span className="subtle">Cases（逗号分隔，对应 case:value 输出）</span>
+            <textarea className="textarea" value={joinConfigList(config.cases)} onChange={(event) => updateConfig("cases", splitConfigList(event.target.value))} />
+          </label>
+        </>
+      ) : null}
+
+      {node.type === "loop" ? (
+        <>
+          <label>
+            <span className="subtle">循环集合字段</span>
+            <input className="input" value={String(config.collectionField ?? config.field ?? "items")} onChange={(event) => updateConfig("collectionField", event.target.value)} />
+          </label>
+          <label>
+            <span className="subtle">最大循环次数</span>
+            <input className="input" type="number" min={1} max={100} value={String(config.maxIterations ?? 50)} onChange={(event) => updateConfig("maxIterations", Number(event.target.value))} />
+          </label>
+        </>
+      ) : null}
+
+      {node.type === "send_email" ? (
+        <>
+          <label>
+            <span className="subtle">发件账户</span>
+            <select className="select" value={String(config.accountId ?? "")} onChange={(event) => updateConfig("accountId", event.target.value || undefined)}>
+              <option value="">自动选择</option>
+              {emailAccounts.filter((account) => account.sendEnabled).map((account) => (
+                <option key={account.id} value={account.id}>{account.emailAddress}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="subtle">收件人</span>
+            <input className="input" value={joinConfigList(config.to)} onChange={(event) => updateConfig("to", splitConfigList(event.target.value))} />
+          </label>
+          <label>
+            <span className="subtle">主题</span>
+            <input className="input" value={String(config.subject ?? "")} onChange={(event) => updateConfig("subject", event.target.value)} />
+          </label>
+          <label>
+            <span className="subtle">正文</span>
+            <textarea className="textarea" value={String(config.bodyText ?? "")} onChange={(event) => updateConfig("bodyText", event.target.value)} />
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={Boolean(config.requiresApproval ?? true)} onChange={(event) => updateConfig("requiresApproval", event.target.checked)} />
+            高风险动作进入审批
+          </label>
+        </>
+      ) : null}
+
+      {node.type === "create_task" || node.type === "notify" ? (
+        <>
+          <label>
+            <span className="subtle">标题</span>
+            <input className="input" value={String(config.title ?? "")} onChange={(event) => updateConfig("title", event.target.value)} />
+          </label>
+          <label>
+            <span className="subtle">内容</span>
+            <textarea className="textarea" value={String(config.body ?? config.content ?? "")} onChange={(event) => updateConfig(node.type === "notify" ? "content" : "body", event.target.value)} />
+          </label>
+        </>
+      ) : null}
+
+      {node.type === "update_deal" ? (
+        <label>
+          <span className="subtle">目标阶段 key</span>
+          <input className="input" value={String(config.stageKey ?? "")} onChange={(event) => updateConfig("stageKey", event.target.value)} />
+        </label>
+      ) : null}
+
+      {users.length ? <div className="subtle">可用负责人：{users.slice(0, 3).map((user) => user.name).join("、")}</div> : null}
+    </aside>
+  );
+}
+
+function ConditionFields({ config, onChange }: { config: Record<string, unknown>; onChange: (key: string, value: unknown) => void }) {
+  return (
+    <>
+      <label>
+        <span className="subtle">字段</span>
+        <input className="input" value={String(config.field ?? "recordId")} onChange={(event) => onChange("field", event.target.value)} />
+      </label>
+      <label>
+        <span className="subtle">操作符</span>
+        <select className="select" value={String(config.operator ?? "equals")} onChange={(event) => onChange("operator", event.target.value)}>
+          <option value="exists">exists</option>
+          <option value="not_exists">not exists</option>
+          <option value="equals">equals</option>
+          <option value="not_equals">not equals</option>
+          <option value="contains">contains</option>
+          <option value="gt">gt</option>
+          <option value="gte">gte</option>
+          <option value="lt">lt</option>
+          <option value="lte">lte</option>
+        </select>
+      </label>
+      <label>
+        <span className="subtle">值</span>
+        <input className="input" value={String(config.value ?? "")} onChange={(event) => onChange("value", event.target.value)} />
+      </label>
+    </>
+  );
+}
+
 function createWorkflowDraft(objectKey: AutomationObjectKey): AutomationDraft {
   const normalizedObjectKey = objectKey === "all" || objectKey === "email" || objectKey === "tasks" ? "contacts" : objectKey;
+  const parts = createDefaultWorkflowParts(normalizedObjectKey);
   return {
     name: `${automationObjectLabel(objectKey)}自动化`,
     description: "通过可视化工作流编辑器创建的草稿。",
     goal: "自动创建跟进任务，并在高风险动作前进入审批。",
     status: "draft",
-    trigger: { type: "crm_event", event: "record.updated", objectKey: normalizedObjectKey },
-    conditions: [{ ...conditionTemplates[0] }],
-    actions: [{ ...actionTemplates[0], config: { ...actionTemplates[0].config } }],
+    trigger: parts.trigger,
+    conditions: parts.conditions,
+    actions: parts.actions,
+    graph: parts.graph,
     version: 1
   };
+}
+
+function createDefaultWorkflowParts(objectKey: string): Pick<AutomationDraft, "trigger" | "conditions" | "actions" | "graph"> {
+  const trigger: WorkflowTrigger = { type: "crm_event", event: "record.updated", objectKey };
+  const conditions = [{ ...conditionTemplates[0] }];
+  const actions = [{ ...actionTemplates[0], config: { ...actionTemplates[0].config } }];
+  return { trigger, conditions, actions, graph: legacyWorkflowToGraph({ trigger, conditions, actions }) };
+}
+
+function withWorkflowGraph(draft: AutomationDraft, graph: WorkflowGraph): AutomationDraft {
+  const legacy = graphToLegacyWorkflow(graph);
+  return { ...draft, ...legacy, graph };
+}
+
+function createGraphNode(type: WorkflowNodeType, index: number, config: Record<string, unknown> = {}): WorkflowNode {
+  return {
+    id: `${type}:${Date.now().toString(36)}:${index}`,
+    type,
+    label: defaultGraphNodeLabel(type),
+    position: {
+      x: 60 + (index % 4) * 260,
+      y: 80 + Math.floor(index / 4) * 150
+    },
+    config: defaultGraphNodeConfig(type, config)
+  };
+}
+
+function createGraphEdge(sourceNodeId: string, sourceHandle: string, targetNodeId: string): WorkflowEdge {
+  return {
+    id: `edge:${sourceNodeId}:${sourceHandle}:${targetNodeId}:${Date.now().toString(36)}`,
+    sourceNodeId,
+    sourceHandle,
+    targetNodeId
+  };
+}
+
+function defaultGraphNodeConfig(type: WorkflowNodeType, config: Record<string, unknown>): Record<string, unknown> {
+  if (Object.keys(config).length > 0) return config;
+  if (type === "if") return { field: "recordId", operator: "equals", value: "" };
+  if (type === "switch") return { field: "stageKey", cases: ["new", "qualified"], operator: "exists" };
+  if (type === "loop") return { collectionField: "items", maxIterations: 50 };
+  if (type === "send_email") return { mode: "draft", to: ["{{record.email}}"], subject: "Follow up {{record.title}}", bodyText: "" };
+  if (type === "create_task") return { activityType: "task", title: "Follow up", body: "", dueInDays: 2 };
+  if (type === "update_deal") return { stageKey: "" };
+  if (type === "notify") return { title: "Workflow notification", content: "" };
+  return {};
+}
+
+function defaultGraphNodeLabel(type: WorkflowNodeType): string {
+  if (type === "start") return "Start";
+  if (type === "if") return "IF";
+  if (type === "switch") return "SWITCH";
+  if (type === "loop") return "LOOP";
+  if (type === "send_email") return "Send Email";
+  if (type === "create_task") return "Create Task";
+  if (type === "update_deal") return "Update Deal";
+  if (type === "notify") return "Notify";
+  return "End";
+}
+
+function workflowNodeTypeLabel(type: WorkflowNodeType): string {
+  return defaultGraphNodeLabel(type);
+}
+
+function defaultGraphOutputHandles(type: WorkflowNodeType): string[] {
+  if (type === "if") return ["true", "false"];
+  if (type === "switch") return ["case:new", "case:qualified", "default"];
+  if (type === "loop") return ["continue", "break"];
+  if (type === "end") return [];
+  return ["main"];
+}
+
+function outputHandleOffset(handle: string): number {
+  if (handle === "false" || handle === "break" || handle === "default") return 22;
+  if (handle.startsWith("case:")) return -18;
+  return 0;
+}
+
+function startNodeLabel(scope: WorkflowGraph["scope"]): string {
+  if (scope.mode === "record") return `Start: 仅此记录 ${scope.recordTitle ?? scope.recordId ?? ""}`.trim();
+  if (scope.mode === "object") return `Start: ${scope.objectKey ?? "object"}`;
+  return "Start: global";
 }
 
 function workflowToNodes(workflow: AutomationDraft): AutomationNode[] {
@@ -999,7 +1449,8 @@ function switchCasesFromConfig(value: unknown): string[] {
   return [];
 }
 
-function workflowTargetRecordId(workflow: Pick<WorkflowDefinition, "trigger" | "conditions">): string {
+function workflowTargetRecordId(workflow: Pick<WorkflowDefinition, "trigger" | "conditions" | "graph">): string {
+  if (workflow.graph?.scope.mode === "record" && workflow.graph.scope.recordId) return workflow.graph.scope.recordId;
   const configuredTarget = workflow.trigger.config?.targetRecordId;
   if (typeof configuredTarget === "string" && configuredTarget.trim()) return configuredTarget.trim();
   const targetCondition = workflow.conditions.find((condition) => condition.key === "target-record" && condition.field === "recordId");
@@ -1008,6 +1459,35 @@ function workflowTargetRecordId(workflow: Pick<WorkflowDefinition, "trigger" | "
 
 function applyWorkflowRecordScope(draft: AutomationDraft, targetRecord?: CrmRecord): AutomationDraft {
   if (!targetRecord) return draft;
+  const baseGraph = draft.graph ?? legacyWorkflowToGraph(draft);
+  const graph: WorkflowGraph = {
+    ...baseGraph,
+    scope: {
+      mode: "record",
+      objectKey: targetRecord.objectKey,
+      recordId: targetRecord.id,
+      recordTitle: targetRecord.title
+    },
+    nodes: baseGraph.nodes.map((node) => node.type === "start"
+      ? {
+          ...node,
+          label: startNodeLabel({ mode: "record", objectKey: targetRecord.objectKey, recordId: targetRecord.id, recordTitle: targetRecord.title }),
+          config: {
+            ...node.config,
+            trigger: {
+              ...draft.trigger,
+              objectKey: targetRecord.objectKey,
+              config: {
+                ...(draft.trigger.config ?? {}),
+                targetRecordId: targetRecord.id,
+                targetRecordTitle: targetRecord.title,
+                targetObjectKey: targetRecord.objectKey
+              }
+            }
+          }
+        }
+      : node)
+  };
   const targetCondition: WorkflowCondition = {
     key: "target-record",
     type: "if",
@@ -1034,7 +1514,8 @@ function applyWorkflowRecordScope(draft: AutomationDraft, targetRecord?: CrmReco
         targetObjectKey: targetRecord.objectKey
       }
     },
-    conditions
+    conditions,
+    graph
   };
 }
 
@@ -1047,6 +1528,7 @@ function stripWorkflowReadonlyFields(workflow: AutomationDraft) {
     trigger: workflow.trigger,
     conditions: workflow.conditions,
     actions: workflow.actions,
+    graph: workflow.graph,
     version: workflow.version
   };
 }

@@ -84,9 +84,14 @@ import {
   buildWorkflowDraftFromGoal,
   buildWorkflowIdempotencyKey,
   didWorkflowConditionsPass,
+  evaluateWorkflowCondition,
   evaluateWorkflowConditions,
+  graphToLegacyWorkflow,
   isHighRiskWorkflowAction,
+  normalizeWorkflowGraph,
   renderWorkflowTextTemplate,
+  workflowNodeToAction,
+  workflowNodeToCondition,
   workflowMatchesEvent
 } from "@/lib/workflows/core";
 
@@ -103,6 +108,20 @@ function clone<T>(value: T): T {
 
 function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function findWorkflowEdge<T extends { sourceNodeId: string; sourceHandle: string; targetNodeId: string }>(edges: T[], nodeId: string, handle: string): T | undefined {
+  return edges.find((edge) => edge.sourceNodeId === nodeId && edge.sourceHandle === handle);
+}
+
+function switchOutputHandle(node: { config: Record<string, unknown> }, value: unknown): string {
+  const actual = String(value ?? "").trim();
+  const cases = Array.isArray(node.config.cases)
+    ? node.config.cases.filter((item): item is string => typeof item === "string")
+    : typeof node.config.cases === "string"
+      ? node.config.cases.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean)
+      : [];
+  return cases.includes(actual) ? `case:${actual}` : "default";
 }
 
 function stamp(): string {
@@ -1526,6 +1545,8 @@ export class CrmStore {
   ): WorkflowDefinition {
     requirePermission(context, "workflow.write");
     const now = stamp();
+    const graph = input.graph ? normalizeWorkflowGraph(input.graph, input) : undefined;
+    const legacy = graph ? graphToLegacyWorkflow(graph) : input;
     const workflow: WorkflowDefinition = {
       id: createId("workflow"),
       workspaceId: context.workspaceId,
@@ -1533,9 +1554,10 @@ export class CrmStore {
       description: input.description?.trim() || undefined,
       goal: input.goal.trim(),
       status: input.status ?? "draft",
-      trigger: input.trigger,
-      conditions: input.conditions ?? [],
-      actions: input.actions ?? [],
+      trigger: legacy.trigger,
+      conditions: legacy.conditions ?? [],
+      actions: legacy.actions ?? [],
+      graph,
       createdById: context.user.id,
       version: input.version ?? 1,
       createdAt: now,
@@ -1556,9 +1578,15 @@ export class CrmStore {
     const index = (this.data.workflowDefinitions ?? []).findIndex((candidate) => candidate.id === id && candidate.workspaceId === context.workspaceId);
     if (index === -1) throw new Error("Workflow not found");
     const current = this.data.workflowDefinitions![index];
+    const graph = patch.graph ? normalizeWorkflowGraph(patch.graph, current) : undefined;
+    const legacy = graph ? graphToLegacyWorkflow(graph) : undefined;
     const updated: WorkflowDefinition = {
       ...current,
       ...patch,
+      trigger: legacy?.trigger ?? patch.trigger ?? current.trigger,
+      conditions: legacy?.conditions ?? patch.conditions ?? current.conditions,
+      actions: legacy?.actions ?? patch.actions ?? current.actions,
+      graph: graph ?? patch.graph ?? current.graph,
       description: patch.description !== undefined ? patch.description?.trim() || undefined : current.description,
       updatedAt: stamp()
     };
@@ -1656,6 +1684,41 @@ export class CrmStore {
     if (existing) return clone(existing);
     const startedAt = stamp();
     const record = this.workflowRecordFromData(context, data);
+    if (workflow.graph) {
+      const graphResults = this.runWorkflowGraph(context, workflow, data, record, options);
+      const status = graphResults.actionResults.some((result) => result.status === "failed") || graphResults.nodeResults.some((result) => result.status === "failed")
+        ? "failed"
+        : graphResults.actionResults.some((result) => result.status === "approval_required") || graphResults.nodeResults.some((result) => result.status === "approval_required")
+          ? "approval_required"
+          : graphResults.nodeResults.some((result) => result.status === "completed")
+            ? "completed"
+            : "skipped";
+      const run: WorkflowRun = {
+        id: createId("workflow_run"),
+        workspaceId: context.workspaceId,
+        workflowId: workflow.id,
+        status,
+        triggerEvent: event,
+        triggerData: clone(data),
+        idempotencyKey: options.test ? undefined : idempotencyKey,
+        conditionResults: graphResults.conditionResults,
+        actionResults: graphResults.actionResults,
+        nodeResults: graphResults.nodeResults,
+        startedAt,
+        completedAt: stamp(),
+        durationMs: 0
+      };
+      (this.data.workflowRuns ??= []).push(run);
+      const workflowIndex = (this.data.workflowDefinitions ?? []).findIndex((candidate) => candidate.id === workflow.id);
+      if (workflowIndex !== -1) {
+        this.data.workflowDefinitions![workflowIndex] = { ...this.data.workflowDefinitions![workflowIndex], lastRunAt: run.completedAt, updatedAt: this.data.workflowDefinitions![workflowIndex].updatedAt };
+      }
+      this.writeAuditLog(context, status === "failed" ? "workflow.run_failed" : "workflow.run_completed", "workflow", workflow.id, {
+        summary: `Workflow ${workflow.name} ${status}`,
+        details: { runId: run.id, event, nodeResults: graphResults.nodeResults, actionResults: graphResults.actionResults }
+      });
+      return clone(run);
+    }
     const conditionResults = evaluateWorkflowConditions(workflow, data, record);
     const actionResults: WorkflowRun["actionResults"] = [];
     if (didWorkflowConditionsPass(conditionResults)) {
@@ -1701,6 +1764,76 @@ export class CrmStore {
       details: { runId: run.id, event, actionResults }
     });
     return clone(run);
+  }
+
+  private runWorkflowGraph(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    triggerData: Record<string, unknown>,
+    record: CrmRecord | undefined,
+    options: { test?: boolean } = {}
+  ): {
+    conditionResults: WorkflowRun["conditionResults"];
+    actionResults: WorkflowRun["actionResults"];
+    nodeResults: NonNullable<WorkflowRun["nodeResults"]>;
+  } {
+    const graph = workflow.graph ? normalizeWorkflowGraph(workflow.graph, workflow) : normalizeWorkflowGraph(undefined, workflow);
+    const conditionResults: WorkflowRun["conditionResults"] = [];
+    const actionResults: WorkflowRun["actionResults"] = [];
+    const nodeResults: NonNullable<WorkflowRun["nodeResults"]> = [];
+    const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+    const visits = new Map<string, number>();
+    let current = graph.nodes.find((node) => node.type === "start")?.id ?? "start";
+    for (let step = 0; step < 200 && current; step += 1) {
+      const node = nodeById.get(current);
+      if (!node) break;
+      const startedAt = stamp();
+      let outputHandle = "main";
+      let status: NonNullable<WorkflowRun["nodeResults"]>[number]["status"] = "completed";
+      let message = "";
+      visits.set(node.id, (visits.get(node.id) ?? 0) + 1);
+
+      if (node.type === "end") {
+        nodeResults.push({ nodeId: node.id, status, outputHandle: "end", message: "Ended workflow", startedAt, completedAt: stamp() });
+        break;
+      }
+
+      if (node.type === "start") {
+        message = graph.scope.mode === "record" ? `Record scoped: ${graph.scope.recordTitle ?? graph.scope.recordId}` : graph.scope.mode === "object" ? `Object scoped: ${graph.scope.objectKey}` : "Global workflow";
+      } else if (node.type === "if" || node.type === "switch" || node.type === "loop") {
+        const condition = workflowNodeToCondition(node);
+        const result = evaluateWorkflowCondition(condition, triggerData, record);
+        conditionResults.push({ key: condition.key, passed: result.passed, actualValue: result.actualValue });
+        if (node.type === "switch") {
+          outputHandle = switchOutputHandle(node, result.actualValue);
+        } else if (node.type === "loop") {
+          const maxIterations = Math.min(Number(node.config.maxIterations ?? condition.config?.maxIterations ?? 100) || 100, 100);
+          outputHandle = (visits.get(node.id) ?? 1) >= maxIterations || !result.passed ? "break" : "continue";
+        } else {
+          outputHandle = result.passed ? "true" : "false";
+        }
+        message = `Output: ${outputHandle}`;
+      } else {
+        const action = workflowNodeToAction(node);
+        let actionResult: WorkflowRun["actionResults"][number];
+        if (options.test) {
+          actionResult = { actionKey: action.key, status: isHighRiskWorkflowAction(action) ? "approval_required" : "completed", message: "Test run only; action was not executed." };
+        } else if (isHighRiskWorkflowAction(action)) {
+          const approval = this.createWorkflowActionApproval(context, workflow, action, triggerData, record);
+          actionResult = { actionKey: action.key, status: "approval_required", message: `Approval required: ${approval.id}` };
+        } else {
+          actionResult = this.executeWorkflowAction(context, workflow, action, triggerData, record);
+        }
+        actionResults.push(actionResult);
+        status = actionResult.status;
+        message = actionResult.message ?? "";
+      }
+
+      nodeResults.push({ nodeId: node.id, status, outputHandle, message, startedAt, completedAt: stamp() });
+      const nextEdge = findWorkflowEdge(graph.edges, node.id, outputHandle) ?? findWorkflowEdge(graph.edges, node.id, "main") ?? findWorkflowEdge(graph.edges, node.id, "default");
+      current = nextEdge?.targetNodeId ?? "";
+    }
+    return { conditionResults, actionResults, nodeResults };
   }
 
   private workflowRecordFromData(context: RequestContext, data: Record<string, unknown>): CrmRecord | undefined {

@@ -362,6 +362,42 @@ export const workflowActionSchema = z
   })
   .strict();
 
+export const workflowScopeSchema = z
+  .object({
+    mode: z.enum(["record", "object", "global"]),
+    objectKey: objectKeySchema.optional(),
+    recordId: z.string().trim().min(1).max(120).optional(),
+    recordTitle: z.string().trim().max(200).optional()
+  })
+  .strict();
+
+export const workflowNodeSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    type: z.enum(["start", "if", "switch", "loop", "send_email", "create_task", "update_deal", "notify", "end"]),
+    label: z.string().trim().min(1).max(200),
+    position: z.object({ x: z.number(), y: z.number() }).strict(),
+    config: z.record(z.unknown()).default({})
+  })
+  .strict();
+
+export const workflowEdgeSchema = z
+  .object({
+    id: z.string().trim().min(1).max(160),
+    sourceNodeId: z.string().trim().min(1).max(120),
+    sourceHandle: z.string().trim().min(1).max(120),
+    targetNodeId: z.string().trim().min(1).max(120)
+  })
+  .strict();
+
+export const workflowGraphSchema = z
+  .object({
+    scope: workflowScopeSchema,
+    nodes: z.array(workflowNodeSchema).min(2).max(100),
+    edges: z.array(workflowEdgeSchema).max(200)
+  })
+  .strict();
+
 export const workflowCreateSchema = z
   .object({
     name: labelSchema,
@@ -370,7 +406,8 @@ export const workflowCreateSchema = z
     status: z.enum(["draft", "active", "disabled", "archived"]).optional(),
     trigger: workflowTriggerSchema,
     conditions: z.array(workflowConditionSchema).max(20).default([]),
-    actions: z.array(workflowActionSchema).min(1).max(20)
+    actions: z.array(workflowActionSchema).min(1).max(20),
+    graph: workflowGraphSchema.optional()
   })
   .strict();
 
