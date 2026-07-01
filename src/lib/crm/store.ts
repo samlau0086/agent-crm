@@ -1592,7 +1592,10 @@ export class CrmStore {
 
   generateWorkflow(context: RequestContext, input: WorkflowAiGenerationRequest): WorkflowAiGenerationResult {
     requirePermission(context, "workflow.write");
-    return buildWorkflowDraftFromGoal(input);
+    const targetRecord = input.objectKey && input.recordId
+      ? (this.data.records ?? []).find((record) => record.workspaceId === context.workspaceId && record.objectKey === input.objectKey && record.id === input.recordId)
+      : undefined;
+    return buildWorkflowDraftFromGoal({ ...input, recordTitle: input.recordTitle ?? targetRecord?.title });
   }
 
   listWorkflowRuns(context: RequestContext, workflowId?: string): WorkflowRun[] {
@@ -1763,18 +1766,23 @@ export class CrmStore {
         const to = Array.isArray(action.config.to)
           ? action.config.to.filter((value): value is string => typeof value === "string")
           : [typeof triggerData.from === "string" ? triggerData.from : typeof record?.data.email === "string" ? record.data.email : ""].filter(Boolean);
+        const cc = Array.isArray(action.config.cc) ? action.config.cc.filter((value): value is string => typeof value === "string") : undefined;
+        const bcc = Array.isArray(action.config.bcc) ? action.config.bcc.filter((value): value is string => typeof value === "string") : undefined;
         if (to.length === 0) throw new Error("No email recipient");
         const message = this.recordEmailMessage(context, {
           accountId: account.id,
           direction: "outbound",
           from: account.emailAddress,
           to,
+          cc,
+          bcc,
           subject: renderWorkflowTextTemplate(action.config.subject ?? `Re: ${record?.title ?? workflow.name}`, triggerData, record),
           bodyText: renderWorkflowTextTemplate(action.config.bodyText ?? action.config.body ?? "", triggerData, record),
           bodyHtml: renderWorkflowTextTemplate(action.config.bodyHtml, triggerData, record) || undefined,
           status: action.config.mode === "draft" ? "draft" : "queued",
           recordId: record?.id,
           clientRequestId: runId ? `workflow:${runId}:${action.key}` : undefined,
+          aiAssisted: Boolean(action.config.aiAssisted),
           skipAutoLink: true
         });
         return { actionKey: action.key, status: "completed", message: `Created email ${message.id}` };

@@ -652,7 +652,7 @@ export type AuditAction =
 export type WorkflowStatus = "draft" | "active" | "disabled" | "archived";
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "skipped" | "approval_required";
 export type WorkflowTriggerType = "crm_event" | "email_event" | "task_event" | "schedule" | "manual";
-export type WorkflowConditionType = "field" | "activity" | "email_behavior" | "ai";
+export type WorkflowConditionType = "field" | "activity" | "email_behavior" | "ai" | "if" | "switch" | "loop";
 export type WorkflowActionType = "create_activity" | "send_email" | "update_stage" | "update_record" | "notify" | "create_knowledge_article";
 export type WorkflowApprovalStatus = "pending" | "approved" | "rejected";
 
@@ -675,6 +675,7 @@ export interface WorkflowCondition {
   operator?: "equals" | "not_equals" | "contains" | "not_contains" | "gt" | "gte" | "lt" | "lte" | "exists" | "not_exists";
   value?: unknown;
   prompt?: string;
+  config?: Record<string, unknown>;
 }
 
 export interface WorkflowAction {
@@ -738,6 +739,8 @@ export interface WorkflowActionApproval {
 export interface WorkflowAiGenerationRequest {
   goal: string;
   objectKey?: string;
+  recordId?: string;
+  recordTitle?: string;
   audience?: string;
   constraints?: string;
 }

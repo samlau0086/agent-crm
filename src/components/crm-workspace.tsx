@@ -2192,6 +2192,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecordPanelMode("detail");
   }
 
+  function openAutomationForRecord(record: CrmRecord) {
+    const nextParams = new URLSearchParams({ objectKey: record.objectKey, recordId: record.id });
+    setActiveNav("automation");
+    router.push(`${crmPathForNav("automation")}?${nextParams.toString()}`);
+  }
+
   async function openTalkSourceRecord(source: { objectKey: string; recordId: string }) {
     const existingRecord = records.find((record) => record.id === source.recordId && record.objectKey === source.objectKey);
     if (existingRecord) {
@@ -4321,6 +4327,20 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         disabled={isPending || isRecordSavePending}
                       />
                     ) : null}
+                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
+                      <div className="section" style={{ marginBottom: 12 }}>
+                        <div className="stage-header">
+                          <div>
+                            <strong>自动化跟进</strong>
+                            <div className="subtle">基于当前记录生成或运行客户跟进、营销培育、交易推进流程。</div>
+                          </div>
+                          <button className="secondary-button" data-testid={`record-automation-${selectedRecord.id}`} type="button" onClick={() => openAutomationForRecord(selectedRecord)}>
+                            <WorkflowIcon size={16} />
+                            为此记录创建自动化
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
                       <ContactProfileEditor
                         allRecords={records}
@@ -5266,6 +5286,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             workflowRuns={props.workflowRuns}
             workflowApprovals={props.workflowApprovals}
             records={records}
+            emailAccounts={props.emailAccounts}
             users={props.users}
           />
         )}

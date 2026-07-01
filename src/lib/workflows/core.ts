@@ -78,6 +78,7 @@ export function didWorkflowConditionsPass(results: WorkflowRun["conditionResults
 export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): WorkflowAiGenerationResult {
   const goal = input.goal.trim();
   const lowerGoal = goal.toLowerCase();
+  const recordTitle = input.recordTitle?.trim();
   const targetObjectKey = input.objectKey ?? (lowerGoal.includes("deal") || lowerGoal.includes("close") || goal.includes("交易") || goal.includes("成交") ? "deals" : "contacts");
   const isEmailGoal = lowerGoal.includes("email") || goal.includes("邮件") || goal.includes("回复") || goal.includes("未回复");
   const isDealGoal = targetObjectKey === "deals" || lowerGoal.includes("close") || goal.includes("成交") || goal.includes("推进");
@@ -88,7 +89,21 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
       ? { type: "schedule" as const, event: "schedule.daily" as const, schedule: { mode: "daily" as const, dailyAt: "09:00" } }
       : { type: "crm_event" as const, event: "record.updated" as const, objectKey: targetObjectKey };
 
-  const conditions: WorkflowCondition[] = isDealGoal
+  const conditions: WorkflowCondition[] = input.recordId
+    ? [
+        {
+          key: "target-record",
+          type: "if",
+          field: "recordId",
+          operator: "equals",
+          value: input.recordId,
+          config: {
+            label: recordTitle ? `仅当触发记录是 ${recordTitle}` : "仅当触发记录是指定记录",
+            branch: "matched"
+          }
+        }
+      ]
+    : isDealGoal
     ? [
         {
           key: "deal-stage-exists",
@@ -138,8 +153,8 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
   }
 
   const workflow: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt"> = {
-    name: goal.slice(0, 80) || "AI 生成工作流",
-    description: "由 Workflow Designer Agent 生成的草稿，需要管理员确认后启用。",
+    name: recordTitle ? `${recordTitle} · ${goal.slice(0, 60)}` : goal.slice(0, 80) || "AI 生成工作流",
+    description: recordTitle ? `由 Workflow Designer Agent 基于“${recordTitle}”生成的定向草稿，需要管理员确认后启用。` : "由 Workflow Designer Agent 生成的草稿，需要管理员确认后启用。",
     goal,
     status: "draft",
     trigger,
@@ -152,7 +167,9 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
     workflow,
     explanation: {
       goal,
-      triggerReason: isEmailGoal ? "目标提到邮件或回复，因此使用邮件事件触发。" : isDormantGoal ? "目标包含时间窗口，因此使用定时触发。" : "目标面向 CRM 状态变化，因此使用记录更新触发。",
+      triggerReason: input.recordId
+        ? `目标绑定到指定记录${recordTitle ? `“${recordTitle}”` : ""}，因此先用 IF 节点限制触发范围。`
+        : isEmailGoal ? "目标提到邮件或回复，因此使用邮件事件触发。" : isDormantGoal ? "目标包含时间窗口，因此使用定时触发。" : "目标面向 CRM 状态变化，因此使用记录更新触发。",
       expectedOutcome: "自动创建跟进任务，并在涉及邮件发送时进入审批队列。",
       risks: isEmailGoal ? ["邮件发送属于高风险动作，默认只生成待审核草稿。"] : ["自动化只创建任务，不直接修改关键 CRM 字段。"]
     }
@@ -173,6 +190,13 @@ export function renderWorkflowTextTemplate(template: unknown, data: Record<strin
 }
 
 function readConditionValue(condition: WorkflowCondition, data: Record<string, unknown>, record?: CrmRecord): unknown {
+  if (condition.type === "loop") {
+    return true;
+  }
+  if (condition.type === "switch") {
+    const field = condition.field ?? "objectKey";
+    return field in data ? data[field] : record?.data?.[field] ?? (record as unknown as Record<string, unknown> | undefined)?.[field];
+  }
   if (condition.type === "ai") {
     const text = [data.subject, data.bodyText, data.summary, record?.title].filter(Boolean).join(" ").toLowerCase();
     const prompt = String(condition.prompt ?? condition.value ?? "").toLowerCase();

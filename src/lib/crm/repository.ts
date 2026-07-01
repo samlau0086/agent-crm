@@ -1726,7 +1726,19 @@ export class PrismaCrmRepository {
 
   async generateWorkflow(context: RequestContext, input: WorkflowAiGenerationRequest): Promise<WorkflowAiGenerationResult> {
     requirePermission(context, "workflow.write");
-    return buildWorkflowDraftFromGoal(input);
+    let recordTitle = input.recordTitle;
+    if (!recordTitle && input.objectKey && input.recordId) {
+      const record = await this.db.crmRecord.findFirst({
+        where: {
+          id: input.recordId,
+          workspaceId: context.workspaceId,
+          objectKey: input.objectKey
+        },
+        select: { title: true }
+      });
+      recordTitle = record?.title;
+    }
+    return buildWorkflowDraftFromGoal({ ...input, recordTitle });
   }
 
   async listWorkflowRuns(context: RequestContext, workflowId?: string): Promise<WorkflowRun[]> {
@@ -5636,12 +5648,16 @@ export class PrismaCrmRepository {
         const to = Array.isArray(action.config.to)
           ? action.config.to.filter((value): value is string => typeof value === "string")
           : [typeof triggerData.from === "string" ? triggerData.from : typeof record?.data.email === "string" ? record.data.email : ""].filter(Boolean);
+        const cc = Array.isArray(action.config.cc) ? action.config.cc.filter((value): value is string => typeof value === "string") : undefined;
+        const bcc = Array.isArray(action.config.bcc) ? action.config.bcc.filter((value): value is string => typeof value === "string") : undefined;
         if (to.length === 0) throw new Error("No email recipient");
         const message = await this.recordEmailMessage(context, {
           accountId: account.id,
           direction: "outbound",
           from: account.emailAddress,
           to,
+          cc,
+          bcc,
           subject: renderWorkflowTextTemplate(action.config.subject ?? `Re: ${record?.title ?? workflow.name}`, triggerData, record),
           bodyText: renderWorkflowTextTemplate(action.config.bodyText ?? action.config.body ?? "", triggerData, record),
           bodyHtml: renderWorkflowTextTemplate(action.config.bodyHtml, triggerData, record) || undefined,

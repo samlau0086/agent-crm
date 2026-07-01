@@ -70,6 +70,7 @@ import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.t
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
+import { buildWorkflowDraftFromGoal } from "../src/lib/workflows/core.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
 import { hasRecordPatchChanges, isContactMethodsAdditionOnly, previousRecordApprovalPatch, splitRecordApprovalPatch, stripRecordApprovalMetadata } from "../src/lib/crm/record-approval.ts";
@@ -284,6 +285,34 @@ await run("workflow schema accepts generated key/name actions", () => {
     actions: [{ key: "task", type: "create_activity", name: "创建跟进任务", config: { activityType: "task", title: "跟进客户" } }]
   });
   assert.equal(parsed.actions[0].key, "task");
+});
+
+await run("workflow schema supports control nodes and record-scoped generation", () => {
+  const parsed = workflowCreateSchema.parse({
+    name: "Targeted automation",
+    goal: "只针对指定联系人自动跟进",
+    status: "draft",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [
+      { key: "if-target", type: "if", field: "recordId", operator: "equals", value: "contact-lin", config: { branch: "matched" } },
+      { key: "switch-stage", type: "switch", field: "stageKey", operator: "exists", config: { cases: "new,qualified" } },
+      { key: "loop-items", type: "loop", field: "items", operator: "exists", config: { collectionField: "items", maxIterations: 10 } }
+    ],
+    actions: [
+      {
+        key: "send-email",
+        type: "send_email",
+        name: "Send follow up",
+        config: { mode: "queued", accountId: "account-1", to: ["buyer@example.com"], cc: ["manager@example.com"], bcc: ["archive@example.com"], subject: "Follow up", bodyHtml: "<p>Hello</p>" }
+      }
+    ]
+  });
+  assert.deepEqual(parsed.conditions.map((condition) => condition.type), ["if", "switch", "loop"]);
+  assert.equal(parsed.actions[0].config.mode, "queued");
+  const draft = buildWorkflowDraftFromGoal({ goal: "7 天未回复自动跟进", objectKey: "contacts", recordId: "contact-lin", recordTitle: "林晓" });
+  assert.match(draft.workflow.name, /林晓/);
+  assert.equal(draft.workflow.conditions[0].type, "if");
+  assert.equal(draft.workflow.conditions[0].value, "contact-lin");
 });
 
 await run("workflow creates low-risk follow-up activity and is idempotent", () => {
@@ -1776,9 +1805,20 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /email/);
   assert.match(automation, /automation-node-canvas/);
   assert.match(automation, /AutomationNodeInspector/);
+  assert.match(automation, /automation-target-record/);
+  assert.match(automation, /recordId: selectedTargetRecord\?\.id/);
+  assert.match(automation, /IF 条件分支/);
+  assert.match(automation, /SWITCH 多分支/);
+  assert.match(automation, /LOOP 循环/);
+  assert.match(automation, /accountId/);
+  assert.match(automation, /bodyHtml/);
+  assert.match(automation, /splitConfigList/);
   assert.match(automation, /\/api\/workflows\/generate/);
   assert.match(automation, /\/api\/workflows\/\$\{workflow\.id\}\/test/);
   assert.match(workspace, /import \{ AutomationWorkspace \} from "@\/components\/automation-workspace"/);
+  assert.match(workspace, /emailAccounts=\{props\.emailAccounts\}/);
+  assert.match(workspace, /record-automation-\$\{selectedRecord\.id\}/);
+  assert.match(workspace, /crmPathForNav\("automation"\)\}\?\$\{nextParams\.toString\(\)\}/);
   assert.match(styles, /\.automation-layout/);
   assert.match(styles, /\.automation-canvas/);
   assert.match(styles, /\.automation-node\.selected/);

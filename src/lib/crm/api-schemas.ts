@@ -342,11 +342,12 @@ export const workflowTriggerSchema = z
 export const workflowConditionSchema = z
   .object({
     key: z.string().trim().min(1).max(120),
-    type: z.enum(["field", "activity", "email_behavior", "ai"]),
+    type: z.enum(["field", "activity", "email_behavior", "ai", "if", "switch", "loop"]),
     field: z.string().trim().min(1).max(120).optional(),
     operator: z.enum(["equals", "not_equals", "contains", "not_contains", "gt", "gte", "lt", "lte", "exists", "not_exists"]).optional(),
     value: z.unknown().optional(),
-    prompt: z.string().trim().max(2000).optional()
+    prompt: z.string().trim().max(2000).optional(),
+    config: z.record(z.unknown()).optional()
   })
   .strict();
 
@@ -385,6 +386,8 @@ export const workflowGenerateSchema = z
   .object({
     goal: z.string().trim().min(1).max(1000),
     objectKey: objectKeySchema.optional(),
+    recordId: z.string().trim().min(1).max(120).optional(),
+    recordTitle: z.string().trim().max(200).optional(),
     audience: z.string().trim().max(500).optional(),
     constraints: z.string().trim().max(2000).optional()
   })

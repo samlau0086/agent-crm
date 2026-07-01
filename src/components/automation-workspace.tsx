@@ -19,14 +19,18 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Repeat2,
+  Split,
   Trash2,
   UserRound,
   Workflow as WorkflowIcon,
   type LucideIcon
 } from "lucide-react";
-import { useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import type {
   CrmRecord,
+  EmailAccount,
   User,
   WorkflowAction,
   WorkflowActionApproval,
@@ -51,6 +55,7 @@ interface AutomationWorkspaceProps {
   workflowRuns: WorkflowRun[];
   workflowApprovals: WorkflowActionApproval[];
   records: CrmRecord[];
+  emailAccounts: EmailAccount[];
   users: User[];
 }
 
@@ -82,6 +87,14 @@ const conditionTemplates: WorkflowCondition[] = [
   { key: "ai-high-intent", type: "ai", prompt: "判断客户是否为高意向，需要结合客户背景、邮件摘要、活动时间线和知识库。" }
 ];
 
+const controlConditionTemplates: WorkflowCondition[] = [
+  { key: "if-record-match", type: "if", field: "recordId", operator: "equals", value: "", config: { label: "IF 条件分支", branch: "matched" } },
+  { key: "switch-stage", type: "switch", field: "stageKey", operator: "exists", config: { label: "SWITCH 多分支", cases: "new,qualified,proposal,won,lost" } },
+  { key: "loop-contacts", type: "loop", field: "items", operator: "exists", config: { label: "LOOP 循环处理", collectionField: "items", maxIterations: 50 } }
+];
+
+const allConditionTemplates: WorkflowCondition[] = [...conditionTemplates, ...controlConditionTemplates];
+
 const actionTemplates: WorkflowAction[] = [
   {
     key: "create-follow-up-task",
@@ -106,7 +119,9 @@ const actionTemplates: WorkflowAction[] = [
   }
 ];
 
-export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns: initialRuns, workflowApprovals: initialApprovals, records, users }: AutomationWorkspaceProps) {
+export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns: initialRuns, workflowApprovals: initialApprovals, records, emailAccounts, users }: AutomationWorkspaceProps) {
+  const searchParams = useSearchParams();
+  const initializedFromUrl = useRef(false);
   const [workflows, setWorkflows] = useState(initialWorkflows);
   const [workflowRuns, setWorkflowRuns] = useState(initialRuns);
   const [workflowApprovals, setWorkflowApprovals] = useState(initialApprovals);
@@ -117,6 +132,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   const [goal, setGoal] = useState("7 天未回复的报价客户自动跟进");
   const [isBusy, setIsBusy] = useState(false);
   const [toast, setToast] = useState<{ intent: "success" | "error" | "info"; message: string } | null>(null);
+  const [targetRecordId, setTargetRecordId] = useState("");
   const [draggedNodeId, setDraggedNodeId] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<WorkflowDefinition | null>(null);
 
@@ -126,6 +142,29 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0];
   const relatedRuns = workflowRuns.filter((run) => !selectedWorkflowId || run.workflowId === selectedWorkflowId).slice(0, 20);
   const pendingApprovals = workflowApprovals.filter((approval) => approval.status === "pending");
+  const targetObjectKey = activeObjectKey === "contacts" || activeObjectKey === "companies" || activeObjectKey === "deals"
+    ? activeObjectKey
+    : draft.trigger.objectKey === "contacts" || draft.trigger.objectKey === "companies" || draft.trigger.objectKey === "deals"
+      ? draft.trigger.objectKey
+      : "";
+  const targetRecords = useMemo(
+    () => records.filter((record) => targetObjectKey && record.objectKey === targetObjectKey).slice(0, 100),
+    [records, targetObjectKey]
+  );
+  const selectedTargetRecord = targetRecords.find((record) => record.id === targetRecordId);
+
+  useEffect(() => {
+    if (initializedFromUrl.current) return;
+    initializedFromUrl.current = true;
+    const objectKey = searchParams.get("objectKey");
+    const recordId = searchParams.get("recordId");
+    if ((objectKey === "contacts" || objectKey === "companies" || objectKey === "deals") && recordId) {
+      setActiveObjectKey(objectKey);
+      setTargetRecordId(recordId);
+      setSelectedWorkflowId("");
+      setDraft(createWorkflowDraft(objectKey));
+    }
+  }, [searchParams]);
 
   function showToast(intent: "success" | "error" | "info", message: string) {
     setToast({ intent, message });
@@ -143,6 +182,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
   function createNewWorkflow(objectKey: AutomationObjectKey = activeObjectKey === "all" ? "contacts" : activeObjectKey) {
     setSelectedWorkflowId("");
     setDraft(createWorkflowDraft(objectKey));
+    setTargetRecordId("");
     setSelectedNodeId("trigger");
   }
 
@@ -167,7 +207,9 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
         method: "POST",
         body: {
           goal: goal.trim(),
-          objectKey: activeObjectKey === "all" || activeObjectKey === "email" || activeObjectKey === "tasks" ? undefined : activeObjectKey
+          objectKey: selectedTargetRecord?.objectKey ?? (activeObjectKey === "all" || activeObjectKey === "email" || activeObjectKey === "tasks" ? undefined : activeObjectKey),
+          recordId: selectedTargetRecord?.id,
+          recordTitle: selectedTargetRecord?.title
         }
       });
       setSelectedWorkflowId("");
@@ -327,6 +369,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
               type="button"
               onClick={() => {
                 setActiveObjectKey(item.key);
+                setTargetRecordId("");
                 const first = workflows.find((workflow) => item.key === "all" || workflowTargetKey(workflow) === item.key);
                 if (first) selectWorkflow(first);
                 else createNewWorkflow(item.key === "all" ? "contacts" : item.key);
@@ -347,6 +390,21 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
         <label>
           <span className="subtle">AI 一键生成工作流目标</span>
           <input className="input" data-testid="automation-ai-goal" value={goal} onChange={(event) => setGoal(event.target.value)} />
+        </label>
+        <label>
+          <span className="subtle">目标记录</span>
+          <select
+            className="select"
+            data-testid="automation-target-record"
+            value={targetRecordId}
+            onChange={(event) => setTargetRecordId(event.target.value)}
+            disabled={!targetObjectKey}
+          >
+            <option value="">不绑定具体记录</option>
+            {targetRecords.map((record) => (
+              <option key={record.id} value={record.id}>{record.title}</option>
+            ))}
+          </select>
         </label>
         <button className="secondary-button" data-testid="automation-ai-generate" type="button" onClick={() => { void generateDraft(); }} disabled={isBusy}>
           <Sparkles size={16} />
@@ -432,9 +490,9 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
                 <GitBranch size={16} />
                 触发器
               </button>
-              {conditionTemplates.map((condition) => (
+              {allConditionTemplates.map((condition) => (
                 <button className="automation-palette-item" key={condition.key} type="button" onClick={() => addCondition(condition)}>
-                  <ShieldCheck size={16} />
+                  {condition.type === "switch" ? <Split size={16} /> : condition.type === "loop" ? <Repeat2 size={16} /> : <ShieldCheck size={16} />}
                   {conditionLabel(condition)}
                 </button>
               ))}
@@ -476,6 +534,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
             <AutomationNodeInspector
               node={selectedNode}
               draft={draft}
+              emailAccounts={emailAccounts}
               users={users}
               onChange={setDraft}
               onRemove={removeNode}
@@ -564,12 +623,14 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
 function AutomationNodeInspector({
   node,
   draft,
+  emailAccounts,
   users,
   onChange,
   onRemove
 }: {
   node: AutomationNode;
   draft: AutomationDraft;
+  emailAccounts: EmailAccount[];
   users: User[];
   onChange: (draft: AutomationDraft) => void;
   onRemove: (node: AutomationNode) => void;
@@ -650,6 +711,9 @@ function AutomationNodeInspector({
             <option value="activity">活动条件</option>
             <option value="email_behavior">邮件行为</option>
             <option value="ai">AI 判断</option>
+            <option value="if">IF 条件分支</option>
+            <option value="switch">SWITCH 多分支</option>
+            <option value="loop">LOOP 循环</option>
           </select>
         </label>
         <label>
@@ -670,6 +734,30 @@ function AutomationNodeInspector({
           <span className="subtle">期望值</span>
           <input className="input" value={stringifyConfigValue(condition.value)} onChange={(event) => updateCondition(draft, condition.key, { value: event.target.value }, onChange)} />
         </label>
+        {condition.type === "if" ? (
+          <label>
+            <span className="subtle">分支名称</span>
+            <input className="input" value={String(condition.config?.branch ?? "")} onChange={(event) => updateConditionConfig(draft, condition.key, "branch", event.target.value, onChange)} />
+          </label>
+        ) : null}
+        {condition.type === "switch" ? (
+          <label>
+            <span className="subtle">分支值（逗号分隔）</span>
+            <textarea className="textarea" value={String(condition.config?.cases ?? "")} onChange={(event) => updateConditionConfig(draft, condition.key, "cases", event.target.value, onChange)} />
+          </label>
+        ) : null}
+        {condition.type === "loop" ? (
+          <>
+            <label>
+              <span className="subtle">循环集合字段</span>
+              <input className="input" value={String(condition.config?.collectionField ?? condition.field ?? "items")} onChange={(event) => updateConditionConfig(draft, condition.key, "collectionField", event.target.value, onChange)} />
+            </label>
+            <label>
+              <span className="subtle">最大循环次数</span>
+              <input className="input" type="number" min={1} max={500} value={String(condition.config?.maxIterations ?? 50)} onChange={(event) => updateConditionConfig(draft, condition.key, "maxIterations", Number(event.target.value), onChange)} />
+            </label>
+          </>
+        ) : null}
       </aside>
     );
   }
@@ -700,6 +788,42 @@ function AutomationNodeInspector({
         <input type="checkbox" checked={Boolean(action.requiresApproval)} onChange={(event) => updateAction(draft, action.key, { requiresApproval: event.target.checked }, onChange)} />
         需要人工审批
       </label>
+      {action.type === "send_email" ? (
+        <>
+          <label>
+            <span className="subtle">邮件处理方式</span>
+            <select className="select" value={String(action.config.mode ?? "draft")} onChange={(event) => updateActionConfigValue(draft, action.key, "mode", event.target.value, onChange)}>
+              <option value="draft">创建草稿</option>
+              <option value="queued">加入发送队列</option>
+            </select>
+          </label>
+          <label>
+            <span className="subtle">发件账户</span>
+            <select className="select" value={String(action.config.accountId ?? "")} onChange={(event) => updateActionConfigValue(draft, action.key, "accountId", event.target.value || undefined, onChange)}>
+              <option value="">自动选择可发送账户</option>
+              {emailAccounts.filter((account) => account.sendEnabled).map((account) => (
+                <option key={account.id} value={account.id}>{account.emailAddress}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="subtle">收件人（逗号分隔，支持模板变量）</span>
+            <input className="input" value={joinConfigList(action.config.to)} onChange={(event) => updateActionConfigValue(draft, action.key, "to", splitConfigList(event.target.value), onChange)} placeholder="{{record.email}}, buyer@example.com" />
+          </label>
+          <label>
+            <span className="subtle">CC</span>
+            <input className="input" value={joinConfigList(action.config.cc)} onChange={(event) => updateActionConfigValue(draft, action.key, "cc", splitConfigList(event.target.value), onChange)} />
+          </label>
+          <label>
+            <span className="subtle">BCC</span>
+            <input className="input" value={joinConfigList(action.config.bcc)} onChange={(event) => updateActionConfigValue(draft, action.key, "bcc", splitConfigList(event.target.value), onChange)} />
+          </label>
+          <label className="settings-toggle">
+            <input type="checkbox" checked={Boolean(action.config.aiAssisted)} onChange={(event) => updateActionConfigValue(draft, action.key, "aiAssisted", event.target.checked, onChange)} />
+            AI 生成/辅助正文
+          </label>
+        </>
+      ) : null}
       <label>
         <span className="subtle">标题 / 主题</span>
         <input className="input" value={String(action.config.title ?? action.config.subject ?? "")} onChange={(event) => updateActionConfig(draft, action.key, action.type === "send_email" ? "subject" : "title", event.target.value, onChange)} />
@@ -708,6 +832,12 @@ function AutomationNodeInspector({
         <span className="subtle">内容</span>
         <textarea className="textarea" value={String(action.config.body ?? action.config.bodyText ?? action.config.content ?? "")} onChange={(event) => updateActionConfig(draft, action.key, action.type === "send_email" ? "bodyText" : "body", event.target.value, onChange)} />
       </label>
+      {action.type === "send_email" ? (
+        <label>
+          <span className="subtle">HTML 正文</span>
+          <textarea className="textarea" value={String(action.config.bodyHtml ?? "")} onChange={(event) => updateActionConfig(draft, action.key, "bodyHtml", event.target.value, onChange)} />
+        </label>
+      ) : null}
       {users.length ? <div className="subtle">可用负责人：{users.slice(0, 3).map((user) => user.name).join("、")}</div> : null}
     </aside>
   );
@@ -777,15 +907,36 @@ function updateCondition(draft: AutomationDraft, key: string, patch: Partial<Wor
   onChange({ ...draft, conditions: draft.conditions.map((condition) => (condition.key === key ? { ...condition, ...patch } : condition)) });
 }
 
+function updateConditionConfig(draft: AutomationDraft, key: string, configKey: string, value: unknown, onChange: (draft: AutomationDraft) => void) {
+  onChange({
+    ...draft,
+    conditions: draft.conditions.map((condition) => (
+      condition.key === key ? { ...condition, config: { ...(condition.config ?? {}), [configKey]: value } } : condition
+    ))
+  });
+}
+
 function updateAction(draft: AutomationDraft, key: string, patch: Partial<WorkflowAction>, onChange: (draft: AutomationDraft) => void) {
   onChange({ ...draft, actions: draft.actions.map((action) => (action.key === key ? { ...action, ...patch } : action)) });
 }
 
 function updateActionConfig(draft: AutomationDraft, key: string, configKey: string, value: string, onChange: (draft: AutomationDraft) => void) {
+  updateActionConfigValue(draft, key, configKey, value, onChange);
+}
+
+function updateActionConfigValue(draft: AutomationDraft, key: string, configKey: string, value: unknown, onChange: (draft: AutomationDraft) => void) {
   onChange({
     ...draft,
     actions: draft.actions.map((action) => (action.key === key ? { ...action, config: { ...action.config, [configKey]: value } } : action))
   });
+}
+
+function splitConfigList(value: string): string[] {
+  return value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function joinConfigList(value: unknown): string {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").join(", ") : "";
 }
 
 function reorderByKey<T extends { key: string }>(items: T[], sourceKey: string, targetKey: string): T[] {
@@ -820,6 +971,9 @@ function triggerLabel(trigger: WorkflowTrigger): string {
 }
 
 function conditionLabel(condition: WorkflowCondition): string {
+  if (condition.type === "if") return "IF 条件分支";
+  if (condition.type === "switch") return "SWITCH 多分支";
+  if (condition.type === "loop") return "LOOP 循环";
   if (condition.type === "ai") return "AI 条件判断";
   if (condition.type === "email_behavior") return "邮件行为条件";
   if (condition.type === "activity") return "活动条件";
@@ -867,3 +1021,4 @@ async function fetchAutomationJson<T = unknown>(url: string, init: { method?: st
   }
   return (payload?.data ?? payload) as T;
 }
+
