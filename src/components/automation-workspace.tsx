@@ -648,23 +648,32 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
 
           <div className="automation-designer">
             <div className="automation-palette">
-              <strong>节点库</strong>
-              <button className="automation-palette-item" type="button" onClick={() => setSelectedNodeId("trigger")}>
-                <GitBranch size={16} />
-                触发器
-              </button>
-              {allConditionTemplates.map((condition) => (
-                <button className="automation-palette-item" key={condition.key} type="button" onClick={() => addCondition(condition)}>
-                  {condition.type === "switch" ? <Split size={16} /> : condition.type === "loop" ? <Repeat2 size={16} /> : <ShieldCheck size={16} />}
-                  {conditionLabel(condition)}
-                </button>
-              ))}
-              {actionTemplates.map((action) => (
-                <button className="automation-palette-item" key={action.key} type="button" onClick={() => addAction(action)}>
-                  <Send size={16} />
-                  {action.name}
-                </button>
-              ))}
+              <span className="subtle">Drag graph nodes into the canvas</span>
+              {workflowGraphPaletteItems.map((item, index) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    className="automation-palette-item"
+                    data-testid={`workflow-palette-${item.type}`}
+                    draggable
+                    key={item.type}
+                    onClick={() => addLooseGraphNode(item.type, { x: 180 + index * 28, y: 220 + index * 68 })}
+                    onDragStart={(event) => {
+                      event.stopPropagation();
+                      event.dataTransfer.effectAllowed = "copy";
+                      event.dataTransfer.setData("application/x-workflow-node-type", item.type);
+                      event.dataTransfer.setData("text/plain", item.type);
+                    }}
+                    type="button"
+                  >
+                    <Icon size={16} />
+                    <span>
+                      <strong>{workflowNodeTypeLabel(item.type)}</strong>
+                      <small>{item.description}</small>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             <WorkflowGraphCanvas
