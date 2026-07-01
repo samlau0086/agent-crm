@@ -1167,6 +1167,7 @@ function WorkflowGraphCanvas({
   onSave: () => void;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [connectionPreview, setConnectionPreview] = useState<{
     connection: { sourceNodeId: string; sourceHandle: string };
@@ -1184,11 +1185,11 @@ function WorkflowGraphCanvas({
     if (!movingNode) return;
     const activeMove = movingNode;
     function handlePointerMove(event: PointerEvent) {
-      const rect = canvasRef.current?.getBoundingClientRect();
+      const rect = stageRef.current?.getBoundingClientRect();
       if (!rect) return;
       onMoveNode(activeMove.nodeId, {
-        x: Math.max(12, Math.round(event.clientX - rect.left + (canvasRef.current?.scrollLeft ?? 0) - activeMove.offsetX)),
-        y: Math.max(12, Math.round(event.clientY - rect.top + (canvasRef.current?.scrollTop ?? 0) - activeMove.offsetY))
+        x: Math.max(12, Math.round(event.clientX - rect.left - activeMove.offsetX)),
+        y: Math.max(12, Math.round(event.clientY - rect.top - activeMove.offsetY))
       });
     }
     function handlePointerUp() {
@@ -1227,10 +1228,10 @@ function WorkflowGraphCanvas({
   }
 
   function canvasPointFromClient(clientX: number, clientY: number): WorkflowNode["position"] {
-    const rect = canvasRef.current?.getBoundingClientRect();
+    const rect = stageRef.current?.getBoundingClientRect();
     return {
-      x: Math.max(20, Math.round(clientX - (rect?.left ?? 0) + (canvasRef.current?.scrollLeft ?? 0) - 110)),
-      y: Math.max(20, Math.round(clientY - (rect?.top ?? 0) + (canvasRef.current?.scrollTop ?? 0) - 48))
+      x: Math.max(20, Math.round(clientX - (rect?.left ?? 0) - 110)),
+      y: Math.max(20, Math.round(clientY - (rect?.top ?? 0) - 48))
     };
   }
 
@@ -1330,7 +1331,7 @@ function WorkflowGraphCanvas({
           })}
         </div>
       ) : null}
-      <div className="workflow-graph-stage">
+      <div className="workflow-graph-stage" ref={stageRef}>
       <svg className="workflow-graph-edges" aria-label="Workflow connections">
         {edgeViews.map(({ edge, path }) => (
           <g className="workflow-graph-edge" key={edge.id}>
