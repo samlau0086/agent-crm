@@ -713,6 +713,24 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setMessage(`AI Agent 测试完成：${result.generationMode}`);
   }
 
+  function updateAiAgentDraft(agentKey: string, patch: Partial<AiAgentSetting>) {
+    setAiAgents((current) => current.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent)));
+  }
+
+  function updateAiAgentContextPolicy(agentKey: string, patch: Partial<NonNullable<AiAgentSetting["contextPolicy"]>>) {
+    setAiAgents((current) =>
+      current.map((agent) => (agent.key === agentKey ? { ...agent, contextPolicy: { ...agent.contextPolicy, ...patch } } : agent))
+    );
+  }
+
+  function updateAiAgentToolPolicy(agentKey: string, patch: Partial<NonNullable<AiAgentSetting["toolPolicy"]>>) {
+    setAiAgents((current) => current.map((agent) => (agent.key === agentKey ? { ...agent, toolPolicy: { ...agent.toolPolicy, ...patch } } : agent)));
+  }
+
+  function parseAiAgentToolList(value: string): string[] {
+    return Array.from(new Set(value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))).slice(0, 30);
+  }
+
   async function saveObject() {
     if (selectedObject) {
       await fetchJson(`/api/object-definitions/${selectedObject.id}`, {
@@ -1664,6 +1682,115 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                         onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, contextPolicy: { ...agent.contextPolicy, maxContextChars: Number(event.target.value) || agent.contextPolicy?.maxContextChars } } : agent)))}
                       />
                     </label>
+                    <div className="field wide harness-config-panel" data-testid="ai-agent-harness-config">
+                      <div className="settings-panel-header">
+                        <div>
+                          <h3>Harness config</h3>
+                          <p className="subtle">Per-agent runtime options for context injection, tool access, output shape, and provider override.</p>
+                        </div>
+                        <span className="badge">{selectedAiAgent.outputSchema ?? selectedAiAgentDefinition?.outputSchema ?? "text"}</span>
+                      </div>
+                      <div className="form-grid">
+                        <label>
+                          <span className="subtle">Provider Base URL override</span>
+                          <input
+                            className="input"
+                            placeholder="Use global provider base URL"
+                            value={selectedAiAgent.baseUrl ?? ""}
+                            onChange={(event) => updateAiAgentDraft(selectedAiAgent.key, { baseUrl: event.target.value.trim() || undefined })}
+                          />
+                        </label>
+                        <label>
+                          <span className="subtle">Output schema</span>
+                          <select
+                            className="select"
+                            value={selectedAiAgent.outputSchema ?? selectedAiAgentDefinition?.outputSchema ?? "text"}
+                            onChange={(event) => updateAiAgentDraft(selectedAiAgent.key, { outputSchema: event.target.value as NonNullable<AiAgentSetting["outputSchema"]> })}
+                          >
+                            <option value="text">text</option>
+                            <option value="email">email</option>
+                            <option value="query">query</option>
+                            <option value="workflow">workflow</option>
+                            <option value="classification">classification</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span className="subtle">Max history messages</span>
+                          <input
+                            className="input"
+                            inputMode="numeric"
+                            value={selectedAiAgent.contextPolicy?.maxHistoryMessages ?? ""}
+                            onChange={(event) => updateAiAgentContextPolicy(selectedAiAgent.key, { maxHistoryMessages: Number(event.target.value) || undefined })}
+                          />
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedAiAgent.contextPolicy?.includeRecord ?? selectedAiAgentDefinition?.contextPolicy.includeRecord ?? false}
+                            onChange={(event) => updateAiAgentContextPolicy(selectedAiAgent.key, { includeRecord: event.target.checked })}
+                          />
+                          Include CRM record context
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedAiAgent.contextPolicy?.includeActivities ?? selectedAiAgentDefinition?.contextPolicy.includeActivities ?? false}
+                            onChange={(event) => updateAiAgentContextPolicy(selectedAiAgent.key, { includeActivities: event.target.checked })}
+                          />
+                          Include activity timeline
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedAiAgent.contextPolicy?.includeEmailThread ?? selectedAiAgentDefinition?.contextPolicy.includeEmailThread ?? false}
+                            onChange={(event) => updateAiAgentContextPolicy(selectedAiAgent.key, { includeEmailThread: event.target.checked })}
+                          />
+                          Include email thread
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedAiAgent.contextPolicy?.includeKnowledge ?? selectedAiAgentDefinition?.contextPolicy.includeKnowledge ?? false}
+                            onChange={(event) => updateAiAgentContextPolicy(selectedAiAgent.key, { includeKnowledge: event.target.checked })}
+                          />
+                          Include knowledge base
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedAiAgent.toolPolicy?.allowRead ?? selectedAiAgentDefinition?.toolPolicy.allowRead ?? true}
+                            onChange={(event) => updateAiAgentToolPolicy(selectedAiAgent.key, { allowRead: event.target.checked })}
+                          />
+                          Allow read tools
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedAiAgent.toolPolicy?.allowWrite ?? selectedAiAgentDefinition?.toolPolicy.allowWrite ?? false}
+                            onChange={(event) => updateAiAgentToolPolicy(selectedAiAgent.key, { allowWrite: event.target.checked })}
+                          />
+                          Allow write tools
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={selectedAiAgent.toolPolicy?.highRiskRequiresApproval ?? selectedAiAgentDefinition?.toolPolicy.highRiskRequiresApproval ?? true}
+                            onChange={(event) => updateAiAgentToolPolicy(selectedAiAgent.key, { highRiskRequiresApproval: event.target.checked })}
+                          />
+                          High-risk actions require approval
+                        </label>
+                        <label className="field wide">
+                          <span>Allowed tools</span>
+                          <textarea
+                            className="textarea code-textarea"
+                            rows={4}
+                            placeholder="One tool per line, for example: create_email_draft"
+                            value={(selectedAiAgent.toolPolicy?.allowedTools ?? selectedAiAgentDefinition?.toolPolicy.allowedTools ?? []).join("\n")}
+                            onChange={(event) => updateAiAgentToolPolicy(selectedAiAgent.key, { allowedTools: parseAiAgentToolList(event.target.value) })}
+                          />
+                        </label>
+                      </div>
+                    </div>
                     <label className="field wide">
                       <span>agent.md</span>
                       <textarea

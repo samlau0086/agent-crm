@@ -2543,6 +2543,11 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(source, /AI Agents/);
   assert.match(source, /\/api\/ai\/agents/);
   assert.match(source, /activeSettingsTab === "aiAgents"[\s\S]*agent\.md/);
+  assert.match(source, /data-testid="ai-agent-harness-config"/);
+  assert.match(source, /Harness config/);
+  assert.match(source, /Include CRM record context/);
+  assert.match(source, /Allowed tools/);
+  assert.match(source, /updateAiAgentToolPolicy/);
   assert.match(source, /公海规则/);
   assert.match(source, /\/api\/pool-settings/);
   assert.match(source, /activeSettingsTab === "pool"[\s\S]*保存公海规则/);

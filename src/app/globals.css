@@ -3999,6 +3999,23 @@ button {
   min-height: 38px;
 }
 
+.harness-config-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.harness-config-panel .settings-panel-header {
+  margin-bottom: 0;
+}
+
+.harness-config-panel .form-grid {
+  margin-top: 0;
+}
+
 .permission-picker {
   display: grid;
   gap: 8px;
