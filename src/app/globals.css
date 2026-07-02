@@ -825,9 +825,9 @@ button {
   padding-bottom: 2px;
 }
 
-.contact-profile-progress {
+.contact-profile-info-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
   margin: 0 16px 16px;
   overflow: hidden;
@@ -836,45 +836,31 @@ button {
   background: var(--surface-strong);
 }
 
-.contact-profile-progress-step {
-  position: relative;
-  display: flex;
+.contact-profile-info-item {
+  display: grid;
   min-width: 0;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+  gap: 4px;
   padding: 10px 12px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
 }
 
-.contact-profile-progress-step:not(:last-child) {
+.contact-profile-info-item:not(:last-child) {
   border-right: 1px solid var(--line);
 }
 
-.contact-profile-progress-step.done {
-  color: var(--green);
-}
-
-.contact-profile-progress-icon {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
+.contact-profile-info-label {
   color: var(--muted);
   font-size: 12px;
+  font-weight: 700;
 }
 
-.contact-profile-progress-step.done .contact-profile-progress-icon {
-  border-color: rgba(20, 184, 166, 0.28);
-  background: rgba(20, 184, 166, 0.12);
-  color: var(--green);
+.contact-profile-info-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .contact-profile-grid {
@@ -993,7 +979,7 @@ button {
     width: 100%;
   }
 
-  .contact-profile-progress {
+  .contact-profile-info-strip {
     grid-template-columns: 1fr 1fr;
   }
 }

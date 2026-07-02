@@ -12626,7 +12626,11 @@ function ContactProfileEditor({
   const primaryEmail = getPrimaryRecordEmail({ ...record, title, data: { ...record.data, ...values } });
   const company = typeof values.companyId === "string" ? allRecords.find((candidate) => candidate.id === values.companyId) : undefined;
   const contactMethods = normalizeContactMethods(contactMethodValue);
-  const hasDirectChannel = Boolean(primaryEmail) || contactMethods.length > 0;
+  const actualOwner = record.ownerId ? users.find((user) => user.id === record.ownerId) : undefined;
+  const editedOwner = ownerId ? users.find((user) => user.id === ownerId) : undefined;
+  const poolLabel = record.ownerId ? "私海" : "公海";
+  const ownerName = actualOwner?.name ?? editedOwner?.name ?? "未分配负责人";
+  const reviewStatus = pendingDeleteRequest ? "删除待审核" : pendingUpdateRequest ? "修改待审核" : "无待审核";
 
   return (
     <div className="contact-profile-layout" data-testid="contact-profile-layout">
@@ -12671,11 +12675,13 @@ function ContactProfileEditor({
             )}
           </div>
         </div>
-        <ContactProfileProgressStrip
-          companyLinked={Boolean(company)}
-          hasDirectChannel={hasDirectChannel}
-          hasPendingReview={Boolean(pendingDeleteRequest || pendingUpdateRequest)}
-          hasPrimaryEmail={Boolean(primaryEmail)}
+        <ContactProfileInfoStrip
+          companyName={company?.title}
+          contactMethodCount={contactMethods.length}
+          ownerName={ownerName}
+          poolLabel={poolLabel}
+          primaryEmail={primaryEmail}
+          reviewStatus={reviewStatus}
         />
       </section>
 
@@ -12749,32 +12755,36 @@ function ContactProfileEditor({
   );
 }
 
-function ContactProfileProgressStrip({
-  companyLinked,
-  hasDirectChannel,
-  hasPendingReview,
-  hasPrimaryEmail
+function ContactProfileInfoStrip({
+  companyName,
+  contactMethodCount,
+  ownerName,
+  poolLabel,
+  primaryEmail,
+  reviewStatus
 }: {
-  companyLinked: boolean;
-  hasDirectChannel: boolean;
-  hasPendingReview: boolean;
-  hasPrimaryEmail: boolean;
+  companyName?: string;
+  contactMethodCount: number;
+  ownerName: string;
+  poolLabel: string;
+  primaryEmail?: string;
+  reviewStatus: string;
 }) {
-  const steps = [
-    { label: "资料已建立", done: true },
-    { label: "公司已关联", done: companyLinked },
-    { label: "可直接联系", done: hasPrimaryEmail || hasDirectChannel },
-    { label: hasPendingReview ? "待审核" : "可持续跟进", done: !hasPendingReview }
+  const items = [
+    { label: "归属", value: poolLabel },
+    { label: "负责人", value: ownerName },
+    { label: "公司", value: companyName || "未关联" },
+    { label: "主要邮箱", value: primaryEmail || "未设置" },
+    { label: "联系方式", value: `${contactMethodCount} 条` },
+    { label: "审核状态", value: reviewStatus }
   ];
 
   return (
-    <div className="contact-profile-progress" data-testid="contact-profile-progress">
-      {steps.map((step, index) => (
-        <div className={`contact-profile-progress-step ${step.done ? "done" : ""}`} key={step.label}>
-          <span className="contact-profile-progress-icon">
-            {step.done ? <CheckCircle2 size={16} /> : index + 1}
-          </span>
-          <span>{step.label}</span>
+    <div className="contact-profile-info-strip" data-testid="contact-profile-info-strip">
+      {items.map((item) => (
+        <div className="contact-profile-info-item" key={item.label}>
+          <span className="contact-profile-info-label">{item.label}</span>
+          <strong title={item.value}>{item.value}</strong>
         </div>
       ))}
     </div>
