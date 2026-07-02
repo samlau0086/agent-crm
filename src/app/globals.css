@@ -1268,6 +1268,200 @@ button {
   font-size: 13px;
 }
 
+.activity-timeline-shell {
+  margin-top: 16px;
+  padding: 12px 0 4px;
+}
+
+.activity-timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.activity-timeline-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.activity-timeline-filter .select {
+  min-height: 30px;
+  padding: 4px 24px 4px 8px;
+  border: 0;
+  background-color: transparent;
+}
+
+.activity-timeline-list {
+  display: grid;
+  gap: 0;
+}
+
+.activity-timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.activity-timeline-item::before {
+  content: "";
+  position: absolute;
+  top: 34px;
+  bottom: 0;
+  left: 20px;
+  width: 1px;
+  background: var(--line);
+}
+
+.activity-timeline-item:last-child::before {
+  display: none;
+}
+
+.activity-timeline-marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 2px auto 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #64748b;
+  background: #e8eef7;
+}
+
+.activity-timeline-marker.email {
+  color: #2563eb;
+  background: #dbeafe;
+}
+
+.activity-timeline-marker.call {
+  color: #0f766e;
+  background: #ccfbf1;
+}
+
+.activity-timeline-marker.meeting {
+  color: #7c3aed;
+  background: #ede9fe;
+}
+
+.activity-timeline-marker.note {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.activity-timeline-marker.stage_change {
+  color: #c2410c;
+  background: #ffedd5;
+}
+
+.activity-timeline-marker.task {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.activity-timeline-content {
+  min-width: 0;
+  padding-bottom: 18px;
+}
+
+.activity-timeline-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.activity-timeline-linked {
+  margin-top: 3px;
+  color: var(--blue);
+  font-size: 13px;
+}
+
+.activity-timeline-linked span {
+  font-weight: 700;
+}
+
+.activity-timeline-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+}
+
+.activity-timeline-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.activity-timeline-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.activity-timeline-card-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: #2563eb;
+  background: #dbeafe;
+}
+
+.activity-timeline-type {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: #ccfbf1;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.activity-timeline-body {
+  padding: 14px;
+  color: var(--text);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.activity-timeline-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-strong);
+}
+
+@media (max-width: 760px) {
+  .activity-timeline-header,
+  .activity-timeline-summary,
+  .activity-timeline-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .task-view-header {
   align-items: flex-start;
   gap: 14px;

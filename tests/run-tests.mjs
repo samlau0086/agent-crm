@@ -2943,6 +2943,14 @@ await run("record create and detail panels render full width in the main content
   assert.match(source, /type="note"[\s\S]*testIdPrefix="record-note"/);
   assert.match(source, /type="call"[\s\S]*testIdPrefix="record-call"/);
   assert.match(source, /type="meeting"[\s\S]*testIdPrefix="record-meeting"/);
+  assert.match(source, /<ActivityTimeline[\s\S]*testIdPrefix="record-activity"/);
+  assert.match(source, /function activityTimelineIcon\(type: Activity\["type"\]\): LucideIcon/);
+  assert.match(source, /case "email":[\s\S]*return Mail/);
+  assert.match(source, /case "stage_change":[\s\S]*return Trophy/);
+  assert.match(styles, /\.activity-timeline-item \{[\s\S]*grid-template-columns: 42px minmax\(0, 1fr\);/);
+  assert.match(styles, /\.activity-timeline-item::before/);
+  assert.match(styles, /\.activity-timeline-marker\.email/);
+  assert.match(styles, /\.activity-timeline-card/);
   assert.doesNotMatch(source, /data-testid="activity-type"/);
   assert.doesNotMatch(source, /data-testid="activity-submit"/);
   assert.doesNotMatch(source, /aria-label="关闭面板"[\s\S]{0,120}setRecordPanelMode\("closed"\)/);
@@ -3747,8 +3755,9 @@ await run("quick contact actions open follow-up dialogs and save timeline activi
   assert.match(source, /onStartCall=\{\(method\) => openContactFollowUp\(selectedRecord, method, "call"\)\}/);
   assert.match(formatUtils, /export function formatDateTimeSeconds/);
   assert.match(formatUtils, /timeStyle: "medium"/);
-  assert.match(source, /formatActivityType\(activity\.type\)} · \{formatDateTimeSeconds\(activity\.createdAt\)\}/);
-  assert.match(source, /formatActivityType\(activity\.type\)} · \{formatDateTimeSeconds\(activity\.createdAt\)\} ·/);
+  assert.match(source, /<ActivityTimeline[\s\S]*testIdPrefix="record-activity"/);
+  assert.match(source, /<span className="subtle"> - \{formatDateTimeSeconds\(activity\.createdAt\)\}<\/span>/);
+  assert.match(source, /Associated with <span>\{linkedRecord\.title\}<\/span>/);
 });
 
 await run("email workspace explains when translation fallback is not persisted", () => {

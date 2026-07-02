@@ -5129,25 +5129,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     ) : null}
 
                     {(!selectedRecordUsesActivityTabs || showContactActivityTimeline) ? (
-                    <section className={selectedRecordUsesActivityTabs ? "contact-detail-tab-panel" : ""} style={{ marginTop: 16 }}>
-                      <div className="property-name" style={{ marginBottom: 8 }}>
-                        活动时间线
-                      </div>
-                      <ActivityList
+                      <ActivityTimeline
                         activities={selectedActivities}
                         emptyMessage="暂无活动"
                         mediaAssets={mediaAssets}
                         pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
+                        records={records}
                         testIdPrefix="record-activity"
                         onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
-                        renderMeta={(activity) => (
-                          <>
-                            <ActivityIcon size={15} />
-                            {formatActivityType(activity.type)} · {formatDateTimeSeconds(activity.createdAt)}
-                          </>
-                        )}
                       />
-                    </section>
                     ) : null}
 
                     {coreObjects.has(selectedRecord.objectKey) && (!selectedRecordUsesActivityTabs || showContactAllSections) && (
@@ -10009,38 +9999,148 @@ function formatCalendarDateTime(date: Date): string {
 
 function ActivityTimeline({
   activities,
+  emptyMessage = "暂无活动",
   mediaAssets,
   pendingDeleteRequestsById,
   records,
+  testIdPrefix = "activity-view-activity",
   onDelete
 }: {
   activities: Activity[];
+  emptyMessage?: string;
   mediaAssets: MediaAsset[];
   pendingDeleteRequestsById: Map<string, RecordChangeRequest>;
   records: CrmRecord[];
+  testIdPrefix?: string;
   onDelete: (activity: Activity) => void;
 }) {
   const sortedActivities = [...activities].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  if (sortedActivities.length === 0) {
+    return (
+      <section className="activity-timeline-shell">
+        <div className="activity-timeline-header">
+          <div className="property-name">活动时间线</div>
+        </div>
+        <div className="empty-state">{emptyMessage}</div>
+      </section>
+    );
+  }
 
   return (
-    <section className="section">
-      <h2 className="page-title">全部活动</h2>
-      <ActivityList
-        activities={sortedActivities}
-        emptyMessage="暂无活动"
-        mediaAssets={mediaAssets}
-        pendingDeleteRequestsById={pendingDeleteRequestsById}
-        testIdPrefix="activity-view-activity"
-        onDelete={onDelete}
-        renderMeta={(activity) => (
-          <>
-            <ActivityIcon size={15} />
-            {formatActivityType(activity.type)} · {formatDateTimeSeconds(activity.createdAt)} · {records.find((record) => record.id === activity.recordId)?.title ?? "未关联记录"}
-          </>
-        )}
-      />
+    <section className="activity-timeline-shell">
+      <div className="activity-timeline-header">
+        <div>
+          <div className="property-name">活动时间线</div>
+          <div className="subtle">按时间倒序展示邮件、电话、备注、任务和阶段变更。</div>
+        </div>
+        <label className="activity-timeline-filter">
+          <span>Filter by</span>
+          <select className="select" value="all" disabled>
+            <option value="all">All</option>
+          </select>
+        </label>
+      </div>
+      <div className="activity-timeline-list">
+        {sortedActivities.map((activity) => {
+          const details = parseActivityDetails(activity.body);
+          const body = details.text;
+          const linkedRecord = records.find((record) => record.id === activity.recordId);
+          const pendingDeleteRequest = pendingDeleteRequestsById.get(activity.id);
+          const TimelineIcon = activityTimelineIcon(activity.type);
+          return (
+            <article className="activity-timeline-item" data-testid={`${testIdPrefix}-${activity.id}`} key={activity.id}>
+              <div className={`activity-timeline-marker ${activity.type}`}>
+                <TimelineIcon size={16} />
+              </div>
+              <div className="activity-timeline-content">
+                <div className="activity-timeline-summary">
+                  <div>
+                    <strong>{activityTimelineTitle(activity)}</strong>
+                    <span className="subtle"> - {formatDateTimeSeconds(activity.createdAt)}</span>
+                    {linkedRecord ? (
+                      <div className="activity-timeline-linked">
+                        Associated with <span>{linkedRecord.title}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                  <button className="text-button" type="button">
+                    Pin on top
+                  </button>
+                </div>
+                <div className="activity-timeline-card">
+                  <div className="activity-timeline-card-header">
+                    <div className="activity-timeline-card-title">
+                      <span className="activity-timeline-card-icon">
+                        <TimelineIcon size={16} />
+                      </span>
+                      <div>
+                        <strong>{activity.title}</strong>
+                        {pendingDeleteRequest ? <span className="danger-badge">删除待审核</span> : null}
+                      </div>
+                    </div>
+                    <span className="activity-timeline-type">{formatActivityType(activity.type)}</span>
+                  </div>
+                  {body ? <div className="activity-timeline-body">{body}</div> : null}
+                  <TaskAttachmentPreview attachments={details.attachments} mediaAssets={mediaAssets} />
+                  {onDelete ? (
+                    <div className="activity-timeline-footer">
+                      <button
+                        className="secondary-button danger-button"
+                        data-testid={`${testIdPrefix}-delete-${activity.id}`}
+                        type="button"
+                        onClick={() => onDelete(activity)}
+                      >
+                        {pendingDeleteRequest ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                        {pendingDeleteRequest ? "取消删除申请" : "删除"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
+}
+
+function activityTimelineIcon(type: Activity["type"]): LucideIcon {
+  switch (type) {
+    case "call":
+      return Phone;
+    case "email":
+      return Mail;
+    case "meeting":
+      return CalendarClock;
+    case "note":
+      return FileText;
+    case "stage_change":
+      return Trophy;
+    case "task":
+      return CheckCircle2;
+    default:
+      return ActivityIcon;
+  }
+}
+
+function activityTimelineTitle(activity: Activity): string {
+  switch (activity.type) {
+    case "call":
+      return "New call has been logged";
+    case "email":
+      return "Email message has been created";
+    case "meeting":
+      return "Meeting has been scheduled";
+    case "note":
+      return "New note has been created";
+    case "stage_change":
+      return "Deal stage has changed";
+    case "task":
+      return activity.completedAt ? "Task has been completed" : "Task has been created";
+    default:
+      return "An activity has been created";
+  }
 }
 
 function RecordSectionHeader({
@@ -10816,6 +10916,10 @@ function formatActivityType(type: Activity["type"]): string {
       return "会议";
     case "task":
       return "任务";
+    case "email":
+      return "邮件";
+    case "stage_change":
+      return "阶段变更";
   }
   return type;
 }
