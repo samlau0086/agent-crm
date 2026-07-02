@@ -686,6 +686,52 @@ await run("workflow AI designer makes repeated email touches distinct", async ()
   assert.match(String(emailTwo?.config.messageGoal), /different angle/i);
 });
 
+await run("workflow AI designer collapses duplicate sequential wait delays", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  const fetchImpl = async () => new Response(JSON.stringify({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            name: "Quote no reply follow-up",
+            goal: "7 天未回复的报价客户自动跟进",
+            trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+            graph: {
+              scope: { mode: "object", objectKey: "contacts" },
+              nodes: [
+                { id: "start", type: "start", label: "Start", position: { x: 40, y: 160 }, config: { trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" } } },
+                { id: "wait-a", type: "wait_delay", label: "Wait 7 days", position: { x: 320, y: 160 }, config: { delayAmount: 7, delayUnit: "days" } },
+                { id: "wait-b", type: "wait_delay", label: "Wait 7 days again", position: { x: 600, y: 160 }, config: { delayAmount: 7, delayUnit: "days" } },
+                { id: "reply-check", type: "wait_reply", label: "Check reply", position: { x: 880, y: 160 }, config: { lookbackDays: 7 } },
+                { id: "end", type: "end", label: "End", position: { x: 1160, y: 160 }, config: {} }
+              ],
+              edges: [
+                { id: "edge-start-wait-a", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "wait-a" },
+                { id: "edge-wait-a-wait-b", sourceNodeId: "wait-a", sourceHandle: "after_delay", targetNodeId: "wait-b" },
+                { id: "edge-wait-b-reply", sourceNodeId: "wait-b", sourceHandle: "after_delay", targetNodeId: "reply-check" },
+                { id: "edge-reply-end", sourceNodeId: "reply-check", sourceHandle: "replied", targetNodeId: "end" }
+              ]
+            }
+          })
+        }
+      }
+    ]
+  }), { status: 200, headers: { "content-type": "application/json" } });
+
+  const generated = await generateWorkflowWithAiDesigner(
+    { goal: "7 天未回复的报价客户自动跟进", objectKey: "contacts" },
+    {
+      settings,
+      providerConfig: { provider: "openai", baseUrl: "https://ai.example/v1", apiKey: "test-key", model: "test-model", timeoutMs: 10000 },
+      fetchImpl
+    }
+  );
+
+  assert.equal(generated.workflow.graph.nodes.filter((node) => node.type === "wait_delay").length, 1);
+  assert(!generated.workflow.graph.nodes.some((node) => node.id === "wait-b"));
+  assert(generated.workflow.graph.edges.some((edge) => edge.sourceNodeId === "wait-a" && edge.targetNodeId === "reply-check"));
+});
+
 await run("Prisma workflow generation uses the Workflow Designer Agent provider", () => {
   const repositorySource = readFileSync("src/lib/crm/repository.ts", "utf8");
   assert.match(repositorySource, /generateWorkflowWithAiDesigner/);
@@ -2308,6 +2354,14 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(automation, /nodeDeleteCandidate/);
   assert.match(automation, /confirmDeleteGraphNode/);
   assert.match(automation, /workflow-floating-palette/);
+  assert.match(automation, /workflow-floating-palette-toggle/);
+  assert.match(automation, /isFloatingPaletteOpen/);
+  assert.match(automation, /floatingPalettePosition/);
+  assert.match(automation, /startPaletteMove/);
+  assert.match(automation, /WORKFLOW_CANVAS_ORIGIN_OFFSET/);
+  assert.match(automation, /visibleCanvasPoint/);
+  assert.match(automation, /WorkflowRichTextEditor/);
+  assert.match(automation, /richTextHtmlToPlainText/);
   assert.match(automation, /application\/x-workflow-node-type/);
   assert.match(automation, /isWorkflowPaletteNodeType/);
   assert.match(automation, /onPointerDown/);
@@ -2404,7 +2458,12 @@ await run("automation workspace is a first-class visual workflow module", () => 
   assert.match(styles, /\.workflow-node-dialog-backdrop/);
   assert.match(styles, /\.app-dialog-backdrop/);
   assert.match(styles, /\.workflow-floating-palette/);
+  assert.match(styles, /\.workflow-floating-palette-toggle/);
+  assert.match(styles, /\.workflow-floating-palette-header/);
   assert.match(styles, /\.workflow-floating-palette-item/);
+  assert.match(styles, /\.workflow-rich-editor/);
+  assert.match(styles, /\.workflow-rich-toolbar/);
+  assert.match(styles, /\.workflow-rich-content/);
   assert.match(styles, /\.workflow-node-input::after/);
   assert.match(styles, /\.workflow-node-output/);
   assert.match(styles, /\.workflow-node-port/);

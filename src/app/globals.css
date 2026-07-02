@@ -3325,9 +3325,9 @@ button {
 }
 
 .workflow-floating-palette {
-  position: sticky;
-  top: 52px;
-  left: 20px;
+  position: fixed;
+  top: 0;
+  left: 0;
   z-index: 12;
   display: grid;
   gap: 8px;
@@ -3339,6 +3339,39 @@ button {
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   box-shadow: var(--shadow-lg);
+  touch-action: none;
+}
+
+.workflow-floating-palette.moving {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.workflow-floating-palette-toggle {
+  position: fixed;
+  top: 64px;
+  left: 24px;
+  z-index: 13;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.workflow-floating-palette-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  cursor: grab;
+}
+
+.workflow-floating-palette-header:active {
+  cursor: grabbing;
+}
+
+.workflow-floating-palette-title {
+  display: grid;
+  gap: 2px;
 }
 
 .workflow-floating-palette-item {
@@ -3366,17 +3399,56 @@ button {
   font-size: 11px;
 }
 
+.workflow-rich-editor {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.workflow-rich-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-strong);
+}
+
+.workflow-rich-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.workflow-rich-content {
+  min-height: 150px;
+  padding: 10px 12px;
+  outline: none;
+  color: var(--text);
+}
+
+.workflow-rich-content:focus {
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
 .workflow-graph-stage {
   position: relative;
-  width: 4200px;
-  height: 2400px;
+  width: 6400px;
+  height: 3600px;
 }
 
 .workflow-graph-edges {
   position: absolute;
   inset: 0;
-  width: 4200px;
-  height: 2400px;
+  width: 6400px;
+  height: 3600px;
   pointer-events: auto;
 }
 

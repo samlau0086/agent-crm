@@ -113,7 +113,7 @@ function parseWorkflowDesignerResponse(content: string, input: WorkflowAiGenerat
     conditions: fallback.workflow.conditions,
     actions: fallback.workflow.actions
   });
-  const graphWithScope = ensureDistinctEmailTouches(enforceRequestedScope(graph, input));
+  const graphWithScope = normalizeGeneratedWorkflowGraph(enforceRequestedScope(graph, input));
   const legacy = graphToLegacyWorkflow(graphWithScope);
   const workflow: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt"> = {
     name: stringValue(parsed.name, fallback.workflow.name),
@@ -165,6 +165,7 @@ function buildWorkflowDesignerSystemPrompt(agentMarkdown?: string): string {
     "- Generated workflows must be draft.",
     "- Prefer create_email_draft over send_email for outreach unless the user explicitly requests automatic sending.",
     "- For 'until reply' goals, include wait_reply branches: replied path should handle/stop, not_replied path should continue follow-up or review.",
+    "- Do not place two wait_delay nodes with the same duration directly after each other. One wait is enough before the next reply check or follow-up action.",
     "- For multi-touch email sequences, every create_email_draft/send_email node must have a distinct subject, body, purpose, and timing. Do not copy the same body across rounds.",
     "- Later follow-up email nodes must explicitly account for previous sent emails and no-reply context. Include config fields such as touchIndex, previousTouchCount, lastEmailSummary, replyStatus, and messageGoal when useful.",
     "- Multi-round outreach should progress logically: initial value proposition, first follow-up with a different angle, later follow-up with objection/risk handling or a graceful close-the-loop. Do not repeat the first email.",
@@ -194,6 +195,7 @@ function buildWorkflowDesignerUserPrompt(input: WorkflowAiGenerationRequest, fal
         : { mode: "global" },
     instruction: "Design a workflow graph that best satisfies the user goal. The graph may differ from the fallback example when the goal requires a different structure."
       + " If the workflow creates more than one email, each email node must be materially different and must include touchIndex/messageGoal plus context about prior sent emails or no-reply state."
+      + " Avoid consecutive identical wait_delay nodes; merge them into one wait before checking replies or drafting the next follow-up."
   });
 }
 
@@ -227,6 +229,55 @@ function enforceRequestedScope(graph: WorkflowGraph, input: WorkflowAiGeneration
         })()
       : node)
   };
+}
+
+function normalizeGeneratedWorkflowGraph(graph: WorkflowGraph): WorkflowGraph {
+  return ensureDistinctEmailTouches(collapseRedundantSequentialWaitDelays(graph));
+}
+
+function collapseRedundantSequentialWaitDelays(graph: WorkflowGraph): WorkflowGraph {
+  let nodes = graph.nodes;
+  let edges = graph.edges;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      if (node.type !== "wait_delay") continue;
+      const nextEdge = edges.find((edge) => edge.sourceNodeId === node.id && edge.sourceHandle === "after_delay");
+      const nextNode = nextEdge ? nodes.find((candidate) => candidate.id === nextEdge.targetNodeId) : undefined;
+      if (!nextEdge || !nextNode || nextNode.type !== "wait_delay" || !sameWaitDelay(node.config, nextNode.config)) {
+        continue;
+      }
+      const nextOutgoing = edges.find((edge) => edge.sourceNodeId === nextNode.id && edge.sourceHandle === "after_delay");
+      if (!nextOutgoing) {
+        continue;
+      }
+      nodes = nodes.filter((candidate) => candidate.id !== nextNode.id);
+      edges = edges.filter((edge) => edge.id !== nextEdge.id && edge.sourceNodeId !== nextNode.id && edge.targetNodeId !== nextNode.id);
+      const rewired = {
+        id: uniqueWorkflowEdgeId(edges, `edge:${node.id}:after_delay:${nextOutgoing.targetNodeId}`),
+        sourceNodeId: node.id,
+        sourceHandle: "after_delay",
+        targetNodeId: nextOutgoing.targetNodeId
+      };
+      edges = [...edges, rewired];
+      changed = true;
+      break;
+    }
+  }
+  return { ...graph, nodes, edges };
+}
+
+function sameWaitDelay(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return Number(left.delayAmount ?? 0) === Number(right.delayAmount ?? 0)
+    && stringValue(left.delayUnit, "days") === stringValue(right.delayUnit, "days");
+}
+
+function uniqueWorkflowEdgeId(edges: WorkflowGraph["edges"], baseId: string): string {
+  if (!edges.some((edge) => edge.id === baseId)) return baseId;
+  let index = 2;
+  while (edges.some((edge) => edge.id === `${baseId}:${index}`)) index += 1;
+  return `${baseId}:${index}`;
 }
 
 function ensureDistinctEmailTouches(graph: WorkflowGraph): WorkflowGraph {

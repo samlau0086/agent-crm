@@ -15,6 +15,8 @@ import {
   Maximize2,
   Minimize2,
   MousePointer2,
+  PanelLeftClose,
+  PanelLeftOpen,
   PauseCircle,
   PlayCircle,
   Plus,
@@ -142,6 +144,10 @@ const workflowGraphPaletteItems: WorkflowGraphPaletteItem[] = [
   { type: "notify", icon: Mail, description: "notify channel" },
   { type: "end", icon: PauseCircle, description: "finish path" }
 ];
+
+const WORKFLOW_CANVAS_ORIGIN_OFFSET = 1200;
+const WORKFLOW_STAGE_WIDTH = 6400;
+const WORKFLOW_STAGE_HEIGHT = 3600;
 
 export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns: initialRuns, workflowApprovals: initialApprovals, records, emailAccounts, users }: AutomationWorkspaceProps) {
   const searchParams = useSearchParams();
@@ -1201,6 +1207,14 @@ function WorkflowGraphCanvas({
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFloatingPaletteOpen, setIsFloatingPaletteOpen] = useState(true);
+  const [floatingPalettePosition, setFloatingPalettePosition] = useState({ x: 24, y: 76 });
+  const [movingPalette, setMovingPalette] = useState<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const [connectionPreview, setConnectionPreview] = useState<{
     connection: { sourceNodeId: string; sourceHandle: string };
     point: WorkflowNode["position"];
@@ -1220,14 +1234,26 @@ function WorkflowGraphCanvas({
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
 
   useEffect(() => {
+    if (!isFullscreen) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (canvas.scrollLeft < WORKFLOW_CANVAS_ORIGIN_OFFSET / 2) {
+      canvas.scrollLeft = WORKFLOW_CANVAS_ORIGIN_OFFSET - 180;
+    }
+    if (canvas.scrollTop < WORKFLOW_CANVAS_ORIGIN_OFFSET / 2) {
+      canvas.scrollTop = WORKFLOW_CANVAS_ORIGIN_OFFSET - 120;
+    }
+  }, [isFullscreen]);
+
+  useEffect(() => {
     if (!movingNode) return;
     const activeMove = movingNode;
     function handlePointerMove(event: PointerEvent) {
       const rect = stageRef.current?.getBoundingClientRect();
       if (!rect) return;
       onMoveNode(activeMove.nodeId, {
-        x: Math.max(12, Math.round(event.clientX - rect.left - activeMove.offsetX)),
-        y: Math.max(12, Math.round(event.clientY - rect.top - activeMove.offsetY))
+        x: Math.max(12, Math.round(event.clientX - rect.left - activeMove.offsetX - WORKFLOW_CANVAS_ORIGIN_OFFSET)),
+        y: Math.max(12, Math.round(event.clientY - rect.top - activeMove.offsetY - WORKFLOW_CANVAS_ORIGIN_OFFSET))
       });
     }
     function handlePointerUp() {
@@ -1242,6 +1268,28 @@ function WorkflowGraphCanvas({
       window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [movingNode, onMoveNode]);
+
+  useEffect(() => {
+    if (!movingPalette) return;
+    const activeMove = movingPalette;
+    function handlePointerMove(event: PointerEvent) {
+      setFloatingPalettePosition({
+        x: clampNumber(activeMove.originX + event.clientX - activeMove.startX, 12, Math.max(12, window.innerWidth - 260)),
+        y: clampNumber(activeMove.originY + event.clientY - activeMove.startY, 56, Math.max(56, window.innerHeight - 280))
+      });
+    }
+    function handlePointerUp() {
+      setMovingPalette(null);
+    }
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", handlePointerUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [movingPalette]);
 
   useEffect(() => {
     if (!panningCanvas) return;
@@ -1290,8 +1338,16 @@ function WorkflowGraphCanvas({
   function canvasPointFromClient(clientX: number, clientY: number): WorkflowNode["position"] {
     const rect = stageRef.current?.getBoundingClientRect();
     return {
-      x: Math.max(20, Math.round(clientX - (rect?.left ?? 0) - 110)),
-      y: Math.max(20, Math.round(clientY - (rect?.top ?? 0) - 48))
+      x: Math.max(20, Math.round(clientX - (rect?.left ?? 0) - 110 - WORKFLOW_CANVAS_ORIGIN_OFFSET)),
+      y: Math.max(20, Math.round(clientY - (rect?.top ?? 0) - 48 - WORKFLOW_CANVAS_ORIGIN_OFFSET))
+    };
+  }
+
+  function visibleCanvasPoint(index = 0): WorkflowNode["position"] {
+    const canvas = canvasRef.current;
+    return {
+      x: Math.max(20, Math.round((canvas?.scrollLeft ?? WORKFLOW_CANVAS_ORIGIN_OFFSET) - WORKFLOW_CANVAS_ORIGIN_OFFSET + 360)),
+      y: Math.max(20, Math.round((canvas?.scrollTop ?? WORKFLOW_CANVAS_ORIGIN_OFFSET) - WORKFLOW_CANVAS_ORIGIN_OFFSET + 160 + (index % 5) * 88))
     };
   }
 
@@ -1312,7 +1368,7 @@ function WorkflowGraphCanvas({
 
   function shouldIgnoreCanvasPan(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
-    return Boolean(target.closest("button, input, select, textarea, a"));
+    return Boolean(target.closest("button, input, select, textarea, a, .workflow-floating-palette, .workflow-floating-palette-toggle"));
   }
 
   function startCanvasPan(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1345,6 +1401,19 @@ function WorkflowGraphCanvas({
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
+  function startPaletteMove(event: ReactPointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    if (event.target instanceof HTMLElement && event.target.closest("button")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMovingPalette({
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: floatingPalettePosition.x,
+      originY: floatingPalettePosition.y
+    });
+  }
+
   function handleCanvasDrop(event: DragEvent<HTMLDivElement>) {
     const connection = readConnection(event);
     const nodeType = readNodeType(event);
@@ -1364,10 +1433,10 @@ function WorkflowGraphCanvas({
     const source = nodeById.get(edge.sourceNodeId);
     const target = nodeById.get(edge.targetNodeId);
     if (!source || !target) return [];
-    const startX = source.position.x + 270;
-    const startY = source.position.y + 50 + outputHandleOffset(edge.sourceHandle);
-    const endX = target.position.x;
-    const endY = target.position.y + 50;
+    const startX = source.position.x + WORKFLOW_CANVAS_ORIGIN_OFFSET + 270;
+    const startY = source.position.y + WORKFLOW_CANVAS_ORIGIN_OFFSET + 50 + outputHandleOffset(edge.sourceHandle);
+    const endX = target.position.x + WORKFLOW_CANVAS_ORIGIN_OFFSET;
+    const endY = target.position.y + WORKFLOW_CANVAS_ORIGIN_OFFSET + 50;
     const midX = Math.round((startX + endX) / 2);
     const midY = Math.round((startY + endY) / 2);
     return [{
@@ -1376,7 +1445,7 @@ function WorkflowGraphCanvas({
       midpoint: { x: midX, y: midY }
     }];
   });
-  const previewEdge = connectionPreview ? buildWorkflowPreviewEdge(connectionPreview.connection, connectionPreview.point, nodeById) : null;
+  const previewEdge = connectionPreview ? buildWorkflowPreviewEdge(connectionPreview.connection, connectionPreview.point, nodeById, WORKFLOW_CANVAS_ORIGIN_OFFSET) : null;
 
   return (
     <div
@@ -1401,9 +1470,31 @@ function WorkflowGraphCanvas({
         </button>
       ) : null}
       {isFullscreen ? (
-        <div className="workflow-floating-palette" data-testid="workflow-floating-palette">
-          <strong>节点库</strong>
-          <span className="subtle">拖拽到画布添加节点</span>
+        <button
+          aria-label={isFloatingPaletteOpen ? "Hide node library" : "Show node library"}
+          className="workflow-floating-palette-toggle icon-button"
+          data-testid="workflow-floating-palette-toggle"
+          type="button"
+          onClick={() => setIsFloatingPaletteOpen((current) => !current)}
+        >
+          {isFloatingPaletteOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+        </button>
+      ) : null}
+      {isFullscreen && isFloatingPaletteOpen ? (
+        <div
+          className={`workflow-floating-palette ${movingPalette ? "moving" : ""}`}
+          data-testid="workflow-floating-palette"
+          style={{ transform: `translate(${floatingPalettePosition.x}px, ${floatingPalettePosition.y}px)` }}
+        >
+          <div className="workflow-floating-palette-header" onPointerDown={startPaletteMove}>
+            <span className="workflow-floating-palette-title">
+              <strong>Node library</strong>
+              <small className="subtle">Drag or click to add</small>
+            </span>
+            <button className="icon-button" type="button" onClick={() => setIsFloatingPaletteOpen(false)} aria-label="Hide node library">
+              <PanelLeftClose size={15} />
+            </button>
+          </div>
           {workflowGraphPaletteItems.map((item, index) => {
             const Icon = item.icon;
             return (
@@ -1413,7 +1504,7 @@ function WorkflowGraphCanvas({
                 key={item.type}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onCreateNode(item.type, { x: 120, y: 120 + index * 118 });
+                  onCreateNode(item.type, visibleCanvasPoint(index));
                 }}
                 onDragStart={(event) => {
                   event.stopPropagation();
@@ -1433,8 +1524,8 @@ function WorkflowGraphCanvas({
           })}
         </div>
       ) : null}
-      <div className="workflow-graph-stage" ref={stageRef}>
-      <svg className="workflow-graph-edges" aria-label="Workflow connections">
+      <div className="workflow-graph-stage" ref={stageRef} style={{ width: WORKFLOW_STAGE_WIDTH, height: WORKFLOW_STAGE_HEIGHT }}>
+      <svg className="workflow-graph-edges" aria-label="Workflow connections" style={{ width: WORKFLOW_STAGE_WIDTH, height: WORKFLOW_STAGE_HEIGHT }}>
         {edgeViews.map(({ edge, path }) => (
           <g className="workflow-graph-edge" key={edge.id}>
             <path d={path} className="workflow-graph-edge-path" />
@@ -1492,7 +1583,7 @@ function WorkflowGraphCanvas({
           }}
           onPointerDown={(event) => startNodeMove(event, node)}
           role="button"
-          style={{ transform: `translate(${node.position.x}px, ${node.position.y}px)` }}
+          style={{ transform: `translate(${node.position.x + WORKFLOW_CANVAS_ORIGIN_OFFSET}px, ${node.position.y + WORKFLOW_CANVAS_ORIGIN_OFFSET}px)` }}
           tabIndex={0}
         >
           <span
@@ -1585,7 +1676,7 @@ function WorkflowGraphCanvas({
       ))}
 
       {quickAdd ? (
-        <div className="workflow-quick-add" data-testid="workflow-quick-add" style={{ transform: `translate(${quickAdd.x}px, ${quickAdd.y}px)` }}>
+        <div className="workflow-quick-add" data-testid="workflow-quick-add" style={{ transform: `translate(${quickAdd.x + WORKFLOW_CANVAS_ORIGIN_OFFSET}px, ${quickAdd.y + WORKFLOW_CANVAS_ORIGIN_OFFSET}px)` }}>
           <div className="stage-header">
             <strong>添加下级节点</strong>
             <button className="icon-button" type="button" onClick={onCancelQuickAdd}>×</button>
@@ -1643,6 +1734,16 @@ function WorkflowGraphInspector({
 
   function updateConfig(key: string, value: unknown) {
     onChange(node.id, { config: { ...config, [key]: value } });
+  }
+
+  function updateEmailBody(html: string) {
+    onChange(node.id, {
+      config: {
+        ...config,
+        bodyHtml: html,
+        bodyText: richTextHtmlToPlainText(html)
+      }
+    });
   }
 
   function updateStartScope(patch: Partial<WorkflowGraph["scope"]>) {
@@ -1840,7 +1941,10 @@ function WorkflowGraphInspector({
           </label>
           <label>
             <span className="subtle">正文</span>
-            <textarea className="textarea" value={String(config.bodyText ?? "")} onChange={(event) => updateConfig("bodyText", event.target.value)} />
+            <WorkflowRichTextEditor
+              value={String(config.bodyHtml ?? config.bodyText ?? "")}
+              onChange={updateEmailBody}
+            />
           </label>
           <label className="settings-toggle">
             <input type="checkbox" checked={Boolean(config.requiresApproval ?? true)} onChange={(event) => updateConfig("requiresApproval", event.target.checked)} />
@@ -1922,17 +2026,59 @@ function WorkflowGraphInspector({
   );
 }
 
+function WorkflowRichTextEditor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const editorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || document.activeElement === editor) return;
+    if (editor.innerHTML !== value) {
+      editor.innerHTML = value;
+    }
+  }, [value]);
+
+  function emitChange() {
+    onChange(editorRef.current?.innerHTML ?? "");
+  }
+
+  function runCommand(command: "bold" | "italic" | "insertUnorderedList" | "insertOrderedList") {
+    editorRef.current?.focus();
+    document.execCommand(command);
+    emitChange();
+  }
+
+  return (
+    <div className="workflow-rich-editor" data-testid="workflow-rich-editor">
+      <div className="workflow-rich-toolbar">
+        <button type="button" onClick={() => runCommand("bold")} title="Bold"><strong>B</strong></button>
+        <button type="button" onClick={() => runCommand("italic")} title="Italic"><em>I</em></button>
+        <button type="button" onClick={() => runCommand("insertUnorderedList")} title="Bullet list">•</button>
+        <button type="button" onClick={() => runCommand("insertOrderedList")} title="Numbered list">1.</button>
+      </div>
+      <div
+        className="workflow-rich-content"
+        contentEditable
+        onInput={emitChange}
+        ref={editorRef}
+        role="textbox"
+        suppressContentEditableWarning
+      />
+    </div>
+  );
+}
+
 function buildWorkflowPreviewEdge(
   connection: { sourceNodeId: string; sourceHandle: string },
   point: WorkflowNode["position"],
-  nodeById: Map<string, WorkflowNode>
+  nodeById: Map<string, WorkflowNode>,
+  originOffset = 0
 ): { path: string } | null {
   const source = nodeById.get(connection.sourceNodeId);
   if (!source) return null;
-  const startX = source.position.x + 270;
-  const startY = source.position.y + 50 + outputHandleOffset(connection.sourceHandle);
-  const endX = point.x + 110;
-  const endY = point.y + 48;
+  const startX = source.position.x + originOffset + 270;
+  const startY = source.position.y + originOffset + 50 + outputHandleOffset(connection.sourceHandle);
+  const endX = point.x + originOffset + 110;
+  const endY = point.y + originOffset + 48;
   const midX = Math.round((startX + endX) / 2);
   return {
     path: `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`
@@ -2267,6 +2413,23 @@ function updateActionConfigValue(draft: AutomationDraft, key: string, configKey:
 
 function splitConfigList(value: string): string[] {
   return value.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function richTextHtmlToPlainText(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function joinConfigList(value: unknown): string {
