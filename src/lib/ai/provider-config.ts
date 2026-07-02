@@ -62,14 +62,16 @@ export function normalizeAiProviderProfile(profile: Partial<AiProviderProfile> |
 
 export function normalizeAiProviderProfiles(profiles: unknown, defaultConfig?: Partial<AiProviderConfig>): AiProviderProfile[] {
   const defaults = createDefaultAiProviderProfiles(defaultConfig);
-  const byKey = new Map(defaults.map((profile) => [profile.key, profile]));
-  if (Array.isArray(profiles)) {
-    for (const raw of profiles) {
-      if (!raw || typeof raw !== "object") continue;
-      const partial = raw as Partial<AiProviderProfile>;
-      const normalized = normalizeAiProviderProfile(partial, byKey.get(String(partial.key ?? "")));
-      byKey.set(normalized.key, normalized);
-    }
+  if (!Array.isArray(profiles)) {
+    return defaults;
+  }
+  const fallbackByKey = new Map(defaults.map((profile) => [profile.key, profile]));
+  const byKey = new Map<string, AiProviderProfile>();
+  for (const raw of profiles) {
+    if (!raw || typeof raw !== "object") continue;
+    const partial = raw as Partial<AiProviderProfile>;
+    const normalized = normalizeAiProviderProfile(partial, fallbackByKey.get(String(partial.key ?? "")));
+    byKey.set(normalized.key, normalized);
   }
   return Array.from(byKey.values()).slice(0, 20);
 }

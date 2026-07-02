@@ -169,6 +169,7 @@ const fieldTypes: FieldDefinition["type"][] = [
 ];
 
 type SettingsTabKey = "access" | "crm" | "pool" | "aiAgents" | "workflows" | "integrations" | "operations";
+type AiAgentConfigTabKey = "providers" | "agents";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[]; providerProfiles: AiProviderProfile[] };
 type TagSelectOption = { value: string; label: string; description?: string };
@@ -262,6 +263,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [aiAgentTestPrompt, setAiAgentTestPrompt] = useState("");
   const [aiAgentTestRecordId, setAiAgentTestRecordId] = useState(props.records[0]?.id ?? "");
   const [aiAgentTestResult, setAiAgentTestResult] = useState<AiAgentRunResult | null>(null);
+  const [activeAiAgentConfigTab, setActiveAiAgentConfigTab] = useState<AiAgentConfigTabKey>("providers");
   const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
   const [paymentTermOptionsText, setPaymentTermOptionsText] = useState("");
@@ -1655,6 +1657,29 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 刷新
               </button>
             </div>
+            <div className="settings-tab-list compact-tab-list" role="tablist" aria-label="AI 配置分类">
+              <button
+                className={`settings-tab-button ${activeAiAgentConfigTab === "providers" ? "active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeAiAgentConfigTab === "providers"}
+                onClick={() => setActiveAiAgentConfigTab("providers")}
+              >
+                <strong>Providers</strong>
+                <span>OpenAI、OpenRouter、Gemini 与 Custom provider</span>
+              </button>
+              <button
+                className={`settings-tab-button ${activeAiAgentConfigTab === "agents" ? "active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeAiAgentConfigTab === "agents"}
+                onClick={() => setActiveAiAgentConfigTab("agents")}
+              >
+                <strong>Agents</strong>
+                <span>agent.md、Harness、工具权限与测试运行</span>
+              </button>
+            </div>
+            {activeAiAgentConfigTab === "providers" ? (
             <div className="settings-panel harness-config-panel" data-testid="ai-provider-profiles">
               <div className="settings-panel-header">
                 <div>
@@ -1740,6 +1765,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 ))}
               </div>
             </div>
+            ) : null}
+            {activeAiAgentConfigTab === "agents" ? (
             <div className="settings-grid settings-grid-wide">
               <div className="activity-list">
                 {aiAgents.map((agent) => {
@@ -1975,9 +2002,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 </div>
               ) : null}
             </div>
+            ) : null}
           </section>
 
-          {selectedAiAgent ? (
+          {activeAiAgentConfigTab === "agents" && selectedAiAgent ? (
             <section className="settings-panel audit-panel">
               <div className="section-heading">
                 <div>
@@ -2021,6 +2049,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             </section>
           ) : null}
 
+          {activeAiAgentConfigTab === "agents" ? (
           <section className="settings-panel audit-panel">
             <div className="section-heading">
               <h3>最近运行</h3>
@@ -2040,6 +2069,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               {aiAgentRuns.length === 0 ? <div className="empty-state">暂无运行记录。点击测试运行后会显示在这里。</div> : null}
             </div>
           </section>
+          ) : null}
         </div>
       ) : null}
 

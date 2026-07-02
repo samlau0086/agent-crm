@@ -3072,6 +3072,11 @@ button {
   gap: 8px;
 }
 
+.settings-tab-list.compact-tab-list {
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  margin-bottom: 12px;
+}
+
 .settings-tab-button {
   display: grid;
   gap: 4px;

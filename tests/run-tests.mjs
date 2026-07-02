@@ -2541,6 +2541,11 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "aiAgents" \| "workflows" \| "integrations" \| "operations"/);
   assert.match(source, /const settingsTabs/);
   assert.match(source, /AI Agents/);
+  assert.match(source, /type AiAgentConfigTabKey = "providers" \| "agents"/);
+  assert.match(source, /activeAiAgentConfigTab === "providers"[\s\S]*data-testid="ai-provider-profiles"/);
+  assert.match(source, /activeAiAgentConfigTab === "agents"[\s\S]*data-testid="ai-agent-harness-config"/);
+  assert.match(source, /Save providers/);
+  assert.match(source, /保存 Agent/);
   assert.match(source, /\/api\/ai\/agents/);
   assert.match(source, /activeSettingsTab === "aiAgents"[\s\S]*agent\.md/);
   assert.match(source, /data-testid="ai-agent-harness-config"/);
@@ -2567,6 +2572,7 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(source, /activeSettingsTab === "operations"[\s\S]*ImportQueueMonitor[\s\S]*BackupOperationsPanel[\s\S]*audit-panel/);
   assert.match(styles, /\.settings-tabs-shell/);
   assert.match(styles, /\.settings-tab-list/);
+  assert.match(styles, /\.settings-tab-list\.compact-tab-list/);
   assert.match(styles, /\.settings-tab-button\.active/);
   assert.match(styles, /\.tag-select-input/);
   assert.match(styles, /\.tag-select-menu/);
@@ -10763,7 +10769,24 @@ await run("email ai settings expose encrypted provider profiles", () => {
       }
     ]
   });
-  const publicProfile = withProfile.providerProfiles.find((profile) => profile.key === "openrouter-sales");
+  assert.deepEqual(withProfile.providerProfiles.map((profile) => profile.key), ["openrouter-sales"]);
+  const afterProfileRemoval = store.updateEmailAiSettings(context, { providerProfiles: [] });
+  assert.deepEqual(afterProfileRemoval.providerProfiles, []);
+  const restoredProfile = store.updateEmailAiSettings(context, {
+    providerProfiles: [
+      {
+        key: "openrouter-sales",
+        name: "OpenRouter Sales",
+        enabled: true,
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        apiKey: "secret-profile-key",
+        model: "anthropic/claude-3-haiku",
+        timeoutMs: 13000
+      }
+    ]
+  });
+  const publicProfile = restoredProfile.providerProfiles.find((profile) => profile.key === "openrouter-sales");
   assert.equal(publicProfile?.hasApiKey, true);
   assert.equal(publicProfile?.apiKey, undefined);
   const profileAgent = store.updateAiAgent(context, emailDraftAgentKey, { providerProfileKey: "openrouter-sales" });
