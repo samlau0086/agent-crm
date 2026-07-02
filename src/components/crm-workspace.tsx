@@ -1188,6 +1188,8 @@ function AppSidebarToggleButton({
   );
 }
 
+type ContactDetailActivityTab = "all" | "activities" | "emails" | "calls" | "notes" | "tasks";
+
 export function CrmWorkspace(props: CrmWorkspaceProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -1230,6 +1232,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
+  const [contactDetailActivityTab, setContactDetailActivityTab] = useState<ContactDetailActivityTab>("all");
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
   const [contactMethodEditingRecordId, setContactMethodEditingRecordId] = useState("");
   const [contactMethodEditingValue, setContactMethodEditingValue] = useState("");
@@ -1575,6 +1578,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () => (selectedRecord ? getQuickContactMethodsForRecord(selectedRecord, records) : []),
     [records, selectedRecord]
   );
+  const contactDetailTab = selectedRecord?.objectKey === "contacts" ? contactDetailActivityTab : "all";
+  const showContactAllSections = contactDetailTab === "all";
+  const showContactEmailSections = showContactAllSections || contactDetailTab === "emails";
+  const showContactActivityTimeline = showContactAllSections || contactDetailTab === "activities";
+  const showContactTaskSections = showContactAllSections || contactDetailTab === "tasks";
+  const showContactNoteSections = showContactAllSections || contactDetailTab === "notes";
+  const showContactCallSections = showContactAllSections || contactDetailTab === "calls";
   const openTasks = useMemo(
     () =>
       activities
@@ -2098,6 +2108,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEditOwnerId("");
       setEditValues({});
       setDealCloseReason("");
+      setContactDetailActivityTab("all");
+      setRecordActivityComposerType("");
       return;
     }
 
@@ -2109,6 +2121,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditOwnerId(selectedRecord.ownerId ?? props.contextUser.id);
     setEditValues(buildRecordValues(selectedFields, selectedRecord));
     setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
+    setContactDetailActivityTab("all");
+    setRecordActivityComposerType("");
   }, [props.contextUser.id, selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
   function navigateToWorkspace(navKey: NavKey, objectKey?: string) {
@@ -4395,10 +4409,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           showContactMethodEditor={selectedRecordQuickContactMethods.length === 0}
                         />
                         <ContactDetailActivityTabs
+                          activeTab={contactDetailActivityTab}
                           activityCount={selectedActivities.length}
                           callCount={selectedCalls.length}
                           emailCount={selectedRecordVisibleEmailThreads.length}
                           noteCount={selectedNotes.length}
+                          onChange={setContactDetailActivityTab}
                           taskCount={selectedTasks.length}
                         />
                       </>
@@ -4592,7 +4608,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </>
                     )}
 
-                    {selectedRecordQuickContactMethods.length > 0 ? (
+                    {selectedRecordQuickContactMethods.length > 0 && (selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
                       <>
                         <ContactMethodsQuickActions
                           methods={selectedRecordQuickContactMethods}
@@ -4677,7 +4693,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                     )}
 
-                    {(selectedRecordEmailAddresses.length > 0 || selectedRecordEmailThreads.length > 0) && (
+                    {(selectedRecordEmailAddresses.length > 0 || selectedRecordEmailThreads.length > 0) && (selectedRecord.objectKey !== "contacts" || showContactEmailSections) && (
                       <section style={{ marginTop: 16 }}>
                         <div className="property-name" style={{ marginBottom: 8 }}>
                           邮件活动
@@ -4784,6 +4800,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                     )}
 
+                    {(selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
                     <section style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         关联记录
@@ -4808,8 +4825,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <div className="empty-state">暂无关联记录</div>
                       )}
                     </section>
+                    ) : null}
 
+                    {(selectedRecord.objectKey !== "contacts" || showContactAllSections || showContactTaskSections || showContactNoteSections || showContactCallSections) ? (
                     <div className="record-activity-grid">
+                      {(selectedRecord.objectKey !== "contacts" || showContactTaskSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="任务"
@@ -4854,7 +4874,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
                         />
                       </section>
+                      ) : null}
 
+                      {(selectedRecord.objectKey !== "contacts" || showContactNoteSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="备注"
@@ -4897,7 +4919,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           )}
                         />
                       </section>
+                      ) : null}
 
+                      {(selectedRecord.objectKey !== "contacts" || showContactCallSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="电话"
@@ -4940,7 +4964,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           )}
                         />
                       </section>
+                      ) : null}
 
+                      {(selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="会议"
@@ -4984,8 +5010,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           )}
                         />
                       </section>
+                      ) : null}
                     </div>
+                    ) : null}
 
+                    {(selectedRecord.objectKey !== "contacts" || showContactActivityTimeline) ? (
                     <section style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         活动时间线
@@ -5005,8 +5034,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         )}
                       />
                     </section>
+                    ) : null}
 
-                    {coreObjects.has(selectedRecord.objectKey) && (
+                    {coreObjects.has(selectedRecord.objectKey) && (selectedRecord.objectKey !== "contacts" || showContactAllSections) && (
                       <AiAssistant
                         record={selectedRecord}
                         fields={selectedFields}
@@ -5019,6 +5049,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       />
                     )}
 
+                    {(selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
                     <TalkAboutThisPanel
                       target={{ type: "record", objectKey: selectedRecord.objectKey, recordId: selectedRecord.id, label: selectedRecord.title }}
                       disabled={isPending}
@@ -5027,6 +5058,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onRequestConfirm={requestConfirm}
                       onShowToast={showToast}
                     />
+                    ) : null}
                   </>
                 ) : (
                   <div className="empty-state">请先从左侧列表选择一条记录</div>
@@ -12750,37 +12782,52 @@ function ContactProfileProgressStrip({
 }
 
 function ContactDetailActivityTabs({
+  activeTab,
   activityCount,
   callCount,
   emailCount,
   noteCount,
+  onChange,
   taskCount
 }: {
+  activeTab: ContactDetailActivityTab;
   activityCount: number;
   callCount: number;
   emailCount: number;
   noteCount: number;
+  onChange: (tab: ContactDetailActivityTab) => void;
   taskCount: number;
 }) {
   const tabs = [
-    { label: "All", count: activityCount + emailCount, icon: LayoutList, active: true },
-    { label: "Activities", count: activityCount, icon: ActivityIcon },
-    { label: "Emails", count: emailCount, icon: Mail },
-    { label: "Calls", count: callCount, icon: Phone },
-    { label: "Notes", count: noteCount, icon: FileText },
-    { label: "Tasks", count: taskCount, icon: CheckCircle2 }
-  ];
+    { key: "all", label: "All", count: activityCount + emailCount, icon: LayoutList },
+    { key: "activities", label: "Activities", count: activityCount, icon: ActivityIcon },
+    { key: "emails", label: "Emails", count: emailCount, icon: Mail },
+    { key: "calls", label: "Calls", count: callCount, icon: Phone },
+    { key: "notes", label: "Notes", count: noteCount, icon: FileText },
+    { key: "tasks", label: "Tasks", count: taskCount, icon: CheckCircle2 }
+  ] satisfies Array<{ key: ContactDetailActivityTab; label: string; count: number; icon: LucideIcon }>;
+
+  function handleTabChange(tab: ContactDetailActivityTab) {
+    onChange(tab);
+  }
 
   return (
     <div className="contact-detail-activity-tabs" data-testid="contact-detail-activity-tabs">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         return (
-          <span className={`contact-detail-activity-tab ${tab.active ? "active" : ""}`} key={tab.label}>
+          <button
+            aria-pressed={activeTab === tab.key}
+            className={`contact-detail-activity-tab ${activeTab === tab.key ? "active" : ""}`}
+            data-testid={`contact-detail-activity-tab-${tab.key}`}
+            key={tab.key}
+            type="button"
+            onClick={() => handleTabChange(tab.key)}
+          >
             <Icon size={15} />
             <span>{tab.label}</span>
             {tab.count > 0 ? <span className="contact-detail-tab-count">{tab.count}</span> : null}
-          </span>
+          </button>
         );
       })}
     </div>

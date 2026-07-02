@@ -914,10 +914,17 @@ button {
   align-items: center;
   gap: 7px;
   padding: 0 10px;
+  border: 0;
   border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--muted);
+  cursor: pointer;
   font-size: 13px;
   font-weight: 700;
+}
+
+.contact-detail-activity-tab:hover {
+  color: var(--accent);
 }
 
 .contact-detail-activity-tab.active {

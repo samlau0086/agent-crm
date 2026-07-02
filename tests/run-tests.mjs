@@ -2837,7 +2837,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /function getQuickContactMethodsForRecord\(record: CrmRecord, records: CrmRecord\[\]\): ContactMethodDraft\[\]/);
   assert.match(source, /sourceRecordId: primaryContact\.id/);
   assert.match(source, /sourceRecordId: contact\.id/);
-  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 \? \([\s\S]*<ContactMethodsQuickActions/);
+  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(selectedRecord\.objectKey !== "contacts" \|\| showContactAllSections\) \? \([\s\S]*<ContactMethodsQuickActions/);
   assert.match(source, /const \[contactMethodEditingId, setContactMethodEditingId\] = useState\(""\)/);
   assert.match(source, /const \[contactMethodEditingRecordId, setContactMethodEditingRecordId\] = useState\(""\)/);
   assert.match(source, /const \[contactMethodEditingValue, setContactMethodEditingValue\] = useState\(""\)/);
@@ -3123,6 +3123,12 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /<ContactProfileProgressStrip/);
   assert.match(source, /data-testid="contact-profile-progress"/);
   assert.match(source, /<ContactDetailActivityTabs/);
+  assert.match(source, /activeTab=\{contactDetailActivityTab\}/);
+  assert.match(source, /onChange=\{setContactDetailActivityTab\}/);
+  assert.match(source, /showContactEmailSections/);
+  assert.match(source, /showContactActivityTimeline/);
+  assert.match(source, /data-testid=\{`contact-detail-activity-tab-\$\{tab\.key\}`\}/);
+  assert.match(source, /aria-pressed=\{activeTab === tab\.key\}/);
   assert.match(source, /data-testid="contact-detail-activity-tabs"/);
   assert.match(source, /function ContactProfileEditor/);
   assert.match(source, /function ContactProfileProgressStrip/);
@@ -3134,6 +3140,7 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(styles, /\.contact-profile-progress/);
   assert.match(styles, /\.contact-profile-progress-step\.done/);
   assert.match(styles, /\.contact-detail-activity-tabs/);
+  assert.match(styles, /\.contact-detail-activity-tab:hover/);
   assert.match(styles, /\.contact-detail-activity-tab\.active/);
   assert.match(styles, /\.contact-profile-hero\.update-pending/);
   assert.match(styles, /\.record-update-pending-banner/);
