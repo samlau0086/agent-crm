@@ -3,8 +3,11 @@ import { requirePermission } from "@/lib/auth/rbac";
 import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { aiTalkRequestSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
-import { generateAiTalkResponse, generateAiTalkSuggestion, type AiTalkSource } from "@/lib/ai/talk";
+import { getGlobalAiAgentSetting, talkAboutThisAgentKey } from "@/lib/ai/agents";
+import { runAiAgent } from "@/lib/ai/harness";
 import type { Activity, CrmRecord, EmailMessage, EmailThread, FieldDefinition, KnowledgeArticle } from "@/lib/crm/types";
+
+type AiTalkSource = { label: string; objectKey?: string; recordId?: string; messageId?: string; knowledgeArticleId?: string };
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +17,6 @@ async function postApiMetricsHandler(request: NextRequest) {
     requirePermission(context, "ai.use");
     const body = await parseJson(request, aiTalkRequestSchema);
     const repository = getCrmRepository();
-    const providerConfig = await repository.getEmailAiProviderConfig(context);
     const knowledgeArticles = await repository.listKnowledgeArticles(context, true);
     const talkContext =
       body.target.type === "record"
@@ -26,17 +28,30 @@ async function postApiMetricsHandler(request: NextRequest) {
       history: body.history,
       ...talkContext
     };
-    return ok(
-      body.mode === "suggestion"
-        ? await generateAiTalkSuggestion(
-            {
-              ...input,
-              questionPrefix: body.question
-            },
-            { config: providerConfig }
-          )
-        : await generateAiTalkResponse(input, { config: providerConfig })
+    const agent = getGlobalAiAgentSetting(await repository.getEmailAiSettings(context), talkAboutThisAgentKey);
+    if (!agent) {
+      throw new Error("Talk about this agent is not available");
+    }
+    const result = await runAiAgent(
+      {
+        agentKey: talkAboutThisAgentKey,
+        task:
+          body.mode === "suggestion"
+            ? "Generate a single Gmail-style smart compose continuation for the Talk about this input. Return only the completion text."
+            : "Answer the user's CRM discussion question with practical analysis, next options, and explicit uncertainty.",
+        userPrompt: body.mode === "suggestion" ? body.question : input.question,
+        context: {
+          targetLabel: input.targetLabel,
+          targetType: input.targetType,
+          contextText: input.contextText,
+          knowledgeText: input.knowledgeText,
+          history: input.history
+        },
+        expectedOutput: "text"
+      },
+      { agent, providerConfig: await repository.getEmailAiProviderConfig(context), sources: input.sources }
     );
+    return ok(body.mode === "suggestion" ? { completion: normalizeTalkSuggestion(body.question, result.text), generationMode: result.generationMode } : result);
   } catch (error) {
     return handleApiError(error, request);
   }
@@ -165,4 +180,14 @@ function formatContextValue(value: unknown): string {
     return "";
   }
   return typeof value === "object" ? JSON.stringify(value).slice(0, 500) : String(value);
+}
+
+function normalizeTalkSuggestion(prefix: string, value: string): string {
+  const cleaned = value.replace(/^["']+|["']+$/g, "").replace(/\s+/g, " ").trim();
+  const trimmedPrefix = prefix.trim();
+  if (!trimmedPrefix || cleaned.toLowerCase().startsWith(trimmedPrefix.toLowerCase())) {
+    return cleaned.slice(0, 260);
+  }
+  const separator = /[\s,.;:!?，。；：！？]$/.test(trimmedPrefix) ? "" : "，";
+  return `${trimmedPrefix}${separator}${cleaned}`.slice(0, 260);
 }

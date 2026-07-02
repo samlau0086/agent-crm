@@ -157,6 +157,20 @@ export type EmailMessageStatus = "received" | "draft" | "queued" | "sending" | "
 export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize";
 export type EmailAiFeature = "draft" | "translate" | "auto_translate" | "context_analysis" | "auto_context_analysis" | "auto_summarize";
 export type AiProviderType = "openai" | "gemini" | "openrouter" | "custom" | "openai-compatible";
+export type AiAgentScenario = "email" | "sales" | "system";
+export type AiAgentKey =
+  | "email_draft"
+  | "email_translation"
+  | "email_context_analysis"
+  | "email_thread_summary"
+  | "email_classification"
+  | "inbound_email_preprocess"
+  | "record_summary"
+  | "next_action_suggestion"
+  | "ai_query_planner"
+  | "talk_about_this"
+  | "workflow_designer"
+  | "workflow_ai_agent_node";
 
 export interface EmailAccount {
   id: string;
@@ -476,14 +490,90 @@ export interface AiProviderConfig {
   timeoutMs: number;
 }
 
+export interface AiAgentContextPolicy {
+  includeRecord?: boolean;
+  includeActivities?: boolean;
+  includeEmailThread?: boolean;
+  includeKnowledge?: boolean;
+  maxContextChars?: number;
+  maxHistoryMessages?: number;
+}
+
+export interface AiAgentToolPolicy {
+  allowRead?: boolean;
+  allowWrite?: boolean;
+  allowedTools?: string[];
+  highRiskRequiresApproval?: boolean;
+}
+
+export interface AiAgentDefinition {
+  key: AiAgentKey;
+  name: string;
+  scenario: AiAgentScenario;
+  description: string;
+  defaultModel: string;
+  defaultAgentMarkdown: string;
+  outputSchema: "text" | "email" | "query" | "workflow" | "classification";
+  contextPolicy: AiAgentContextPolicy;
+  toolPolicy: AiAgentToolPolicy;
+  maxOutputChars: number;
+}
+
 export interface AiAgentSetting {
   key: string;
   name: string;
-  scenario: "email" | "sales" | "system";
+  scenario: AiAgentScenario;
   enabled: boolean;
   model: string;
   agentMarkdown: string;
   maxOutputChars: number;
+  provider?: AiProviderType;
+  baseUrl?: string;
+  contextPolicy?: AiAgentContextPolicy;
+  toolPolicy?: AiAgentToolPolicy;
+  outputSchema?: AiAgentDefinition["outputSchema"];
+}
+
+export interface AiAgentRunRequest {
+  agentKey: string;
+  task: string;
+  userPrompt?: string;
+  context?: Record<string, unknown>;
+  expectedOutput?: AiAgentDefinition["outputSchema"];
+  dryRun?: boolean;
+}
+
+export interface AiAgentRunResult {
+  agentKey: string;
+  agentName: string;
+  enabled: boolean;
+  generationMode: EmailAiGenerationMode;
+  provider?: AiProviderType;
+  model: string;
+  text: string;
+  structured?: Record<string, unknown>;
+  sources: Array<{ label: string; objectKey?: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  budget: {
+    promptChars: number;
+    outputChars: number;
+    maxOutputChars: number;
+    truncated: boolean;
+  };
+  error?: string;
+}
+
+export interface AiAgentRunLog {
+  id: string;
+  agentKey: string;
+  agentName?: string;
+  generationMode?: EmailAiGenerationMode;
+  provider?: AiProviderType;
+  model?: string;
+  promptChars?: number;
+  outputChars?: number;
+  error?: string;
+  createdAt: string;
+  createdById?: string;
 }
 
 export interface EmailAiGenerationAuditInput {

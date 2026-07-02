@@ -6,6 +6,8 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
+import { listAiAgentDefinitions, normalizeGlobalAiAgentSettings, recordSummaryAgentKey, talkAboutThisAgentKey, workflowAiAgentNodeKey } from "../src/lib/ai/agents.ts";
+import { runAiAgent } from "../src/lib/ai/harness.ts";
 import { createAiProvider } from "../src/lib/ai/provider.ts";
 import { buildAiQueryPlan, validateAiQueryPlan } from "../src/lib/ai/query-planner.ts";
 import { assertReadOnlyAiQuestion } from "../src/lib/ai/query-guard.ts";
@@ -2536,8 +2538,11 @@ await run("settings admin groups configuration panels by tabs", () => {
   const source = readFileSync("src/components/settings-admin.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "workflows" \| "integrations" \| "operations"/);
+  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "aiAgents" \| "workflows" \| "integrations" \| "operations"/);
   assert.match(source, /const settingsTabs/);
+  assert.match(source, /AI Agents/);
+  assert.match(source, /\/api\/ai\/agents/);
+  assert.match(source, /activeSettingsTab === "aiAgents"[\s\S]*agent\.md/);
   assert.match(source, /公海规则/);
   assert.match(source, /\/api\/pool-settings/);
   assert.match(source, /activeSettingsTab === "pool"[\s\S]*保存公海规则/);
@@ -3350,15 +3355,15 @@ await run("talk about this api is guarded by ai permission and uses crm context"
   const messagesRoute = readFileSync("src/app/api/ai/talk/messages/route.ts", "utf8");
   const messageRoute = readFileSync("src/app/api/ai/talk/messages/[id]/route.ts", "utf8");
   const schemas = readFileSync("src/lib/crm/api-schemas.ts", "utf8");
-  const talk = readFileSync("src/lib/ai/talk.ts", "utf8");
   assert.match(route, /requirePermission\(context, "ai\.use"\)/);
   assert.match(route, /parseJson\(request, aiTalkRequestSchema\)/);
   assert.match(route, /buildRecordTalkContext/);
   assert.match(route, /buildEmailThreadTalkContext/);
   assert.match(route, /repository\.listKnowledgeArticles\(context, true\)/);
-  assert.match(route, /generateAiTalkResponse/);
+  assert.match(route, /getGlobalAiAgentSetting\(await repository\.getEmailAiSettings\(context\), talkAboutThisAgentKey\)/);
+  assert.match(route, /runAiAgent/);
   assert.match(route, /body\.mode === "suggestion"/);
-  assert.match(route, /generateAiTalkSuggestion/);
+  assert.match(route, /normalizeTalkSuggestion/);
   assert.match(messagesRoute, /listTalkMessages\(context, target\)/);
   assert.match(messagesRoute, /createTalkMessage\(context/);
   assert.match(messageRoute, /markTalkMessageKnowledgeArticle\(context, params\.id, body\.knowledgeArticleId\)/);
@@ -3369,10 +3374,6 @@ await run("talk about this api is guarded by ai permission and uses crm context"
   assert.match(schemas, /z\.enum\(\["chat", "suggestion"\]\)/);
   assert.match(schemas, /type: z\.literal\("record"\)/);
   assert.match(schemas, /type: z\.literal\("email_thread"\)/);
-  assert.match(talk, /generateAiTalkSuggestion/);
-  assert.match(talk, /buildTalkSuggestionPrompt/);
-  assert.match(talk, /chat\/completions/);
-  assert.match(talk, /generationMode: "local"/);
 });
 
 await run("email workspace sends stable client request ids for compose idempotency", () => {
@@ -10591,6 +10592,96 @@ await run("email ai settings expose configurable backend agents", () => {
   assert.match(source, /data-testid=\{`email-ai-agent-model-\$\{agent\.key\}`\}/);
   assert.match(source, /data-testid=\{`email-ai-agent-md-\$\{agent\.key\}`\}/);
   assert.match(aiGeneration, /model: options\?\.config\?\.model \?\? context\.agentModel/);
+});
+
+await run("global ai agent registry includes the first wave agents", () => {
+  const definitions = listAiAgentDefinitions();
+  const keys = definitions.map((definition) => definition.key);
+  assert.equal(keys.includes(emailDraftAgentKey), true);
+  assert.equal(keys.includes(recordSummaryAgentKey), true);
+  assert.equal(keys.includes(talkAboutThisAgentKey), true);
+  assert.equal(keys.includes(workflowDesignerAgentKey), true);
+  assert.equal(keys.includes(workflowAiAgentNodeKey), true);
+
+  const settings = normalizeGlobalAiAgentSettings([]);
+  assert.equal(settings.length >= definitions.length, true);
+  assert.equal(settings.some((agent) => agent.key === recordSummaryAgentKey && agent.outputSchema === "text"), true);
+  assert.equal(settings.some((agent) => agent.key === talkAboutThisAgentKey && agent.toolPolicy?.allowWrite === false), true);
+});
+
+await run("global ai agent settings preserve workspace overrides", () => {
+  const settings = normalizeGlobalAiAgentSettings([
+    {
+      key: recordSummaryAgentKey,
+      name: "Custom Summary Agent",
+      scenario: "sales",
+      enabled: false,
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "custom-summary-model",
+      agentMarkdown: "# Custom summary agent",
+      contextPolicy: {
+        includeRecord: true,
+        includeActivities: false,
+        includeEmailThread: true,
+        includeKnowledge: false,
+        maxContextChars: 4321,
+        maxHistoryMessages: 7
+      },
+      toolPolicy: {
+        allowRead: true,
+        allowWrite: false,
+        allowedTools: ["query_records"],
+        highRiskRequiresApproval: true
+      },
+      outputSchema: "text",
+      maxOutputChars: 1234
+    }
+  ]);
+  const agent = settings.find((candidate) => candidate.key === recordSummaryAgentKey);
+  assert.equal(agent?.name, "Custom Summary Agent");
+  assert.equal(agent?.enabled, false);
+  assert.equal(agent?.provider, "openrouter");
+  assert.equal(agent?.baseUrl, "https://openrouter.ai/api/v1");
+  assert.equal(agent?.model, "custom-summary-model");
+  assert.equal(agent?.contextPolicy?.maxContextChars, 4321);
+  assert.deepEqual(agent?.toolPolicy?.allowedTools, ["query_records"]);
+
+  const parsed = emailAiSettingsUpdateSchema.parse({ agents: settings });
+  assert.equal(parsed.agents?.some((candidate) => candidate.key === recordSummaryAgentKey && candidate.provider === "openrouter"), true);
+});
+
+await run("ai agent harness falls back locally without provider key", async () => {
+  const agent = normalizeGlobalAiAgentSettings([]).find((candidate) => candidate.key === recordSummaryAgentKey);
+  assert.ok(agent);
+
+  const result = await runAiAgent(
+    {
+      agentKey: recordSummaryAgentKey,
+      task: "Summarize this record for a sales rep.",
+      context: {
+        record: {
+          title: "Acme China",
+          data: { industry: "software" }
+        }
+      }
+    },
+    {
+      agent,
+      providerConfig: {
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-test",
+        timeoutMs: 1000
+      }
+    }
+  );
+
+  assert.equal(result.agentKey, recordSummaryAgentKey);
+  assert.equal(result.generationMode, "local");
+  assert.match(result.text, /local fallback/);
+  assert.equal(result.provider, "openai");
+  assert.equal(result.budget.promptChars > 0, true);
 });
 
 await run("email ai settings expose encrypted provider profiles", () => {

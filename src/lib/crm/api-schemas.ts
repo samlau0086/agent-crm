@@ -753,12 +753,53 @@ export const emailOAuthStartSchema = z
   })
   .strict();
 
+const aiAgentContextPolicySchema = z
+  .object({
+    includeRecord: z.boolean().optional(),
+    includeActivities: z.boolean().optional(),
+    includeEmailThread: z.boolean().optional(),
+    includeKnowledge: z.boolean().optional(),
+    maxContextChars: z.number().int().min(1000).max(30000).optional(),
+    maxHistoryMessages: z.number().int().min(1).max(50).optional()
+  })
+  .strict();
+
+const aiAgentToolPolicySchema = z
+  .object({
+    allowRead: z.boolean().optional(),
+    allowWrite: z.boolean().optional(),
+    allowedTools: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+    highRiskRequiresApproval: z.boolean().optional()
+  })
+  .strict();
+
+const aiAgentProviderSchema = z.enum(["openai", "gemini", "openrouter", "custom", "openai-compatible"]);
+const aiAgentScenarioSchema = z.enum(["email", "sales", "system"]);
+const aiAgentOutputSchema = z.enum(["text", "email", "query", "workflow", "classification"]);
+
+const aiAgentSettingSchema = z
+  .object({
+    key: z.string().trim().regex(/^[a-z][a-z0-9_:-]{1,80}$/),
+    name: labelSchema,
+    scenario: aiAgentScenarioSchema,
+    enabled: z.boolean(),
+    provider: aiAgentProviderSchema.optional(),
+    baseUrl: z.string().trim().url().max(500).optional(),
+    model: z.string().trim().min(1).max(120),
+    agentMarkdown: z.string().trim().min(1).max(12000),
+    contextPolicy: aiAgentContextPolicySchema.optional(),
+    toolPolicy: aiAgentToolPolicySchema.optional(),
+    outputSchema: aiAgentOutputSchema.optional(),
+    maxOutputChars: z.number().int().min(500).max(12000)
+  })
+  .strict();
+
 export const emailAiSettingsUpdateSchema = z
   .object({
     features: z.record(emailAiFeatureSchema, z.boolean()).optional(),
     providerConfig: z
       .object({
-        provider: z.enum(["openai", "gemini", "openrouter", "custom", "openai-compatible"]).optional(),
+        provider: aiAgentProviderSchema.optional(),
         baseUrl: z.string().trim().url().max(500).optional(),
         apiKey: z.string().trim().max(500).optional(),
         hasApiKey: z.boolean().optional(),
@@ -768,26 +809,41 @@ export const emailAiSettingsUpdateSchema = z
       .strict()
       .optional(),
     agents: z
-      .array(
-        z
-          .object({
-            key: z.string().trim().regex(/^[a-z][a-z0-9_:-]{1,80}$/),
-            name: labelSchema,
-            scenario: z.enum(["email", "sales", "system"]),
-            enabled: z.boolean(),
-            model: z.string().trim().min(1).max(120),
-            agentMarkdown: z.string().trim().min(1).max(8000),
-            maxOutputChars: z.number().int().min(500).max(12000)
-          })
-          .strict()
-      )
-      .max(20)
+      .array(aiAgentSettingSchema)
+      .max(40)
       .optional(),
     defaultLocale: z.string().trim().min(2).max(20).optional(),
     requireSourceLinks: z.boolean().optional(),
     maxHistoryMessages: z.number().int().min(1).max(20).optional(),
     maxKnowledgeArticles: z.number().int().min(0).max(20).optional(),
     maxContextChars: z.number().int().min(1000).max(20000).optional()
+  })
+  .strict();
+
+export const aiAgentUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    scenario: aiAgentScenarioSchema.optional(),
+    enabled: z.boolean().optional(),
+    model: z.string().trim().min(1).max(120).optional(),
+    provider: aiAgentProviderSchema.optional(),
+    baseUrl: z.string().trim().url().max(500).optional(),
+    agentMarkdown: z.string().trim().min(1).max(12000).optional(),
+    maxOutputChars: z.number().int().min(500).max(12000).optional(),
+    contextPolicy: aiAgentContextPolicySchema.optional(),
+    toolPolicy: aiAgentToolPolicySchema.optional(),
+    outputSchema: aiAgentOutputSchema.optional()
+  })
+  .strict();
+
+export const aiAgentTestSchema = z
+  .object({
+    task: z.string().trim().min(1).max(2000),
+    userPrompt: z.string().trim().max(2000).optional(),
+    objectKey: z.string().trim().regex(/^[a-z][a-z0-9_]*$/).optional(),
+    recordId: z.string().trim().min(1).max(120).optional(),
+    threadId: z.string().trim().min(1).max(120).optional(),
+    dryRun: z.boolean().optional()
   })
   .strict();
 

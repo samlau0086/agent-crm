@@ -5329,6 +5329,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             webhooks={props.webhooks}
             notificationChannels={props.notificationChannels}
             emailAccounts={props.emailAccounts}
+            emailAiSettings={emailAiSettings}
             auditLogs={props.auditLogs}
             backupFiles={props.backupFiles}
             importJobQueueSummary={props.importJobQueueSummary}

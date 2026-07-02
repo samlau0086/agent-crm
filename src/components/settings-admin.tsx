@@ -8,7 +8,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -27,6 +27,7 @@ interface SettingsAdminProps {
   webhooks: WebhookEndpoint[];
   notificationChannels: NotificationChannel[];
   emailAccounts: EmailAccount[];
+  emailAiSettings: EmailAiSettings;
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
   importJobQueueSummary?: ImportJobQueueSummary;
@@ -167,12 +168,14 @@ const fieldTypes: FieldDefinition["type"][] = [
   "reference"
 ];
 
-type SettingsTabKey = "access" | "crm" | "pool" | "workflows" | "integrations" | "operations";
+type SettingsTabKey = "access" | "crm" | "pool" | "aiAgents" | "workflows" | "integrations" | "operations";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
+type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[] };
 
 const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
   { key: "access", label: "成员权限", description: "用户、团队、角色与权限矩阵" },
   { key: "crm", label: "CRM 配置", description: "对象、字段、关系、管道、视图与货币" },
+  { key: "aiAgents", label: "AI Agents", description: "agent.md、模型、上下文、工具权限与测试运行" },
   { key: "integrations", label: "集成接口", description: "API Key、Webhook 与外部系统连接" },
   { key: "operations", label: "运维审计", description: "导入队列、备份与审计日志" }
 ];
@@ -225,6 +228,15 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(props.workflows[0]?.id ?? "");
   const [workflowGoal, setWorkflowGoal] = useState("");
   const [workflowDraftJson, setWorkflowDraftJson] = useState("");
+  const [aiAgentDefinitions, setAiAgentDefinitions] = useState<AiAgentDefinition[]>([]);
+  const [aiAgents, setAiAgents] = useState<AiAgentSetting[]>(props.emailAiSettings.agents);
+  const [selectedAiAgentKey, setSelectedAiAgentKey] = useState(props.emailAiSettings.agents[0]?.key ?? "");
+  const [aiAgentRuns, setAiAgentRuns] = useState<AiAgentRunLog[]>([]);
+  const [aiAgentActionKey, setAiAgentActionKey] = useState("");
+  const [aiAgentTestTask, setAiAgentTestTask] = useState("Summarize the selected fixture and suggest the safest next step.");
+  const [aiAgentTestPrompt, setAiAgentTestPrompt] = useState("");
+  const [aiAgentTestRecordId, setAiAgentTestRecordId] = useState(props.records[0]?.id ?? "");
+  const [aiAgentTestResult, setAiAgentTestResult] = useState<AiAgentRunResult | null>(null);
   const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
   const [paymentTermOptionsText, setPaymentTermOptionsText] = useState("");
@@ -251,6 +263,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const selectedTeam = props.teams.find((team) => team.id === selectedTeamId);
   const selectedNotificationChannel = props.notificationChannels.find((channel) => channel.id === selectedNotificationChannelId);
   const selectedWebhookEdit = props.webhooks.find((webhook) => webhook.id === selectedWebhookEditId);
+  const selectedAiAgent = aiAgents.find((agent) => agent.key === selectedAiAgentKey) ?? aiAgents[0];
+  const selectedAiAgentDefinition = selectedAiAgent ? aiAgentDefinitions.find((definition) => definition.key === selectedAiAgent.key) : undefined;
+  const selectedAiAgentFixtureRecord = props.records.find((record) => record.id === aiAgentTestRecordId);
   const currencyRecords = useMemo(() => props.records.filter((record) => record.objectKey === "currencies"), [props.records]);
   const selectedCurrency = currencyRecords.find((currency) => currency.id === selectedCurrencyId);
   const objectFields = useMemo(
@@ -365,6 +380,38 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setWorkflowApprovals(props.workflowApprovals);
     setSelectedWorkflowId((current) => (props.workflows.some((workflow) => workflow.id === current) ? current : props.workflows[0]?.id ?? ""));
   }, [props.workflowApprovals, props.workflowRuns, props.workflows]);
+
+  useEffect(() => {
+    if (activeSettingsTab !== "aiAgents") {
+      return;
+    }
+    let cancelled = false;
+    setMessage(null);
+    setError(null);
+    setAiAgentActionKey("load");
+    void fetchJson<AiAgentsPayload>("/api/ai/agents", { method: "GET" })
+      .then((payload) => {
+        if (cancelled) return;
+        setAiAgentDefinitions(payload.definitions);
+        setAiAgents(payload.agents);
+        if (!selectedAiAgentKey && payload.agents[0]) {
+          setSelectedAiAgentKey(payload.agents[0].key);
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "AI Agent 鎿嶄綔澶辫触");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAiAgentActionKey("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSettingsTab, selectedAiAgentKey]);
 
   useEffect(() => {
     setSelectedNotificationChannelId((current) => (props.notificationChannels.some((channel) => channel.id === current) ? current : ""));
@@ -603,6 +650,67 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     } finally {
       setWorkflowActionKey("");
     }
+  }
+
+  async function runAiAgentAction(actionKey: string, action: () => Promise<void>) {
+    setMessage(null);
+    setError(null);
+    setAiAgentActionKey(actionKey);
+    try {
+      await action();
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "AI Agent 操作失败");
+    } finally {
+      setAiAgentActionKey("");
+    }
+  }
+
+  async function loadAiAgents() {
+    const payload = await fetchJson<AiAgentsPayload>("/api/ai/agents", { method: "GET" });
+    setAiAgentDefinitions(payload.definitions);
+    setAiAgents(payload.agents);
+    if (!selectedAiAgentKey && payload.agents[0]) {
+      setSelectedAiAgentKey(payload.agents[0].key);
+    }
+  }
+
+  async function saveAiAgent(agent: AiAgentSetting) {
+    const updated = await fetchJson<AiAgentSetting>(`/api/ai/agents/${encodeURIComponent(agent.key)}`, {
+      method: "PATCH",
+      body: {
+        name: agent.name,
+        scenario: agent.scenario,
+        enabled: agent.enabled,
+        model: agent.model,
+        provider: agent.provider,
+        baseUrl: agent.baseUrl,
+        agentMarkdown: agent.agentMarkdown,
+        maxOutputChars: agent.maxOutputChars,
+        contextPolicy: agent.contextPolicy,
+        toolPolicy: agent.toolPolicy,
+        outputSchema: agent.outputSchema
+      }
+    });
+    setAiAgents((current) => current.map((candidate) => (candidate.key === updated.key ? updated : candidate)));
+    setMessage(`已保存 AI Agent：${updated.name}`);
+  }
+
+  async function testAiAgent(agent: AiAgentSetting) {
+    const fixtureRecord = selectedAiAgentFixtureRecord;
+    const result = await fetchJson<AiAgentRunResult>(`/api/ai/agents/${encodeURIComponent(agent.key)}/test`, {
+      method: "POST",
+      body: {
+        task: aiAgentTestTask,
+        userPrompt: aiAgentTestPrompt || undefined,
+        objectKey: fixtureRecord?.objectKey,
+        recordId: fixtureRecord?.id,
+        dryRun: false
+      }
+    });
+    setAiAgentTestResult(result);
+    const runs = await fetchJson<AiAgentRunLog[]>(`/api/ai/agents/${encodeURIComponent(agent.key)}/runs`, { method: "GET" });
+    setAiAgentRuns(runs);
+    setMessage(`AI Agent 测试完成：${result.generationMode}`);
   }
 
   async function saveObject() {
@@ -1441,6 +1549,203 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 最近回收：
                 {props.poolSettings.lastAutoReclaimAt ? `${props.poolSettings.lastAutoReclaimCount} 条 · ${props.poolSettings.lastAutoReclaimAt}` : "尚未执行"}
               </span>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeSettingsTab === "aiAgents" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <section className="settings-panel audit-panel">
+            <div className="section-heading">
+              <div>
+                <h2 className="page-title">AI Agents</h2>
+                <p className="subtle">统一管理每个 AI 功能的 agent.md、模型、上下文策略、工具权限和测试运行。</p>
+              </div>
+              <button className="secondary-button" type="button" onClick={() => { void runAiAgentAction("load", loadAiAgents); }} disabled={Boolean(aiAgentActionKey)}>
+                <RefreshCw className={aiAgentActionKey === "load" ? "spin-icon" : undefined} size={15} />
+                刷新
+              </button>
+            </div>
+            <div className="settings-grid settings-grid-wide">
+              <div className="activity-list">
+                {aiAgents.map((agent) => {
+                  const definition = aiAgentDefinitions.find((item) => item.key === agent.key);
+                  return (
+                    <button
+                      className={`activity-item text-left-button ${selectedAiAgentKey === agent.key ? "selected" : ""}`}
+                      key={agent.key}
+                      type="button"
+                      onClick={async () => {
+                        setSelectedAiAgentKey(agent.key);
+                        setAiAgentTestResult(null);
+                        const runs = await fetchJson<AiAgentRunLog[]>(`/api/ai/agents/${encodeURIComponent(agent.key)}/runs`, { method: "GET" }).catch(() => []);
+                        setAiAgentRuns(runs);
+                      }}
+                    >
+                      <div className="activity-header-row">
+                        <strong>{agent.name}</strong>
+                        <span className={agent.enabled ? "badge" : "muted-badge"}>{agent.enabled ? "enabled" : "disabled"}</span>
+                      </div>
+                      <div className="subtle">{definition?.description ?? agent.key}</div>
+                      <div className="subtle">{agent.scenario} · {agent.model} · {agent.outputSchema ?? definition?.outputSchema ?? "text"}</div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedAiAgent ? (
+                <div className="settings-panel">
+                  <div className="settings-panel-header">
+                    <div>
+                      <h3>{selectedAiAgent.name}</h3>
+                      <p className="subtle">{selectedAiAgentDefinition?.description ?? selectedAiAgent.key}</p>
+                    </div>
+                    <span className="badge">{selectedAiAgent.key}</span>
+                  </div>
+                  <div className="form-grid">
+                    <label>
+                      <span className="subtle">名称</span>
+                      <input
+                        className="input"
+                        value={selectedAiAgent.name}
+                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, name: event.target.value } : agent)))}
+                      />
+                    </label>
+                    <label>
+                      <span className="subtle">启用状态</span>
+                      <select
+                        className="select"
+                        value={selectedAiAgent.enabled ? "1" : "0"}
+                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, enabled: event.target.value === "1" } : agent)))}
+                      >
+                        <option value="1">启用</option>
+                        <option value="0">停用</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span className="subtle">Provider</span>
+                      <select
+                        className="select"
+                        value={selectedAiAgent.provider ?? ""}
+                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, provider: event.target.value ? event.target.value as AiAgentSetting["provider"] : undefined } : agent)))}
+                      >
+                        <option value="">使用全局 Provider</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="gemini">Gemini</option>
+                        <option value="openrouter">OpenRouter</option>
+                        <option value="openai-compatible">OpenAI Compatible</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span className="subtle">模型</span>
+                      <input
+                        className="input"
+                        value={selectedAiAgent.model}
+                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, model: event.target.value } : agent)))}
+                      />
+                    </label>
+                    <label>
+                      <span className="subtle">最大输出字符</span>
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={selectedAiAgent.maxOutputChars}
+                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, maxOutputChars: Number(event.target.value) || agent.maxOutputChars } : agent)))}
+                      />
+                    </label>
+                    <label>
+                      <span className="subtle">上下文预算字符</span>
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={selectedAiAgent.contextPolicy?.maxContextChars ?? ""}
+                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, contextPolicy: { ...agent.contextPolicy, maxContextChars: Number(event.target.value) || agent.contextPolicy?.maxContextChars } } : agent)))}
+                      />
+                    </label>
+                    <label className="field wide">
+                      <span>agent.md</span>
+                      <textarea
+                        className="textarea code-textarea"
+                        rows={14}
+                        value={selectedAiAgent.agentMarkdown}
+                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, agentMarkdown: event.target.value } : agent)))}
+                      />
+                    </label>
+                    <div className="form-actions wide">
+                      <button className="primary-button" type="button" onClick={() => { void runAiAgentAction(`save:${selectedAiAgent.key}`, () => saveAiAgent(selectedAiAgent)); }} disabled={Boolean(aiAgentActionKey)}>
+                        <Save size={15} />
+                        保存 Agent
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          {selectedAiAgent ? (
+            <section className="settings-panel audit-panel">
+              <div className="section-heading">
+                <div>
+                  <h3>Harness 测试运行</h3>
+                  <p className="subtle">选择一条 CRM 记录作为 fixture，测试当前 agent.md、模型和上下文策略。</p>
+                </div>
+                <button className="secondary-button" type="button" onClick={() => { void runAiAgentAction(`test:${selectedAiAgent.key}`, () => testAiAgent(selectedAiAgent)); }} disabled={Boolean(aiAgentActionKey)}>
+                  <Bot className={aiAgentActionKey === `test:${selectedAiAgent.key}` ? "spin-icon" : undefined} size={15} />
+                  测试运行
+                </button>
+              </div>
+              <div className="form-grid">
+                <label className="field wide">
+                  <span>任务</span>
+                  <input className="input" value={aiAgentTestTask} onChange={(event) => setAiAgentTestTask(event.target.value)} />
+                </label>
+                <label className="field wide">
+                  <span>可选 Prompt</span>
+                  <input className="input" value={aiAgentTestPrompt} onChange={(event) => setAiAgentTestPrompt(event.target.value)} placeholder="补充你希望 agent 关注的重点" />
+                </label>
+                <label className="field wide">
+                  <span>测试记录</span>
+                  <select className="select" value={aiAgentTestRecordId} onChange={(event) => setAiAgentTestRecordId(event.target.value)}>
+                    <option value="">不绑定记录</option>
+                    {props.records.slice(0, 100).map((record) => (
+                      <option key={record.id} value={record.id}>{record.objectKey} · {record.title}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {aiAgentTestResult ? (
+                <div className="activity-item">
+                  <div className="activity-header-row">
+                    <strong>{aiAgentTestResult.agentName}</strong>
+                    <span className="badge">{aiAgentTestResult.generationMode}</span>
+                  </div>
+                  <div className="subtle">{aiAgentTestResult.provider} · {aiAgentTestResult.model} · prompt {aiAgentTestResult.budget.promptChars} chars · output {aiAgentTestResult.budget.outputChars} chars</div>
+                  <pre className="code-block">{aiAgentTestResult.text}</pre>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          <section className="settings-panel audit-panel">
+            <div className="section-heading">
+              <h3>最近运行</h3>
+              <span className="badge">{aiAgentRuns.length}</span>
+            </div>
+            <div className="activity-list">
+              {aiAgentRuns.map((run) => (
+                <article className="activity-item" key={run.id}>
+                  <div className="activity-header-row">
+                    <strong>{run.agentName ?? run.agentKey}</strong>
+                    <span className={run.error ? "danger-badge" : "badge"}>{run.generationMode ?? "unknown"}</span>
+                  </div>
+                  <div className="subtle">{formatAuditTime(run.createdAt)} · {run.provider ?? "provider"} · {run.model ?? "model"} · prompt {run.promptChars ?? 0} · output {run.outputChars ?? 0}</div>
+                  {run.error ? <div className="danger-text">{run.error}</div> : null}
+                </article>
+              ))}
+              {aiAgentRuns.length === 0 ? <div className="empty-state">暂无运行记录。点击测试运行后会显示在这里。</div> : null}
             </div>
           </section>
         </div>

@@ -1,13 +1,14 @@
-
-export const dynamic = "force-dynamic";
-﻿import type { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { requirePermission } from "@/lib/auth/rbac";
 import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
-import { createAiProvider } from "@/lib/ai/provider";
+import { getGlobalAiAgentSetting, aiQueryPlannerAgentKey } from "@/lib/ai/agents";
+import { runAiAgent } from "@/lib/ai/harness";
 import { buildAiQueryPlan } from "@/lib/ai/query-planner";
 import { assertReadOnlyAiQuestion } from "@/lib/ai/query-guard";
 import { aiQuerySchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
+
+export const dynamic = "force-dynamic";
 
 const AI_QUERY_MAX_OBJECTS = 4;
 const AI_QUERY_PAGE_SIZE = 25;
@@ -32,12 +33,34 @@ async function postApiMetricsHandler(request: NextRequest) {
       maxObjects: AI_QUERY_MAX_OBJECTS,
       pageSize: AI_QUERY_PAGE_SIZE
     });
-    const recordPages = await Promise.all(
-      plan.objectKeys.map((objectKey) => repository.queryRecords(context, objectKey, plan.queries[objectKey]))
-    );
+    const recordPages = await Promise.all(plan.objectKeys.map((objectKey) => repository.queryRecords(context, objectKey, plan.queries[objectKey])));
     const records = recordPages.flatMap((page) => page.records);
     const fields = allFields.filter((field) => plan.objectKeys.includes(field.objectKey));
-    return ok(await createAiProvider({ config: await repository.getEmailAiProviderConfig(context) }).query({ question: body.question, records, fields }));
+    const agent = getGlobalAiAgentSetting(await repository.getEmailAiSettings(context), aiQueryPlannerAgentKey);
+    if (!agent) {
+      throw new Error("AI query planner agent is not available");
+    }
+    return ok(
+      await runAiAgent(
+        {
+          agentKey: aiQueryPlannerAgentKey,
+          task: "Answer the user's read-only CRM question using only supplied candidate records and field definitions.",
+          userPrompt: body.question,
+          context: {
+            question: body.question,
+            plan,
+            fields: fields.map((field) => ({ key: field.key, label: field.label, type: field.type, objectKey: field.objectKey })),
+            records: records.slice(0, 25).map((record) => ({ id: record.id, objectKey: record.objectKey, title: record.title, stageKey: record.stageKey, data: record.data }))
+          },
+          expectedOutput: "query"
+        },
+        {
+          agent,
+          providerConfig: await repository.getEmailAiProviderConfig(context),
+          sources: records.slice(0, 5).map((record) => ({ label: record.title, objectKey: record.objectKey, recordId: record.id }))
+        }
+      )
+    );
   } catch (error) {
     return handleApiError(error, request);
   }

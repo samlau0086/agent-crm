@@ -7,12 +7,14 @@ import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { adminUserId, defaultWorkspaceId, seedData } from "@/lib/crm/seed";
-import { buildEmailAssistantContext, canRunEmailClassification, createDefaultEmailAiSettings, normalizeAiAgentSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
+import { buildEmailAssistantContext, canRunEmailClassification, createDefaultEmailAiSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { getEmailProviderCapability } from "@/lib/email/providers";
 import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } from "@/lib/email/tracking";
 import { mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
+import { getGlobalAiAgentSetting, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings } from "@/lib/ai/agents";
+import { runAiAgent } from "@/lib/ai/harness";
 import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
 import type {
@@ -39,6 +41,9 @@ import type {
   EmailAiGenerationAuditInput,
   EmailAiSettings,
   EmailSyncSettings,
+  AiAgentRunLog,
+  AiAgentRunResult,
+  AiAgentSetting,
   AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
@@ -1371,6 +1376,92 @@ export class CrmStore {
     return publicEmailAiSettings(this.ensureEmailAiSettings(context.workspaceId));
   }
 
+  listAiAgents(context: RequestContext): AiAgentSetting[] {
+    requirePermission(context, "ai.admin");
+    return clone(normalizeGlobalAiAgentSettings(this.ensureEmailAiSettings(context.workspaceId).agents));
+  }
+
+  updateAiAgent(context: RequestContext, agentKey: string, patch: Partial<AiAgentSetting>): AiAgentSetting {
+    requirePermission(context, "ai.admin");
+    const settings = this.ensureEmailAiSettings(context.workspaceId);
+    const agents = normalizeGlobalAiAgentSettings(settings.agents);
+    const current = agents.find((agent) => agent.key === agentKey) ?? getGlobalAiAgentSetting({ agents }, agentKey);
+    if (!current) {
+      throw new Error("AI agent is not available");
+    }
+    const updatedAgent = normalizeGlobalAiAgentSetting({ ...current, ...patch, key: agentKey }, current);
+    settings.agents = agents.map((agent) => (agent.key === agentKey ? updatedAgent : agent));
+    settings.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "ai_agent", agentKey, {
+      summary: `Updated AI agent ${updatedAgent.name}`,
+      details: { agentKey, enabled: updatedAgent.enabled, model: updatedAgent.model, outputSchema: updatedAgent.outputSchema }
+    });
+    return clone(updatedAgent);
+  }
+
+  async testAiAgent(
+    context: RequestContext,
+    agentKey: string,
+    input: { task: string; userPrompt?: string; objectKey?: string; recordId?: string; threadId?: string; dryRun?: boolean }
+  ): Promise<AiAgentRunResult> {
+    requirePermission(context, "ai.admin");
+    const settings = this.ensureEmailAiSettings(context.workspaceId);
+    const agent = getGlobalAiAgentSetting(settings, agentKey);
+    if (!agent) {
+      throw new Error("AI agent is not available");
+    }
+    const harnessContext = this.buildAiAgentHarnessContext(context, input);
+    const result = await runAiAgent(
+      {
+        agentKey,
+        task: input.task,
+        userPrompt: input.userPrompt,
+        context: harnessContext.context,
+        expectedOutput: agent.outputSchema,
+        dryRun: input.dryRun
+      },
+      { agent, providerConfig: normalizeAiProviderConfig(settings.providerConfig), sources: harnessContext.sources }
+    );
+    this.writeAuditLog(context, "create", "ai_agent_run", agentKey, {
+      summary: `Ran AI agent ${agent.name}`,
+      details: {
+        agentKey,
+        agentName: agent.name,
+        generationMode: result.generationMode,
+        provider: result.provider,
+        model: result.model,
+        promptChars: result.budget.promptChars,
+        outputChars: result.budget.outputChars,
+        error: result.error
+      }
+    });
+    return result;
+  }
+
+  listAiAgentRuns(context: RequestContext, agentKey: string): AiAgentRunLog[] {
+    requirePermission(context, "ai.admin");
+    return this.data.auditLogs
+      .filter((log) => log.workspaceId === context.workspaceId && log.entityType === "ai_agent_run" && log.entityId === agentKey)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, 50)
+      .map((log) => {
+        const details = isJsonRecord(log.details) ? log.details : {};
+        return {
+          id: log.id,
+          agentKey: String(details.agentKey ?? agentKey),
+          agentName: typeof details.agentName === "string" ? details.agentName : undefined,
+          generationMode: typeof details.generationMode === "string" ? details.generationMode as AiAgentRunLog["generationMode"] : undefined,
+          provider: typeof details.provider === "string" ? details.provider as AiAgentRunLog["provider"] : undefined,
+          model: typeof details.model === "string" ? details.model : undefined,
+          promptChars: typeof details.promptChars === "number" ? details.promptChars : undefined,
+          outputChars: typeof details.outputChars === "number" ? details.outputChars : undefined,
+          error: typeof details.error === "string" ? details.error : undefined,
+          createdAt: log.createdAt,
+          createdById: log.actorId
+        };
+      });
+  }
+
   updateEmailAiSettings(context: RequestContext, patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt">>): EmailAiSettings {
     requirePermission(context, "ai.admin");
     const settings = this.ensureEmailAiSettings(context.workspaceId);
@@ -1378,9 +1469,9 @@ export class CrmStore {
       settings.features = normalizeEmailAiFeatures({ ...settings.features, ...patch.features });
     }
     if (patch.agents !== undefined) {
-      settings.agents = normalizeAiAgentSettings(patch.agents);
+      settings.agents = normalizeGlobalAiAgentSettings(patch.agents);
     } else {
-      settings.agents = normalizeAiAgentSettings(settings.agents);
+      settings.agents = normalizeGlobalAiAgentSettings(settings.agents);
     }
     if (patch.providerConfig !== undefined) {
       settings.providerConfig = mergeAiProviderConfigSecrets(normalizeAiProviderConfig(settings.providerConfig), patch.providerConfig);
@@ -1403,6 +1494,72 @@ export class CrmStore {
   getEmailAiProviderConfig(context: RequestContext): AiProviderConfig {
     requirePermission(context, "ai.use");
     return normalizeAiProviderConfig(this.ensureEmailAiSettings(context.workspaceId).providerConfig);
+  }
+
+  private buildAiAgentHarnessContext(
+    context: RequestContext,
+    input: { objectKey?: string; recordId?: string; threadId?: string }
+  ): { context: Record<string, unknown>; sources: AiAgentRunResult["sources"] } {
+    const payload: Record<string, unknown> = {};
+    const sources: AiAgentRunResult["sources"] = [];
+    if (input.objectKey && input.recordId) {
+      const record = this.getRecord(context, input.objectKey, input.recordId);
+      const fields = this.listFieldDefinitions(context, input.objectKey);
+      const activities = this.listActivities(context, record.id);
+      payload.record = {
+        id: record.id,
+        objectKey: record.objectKey,
+        title: record.title,
+        stageKey: record.stageKey,
+        ownerId: record.ownerId,
+        data: record.data
+      };
+      payload.fields = fields.map((field) => ({ key: field.key, label: field.label, type: field.type }));
+      payload.activities = activities.slice(0, 12).map((activity) => ({
+        id: activity.id,
+        type: activity.type,
+        title: activity.title,
+        body: activity.body,
+        dueAt: activity.dueAt,
+        completedAt: activity.completedAt,
+        createdAt: activity.createdAt
+      }));
+      sources.push({ label: record.title, objectKey: record.objectKey, recordId: record.id });
+    }
+    if (input.threadId) {
+      const thread = this.getEmailThread(context, input.threadId);
+      const messages = this.listEmailMessages(context, thread.id);
+      payload.emailThread = {
+        id: thread.id,
+        subject: thread.subject,
+        participantEmails: thread.participantEmails,
+        summary: thread.summary,
+        aiAnalysis: thread.aiAnalysis,
+        lastMessageAt: thread.lastMessageAt,
+        messages: messages.slice(-10).map((message) => ({
+          id: message.id,
+          direction: message.direction,
+          status: message.status,
+          from: message.from,
+          to: message.to,
+          subject: message.subject,
+          bodyText: message.bodyText.slice(0, 2000),
+          createdAt: message.createdAt
+        }))
+      };
+      sources.push({ label: thread.subject, messageId: thread.id });
+    }
+    const knowledgeArticles = this.listKnowledgeArticles(context, true);
+    payload.knowledgeArticles = knowledgeArticles.slice(0, 5).map((article) => ({
+      id: article.id,
+      title: article.title,
+      tags: article.tags,
+      body: article.body.slice(0, 1200)
+    }));
+    sources.push(...knowledgeArticles.slice(0, 3).map((article) => ({ label: article.title, knowledgeArticleId: article.id })));
+    payload.user = { id: context.user.id, name: context.user.name, email: context.user.email };
+    payload.workspaceId = context.workspaceId;
+    return { context: payload, sources };
   }
 
   getEmailSyncSettings(context: RequestContext): EmailSyncSettings {
@@ -3897,7 +4054,7 @@ export class CrmStore {
   private ensureEmailAiSettings(workspaceId: string): EmailAiSettings {
     const settings = (this.data.emailAiSettings ??= []).find((candidate) => candidate.workspaceId === workspaceId);
     if (settings) {
-      settings.agents = normalizeAiAgentSettings(settings.agents);
+      settings.agents = normalizeGlobalAiAgentSettings(settings.agents);
       settings.features = normalizeEmailAiFeatures(settings.features);
       settings.providerConfig = normalizeAiProviderConfig(settings.providerConfig);
       return settings;

@@ -19,11 +19,12 @@ import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { isContactMethodsAdditionOnly, previousRecordApprovalPatch, stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
 import { decryptAiProviderConfig, encryptAiProviderConfig, mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
+import { getGlobalAiAgentSetting, listAiAgentDefinitions, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings } from "@/lib/ai/agents";
+import { runAiAgent } from "@/lib/ai/harness";
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
   canRunEmailClassification,
   createDefaultEmailAiSettings,
-  normalizeAiAgentSettings,
   normalizeEmailAiFeatures,
   type EmailAssistantContext,
   type EmailAssistantPurpose
@@ -54,6 +55,9 @@ import type {
   EmailAiGenerationAuditInput,
   EmailAiSettings,
   EmailSyncSettings,
+  AiAgentRunLog,
+  AiAgentRunResult,
+  AiAgentSetting,
   AiProviderConfig,
   EmailConnectionConfig,
   EmailMessage,
@@ -823,7 +827,7 @@ function mapEmailAiSettings(settings: {
   return {
     workspaceId: settings.workspaceId,
     features: normalizeEmailAiFeatures(settings.features as Partial<EmailAiSettings["features"]>),
-    agents: normalizeAiAgentSettings(settings.agents),
+    agents: normalizeGlobalAiAgentSettings(settings.agents),
     providerConfig: publicAiProviderConfig(readAiProviderConfigFromEncrypted(settings.encryptedProviderConfig)),
     defaultLocale: settings.defaultLocale,
     requireSourceLinks: settings.requireSourceLinks,
@@ -3133,6 +3137,98 @@ export class PrismaCrmRepository {
     return this.ensureEmailAiSettings(context.workspaceId);
   }
 
+  async listAiAgents(context: RequestContext): Promise<AiAgentSetting[]> {
+    requirePermission(context, "ai.admin");
+    const settings = await this.ensureEmailAiSettings(context.workspaceId);
+    return normalizeGlobalAiAgentSettings(settings.agents);
+  }
+
+  async updateAiAgent(context: RequestContext, agentKey: string, patch: Partial<AiAgentSetting>): Promise<AiAgentSetting> {
+    requirePermission(context, "ai.admin");
+    const settings = await this.ensureEmailAiSettings(context.workspaceId);
+    const agents = normalizeGlobalAiAgentSettings(settings.agents);
+    const current = agents.find((agent) => agent.key === agentKey) ?? getGlobalAiAgentSetting({ agents }, agentKey);
+    if (!current) {
+      throw new Error("AI agent is not available");
+    }
+    const updatedAgent = normalizeGlobalAiAgentSetting({ ...current, ...patch, key: agentKey }, current);
+    const nextAgents = agents.map((agent) => (agent.key === agentKey ? updatedAgent : agent));
+    await this.db.emailAiSettings.update({
+      where: { workspaceId: context.workspaceId },
+      data: { agents: nextAgents as unknown as Prisma.InputJsonValue }
+    });
+    await this.writeAuditLog(context, "update", "ai_agent", agentKey, {
+      summary: `Updated AI agent ${updatedAgent.name}`,
+      details: { agentKey, enabled: updatedAgent.enabled, model: updatedAgent.model, outputSchema: updatedAgent.outputSchema }
+    });
+    return updatedAgent;
+  }
+
+  async testAiAgent(
+    context: RequestContext,
+    agentKey: string,
+    input: { task: string; userPrompt?: string; objectKey?: string; recordId?: string; threadId?: string; dryRun?: boolean }
+  ): Promise<AiAgentRunResult> {
+    requirePermission(context, "ai.admin");
+    const settings = await this.ensureEmailAiSettings(context.workspaceId);
+    const agent = getGlobalAiAgentSetting(settings, agentKey);
+    if (!agent) {
+      throw new Error("AI agent is not available");
+    }
+    const providerConfig = await this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+    const harnessContext = await this.buildAiAgentHarnessContext(context, input);
+    const result = await runAiAgent(
+      {
+        agentKey,
+        task: input.task,
+        userPrompt: input.userPrompt,
+        context: harnessContext.context,
+        expectedOutput: agent.outputSchema,
+        dryRun: input.dryRun
+      },
+      { agent, providerConfig, sources: harnessContext.sources }
+    );
+    await this.writeAuditLog(context, "create", "ai_agent_run", agentKey, {
+      summary: `Ran AI agent ${agent.name}`,
+      details: {
+        agentKey,
+        agentName: agent.name,
+        generationMode: result.generationMode,
+        provider: result.provider,
+        model: result.model,
+        promptChars: result.budget.promptChars,
+        outputChars: result.budget.outputChars,
+        error: result.error
+      }
+    });
+    return result;
+  }
+
+  async listAiAgentRuns(context: RequestContext, agentKey: string): Promise<AiAgentRunLog[]> {
+    requirePermission(context, "ai.admin");
+    const logs = await this.db.auditLog.findMany({
+      where: { workspaceId: context.workspaceId, entityType: "ai_agent_run", entityId: agentKey },
+      orderBy: { createdAt: "desc" },
+      take: 50
+    });
+    return logs.map((log) => {
+      const details = asRecord(log.details ?? {});
+      return {
+        id: log.id,
+        agentKey: String(details.agentKey ?? agentKey),
+        agentName: typeof details.agentName === "string" ? details.agentName : undefined,
+        generationMode: typeof details.generationMode === "string" ? details.generationMode as AiAgentRunLog["generationMode"] : undefined,
+        provider: typeof details.provider === "string" ? details.provider as AiAgentRunLog["provider"] : undefined,
+        model: typeof details.model === "string" ? details.model : undefined,
+        promptChars: typeof details.promptChars === "number" ? details.promptChars : undefined,
+        outputChars: typeof details.outputChars === "number" ? details.outputChars : undefined,
+        error: typeof details.error === "string" ? details.error : undefined,
+        createdAt: log.createdAt.toISOString(),
+        createdById: log.actorId ?? undefined
+      };
+    });
+  }
+
   async updateEmailAiSettings(
     context: RequestContext,
     patch: Partial<Omit<EmailAiSettings, "workspaceId" | "updatedAt" | "features" | "agents" | "providerConfig">> & {
@@ -3144,7 +3240,7 @@ export class PrismaCrmRepository {
     requirePermission(context, "ai.admin");
     const current = await this.ensureEmailAiSettings(context.workspaceId);
     const features = normalizeEmailAiFeatures({ ...current.features, ...(patch.features ?? {}) });
-    const agents = patch.agents !== undefined ? normalizeAiAgentSettings(patch.agents) : normalizeAiAgentSettings(current.agents);
+    const agents = patch.agents !== undefined ? normalizeGlobalAiAgentSettings(patch.agents) : normalizeGlobalAiAgentSettings(current.agents);
     const currentProviderConfig = await this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
     const providerConfig = patch.providerConfig !== undefined ? mergeAiProviderConfigSecrets(currentProviderConfig, patch.providerConfig) : undefined;
     const updated = await this.db.emailAiSettings.update({
@@ -3170,6 +3266,72 @@ export class PrismaCrmRepository {
   async getEmailAiProviderConfig(context: RequestContext): Promise<AiProviderConfig> {
     requirePermission(context, "ai.use");
     return this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+  }
+
+  private async buildAiAgentHarnessContext(
+    context: RequestContext,
+    input: { objectKey?: string; recordId?: string; threadId?: string }
+  ): Promise<{ context: Record<string, unknown>; sources: AiAgentRunResult["sources"] }> {
+    const payload: Record<string, unknown> = {};
+    const sources: AiAgentRunResult["sources"] = [];
+    if (input.objectKey && input.recordId) {
+      const record = await this.getRecord(context, input.objectKey, input.recordId);
+      const fields = await this.listFieldDefinitions(context, input.objectKey);
+      const activities = await this.listActivities(context, record.id);
+      payload.record = {
+        id: record.id,
+        objectKey: record.objectKey,
+        title: record.title,
+        stageKey: record.stageKey,
+        ownerId: record.ownerId,
+        data: record.data
+      };
+      payload.fields = fields.map((field) => ({ key: field.key, label: field.label, type: field.type }));
+      payload.activities = activities.slice(0, 12).map((activity) => ({
+        id: activity.id,
+        type: activity.type,
+        title: activity.title,
+        body: activity.body,
+        dueAt: activity.dueAt,
+        completedAt: activity.completedAt,
+        createdAt: activity.createdAt
+      }));
+      sources.push({ label: record.title, objectKey: record.objectKey, recordId: record.id });
+    }
+    if (input.threadId) {
+      const thread = await this.getEmailThread(context, input.threadId);
+      const messages = await this.listEmailMessages(context, thread.id);
+      payload.emailThread = {
+        id: thread.id,
+        subject: thread.subject,
+        participantEmails: thread.participantEmails,
+        summary: thread.summary,
+        aiAnalysis: thread.aiAnalysis,
+        lastMessageAt: thread.lastMessageAt,
+        messages: messages.slice(-10).map((message) => ({
+          id: message.id,
+          direction: message.direction,
+          status: message.status,
+          from: message.from,
+          to: message.to,
+          subject: message.subject,
+          bodyText: message.bodyText.slice(0, 2000),
+          createdAt: message.createdAt
+        }))
+      };
+      sources.push({ label: thread.subject, messageId: thread.id });
+    }
+    const knowledgeArticles = await this.listKnowledgeArticles(context, true);
+    payload.knowledgeArticles = knowledgeArticles.slice(0, 5).map((article) => ({
+      id: article.id,
+      title: article.title,
+      tags: article.tags,
+      body: article.body.slice(0, 1200)
+    }));
+    sources.push(...knowledgeArticles.slice(0, 3).map((article) => ({ label: article.title, knowledgeArticleId: article.id })));
+    payload.user = { id: context.user.id, name: context.user.name, email: context.user.email };
+    payload.workspaceId = context.workspaceId;
+    return { context: payload, sources };
   }
 
   async getEmailSyncSettings(context: RequestContext): Promise<EmailSyncSettings> {

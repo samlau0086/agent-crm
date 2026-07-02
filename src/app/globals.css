@@ -4848,3 +4848,34 @@ button {
     grid-template-columns: repeat(6, minmax(144px, 1fr));
   }
 }
+
+.text-left-button {
+  width: 100%;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.activity-item.text-left-button:hover,
+.activity-item.text-left-button.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.code-block {
+  max-height: 260px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.danger-text {
+  margin-top: 6px;
+  color: var(--danger);
+}
