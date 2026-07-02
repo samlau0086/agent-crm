@@ -1579,7 +1579,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () => (selectedRecord ? getQuickContactMethodsForRecord(selectedRecord, records) : []),
     [records, selectedRecord]
   );
-  const contactDetailTab = selectedRecord?.objectKey === "contacts" ? contactDetailActivityTab : "all";
+  const selectedRecordUsesActivityTabs = selectedRecord ? ["contacts", "companies", "deals"].includes(selectedRecord.objectKey) : false;
+  const contactDetailTab = selectedRecordUsesActivityTabs ? contactDetailActivityTab : "all";
   const showContactAllSections = contactDetailTab === "all";
   const showContactEmailSections = showContactAllSections || contactDetailTab === "emails";
   const showContactActivityTimeline = showContactAllSections || contactDetailTab === "activities";
@@ -4474,89 +4475,111 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         />
                       </>
                     ) : selectedRecord.objectKey === "companies" ? (
-                      <CompanyProfileEditor
-                        allRecords={records}
-                        billingAddressEditingId={companyAddressEditing?.valueKey === companyBillingAddressesValueKey ? companyAddressEditing.addressId : ""}
-                        billingAddressValue={editValues[companyBillingAddressesValueKey] ?? ""}
-                        canManageOwners={canManageViews}
-                        contacts={selectedCompanyContacts}
-                        fields={selectedFormFields}
-                        isPending={isPending || isRecordSavePending}
-                        mediaAssets={mediaAssets}
-                        ownerId={editOwnerId}
-                        pendingDeleteRequest={selectedRecordPendingDeleteRequest}
-                        pendingUpdateRequest={selectedRecordPendingUpdateRequest}
-                        primaryContactId={editValues[companyPrimaryContactValueKey] ?? ""}
-                        record={selectedRecord}
-                        saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
-                        shippingAddressEditingId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
-                        shippingAddressValue={editValues[companyShippingAddressesValueKey] ?? ""}
-                        title={editTitle}
-                        users={props.users}
-                        values={editValues}
-                        onAddBillingAddress={() => setCompanyAddressEditing({ valueKey: companyBillingAddressesValueKey, addressId: createCompanyAddressId() })}
-                        onAddShippingAddress={() => setCompanyAddressEditing({ valueKey: companyShippingAddressesValueKey, addressId: createCompanyAddressId() })}
-                        onBillingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
-                        onCancelAddressEdit={() => setCompanyAddressEditing(null)}
-                        onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
-                        onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
-                        onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
-                        onEditBillingAddress={(addressId) =>
-                          setCompanyAddressEditing((current) =>
-                            current?.valueKey === companyBillingAddressesValueKey && current.addressId === addressId
-                              ? null
-                              : { valueKey: companyBillingAddressesValueKey, addressId }
-                          )
-                        }
-                        onEditShippingAddress={(addressId) =>
-                          setCompanyAddressEditing((current) =>
-                            current?.valueKey === companyShippingAddressesValueKey && current.addressId === addressId
-                              ? null
-                              : { valueKey: companyShippingAddressesValueKey, addressId }
-                          )
-                        }
-                        onOwnerChange={setEditOwnerId}
-                        onPrimaryContactChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
-                        onRecordsLoaded={mergeLoadedRecords}
-                        onSave={() => runRecordSaveAction(submitUpdateRecord)}
-                        onSaveField={submitSingleRecordField}
-                        onSaveOwner={submitSingleRecordOwner}
-                        onShippingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
-                        onTitleChange={setEditTitle}
-                        onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
-                        onUploadMediaAssets={uploadMediaAssets}
-                        onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
-                      />
+                      <>
+                        <CompanyProfileEditor
+                          allRecords={records}
+                          billingAddressEditingId={companyAddressEditing?.valueKey === companyBillingAddressesValueKey ? companyAddressEditing.addressId : ""}
+                          billingAddressValue={editValues[companyBillingAddressesValueKey] ?? ""}
+                          canManageOwners={canManageViews}
+                          contacts={selectedCompanyContacts}
+                          fields={selectedFormFields}
+                          isPending={isPending || isRecordSavePending}
+                          mediaAssets={mediaAssets}
+                          ownerId={editOwnerId}
+                          pendingDeleteRequest={selectedRecordPendingDeleteRequest}
+                          pendingUpdateRequest={selectedRecordPendingUpdateRequest}
+                          primaryContactId={editValues[companyPrimaryContactValueKey] ?? ""}
+                          record={selectedRecord}
+                          saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
+                          shippingAddressEditingId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
+                          shippingAddressValue={editValues[companyShippingAddressesValueKey] ?? ""}
+                          title={editTitle}
+                          users={props.users}
+                          values={editValues}
+                          onAddBillingAddress={() => setCompanyAddressEditing({ valueKey: companyBillingAddressesValueKey, addressId: createCompanyAddressId() })}
+                          onAddShippingAddress={() => setCompanyAddressEditing({ valueKey: companyShippingAddressesValueKey, addressId: createCompanyAddressId() })}
+                          onBillingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyBillingAddressesValueKey, addresses))}
+                          onCancelAddressEdit={() => setCompanyAddressEditing(null)}
+                          onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                          onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
+                          onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
+                          onEditBillingAddress={(addressId) =>
+                            setCompanyAddressEditing((current) =>
+                              current?.valueKey === companyBillingAddressesValueKey && current.addressId === addressId
+                                ? null
+                                : { valueKey: companyBillingAddressesValueKey, addressId }
+                            )
+                          }
+                          onEditShippingAddress={(addressId) =>
+                            setCompanyAddressEditing((current) =>
+                              current?.valueKey === companyShippingAddressesValueKey && current.addressId === addressId
+                                ? null
+                                : { valueKey: companyShippingAddressesValueKey, addressId }
+                            )
+                          }
+                          onOwnerChange={setEditOwnerId}
+                          onPrimaryContactChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
+                          onRecordsLoaded={mergeLoadedRecords}
+                          onSave={() => runRecordSaveAction(submitUpdateRecord)}
+                          onSaveField={submitSingleRecordField}
+                          onSaveOwner={submitSingleRecordOwner}
+                          onShippingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
+                          onTitleChange={setEditTitle}
+                          onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                          onUploadMediaAssets={uploadMediaAssets}
+                          onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
+                        />
+                        <ContactDetailActivityTabs
+                          activeTab={contactDetailActivityTab}
+                          activityCount={selectedActivities.length}
+                          callCount={selectedCalls.length}
+                          emailCount={selectedRecordVisibleEmailThreads.length}
+                          noteCount={selectedNotes.length}
+                          onChange={setContactDetailActivityTab}
+                          taskCount={selectedTasks.length}
+                        />
+                      </>
                     ) : selectedRecord.objectKey === "deals" ? (
-                      <DealProfileEditor
-                        allRecords={records}
-                        canManageOwners={canManageViews}
-                        fields={selectedFormFields}
-                        isPending={isPending || isRecordSavePending}
-                        mediaAssets={mediaAssets}
-                        ownerId={editOwnerId}
-                        pendingDeleteRequest={selectedRecordPendingDeleteRequest}
-                        pendingUpdateRequest={selectedRecordPendingUpdateRequest}
-                        pipelineName={activePipeline?.name}
-                        record={selectedRecord}
-                        saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
-                        stages={activePipelineStages}
-                        title={editTitle}
-                        users={props.users}
-                        values={editValues}
-                        onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
-                        onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
-                        onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
-                        onMoveStage={(stageKey) => runAction(() => moveDealStage(selectedRecord, stageKey))}
-                        onOwnerChange={setEditOwnerId}
-                        onRecordsLoaded={mergeLoadedRecords}
-                        onSave={() => runRecordSaveAction(submitUpdateRecord)}
-                        onSaveField={submitSingleRecordField}
-                        onSaveOwner={submitSingleRecordOwner}
-                        onTitleChange={setEditTitle}
-                        onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
-                        onUploadMediaAssets={uploadMediaAssets}
-                      />
+                      <>
+                        <DealProfileEditor
+                          allRecords={records}
+                          canManageOwners={canManageViews}
+                          fields={selectedFormFields}
+                          isPending={isPending || isRecordSavePending}
+                          mediaAssets={mediaAssets}
+                          ownerId={editOwnerId}
+                          pendingDeleteRequest={selectedRecordPendingDeleteRequest}
+                          pendingUpdateRequest={selectedRecordPendingUpdateRequest}
+                          pipelineName={activePipeline?.name}
+                          record={selectedRecord}
+                          saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
+                          stages={activePipelineStages}
+                          title={editTitle}
+                          users={props.users}
+                          values={editValues}
+                          onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                          onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
+                          onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
+                          onMoveStage={(stageKey) => runAction(() => moveDealStage(selectedRecord, stageKey))}
+                          onOwnerChange={setEditOwnerId}
+                          onRecordsLoaded={mergeLoadedRecords}
+                          onSave={() => runRecordSaveAction(submitUpdateRecord)}
+                          onSaveField={submitSingleRecordField}
+                          onSaveOwner={submitSingleRecordOwner}
+                          onTitleChange={setEditTitle}
+                          onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                          onUploadMediaAssets={uploadMediaAssets}
+                        />
+                        <ContactDetailActivityTabs
+                          activeTab={contactDetailActivityTab}
+                          activityCount={selectedActivities.length}
+                          callCount={selectedCalls.length}
+                          emailCount={selectedRecordVisibleEmailThreads.length}
+                          noteCount={selectedNotes.length}
+                          onChange={setContactDetailActivityTab}
+                          taskCount={selectedTasks.length}
+                        />
+                      </>
                     ) : (
                     <>
                     <div className="form-grid" style={{ marginTop: 12 }}>
@@ -4699,7 +4722,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </>
                     )}
 
-                    {selectedRecordQuickContactMethods.length > 0 && (selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
+                    {selectedRecordQuickContactMethods.length > 0 && (!selectedRecordUsesActivityTabs || showContactAllSections) ? (
                       <>
                         <ContactMethodsQuickActions
                           methods={selectedRecordQuickContactMethods}
@@ -4743,7 +4766,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </>
                     ) : null}
 
-                    {selectedRecord.objectKey === "companies" && (
+                    {selectedRecord.objectKey === "companies" && showContactAllSections && (
                       <section style={{ marginTop: 16 }}>
                         <div className="stage-header" style={{ marginBottom: 8 }}>
                           <div className="property-name">公司联系人</div>
@@ -4784,8 +4807,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                     )}
 
-                    {(selectedRecordEmailAddresses.length > 0 || selectedRecordEmailThreads.length > 0) && (selectedRecord.objectKey !== "contacts" || showContactEmailSections) && (
-                      <section className={selectedRecord.objectKey === "contacts" ? "contact-detail-tab-panel" : ""} style={{ marginTop: 16 }}>
+                    {(selectedRecordEmailAddresses.length > 0 || selectedRecordEmailThreads.length > 0) && (!selectedRecordUsesActivityTabs || showContactEmailSections) && (
+                      <section className={selectedRecordUsesActivityTabs ? "contact-detail-tab-panel" : ""} style={{ marginTop: 16 }}>
                         <div className="property-name" style={{ marginBottom: 8 }}>
                           邮件活动
                         </div>
@@ -4863,7 +4886,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                     )}
 
-                    {selectedRecord.objectKey === "deals" && (
+                    {selectedRecord.objectKey === "deals" && showContactAllSections && (
                       <section style={{ marginTop: 16 }}>
                         <div className="property-name" style={{ marginBottom: 8 }}>
                           赢输关闭
@@ -4891,7 +4914,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                     )}
 
-                    {(selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
+                    {(!selectedRecordUsesActivityTabs || showContactAllSections) ? (
                     <section style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         关联记录
@@ -4918,9 +4941,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </section>
                     ) : null}
 
-                    {(selectedRecord.objectKey !== "contacts" || showContactAllSections || showContactTaskSections || showContactNoteSections || showContactCallSections) ? (
-                    <div className={`record-activity-grid ${selectedRecord.objectKey === "contacts" ? "contact-detail-tab-panel" : ""}`}>
-                      {(selectedRecord.objectKey !== "contacts" || showContactTaskSections) ? (
+                    {(!selectedRecordUsesActivityTabs || showContactAllSections || showContactTaskSections || showContactNoteSections || showContactCallSections) ? (
+                    <div className={`record-activity-grid ${selectedRecordUsesActivityTabs ? "contact-detail-tab-panel" : ""}`}>
+                      {(!selectedRecordUsesActivityTabs || showContactTaskSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="任务"
@@ -4967,7 +4990,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                       ) : null}
 
-                      {(selectedRecord.objectKey !== "contacts" || showContactNoteSections) ? (
+                      {(!selectedRecordUsesActivityTabs || showContactNoteSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="备注"
@@ -5012,7 +5035,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                       ) : null}
 
-                      {(selectedRecord.objectKey !== "contacts" || showContactCallSections) ? (
+                      {(!selectedRecordUsesActivityTabs || showContactCallSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="电话"
@@ -5057,7 +5080,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                       ) : null}
 
-                      {(selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
+                      {(!selectedRecordUsesActivityTabs || showContactAllSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="会议"
@@ -5105,8 +5128,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </div>
                     ) : null}
 
-                    {(selectedRecord.objectKey !== "contacts" || showContactActivityTimeline) ? (
-                    <section className={selectedRecord.objectKey === "contacts" ? "contact-detail-tab-panel" : ""} style={{ marginTop: 16 }}>
+                    {(!selectedRecordUsesActivityTabs || showContactActivityTimeline) ? (
+                    <section className={selectedRecordUsesActivityTabs ? "contact-detail-tab-panel" : ""} style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         活动时间线
                       </div>
@@ -5127,7 +5150,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </section>
                     ) : null}
 
-                    {coreObjects.has(selectedRecord.objectKey) && (selectedRecord.objectKey !== "contacts" || showContactAllSections) && (
+                    {coreObjects.has(selectedRecord.objectKey) && (!selectedRecordUsesActivityTabs || showContactAllSections) && (
                       <AiAssistant
                         record={selectedRecord}
                         fields={selectedFields}
@@ -5140,7 +5163,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       />
                     )}
 
-                    {(selectedRecord.objectKey !== "contacts" || showContactAllSections) ? (
+                    {(!selectedRecordUsesActivityTabs || showContactAllSections) ? (
                     <TalkAboutThisPanel
                       target={{ type: "record", objectKey: selectedRecord.objectKey, recordId: selectedRecord.id, label: selectedRecord.title }}
                       disabled={isPending}

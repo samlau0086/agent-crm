@@ -2837,7 +2837,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /function getQuickContactMethodsForRecord\(record: CrmRecord, records: CrmRecord\[\]\): ContactMethodDraft\[\]/);
   assert.match(source, /sourceRecordId: primaryContact\.id/);
   assert.match(source, /sourceRecordId: contact\.id/);
-  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(selectedRecord\.objectKey !== "contacts" \|\| showContactAllSections\) \? \([\s\S]*<ContactMethodsQuickActions/);
+  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(!selectedRecordUsesActivityTabs \|\| showContactAllSections\) \? \([\s\S]*<ContactMethodsQuickActions/);
   assert.match(source, /const \[contactMethodEditingId, setContactMethodEditingId\] = useState\(""\)/);
   assert.match(source, /const \[contactMethodEditingRecordId, setContactMethodEditingRecordId\] = useState\(""\)/);
   assert.match(source, /const \[contactMethodEditingValue, setContactMethodEditingValue\] = useState\(""\)/);
@@ -2934,7 +2934,11 @@ await run("record create and detail panels render full width in the main content
   assert.match(source, /recordActivityComposerType === "meeting" \? \([\s\S]*<RecordActivityComposer[\s\S]*type="meeting"/);
   assert.match(source, /onToggle=\{\(\) => setRecordActivityComposerType\(\(current\) => \(current === "task" \? "" : "task"\)\)\}/);
   assert.match(source, /setRecordActivityComposerType\(""\);[\s\S]*setMessage\("已添加任务"\)/);
-  assert.match(source, /<div className=\{`record-activity-grid \$\{selectedRecord\.objectKey === "contacts" \? "contact-detail-tab-panel" : ""\}`\}>[\s\S]*<section className="record-activity-card">[\s\S]*title="任务"[\s\S]*title="备注"[\s\S]*title="电话"[\s\S]*title="会议"[\s\S]*<\/div>/);
+  assert.match(source, /<div className=\{`record-activity-grid \$\{selectedRecordUsesActivityTabs \? "contact-detail-tab-panel" : ""\}`\}>/);
+  assert.match(source, /title="任务"/);
+  assert.match(source, /title="备注"/);
+  assert.match(source, /title="电话"/);
+  assert.match(source, /title="会议"/);
   assert.match(source, /type="task"[\s\S]*testIdPrefix="record-task"/);
   assert.match(source, /type="note"[\s\S]*testIdPrefix="record-note"/);
   assert.match(source, /type="call"[\s\S]*testIdPrefix="record-call"/);
@@ -3133,10 +3137,13 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /<ContactDetailActivityTabs/);
   assert.match(source, /activeTab=\{contactDetailActivityTab\}/);
   assert.match(source, /onChange=\{setContactDetailActivityTab\}/);
+  assert.match(source, /const selectedRecordUsesActivityTabs = selectedRecord \? \["contacts", "companies", "deals"\]\.includes\(selectedRecord\.objectKey\) : false/);
   assert.match(source, /showContactEmailSections/);
   assert.match(source, /showContactActivityTimeline/);
-  assert.match(source, /className=\{selectedRecord\.objectKey === "contacts" \? "contact-detail-tab-panel" : ""\}/);
-  assert.match(source, /record-activity-grid \$\{selectedRecord\.objectKey === "contacts" \? "contact-detail-tab-panel" : ""\}/);
+  assert.match(source, /className=\{selectedRecordUsesActivityTabs \? "contact-detail-tab-panel" : ""\}/);
+  assert.match(source, /record-activity-grid \$\{selectedRecordUsesActivityTabs \? "contact-detail-tab-panel" : ""\}/);
+  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(!selectedRecordUsesActivityTabs \|\| showContactAllSections\)/);
+  assert.match(source, /selectedRecordEmailAddresses\.length > 0 \|\| selectedRecordEmailThreads\.length > 0\) && \(!selectedRecordUsesActivityTabs \|\| showContactEmailSections\)/);
   assert.match(source, /data-testid=\{`contact-detail-activity-tab-\$\{tab\.key\}`\}/);
   assert.match(source, /aria-pressed=\{activeTab === tab\.key\}/);
   assert.match(source, /data-testid="contact-detail-activity-tabs"/);
@@ -3177,6 +3184,8 @@ await run("company detail uses the same profile layout pattern as contacts", () 
   assert.match(source, /data-testid="company-profile-layout"/);
   assert.match(source, /<CompanyProfileInfoStrip/);
   assert.match(source, /testId="company-profile-info-strip"/);
+  assert.match(source, /<CompanyProfileEditor[\s\S]*<ContactDetailActivityTabs/);
+  assert.match(source, /selectedRecord\.objectKey === "companies" && showContactAllSections/);
   assert.match(source, /function CompanyProfileEditor/);
   assert.match(source, /function CompanyProfileInfoStrip/);
   assert.match(source, /function CompanyLogoEditor/);
@@ -3202,6 +3211,8 @@ await run("deal detail uses profile layout with a one-click stage bar", () => {
   assert.match(source, /function DealProfileInfoStrip/);
   assert.match(source, /data-testid="deal-profile-layout"/);
   assert.match(source, /testId="deal-profile-info-strip"/);
+  assert.match(source, /<DealProfileEditor[\s\S]*<ContactDetailActivityTabs/);
+  assert.match(source, /selectedRecord\.objectKey === "deals" && showContactAllSections/);
   assert.match(source, /data-testid="deal-stage-progress-bar"/);
   assert.match(source, /data-testid=\{`deal-stage-bar-\$\{stage\.key\}`\}/);
   assert.match(source, /onClick=\{\(\) => onMoveStage\(stage\.key\)\}/);
