@@ -2547,6 +2547,12 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(source, /Harness config/);
   assert.match(source, /Include CRM record context/);
   assert.match(source, /Allowed tools/);
+  assert.match(source, /<SearchableTagInput/);
+  assert.match(source, /testId="ai-agent-allowed-tools"/);
+  assert.match(source, /function SearchableTagInput/);
+  assert.match(source, /data-testid=\{testId\}/);
+  assert.match(source, /className="tag-select-token"/);
+  assert.match(source, /Remove \$\{option\?\.label \?\? value\}/);
   assert.match(source, /updateAiAgentToolPolicy/);
   assert.match(source, /公海规则/);
   assert.match(source, /\/api\/pool-settings/);
@@ -2562,6 +2568,9 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(styles, /\.settings-tabs-shell/);
   assert.match(styles, /\.settings-tab-list/);
   assert.match(styles, /\.settings-tab-button\.active/);
+  assert.match(styles, /\.tag-select-input/);
+  assert.match(styles, /\.tag-select-menu/);
+  assert.match(styles, /\.tag-select-token/);
 });
 
 await run("workspace and settings use friendly feedback instead of browser dialogs", () => {

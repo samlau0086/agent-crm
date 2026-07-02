@@ -1,7 +1,7 @@
 "use client";
 
 import { Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
@@ -171,6 +171,7 @@ const fieldTypes: FieldDefinition["type"][] = [
 type SettingsTabKey = "access" | "crm" | "pool" | "aiAgents" | "workflows" | "integrations" | "operations";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[] };
+type TagSelectOption = { value: string; label: string; description?: string };
 
 const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
   { key: "access", label: "成员权限", description: "用户、团队、角色与权限矩阵" },
@@ -178,6 +179,21 @@ const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: str
   { key: "aiAgents", label: "AI Agents", description: "agent.md、模型、上下文、工具权限与测试运行" },
   { key: "integrations", label: "集成接口", description: "API Key、Webhook 与外部系统连接" },
   { key: "operations", label: "运维审计", description: "导入队列、备份与审计日志" }
+];
+
+const aiAgentToolOptions: TagSelectOption[] = [
+  { value: "query_records", label: "Query records", description: "Read CRM records allowed by RBAC" },
+  { value: "create_email_draft", label: "Create email draft", description: "Prepare a draft for human review" },
+  { value: "send_email", label: "Send email", description: "Send or queue an outbound email" },
+  { value: "create_task", label: "Create task", description: "Create a follow-up task" },
+  { value: "create_note", label: "Create note", description: "Write a note to the activity timeline" },
+  { value: "update_deal", label: "Update deal", description: "Move or update a deal with workflow approval rules" },
+  { value: "notify", label: "Send notification", description: "Trigger Bark, webhook, or email notification channels" },
+  { value: "write_rag", label: "Write RAG knowledge", description: "Save approved content into the knowledge base" },
+  { value: "classify_email", label: "Classify email", description: "Assign mailbox category and labels" },
+  { value: "summarize_thread", label: "Summarize thread", description: "Create compact email thread memory" },
+  { value: "translate_email", label: "Translate email", description: "Translate selected email content" },
+  { value: "analyze_context", label: "Analyze context", description: "Analyze CRM context and suggest next steps" }
 ];
 
 export function SettingsAdmin(props: SettingsAdminProps) {
@@ -725,10 +741,6 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   function updateAiAgentToolPolicy(agentKey: string, patch: Partial<NonNullable<AiAgentSetting["toolPolicy"]>>) {
     setAiAgents((current) => current.map((agent) => (agent.key === agentKey ? { ...agent, toolPolicy: { ...agent.toolPolicy, ...patch } } : agent)));
-  }
-
-  function parseAiAgentToolList(value: string): string[] {
-    return Array.from(new Set(value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean))).slice(0, 30);
   }
 
   async function saveObject() {
@@ -1779,16 +1791,17 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                           />
                           High-risk actions require approval
                         </label>
-                        <label className="field wide">
+                        <div className="field wide">
                           <span>Allowed tools</span>
-                          <textarea
-                            className="textarea code-textarea"
-                            rows={4}
-                            placeholder="One tool per line, for example: create_email_draft"
-                            value={(selectedAiAgent.toolPolicy?.allowedTools ?? selectedAiAgentDefinition?.toolPolicy.allowedTools ?? []).join("\n")}
-                            onChange={(event) => updateAiAgentToolPolicy(selectedAiAgent.key, { allowedTools: parseAiAgentToolList(event.target.value) })}
+                          <SearchableTagInput
+                            label="Allowed tools"
+                            options={aiAgentToolOptions}
+                            values={selectedAiAgent.toolPolicy?.allowedTools ?? selectedAiAgentDefinition?.toolPolicy.allowedTools ?? []}
+                            onChange={(values) => updateAiAgentToolPolicy(selectedAiAgent.key, { allowedTools: values })}
+                            placeholder="Search tools, for example create task"
+                            testId="ai-agent-allowed-tools"
                           />
-                        </label>
+                        </div>
                       </div>
                     </div>
                     <label className="field wide">
@@ -2898,6 +2911,107 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         onCancel={() => resolveConfirm(false)}
         onConfirm={() => resolveConfirm(true)}
       />
+    </div>
+  );
+}
+
+function SearchableTagInput({
+  label,
+  options,
+  values,
+  onChange,
+  placeholder,
+  testId
+}: {
+  label: string;
+  options: TagSelectOption[];
+  values: string[];
+  onChange: (values: string[]) => void;
+  placeholder?: string;
+  testId?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const selected = useMemo(() => new Set(values), [values]);
+  const optionMap = useMemo(() => new Map(options.map((option) => [option.value, option])), [options]);
+  const filteredOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return options
+      .filter((option) => !selected.has(option.value))
+      .filter((option) => {
+        if (!normalizedQuery) return true;
+        return `${option.label} ${option.value} ${option.description ?? ""}`.toLowerCase().includes(normalizedQuery);
+      })
+      .slice(0, 8);
+  }, [options, query, selected]);
+
+  function addValue(value: string) {
+    const nextValue = value.trim();
+    if (!nextValue || selected.has(nextValue)) return;
+    onChange([...values, nextValue]);
+    setQuery("");
+    setOpen(false);
+  }
+
+  function removeValue(value: string) {
+    onChange(values.filter((item) => item !== value));
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if ((event.key === "Enter" || event.key === "Tab") && filteredOptions[0]) {
+      event.preventDefault();
+      addValue(filteredOptions[0].value);
+      return;
+    }
+    if (event.key === "Backspace" && !query && values.length > 0) {
+      removeValue(values[values.length - 1]);
+    }
+    if (event.key === "Escape") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="tag-select" data-testid={testId}>
+      <div className="tag-select-input" onClick={() => setOpen(true)}>
+        {values.map((value) => {
+          const option = optionMap.get(value);
+          return (
+            <span className="tag-select-token" key={value}>
+              {option?.label ?? value}
+              <button aria-label={`Remove ${option?.label ?? value}`} type="button" onClick={() => removeValue(value)}>
+                ×
+              </button>
+            </span>
+          );
+        })}
+        <input
+          aria-label={label}
+          value={query}
+          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKeyDown}
+          placeholder={values.length === 0 ? placeholder : ""}
+        />
+      </div>
+      {open ? (
+        <div className="tag-select-menu" role="listbox">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option) => (
+              <button key={option.value} aria-selected={false} role="option" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => addValue(option.value)}>
+                <span>{option.label}</span>
+                <small>{option.description ?? option.value}</small>
+              </button>
+            ))
+          ) : (
+            <div className="tag-select-empty">No matching options</div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

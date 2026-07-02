@@ -4016,6 +4016,110 @@ button {
   margin-top: 0;
 }
 
+.tag-select {
+  position: relative;
+  width: 100%;
+}
+
+.tag-select-input {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 42px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.tag-select-input:focus-within {
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.tag-select-input input {
+  flex: 1 1 180px;
+  min-width: 120px;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.tag-select-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+  background: #ccfbf1;
+}
+
+.tag-select-token button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 999px;
+  color: #0f766e;
+  cursor: pointer;
+  background: rgba(15, 118, 110, 0.12);
+}
+
+.tag-select-token button:hover {
+  background: rgba(15, 118, 110, 0.22);
+}
+
+.tag-select-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+.tag-select-menu button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+}
+
+.tag-select-menu button:hover {
+  background: var(--surface-muted);
+}
+
+.tag-select-menu small,
+.tag-select-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tag-select-empty {
+  padding: 10px;
+}
+
 .permission-picker {
   display: grid;
   gap: 8px;
