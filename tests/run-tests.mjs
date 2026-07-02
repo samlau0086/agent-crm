@@ -3121,7 +3121,7 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /function buildRecordUpdateDiffs/);
   assert.match(source, /data-testid="contact-profile-layout"/);
   assert.match(source, /<ContactProfileInfoStrip/);
-  assert.match(source, /data-testid="contact-profile-info-strip"/);
+  assert.match(source, /testId="contact-profile-info-strip"/);
   assert.doesNotMatch(source, /资料已建立|公司已关联|可直接联系|可持续跟进/);
   assert.match(source, /function EditableFieldRow/);
   assert.match(source, /function EditableOwnerRow/);
@@ -3175,7 +3175,10 @@ await run("company detail uses the same profile layout pattern as contacts", () 
   assert.match(source, /onSave=\{\(\) => runRecordSaveAction\(submitUpdateRecord\)\}/);
   assert.match(source, /pendingUpdateRequest=\{selectedRecordPendingUpdateRequest\}/);
   assert.match(source, /data-testid="company-profile-layout"/);
+  assert.match(source, /<CompanyProfileInfoStrip/);
+  assert.match(source, /testId="company-profile-info-strip"/);
   assert.match(source, /function CompanyProfileEditor/);
+  assert.match(source, /function CompanyProfileInfoStrip/);
   assert.match(source, /function CompanyLogoEditor/);
   assert.match(source, /<EditablePrimaryContactRow[\s\S]*primaryContactId/);
   assert.match(source, /function EditablePrimaryContactRow/);
@@ -3184,6 +3187,34 @@ await run("company detail uses the same profile layout pattern as contacts", () 
   assert.match(styles, /\.company-profile-cover/);
   assert.match(styles, /\.company-profile-logo/);
   assert.match(styles, /\.company-profile-addresses/);
+});
+
+await run("deal detail uses profile layout with a one-click stage bar", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /selectedRecord\.objectKey === "deals" \? \(/);
+  assert.match(source, /<DealProfileEditor/);
+  assert.match(source, /stages=\{activePipelineStages\}/);
+  assert.match(source, /onMoveStage=\{\(stageKey\) => runAction\(\(\) => moveDealStage\(selectedRecord, stageKey\)\)\}/);
+  assert.match(source, /function DealProfileEditor/);
+  assert.match(source, /function DealStageProgressBar/);
+  assert.match(source, /function DealProfileInfoStrip/);
+  assert.match(source, /data-testid="deal-profile-layout"/);
+  assert.match(source, /testId="deal-profile-info-strip"/);
+  assert.match(source, /data-testid="deal-stage-progress-bar"/);
+  assert.match(source, /data-testid=\{`deal-stage-bar-\$\{stage\.key\}`\}/);
+  assert.match(source, /onClick=\{\(\) => onMoveStage\(stage\.key\)\}/);
+  assert.match(source, /\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}\/stage/);
+  assert.match(source, /<EditableFieldRow[\s\S]*key=\{`deal-profile-\$\{field\.id\}`\}/);
+  assert.match(source, /<EditableFieldRow[\s\S]*key=\{`deal-relation-\$\{field\.id\}`\}/);
+  assert.match(styles, /\.deal-profile-cover/);
+  assert.match(styles, /\.deal-profile-avatar/);
+  assert.match(styles, /\.deal-profile-stage-bar/);
+  assert.match(styles, /\.deal-profile-stage-button/);
+  assert.match(styles, /\.deal-profile-stage-button\.active/);
+  assert.match(styles, /\.deal-profile-stage-button\.completed/);
+  assert.match(styles, /\.deal-profile-stage-empty/);
 });
 
 await run("workspace exposes product and quote modules as first-class crm objects", () => {

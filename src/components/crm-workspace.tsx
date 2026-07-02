@@ -92,6 +92,7 @@ import type {
   NotificationChannel,
   ObjectDefinition,
   Pipeline,
+  PipelineStage,
   RecordChangeRequest,
   RecordPool,
   RecordPoolActionResult,
@@ -4525,6 +4526,36 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
                         onUploadMediaAssets={uploadMediaAssets}
                         onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
+                      />
+                    ) : selectedRecord.objectKey === "deals" ? (
+                      <DealProfileEditor
+                        allRecords={records}
+                        canManageOwners={canManageViews}
+                        fields={selectedFormFields}
+                        isPending={isPending || isRecordSavePending}
+                        mediaAssets={mediaAssets}
+                        ownerId={editOwnerId}
+                        pendingDeleteRequest={selectedRecordPendingDeleteRequest}
+                        pendingUpdateRequest={selectedRecordPendingUpdateRequest}
+                        pipelineName={activePipeline?.name}
+                        record={selectedRecord}
+                        saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
+                        stages={activePipelineStages}
+                        title={editTitle}
+                        users={props.users}
+                        values={editValues}
+                        onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                        onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
+                        onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
+                        onMoveStage={(stageKey) => runAction(() => moveDealStage(selectedRecord, stageKey))}
+                        onOwnerChange={setEditOwnerId}
+                        onRecordsLoaded={mergeLoadedRecords}
+                        onSave={() => runRecordSaveAction(submitUpdateRecord)}
+                        onSaveField={submitSingleRecordField}
+                        onSaveOwner={submitSingleRecordOwner}
+                        onTitleChange={setEditTitle}
+                        onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                        onUploadMediaAssets={uploadMediaAssets}
                       />
                     ) : (
                     <>
@@ -13058,8 +13089,70 @@ function ContactProfileInfoStrip({
     { label: "审核状态", value: reviewStatus }
   ];
 
+  return <ProfileInfoStrip items={items} testId="contact-profile-info-strip" />;
+}
+
+function CompanyProfileInfoStrip({
+  contactCount,
+  domain,
+  industry,
+  ownerName,
+  poolLabel,
+  primaryContactName,
+  reviewStatus
+}: {
+  contactCount: number;
+  domain?: string;
+  industry?: string;
+  ownerName: string;
+  poolLabel: string;
+  primaryContactName?: string;
+  reviewStatus: string;
+}) {
+  const items = [
+    { label: "归属", value: poolLabel },
+    { label: "负责人", value: ownerName },
+    { label: "主联系人", value: primaryContactName || "未设置" },
+    { label: "联系人", value: `${contactCount} 位` },
+    { label: "域名/行业", value: [domain || "", industry || ""].filter(Boolean).join(" / ") || "未设置" },
+    { label: "审核状态", value: reviewStatus }
+  ];
+
+  return <ProfileInfoStrip items={items} testId="company-profile-info-strip" />;
+}
+
+function DealProfileInfoStrip({
+  amount,
+  closeDate,
+  companyName,
+  ownerName,
+  pipelineName,
+  reviewStatus,
+  stageName
+}: {
+  amount: string;
+  closeDate?: string;
+  companyName?: string;
+  ownerName: string;
+  pipelineName?: string;
+  reviewStatus: string;
+  stageName?: string;
+}) {
+  const items = [
+    { label: "金额", value: amount || "未设置" },
+    { label: "阶段", value: stageName || "未设置" },
+    { label: "销售管道", value: pipelineName || "默认管道" },
+    { label: "关联公司", value: companyName || "未关联" },
+    { label: "预计成交", value: closeDate || "未设置" },
+    { label: "负责人/审核", value: `${ownerName} / ${reviewStatus}` }
+  ];
+
+  return <ProfileInfoStrip items={items} testId="deal-profile-info-strip" />;
+}
+
+function ProfileInfoStrip({ items, testId }: { items: Array<{ label: string; value: string }>; testId: string }) {
   return (
-    <div className="contact-profile-info-strip" data-testid="contact-profile-info-strip">
+    <div className="contact-profile-info-strip" data-testid={testId}>
       {items.map((item) => (
         <div className="contact-profile-info-item" key={item.label}>
           <span className="contact-profile-info-label">{item.label}</span>
@@ -13217,6 +13310,11 @@ function CompanyProfileEditor({
   const primaryContact = contacts.find((contact) => contact.id === primaryContactId) ?? contacts[0];
   const domain = typeof values.domain === "string" ? values.domain.trim() : "";
   const industry = typeof values.industry === "string" ? values.industry.trim() : "";
+  const actualOwner = record.ownerId ? users.find((user) => user.id === record.ownerId) : undefined;
+  const editedOwner = ownerId ? users.find((user) => user.id === ownerId) : undefined;
+  const poolLabel = record.ownerId ? "私海" : "公海";
+  const ownerName = actualOwner?.name ?? editedOwner?.name ?? "未分配负责人";
+  const reviewStatus = pendingDeleteRequest ? "删除待审核" : pendingUpdateRequest ? "修改待审核" : "无待审核";
 
   return (
     <div className="contact-profile-layout company-profile-layout" data-testid="company-profile-layout">
@@ -13262,6 +13360,15 @@ function CompanyProfileEditor({
             )}
           </div>
         </div>
+        <CompanyProfileInfoStrip
+          contactCount={contacts.length}
+          domain={domain}
+          industry={industry}
+          ownerName={ownerName}
+          poolLabel={poolLabel}
+          primaryContactName={primaryContact ? formatEmailContactLabel(primaryContact, getPrimaryRecordEmail(primaryContact)) : undefined}
+          reviewStatus={reviewStatus}
+        />
       </section>
 
       <div className="contact-profile-grid company-profile-grid">
@@ -13346,6 +13453,245 @@ function CompanyProfileEditor({
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function DealProfileEditor({
+  allRecords,
+  canManageOwners,
+  fields,
+  isPending,
+  mediaAssets,
+  ownerId,
+  pendingDeleteRequest,
+  pendingUpdateRequest,
+  pipelineName,
+  record,
+  saveLabel,
+  stages,
+  title,
+  users,
+  values,
+  onCancelDeleteRequest,
+  onDelete,
+  onDeleteMediaAsset,
+  onMoveStage,
+  onOwnerChange,
+  onRecordsLoaded,
+  onSave,
+  onSaveField,
+  onSaveOwner,
+  onTitleChange,
+  onUpdateMediaAsset,
+  onUploadMediaAssets
+}: {
+  allRecords: CrmRecord[];
+  canManageOwners: boolean;
+  fields: FieldDefinition[];
+  isPending: boolean;
+  mediaAssets: MediaAsset[];
+  ownerId: string;
+  pendingDeleteRequest?: RecordChangeRequest;
+  pendingUpdateRequest?: RecordChangeRequest;
+  pipelineName?: string;
+  record: CrmRecord;
+  saveLabel: string;
+  stages: PipelineStage[];
+  title: string;
+  users: User[];
+  values: Record<string, string>;
+  onCancelDeleteRequest: (request: RecordChangeRequest) => void;
+  onDelete: () => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
+  onMoveStage: (stageKey: string) => void;
+  onOwnerChange: (ownerId: string) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+  onSave: () => void;
+  onSaveField: (field: FieldDefinition, value: string) => Promise<void>;
+  onSaveOwner: (ownerId: string) => Promise<void>;
+  onTitleChange: (title: string) => void;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+}) {
+  const amountField = fields.find((field) => field.key === "amount");
+  const closeDateField = fields.find((field) => field.key === "closeDate");
+  const companyField = fields.find((field) => field.key === "companyId");
+  const relationshipFields = fields.filter((field) => field.key === "companyId" || field.type === "reference");
+  const detailFields = fields.filter((field) => !relationshipFields.some((relationshipField) => relationshipField.id === field.id));
+  const company = typeof values.companyId === "string" ? allRecords.find((candidate) => candidate.id === values.companyId) : undefined;
+  const currentStage = stages.find((stage) => stage.key === record.stageKey);
+  const amountLabel = amountField ? formatEditableFieldValue(amountField, values[amountField.key] ?? "", allRecords, users) : formatCurrency(record.data.amount);
+  const closeDateLabel = closeDateField && values[closeDateField.key] ? formatDate(values[closeDateField.key]) : "";
+  const actualOwner = record.ownerId ? users.find((user) => user.id === record.ownerId) : undefined;
+  const editedOwner = ownerId ? users.find((user) => user.id === ownerId) : undefined;
+  const ownerName = actualOwner?.name ?? editedOwner?.name ?? "未分配负责人";
+  const reviewStatus = pendingDeleteRequest ? "删除待审核" : pendingUpdateRequest ? "修改待审核" : "无待审核";
+
+  return (
+    <div className="contact-profile-layout deal-profile-layout" data-testid="deal-profile-layout">
+      <section className={`contact-profile-hero deal-profile-hero ${pendingDeleteRequest ? "delete-pending" : ""} ${pendingUpdateRequest ? "update-pending" : ""}`}>
+        <div className="contact-profile-cover deal-profile-cover" />
+        <div className="contact-profile-main">
+          <div className="deal-profile-avatar" aria-hidden="true">
+            <Trophy size={34} />
+          </div>
+          <div className="contact-profile-identity">
+            <label>
+              <span className="subtle">交易名称</span>
+              <input className="input contact-profile-name-input" data-testid="edit-record-title" value={title} onChange={(event) => onTitleChange(event.target.value)} />
+            </label>
+            <div className="contact-profile-summary">
+              {amountLabel ? <span>{amountLabel}</span> : null}
+              {pipelineName ? <span>{pipelineName}</span> : null}
+              {currentStage ? <span>{currentStage.label}</span> : null}
+              {company ? <span>{company.title}</span> : null}
+              <span>{ownerName}</span>
+            </div>
+          </div>
+          <div className="contact-profile-actions">
+            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
+              <Save size={16} />
+              {saveLabel}
+            </button>
+            {pendingDeleteRequest ? (
+              <button className="danger-button" data-testid="edit-record-cancel-delete-request" type="button" onClick={() => onCancelDeleteRequest(pendingDeleteRequest)} disabled={isPending}>
+                <RotateCcw size={16} />
+                取消申请
+              </button>
+            ) : (
+              <button className="danger-button" data-testid="edit-record-delete" type="button" onClick={onDelete} disabled={isPending}>
+                <Trash2 size={16} />
+                删除
+              </button>
+            )}
+          </div>
+        </div>
+        <DealStageProgressBar currentStageKey={record.stageKey} disabled={isPending} stages={stages} onMoveStage={onMoveStage} />
+        <DealProfileInfoStrip
+          amount={amountLabel}
+          closeDate={closeDateLabel}
+          companyName={company?.title}
+          ownerName={ownerName}
+          pipelineName={pipelineName}
+          reviewStatus={reviewStatus}
+          stageName={currentStage?.label}
+        />
+      </section>
+
+      <div className="contact-profile-grid deal-profile-grid">
+        <section className="contact-profile-card">
+          <div className="stage-header">
+            <div>
+              <strong>Deal Details</strong>
+              <div className="subtle">金额、预计成交日、阶段归属与负责人。</div>
+            </div>
+          </div>
+          <div className="form-grid contact-profile-form">
+            <EditableOwnerRow
+              canEdit={canManageOwners}
+              disabled={!canManageOwners}
+              isPending={isPending}
+              ownerName={ownerLabel(ownerId || undefined, users)}
+              testId="edit-record-owner"
+              users={users}
+              value={ownerId}
+              onChange={onOwnerChange}
+              onSave={onSaveOwner}
+            />
+            {detailFields.map((field) => (
+              <EditableFieldRow
+                allRecords={allRecords}
+                field={field}
+                key={`deal-profile-${field.id}`}
+                mediaAssets={mediaAssets}
+                onDeleteMediaAsset={onDeleteMediaAsset}
+                onRecordsLoaded={onRecordsLoaded}
+                onSave={(nextValue) => onSaveField(field, nextValue)}
+                onUpdateMediaAsset={onUpdateMediaAsset}
+                onUploadMediaAssets={onUploadMediaAssets}
+                testId={`edit-field-${record.objectKey}-${field.key}`}
+                users={users}
+                value={values[field.key] ?? ""}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section className="contact-profile-card">
+          <div className="stage-header">
+            <div>
+              <strong>Related Records</strong>
+              <div className="subtle">关联公司、联系人和其他销售上下文。</div>
+            </div>
+          </div>
+          <div className="form-grid contact-profile-form">
+            {relationshipFields.length ? relationshipFields.map((field) => (
+              <EditableFieldRow
+                allRecords={allRecords}
+                field={field}
+                key={`deal-relation-${field.id}`}
+                mediaAssets={mediaAssets}
+                onRecordsLoaded={onRecordsLoaded}
+                onSave={(nextValue) => onSaveField(field, nextValue)}
+                testId={`edit-field-${record.objectKey}-${field.key}`}
+                users={users}
+                value={values[field.key] ?? ""}
+              />
+            )) : <div className="empty-state compact">暂无关联记录字段。</div>}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function DealStageProgressBar({
+  currentStageKey,
+  disabled,
+  stages,
+  onMoveStage
+}: {
+  currentStageKey?: string;
+  disabled: boolean;
+  stages: PipelineStage[];
+  onMoveStage: (stageKey: string) => void;
+}) {
+  if (stages.length === 0) {
+    return (
+      <div className="deal-profile-stage-empty" data-testid="deal-stage-progress-bar">
+        暂无交易阶段，请先在设置中配置销售管道。
+      </div>
+    );
+  }
+
+  const currentIndex = stages.findIndex((stage) => stage.key === currentStageKey);
+
+  return (
+    <div className="deal-profile-stage-bar" data-testid="deal-stage-progress-bar">
+      {stages.map((stage, index) => {
+        const isActive = stage.key === currentStageKey;
+        const isCompleted = currentIndex >= 0 && index < currentIndex;
+        return (
+          <button
+            aria-current={isActive ? "step" : undefined}
+            className={`deal-profile-stage-button ${isActive ? "active" : ""} ${isCompleted ? "completed" : ""}`}
+            data-testid={`deal-stage-bar-${stage.key}`}
+            disabled={disabled || isActive}
+            key={stage.key}
+            type="button"
+            onClick={() => onMoveStage(stage.key)}
+          >
+            <span className="deal-stage-button-icon">
+              {isCompleted || isActive ? <CheckCircle2 size={17} /> : <Plus size={17} />}
+            </span>
+            <span className="deal-stage-button-copy">
+              <strong>{stage.label}</strong>
+              <small>{stage.probability}%</small>
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
