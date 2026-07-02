@@ -4694,7 +4694,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     )}
 
                     {(selectedRecordEmailAddresses.length > 0 || selectedRecordEmailThreads.length > 0) && (selectedRecord.objectKey !== "contacts" || showContactEmailSections) && (
-                      <section style={{ marginTop: 16 }}>
+                      <section className={selectedRecord.objectKey === "contacts" ? "contact-detail-tab-panel" : ""} style={{ marginTop: 16 }}>
                         <div className="property-name" style={{ marginBottom: 8 }}>
                           邮件活动
                         </div>
@@ -4828,7 +4828,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     ) : null}
 
                     {(selectedRecord.objectKey !== "contacts" || showContactAllSections || showContactTaskSections || showContactNoteSections || showContactCallSections) ? (
-                    <div className="record-activity-grid">
+                    <div className={`record-activity-grid ${selectedRecord.objectKey === "contacts" ? "contact-detail-tab-panel" : ""}`}>
                       {(selectedRecord.objectKey !== "contacts" || showContactTaskSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
@@ -5015,7 +5015,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     ) : null}
 
                     {(selectedRecord.objectKey !== "contacts" || showContactActivityTimeline) ? (
-                    <section style={{ marginTop: 16 }}>
+                    <section className={selectedRecord.objectKey === "contacts" ? "contact-detail-tab-panel" : ""} style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         活动时间线
                       </div>

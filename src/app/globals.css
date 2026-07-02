@@ -943,6 +943,17 @@ button {
   font-size: 12px;
 }
 
+.contact-detail-tab-panel {
+  min-height: 320px;
+  min-height: max(320px, 42vh);
+}
+
+.contact-detail-tab-panel > .empty-state {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+}
+
 .company-profile-cover {
   background:
     linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(15, 118, 110, 0.14)),

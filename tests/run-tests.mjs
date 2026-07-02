@@ -2934,7 +2934,7 @@ await run("record create and detail panels render full width in the main content
   assert.match(source, /recordActivityComposerType === "meeting" \? \([\s\S]*<RecordActivityComposer[\s\S]*type="meeting"/);
   assert.match(source, /onToggle=\{\(\) => setRecordActivityComposerType\(\(current\) => \(current === "task" \? "" : "task"\)\)\}/);
   assert.match(source, /setRecordActivityComposerType\(""\);[\s\S]*setMessage\("已添加任务"\)/);
-  assert.match(source, /<div className="record-activity-grid">[\s\S]*<section className="record-activity-card">[\s\S]*title="任务"[\s\S]*title="备注"[\s\S]*title="电话"[\s\S]*title="会议"[\s\S]*<\/div>/);
+  assert.match(source, /<div className=\{`record-activity-grid \$\{selectedRecord\.objectKey === "contacts" \? "contact-detail-tab-panel" : ""\}`\}>[\s\S]*<section className="record-activity-card">[\s\S]*title="任务"[\s\S]*title="备注"[\s\S]*title="电话"[\s\S]*title="会议"[\s\S]*<\/div>/);
   assert.match(source, /type="task"[\s\S]*testIdPrefix="record-task"/);
   assert.match(source, /type="note"[\s\S]*testIdPrefix="record-note"/);
   assert.match(source, /type="call"[\s\S]*testIdPrefix="record-call"/);
@@ -3127,6 +3127,8 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /onChange=\{setContactDetailActivityTab\}/);
   assert.match(source, /showContactEmailSections/);
   assert.match(source, /showContactActivityTimeline/);
+  assert.match(source, /className=\{selectedRecord\.objectKey === "contacts" \? "contact-detail-tab-panel" : ""\}/);
+  assert.match(source, /record-activity-grid \$\{selectedRecord\.objectKey === "contacts" \? "contact-detail-tab-panel" : ""\}/);
   assert.match(source, /data-testid=\{`contact-detail-activity-tab-\$\{tab\.key\}`\}/);
   assert.match(source, /aria-pressed=\{activeTab === tab\.key\}/);
   assert.match(source, /data-testid="contact-detail-activity-tabs"/);
@@ -3142,6 +3144,8 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(styles, /\.contact-detail-activity-tabs/);
   assert.match(styles, /\.contact-detail-activity-tab:hover/);
   assert.match(styles, /\.contact-detail-activity-tab\.active/);
+  assert.match(styles, /\.contact-detail-tab-panel \{[\s\S]*min-height: max\(320px, 42vh\);/);
+  assert.match(styles, /\.contact-detail-tab-panel > \.empty-state \{[\s\S]*place-items: center;/);
   assert.match(styles, /\.contact-profile-hero\.update-pending/);
   assert.match(styles, /\.record-update-pending-banner/);
   assert.match(styles, /\.record-change-old-value[\s\S]*text-decoration: line-through/);
