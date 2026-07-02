@@ -113,7 +113,7 @@ function parseWorkflowDesignerResponse(content: string, input: WorkflowAiGenerat
     conditions: fallback.workflow.conditions,
     actions: fallback.workflow.actions
   });
-  const graphWithScope = normalizeGeneratedWorkflowGraph(enforceRequestedScope(graph, input));
+  const graphWithScope = normalizeGeneratedWorkflowGraph(enforceRequestedScope(graph, input), input.goal);
   const legacy = graphToLegacyWorkflow(graphWithScope);
   const workflow: Omit<WorkflowDefinition, "id" | "workspaceId" | "createdById" | "createdAt" | "updatedAt"> = {
     name: stringValue(parsed.name, fallback.workflow.name),
@@ -167,6 +167,7 @@ function buildWorkflowDesignerSystemPrompt(agentMarkdown?: string): string {
     "- For 'until reply' goals, include wait_reply branches: replied path should handle/stop, not_replied path should continue follow-up or review.",
     "- Do not place two wait_delay nodes with the same duration directly after each other. One wait is enough before the next reply check or follow-up action.",
     "- For multi-touch email sequences, every create_email_draft/send_email node must have a distinct subject, body, purpose, and timing. Do not copy the same body across rounds.",
+    "- Email subjects must describe the business topic or next step. Do not put recipient/customer names, {{record.title}}, {{record.data.email}}, or other recipient identity placeholders in the subject. Use personalization in the email body only.",
     "- Later follow-up email nodes must explicitly account for previous sent emails and no-reply context. Include config fields such as touchIndex, previousTouchCount, lastEmailSummary, replyStatus, and messageGoal when useful.",
     "- Multi-round outreach should progress logically: initial value proposition, first follow-up with a different angle, later follow-up with objection/risk handling or a graceful close-the-loop. Do not repeat the first email.",
     "- Do not create duplicate IF nodes with empty recordId. Only use recordId equals when an actual recordId is provided.",
@@ -195,6 +196,7 @@ function buildWorkflowDesignerUserPrompt(input: WorkflowAiGenerationRequest, fal
         : { mode: "global" },
     instruction: "Design a workflow graph that best satisfies the user goal. The graph may differ from the fallback example when the goal requires a different structure."
       + " If the workflow creates more than one email, each email node must be materially different and must include touchIndex/messageGoal plus context about prior sent emails or no-reply state."
+      + " Email subjects should be topic-based, such as proposal follow-up or next-step confirmation; do not include the recipient name or {{record.title}} in the subject."
       + " Avoid consecutive identical wait_delay nodes; merge them into one wait before checking replies or drafting the next follow-up."
   });
 }
@@ -231,8 +233,8 @@ function enforceRequestedScope(graph: WorkflowGraph, input: WorkflowAiGeneration
   };
 }
 
-function normalizeGeneratedWorkflowGraph(graph: WorkflowGraph): WorkflowGraph {
-  return ensureDistinctEmailTouches(collapseRedundantSequentialWaitDelays(graph));
+function normalizeGeneratedWorkflowGraph(graph: WorkflowGraph, goal = ""): WorkflowGraph {
+  return ensureDistinctEmailTouches(collapseRedundantSequentialWaitDelays(graph), goal);
 }
 
 function collapseRedundantSequentialWaitDelays(graph: WorkflowGraph): WorkflowGraph {
@@ -280,9 +282,9 @@ function uniqueWorkflowEdgeId(edges: WorkflowGraph["edges"], baseId: string): st
   return `${baseId}:${index}`;
 }
 
-function ensureDistinctEmailTouches(graph: WorkflowGraph): WorkflowGraph {
+function ensureDistinctEmailTouches(graph: WorkflowGraph, goal = ""): WorkflowGraph {
   const emailNodes = graph.nodes.filter((node) => node.type === "create_email_draft" || node.type === "send_email");
-  if (emailNodes.length <= 1) {
+  if (emailNodes.length === 0) {
     return graph;
   }
   const seenBodies = new Map<string, number>();
@@ -312,12 +314,48 @@ function ensureDistinctEmailTouches(graph: WorkflowGraph): WorkflowGraph {
       if (duplicateCount > 0 || !normalizedBody) {
         nextConfig.bodyText = buildDistinctFollowUpBody(touchIndex, messageGoal);
       }
-      if (!stringValue(nextConfig.subject)) {
-        nextConfig.subject = touchIndex === 1 ? "Quick question for {{record.title}}" : `Follow-up ${touchIndex} for {{record.title}}`;
-      }
+      nextConfig.subject = sanitizeGeneratedEmailSubject(stringValue(nextConfig.subject), touchIndex, goal);
       return { ...node, config: nextConfig };
     })
   };
+}
+
+function sanitizeGeneratedEmailSubject(subject: string, touchIndex: number, goal: string): string {
+  const withoutIdentity = subject
+    .replace(/\{\{\s*record\.(?:title|name|email|data\.(?:name|firstName|lastName|fullName|email|contactName))\s*\}\}/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([:：,，-])/g, "$1")
+    .replace(/([:：,，-])\s*$/g, "")
+    .trim();
+  if (!withoutIdentity || isGenericPersonalizedSubject(withoutIdentity)) {
+    return defaultEmailSubject(touchIndex, goal);
+  }
+  return withoutIdentity;
+}
+
+function isGenericPersonalizedSubject(subject: string): boolean {
+  const normalized = subject.toLowerCase().replace(/\s+/g, " ").trim();
+  return normalized === "follow up"
+    || normalized === "re:"
+    || normalized === "关于"
+    || normalized === "跟进"
+    || normalized === "quick question";
+}
+
+function defaultEmailSubject(touchIndex: number, goal: string): string {
+  if (/报价|quote|proposal/i.test(goal)) {
+    if (touchIndex <= 1) return "关于报价方案的跟进";
+    if (touchIndex === 2) return "补充确认报价方案";
+    return "确认报价后续安排";
+  }
+  if (/冷邮件|cold|outreach/i.test(goal)) {
+    if (touchIndex <= 1) return "关于合作机会的初步沟通";
+    if (touchIndex === 2) return "补充一个合作切入点";
+    return "确认是否方便继续沟通";
+  }
+  if (touchIndex <= 1) return "关于后续沟通的确认";
+  if (touchIndex === 2) return "补充确认下一步";
+  return "确认后续安排";
 }
 
 function getEmailBodyKey(config: Record<string, unknown>): "bodyText" | "body" | "bodyHtml" | undefined {

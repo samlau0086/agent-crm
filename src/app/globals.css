@@ -3337,7 +3337,7 @@ button {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
   box-shadow: var(--shadow-lg);
   touch-action: none;
 }

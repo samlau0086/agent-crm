@@ -686,6 +686,49 @@ await run("workflow AI designer makes repeated email touches distinct", async ()
   assert.match(String(emailTwo?.config.messageGoal), /different angle/i);
 });
 
+await run("workflow AI designer removes recipient identity from generated email subjects", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
+  const fetchImpl = async () => new Response(JSON.stringify({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            name: "Quote follow-up",
+            goal: "7 天未回复的报价客户自动跟进",
+            trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+            graph: {
+              scope: { mode: "object", objectKey: "contacts" },
+              nodes: [
+                { id: "start", type: "start", label: "Start", position: { x: 40, y: 160 }, config: { trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" } } },
+                { id: "email-1", type: "create_email_draft", label: "Email 1", position: { x: 320, y: 120 }, config: { subject: "Follow up {{record.title}}", bodyText: "您好 {{record.title}}，想跟进一下之前发送的报价方案。" } },
+                { id: "end", type: "end", label: "End", position: { x: 620, y: 120 }, config: {} }
+              ],
+              edges: [
+                { id: "edge-start-email-1", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "email-1" },
+                { id: "edge-email-1-end", sourceNodeId: "email-1", sourceHandle: "main", targetNodeId: "end" }
+              ]
+            }
+          })
+        }
+      }
+    ]
+  }), { status: 200, headers: { "content-type": "application/json" } });
+
+  const generated = await generateWorkflowWithAiDesigner(
+    { goal: "7 天未回复的报价客户自动跟进", objectKey: "contacts" },
+    {
+      settings,
+      providerConfig: { provider: "openai", baseUrl: "https://ai.example/v1", apiKey: "test-key", model: "test-model", timeoutMs: 10000 },
+      fetchImpl
+    }
+  );
+
+  const emailOne = generated.workflow.graph.nodes.find((node) => node.id === "email-1");
+  assert.equal(emailOne?.config.subject, "关于报价方案的跟进");
+  assert.doesNotMatch(String(emailOne?.config.subject), /\{\{record\.title\}\}/);
+  assert.match(String(emailOne?.config.bodyText), /\{\{record\.title\}\}/);
+});
+
 await run("workflow AI designer collapses duplicate sequential wait delays", async () => {
   const settings = createDefaultEmailAiSettings(defaultWorkspaceId, new Date().toISOString());
   const fetchImpl = async () => new Response(JSON.stringify({

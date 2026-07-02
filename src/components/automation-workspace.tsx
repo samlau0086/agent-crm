@@ -1469,15 +1469,15 @@ function WorkflowGraphCanvas({
           保存草稿
         </button>
       ) : null}
-      {isFullscreen ? (
+      {isFullscreen && !isFloatingPaletteOpen ? (
         <button
-          aria-label={isFloatingPaletteOpen ? "Hide node library" : "Show node library"}
+          aria-label="Show node library"
           className="workflow-floating-palette-toggle icon-button"
           data-testid="workflow-floating-palette-toggle"
           type="button"
-          onClick={() => setIsFloatingPaletteOpen((current) => !current)}
+          onClick={() => setIsFloatingPaletteOpen(true)}
         >
-          {isFloatingPaletteOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+          <PanelLeftOpen size={16} />
         </button>
       ) : null}
       {isFullscreen && isFloatingPaletteOpen ? (
