@@ -881,6 +881,56 @@ button {
   margin-top: 12px;
 }
 
+.editable-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.editable-field-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.editable-field-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.editable-field-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editable-field-row small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editable-field-dialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.toolbar.end {
+  justify-content: flex-end;
+}
+
 .contact-detail-activity-tabs {
   display: flex;
   flex-wrap: wrap;

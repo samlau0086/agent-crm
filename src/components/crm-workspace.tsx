@@ -2295,17 +2295,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}`, { method: "GET" });
   }
 
-  async function submitUpdateRecord() {
+  async function submitRecordUpdatePatch(updatePatch: RecordApprovalPatch, successMessage = "记录已更新") {
     if (!selectedRecord) {
       return;
     }
 
-    const updatePatch: RecordApprovalPatch = {
-      title: editTitle.trim(),
-      data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
-      stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
-      ownerId: editOwnerId || undefined
-    };
     const approvalBaselineRecord = await loadRecordForApprovalDecision(selectedRecord);
     const needsApproval =
       editApprovalObjectKeys.has(selectedRecord.objectKey) &&
@@ -2361,6 +2355,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
 
     setRecords((current) => mergeRecords(current, [result]));
+    setEditValues(buildRecordValues(selectedFields, result));
+    setEditTitle(result.title);
+    setEditOwnerId(result.ownerId ?? "");
+    setMessage(successMessage);
+    router.refresh();
+  }
+
+  async function submitUpdateRecord() {
+    if (!selectedRecord) {
+      return;
+    }
+
+    const updatePatch: RecordApprovalPatch = {
+      title: editTitle.trim(),
+      data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
+      stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
+      ownerId: editOwnerId || undefined
+    };
+    await submitRecordUpdatePatch(updatePatch);
     if (selectedRecord.objectKey === "contacts") {
       setContactMethodEditingId("");
       setContactMethodEditingRecordId("");
@@ -2369,8 +2382,47 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (selectedRecord.objectKey === "companies") {
       setCompanyAddressEditing(null);
     }
-    setMessage("记录已更新");
-    router.refresh();
+  }
+
+  async function submitSingleRecordField(field: FieldDefinition, nextValue: string) {
+    if (!selectedRecord) {
+      return;
+    }
+    setMessage(null);
+    setError(null);
+    setIsRecordSavePending(true);
+    try {
+      await submitRecordUpdatePatch(
+        {
+          data: {
+            [field.key]: parseSingleFieldValue(field, nextValue)
+          }
+        },
+        `${field.label}已更新`
+      );
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "保存失败");
+      throw actionError;
+    } finally {
+      setIsRecordSavePending(false);
+    }
+  }
+
+  async function submitSingleRecordOwner(nextOwnerId: string) {
+    if (!selectedRecord) {
+      return;
+    }
+    setMessage(null);
+    setError(null);
+    setIsRecordSavePending(true);
+    try {
+      await submitRecordUpdatePatch({ ownerId: nextOwnerId || undefined }, "负责人已更新");
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "保存失败");
+      throw actionError;
+    } finally {
+      setIsRecordSavePending(false);
+    }
   }
 
   async function applyRecordPoolAction(action: "claim" | "release", record: CrmRecord) {
@@ -4401,6 +4453,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onOwnerChange={setEditOwnerId}
                           onRecordsLoaded={mergeLoadedRecords}
                           onSave={() => runRecordSaveAction(submitUpdateRecord)}
+                          onSaveField={submitSingleRecordField}
+                          onSaveOwner={submitSingleRecordOwner}
                           onTitleChange={setEditTitle}
                           onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
                           onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
@@ -4464,6 +4518,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onPrimaryContactChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
                         onRecordsLoaded={mergeLoadedRecords}
                         onSave={() => runRecordSaveAction(submitUpdateRecord)}
+                        onSaveField={submitSingleRecordField}
+                        onSaveOwner={submitSingleRecordOwner}
                         onShippingAddressesChange={(addresses) => setEditValues((current) => withCompanyAddressValues(current, companyShippingAddressesValueKey, addresses))}
                         onTitleChange={setEditTitle}
                         onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
@@ -4477,12 +4533,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <span className="subtle">名称</span>
                         <input className="input" data-testid="edit-record-title" value={editTitle} onChange={(event) => setEditTitle(event.target.value)} />
                       </label>
-                      <OwnerSelect
+                      <EditableOwnerRow
+                        canEdit={canManageViews}
                         disabled={!canManageViews}
+                        isPending={isPending || isRecordSavePending}
+                        ownerName={ownerLabel(editOwnerId || undefined, props.users)}
                         testId="edit-record-owner"
                         users={props.users}
                         value={editOwnerId}
                         onChange={setEditOwnerId}
+                        onSave={submitSingleRecordOwner}
                       />
                       {selectedRecord.objectKey === "deals" && activePipelineStages.length > 0 && (
                         <label>
@@ -4502,7 +4562,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         </label>
                       )}
                       {selectedFormFields.map((field) => (
-                        <FieldInput
+                        <EditableFieldRow
                           key={`edit-${field.id}`}
                           field={field}
                           value={editValues[field.key] ?? ""}
@@ -4514,7 +4574,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onUploadMediaAssets={uploadMediaAssets}
                           onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
                           onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
-                          onChange={(nextValue) => setEditValues((current) => ({ ...current, [field.key]: nextValue }))}
+                          onSave={(nextValue) => submitSingleRecordField(field, nextValue)}
                         />
                       ))}
                       {selectedRecord.objectKey === "quotes" ? (
@@ -11708,6 +11768,217 @@ function FieldInput({
   );
 }
 
+function formatEditableFieldValue(field: FieldDefinition, value: string, allRecords: CrmRecord[], users: User[]): string {
+  if (!value) {
+    return "未设置";
+  }
+  if (field.type === "reference") {
+    return allRecords.find((record) => record.id === value)?.title ?? value;
+  }
+  if (field.type === "user") {
+    return ownerLabel(value, users);
+  }
+  if (isCountryField(field)) {
+    return getCountryLabel(value);
+  }
+  if (field.type === "boolean") {
+    return value === "true" ? "是" : "否";
+  }
+  if (field.type === "select") {
+    return field.options?.find((option) => option.value === value)?.label ?? value;
+  }
+  if (field.type === "date") {
+    return formatDate(value);
+  }
+  return value;
+}
+
+function EditableFieldRow({
+  allRecords,
+  field,
+  mediaAssets,
+  testId,
+  users,
+  value,
+  onDeleteMediaAsset,
+  onRecordsLoaded,
+  onSave,
+  onUpdateMediaAsset,
+  onUploadMediaAssets
+}: {
+  allRecords: CrmRecord[];
+  field: FieldDefinition;
+  mediaAssets: MediaAsset[];
+  testId?: string;
+  users: User[];
+  value: string;
+  onDeleteMediaAsset?: (asset: MediaAsset) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+  onSave: (value: string) => Promise<void>;
+  onUpdateMediaAsset?: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onUploadMediaAssets?: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftValue, setDraftValue] = useState(value);
+  const [isSaving, setIsSaving] = useState(false);
+  const displayValue = formatEditableFieldValue(field, value, allRecords, users);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDraftValue(value);
+    }
+  }, [isOpen, value]);
+
+  async function saveField() {
+    setIsSaving(true);
+    try {
+      await onSave(draftValue);
+      setIsOpen(false);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className={`editable-field-row ${field.type === "textarea" ? "wide" : ""}`} data-testid={testId ? `${testId}-display` : undefined}>
+        <div>
+          <span className="editable-field-label">{field.label}</span>
+          <strong title={displayValue}>{displayValue}</strong>
+        </div>
+        <button className="icon-button" aria-label={`编辑${field.label}`} type="button" onClick={() => setIsOpen(true)}>
+          <Pencil size={15} />
+        </button>
+      </div>
+      {isOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={`编辑${field.label}`}>
+          <div className="modal-panel app-dialog editable-field-dialog">
+            <div className="stage-header">
+              <div>
+                <strong>更新字段</strong>
+                <div className="subtle">{field.label}</div>
+              </div>
+              <button className="icon-button" aria-label="关闭" type="button" onClick={() => setIsOpen(false)} disabled={isSaving}>
+                <XCircle size={16} />
+              </button>
+            </div>
+            <FieldInput
+              allRecords={allRecords}
+              field={field}
+              mediaAssets={mediaAssets}
+              onChange={setDraftValue}
+              onDeleteMediaAsset={onDeleteMediaAsset}
+              onRecordsLoaded={onRecordsLoaded}
+              onUpdateMediaAsset={onUpdateMediaAsset}
+              onUploadMediaAssets={onUploadMediaAssets}
+              testId={testId}
+              users={users}
+              value={draftValue}
+            />
+            <div className="toolbar end">
+              <button className="secondary-button" type="button" onClick={() => setIsOpen(false)} disabled={isSaving}>
+                取消
+              </button>
+              <button className="primary-button" type="button" onClick={() => void saveField()} disabled={isSaving}>
+                <Save size={16} />
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function EditableOwnerRow({
+  canEdit,
+  disabled,
+  isPending,
+  ownerName,
+  testId,
+  users,
+  value,
+  onChange,
+  onSave
+}: {
+  canEdit: boolean;
+  disabled: boolean;
+  isPending: boolean;
+  ownerName: string;
+  testId: string;
+  users: User[];
+  value: string;
+  onChange: (value: string) => void;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftValue, setDraftValue] = useState(value);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDraftValue(value);
+    }
+  }, [isOpen, value]);
+
+  async function saveOwner() {
+    setIsSaving(true);
+    try {
+      await onSave(draftValue);
+      onChange(draftValue);
+      setIsOpen(false);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="editable-field-row" data-testid={`${testId}-display`}>
+        <div>
+          <span className="editable-field-label">负责人</span>
+          <strong title={ownerName}>{ownerName}</strong>
+        </div>
+        <button className="icon-button" aria-label="编辑负责人" type="button" onClick={() => setIsOpen(true)} disabled={!canEdit || disabled || isPending}>
+          <Pencil size={15} />
+        </button>
+      </div>
+      {isOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="编辑负责人">
+          <div className="modal-panel app-dialog editable-field-dialog">
+            <div className="stage-header">
+              <div>
+                <strong>更新字段</strong>
+                <div className="subtle">负责人</div>
+              </div>
+              <button className="icon-button" aria-label="关闭" type="button" onClick={() => setIsOpen(false)} disabled={isSaving}>
+                <XCircle size={16} />
+              </button>
+            </div>
+            <OwnerSelect
+              disabled={disabled}
+              testId={testId}
+              users={users}
+              value={draftValue}
+              onChange={setDraftValue}
+            />
+            <div className="toolbar end">
+              <button className="secondary-button" type="button" onClick={() => setIsOpen(false)} disabled={isSaving}>
+                取消
+              </button>
+              <button className="primary-button" type="button" onClick={() => void saveOwner()} disabled={isSaving}>
+                <Save size={16} />
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function OwnerSelect({
   allowEmpty = false,
   disabled,
@@ -12588,6 +12859,8 @@ function ContactProfileEditor({
   onOwnerChange,
   onRecordsLoaded,
   onSave,
+  onSaveField,
+  onSaveOwner,
   onTitleChange,
   onUpdateMediaAsset,
   onUploadMediaAssets,
@@ -12615,6 +12888,8 @@ function ContactProfileEditor({
   onOwnerChange: (ownerId: string) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
   onSave: () => void;
+  onSaveField: (field: FieldDefinition, value: string) => Promise<void>;
+  onSaveOwner: (ownerId: string) => Promise<void>;
   onTitleChange: (title: string) => void;
   onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
   onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
@@ -12695,23 +12970,27 @@ function ContactProfileEditor({
           </div>
           <div className="form-grid contact-profile-form">
             {companyField ? (
-              <FieldInput
+              <EditableFieldRow
                 allRecords={allRecords}
                 field={companyField}
                 mediaAssets={mediaAssets}
-                onChange={(nextValue) => onValueChange(companyField.key, nextValue)}
                 onRecordsLoaded={onRecordsLoaded}
+                onSave={(nextValue) => onSaveField(companyField, nextValue)}
                 testId={`edit-field-${record.objectKey}-${companyField.key}`}
                 users={users}
                 value={values[companyField.key] ?? ""}
               />
             ) : null}
-            <OwnerSelect
+            <EditableOwnerRow
+              canEdit={canManageOwners}
               disabled={!canManageOwners}
+              isPending={isPending}
+              ownerName={ownerLabel(ownerId || undefined, users)}
               testId="edit-record-owner"
               users={users}
               value={ownerId}
               onChange={onOwnerChange}
+              onSave={onSaveOwner}
             />
           </div>
         </section>
@@ -12725,14 +13004,14 @@ function ContactProfileEditor({
           </div>
           <div className="form-grid contact-profile-form">
             {detailFields.map((field) => (
-              <FieldInput
+              <EditableFieldRow
                 allRecords={allRecords}
                 field={field}
                 key={`contact-profile-${field.id}`}
                 mediaAssets={mediaAssets}
-                onChange={(nextValue) => onValueChange(field.key, nextValue)}
                 onDeleteMediaAsset={onDeleteMediaAsset}
                 onRecordsLoaded={onRecordsLoaded}
+                onSave={(nextValue) => onSaveField(field, nextValue)}
                 onUpdateMediaAsset={onUpdateMediaAsset}
                 onUploadMediaAssets={onUploadMediaAssets}
                 testId={`edit-field-${record.objectKey}-${field.key}`}
@@ -12877,6 +13156,8 @@ function CompanyProfileEditor({
   onPrimaryContactChange,
   onRecordsLoaded,
   onSave,
+  onSaveField,
+  onSaveOwner,
   onShippingAddressesChange,
   onTitleChange,
   onUpdateMediaAsset,
@@ -12915,6 +13196,8 @@ function CompanyProfileEditor({
   onPrimaryContactChange: (contactId: string) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
   onSave: () => void;
+  onSaveField: (field: FieldDefinition, value: string) => Promise<void>;
+  onSaveOwner: (ownerId: string) => Promise<void>;
   onShippingAddressesChange: (addresses: CompanyAddressDraft[]) => void;
   onTitleChange: (title: string) => void;
   onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
@@ -12922,7 +13205,15 @@ function CompanyProfileEditor({
   onValueChange: (fieldKey: string, value: string) => void;
 }) {
   const logoField = fields.find((field) => field.key === "logoUrl");
-  const detailFields = fields.filter((field) => field.key !== "logoUrl");
+  const detailFields = fields.filter(
+    (field) =>
+      ![
+        "logoUrl",
+        companyPrimaryContactValueKey,
+        companyBillingAddressesValueKey,
+        companyShippingAddressesValueKey
+      ].includes(field.key)
+  );
   const primaryContact = contacts.find((contact) => contact.id === primaryContactId) ?? contacts[0];
   const domain = typeof values.domain === "string" ? values.domain.trim() : "";
   const industry = typeof values.industry === "string" ? values.industry.trim() : "";
@@ -12982,22 +13273,26 @@ function CompanyProfileEditor({
             </div>
           </div>
           <div className="form-grid contact-profile-form">
-            <OwnerSelect
+            <EditableOwnerRow
+              canEdit={canManageOwners}
               disabled={!canManageOwners}
+              isPending={isPending}
+              ownerName={ownerLabel(ownerId || undefined, users)}
               testId="edit-record-owner"
               users={users}
               value={ownerId}
               onChange={onOwnerChange}
+              onSave={onSaveOwner}
             />
             {detailFields.map((field) => (
-              <FieldInput
+              <EditableFieldRow
                 allRecords={allRecords}
                 field={field}
                 key={`company-profile-${field.id}`}
                 mediaAssets={mediaAssets}
-                onChange={(nextValue) => onValueChange(field.key, nextValue)}
                 onDeleteMediaAsset={onDeleteMediaAsset}
                 onRecordsLoaded={onRecordsLoaded}
+                onSave={(nextValue) => onSaveField(field, nextValue)}
                 onUpdateMediaAsset={onUpdateMediaAsset}
                 onUploadMediaAssets={onUploadMediaAssets}
                 testId={`edit-field-${record.objectKey}-${field.key}`}
@@ -13016,10 +13311,15 @@ function CompanyProfileEditor({
             </div>
           </div>
           <div className="form-grid contact-profile-form">
-            <CompanyPrimaryContactSelect
+            <EditablePrimaryContactRow
               contacts={contacts}
+              disabled={isPending}
               value={primaryContactId}
               onChange={onPrimaryContactChange}
+              onSave={(contactId) => {
+                const field = fields.find((candidate) => candidate.key === companyPrimaryContactValueKey);
+                return field ? onSaveField(field, contactId) : Promise.resolve();
+              }}
             />
           </div>
           <div className="company-profile-addresses">
@@ -13648,6 +13948,83 @@ function CompanyPrimaryContactSelect({
       </select>
       <span className="subtle">联系人通过“联系人”的关联公司字段归属到此公司。给公司发邮件时会优先使用主联系人邮箱。</span>
     </label>
+  );
+}
+
+function EditablePrimaryContactRow({
+  contacts,
+  disabled,
+  value,
+  onChange,
+  onSave
+}: {
+  contacts: CrmRecord[];
+  disabled: boolean;
+  value: string;
+  onChange: (contactId: string) => void;
+  onSave: (contactId: string) => Promise<void>;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draftValue, setDraftValue] = useState(value);
+  const [isSaving, setIsSaving] = useState(false);
+  const selectedContact = contacts.find((contact) => contact.id === value);
+  const displayValue = selectedContact ? formatEmailContactLabel(selectedContact, getPrimaryRecordEmail(selectedContact)) : "未指定";
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDraftValue(value);
+    }
+  }, [isOpen, value]);
+
+  async function savePrimaryContact() {
+    setIsSaving(true);
+    try {
+      await onSave(draftValue);
+      onChange(draftValue);
+      setIsOpen(false);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="editable-field-row wide" data-testid="company-primary-contact-select-display">
+        <div>
+          <span className="editable-field-label">主联系人</span>
+          <strong title={displayValue}>{displayValue}</strong>
+          <small>给公司发邮件时会优先使用主联系人邮箱。</small>
+        </div>
+        <button className="icon-button" aria-label="编辑主联系人" type="button" onClick={() => setIsOpen(true)} disabled={disabled || contacts.length === 0}>
+          <Pencil size={15} />
+        </button>
+      </div>
+      {isOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="编辑主联系人">
+          <div className="modal-panel app-dialog editable-field-dialog">
+            <div className="stage-header">
+              <div>
+                <strong>更新字段</strong>
+                <div className="subtle">主联系人</div>
+              </div>
+              <button className="icon-button" aria-label="关闭" type="button" onClick={() => setIsOpen(false)} disabled={isSaving}>
+                <XCircle size={16} />
+              </button>
+            </div>
+            <CompanyPrimaryContactSelect contacts={contacts} value={draftValue} onChange={setDraftValue} />
+            <div className="toolbar end">
+              <button className="secondary-button" type="button" onClick={() => setIsOpen(false)} disabled={isSaving}>
+                取消
+              </button>
+              <button className="primary-button" type="button" onClick={() => void savePrimaryContact()} disabled={isSaving}>
+                <Save size={16} />
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -14337,6 +14714,19 @@ function toInputValue(value: unknown): string {
   }
 
   return String(value);
+}
+
+function parseSingleFieldValue(field: FieldDefinition, raw: string): unknown {
+  if (raw === "") {
+    return "";
+  }
+  if (field.type === "number" || field.type === "currency") {
+    return Number(raw);
+  }
+  if (field.type === "boolean") {
+    return raw === "true";
+  }
+  return raw;
 }
 
 function parseFormValues(fields: FieldDefinition[], values: Record<string, string>, objectKey?: string, currencyRecords: CrmRecord[] = []): Record<string, unknown> {

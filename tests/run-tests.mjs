@@ -3123,6 +3123,13 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /<ContactProfileInfoStrip/);
   assert.match(source, /data-testid="contact-profile-info-strip"/);
   assert.doesNotMatch(source, /资料已建立|公司已关联|可直接联系|可持续跟进/);
+  assert.match(source, /function EditableFieldRow/);
+  assert.match(source, /function EditableOwnerRow/);
+  assert.match(source, /function submitSingleRecordField/);
+  assert.match(source, /data: \{\s*\[field\.key\]: parseSingleFieldValue\(field, nextValue\)/);
+  assert.match(source, /onSaveField=\{submitSingleRecordField\}/);
+  assert.match(source, /<EditableFieldRow[\s\S]*onSave=\{\(nextValue\) => onSaveField\(field, nextValue\)\}/);
+  assert.match(source, /<EditableOwnerRow[\s\S]*onSave=\{onSaveOwner\}/);
   assert.match(source, /<ContactDetailActivityTabs/);
   assert.match(source, /activeTab=\{contactDetailActivityTab\}/);
   assert.match(source, /onChange=\{setContactDetailActivityTab\}/);
@@ -3143,6 +3150,8 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(styles, /\.contact-profile-info-strip/);
   assert.match(styles, /\.contact-profile-info-item/);
   assert.match(styles, /\.contact-profile-info-label/);
+  assert.match(styles, /\.editable-field-row/);
+  assert.match(styles, /\.editable-field-dialog/);
   assert.match(styles, /\.contact-detail-activity-tabs/);
   assert.match(styles, /\.contact-detail-activity-tab:hover/);
   assert.match(styles, /\.contact-detail-activity-tab\.active/);
@@ -3168,7 +3177,8 @@ await run("company detail uses the same profile layout pattern as contacts", () 
   assert.match(source, /data-testid="company-profile-layout"/);
   assert.match(source, /function CompanyProfileEditor/);
   assert.match(source, /function CompanyLogoEditor/);
-  assert.match(source, /<CompanyPrimaryContactSelect[\s\S]*primaryContactId/);
+  assert.match(source, /<EditablePrimaryContactRow[\s\S]*primaryContactId/);
+  assert.match(source, /function EditablePrimaryContactRow/);
   assert.match(source, /<CompanyAddressCards[\s\S]*testIdPrefix="edit-company-billing-address"/);
   assert.match(source, /<CompanyAddressCards[\s\S]*testIdPrefix="edit-company-shipping-address"/);
   assert.match(styles, /\.company-profile-cover/);
