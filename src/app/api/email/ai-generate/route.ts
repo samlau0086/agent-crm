@@ -3,6 +3,7 @@ import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from
 import { emailAiGenerateSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { generateEmailAiOutput } from "@/lib/email/ai-generation";
+import { getGlobalAiAgentSetting } from "@/lib/ai/agents";
 
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,9 @@ async function postApiMetricsHandler(request: NextRequest) {
     const body = await parseJson(request, emailAiGenerateSchema);
     const repository = getCrmRepository();
     const assistantContext = await repository.buildEmailAssistantContext(context, body);
-    const providerConfig = await repository.getEmailAiProviderConfig(context);
+    const settings = await repository.getEmailAiSettings(context);
+    const agent = assistantContext.agentKey ? getGlobalAiAgentSetting(settings, assistantContext.agentKey) : undefined;
+    const providerConfig = agent ? await repository.getAiProviderConfigForAgent(context, agent) : await repository.getEmailAiProviderConfig(context);
     const result = await generateEmailAiOutput({ context: assistantContext, userPrompt: body.userPrompt, sourceText: body.sourceText }, { config: providerConfig });
     await repository.recordEmailAiGeneration(context, {
       purpose: body.purpose,

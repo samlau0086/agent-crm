@@ -290,12 +290,17 @@ export function normalizeGlobalAiAgentSetting(raw: Partial<AiAgentSetting>, fall
     model: normalizeText(raw.model, fallback?.model ?? definition?.defaultModel ?? defaultModel, 120),
     agentMarkdown: normalizeText(raw.agentMarkdown, fallback?.agentMarkdown ?? definition?.defaultAgentMarkdown ?? "# Agent", 12000),
     maxOutputChars: normalizeNumber(raw.maxOutputChars, fallback?.maxOutputChars ?? definition?.maxOutputChars ?? 4000, 500, 12000),
+    providerProfileKey: normalizeProviderProfileKey(raw.providerProfileKey) || fallback?.providerProfileKey,
     provider: raw.provider,
     baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl.trim().slice(0, 500) : fallback?.baseUrl,
     contextPolicy: normalizeContextPolicy(raw.contextPolicy, fallback?.contextPolicy ?? definition?.contextPolicy),
     toolPolicy: normalizeToolPolicy(raw.toolPolicy, fallback?.toolPolicy ?? definition?.toolPolicy),
     outputSchema: raw.outputSchema ?? fallback?.outputSchema ?? definition?.outputSchema ?? "text"
   };
+}
+
+function normalizeProviderProfileKey(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{1,60}$/.test(value.trim()) ? value.trim() : undefined;
 }
 
 function normalizeContextPolicy(value: unknown, fallback?: AiAgentSetting["contextPolicy"]): AiAgentSetting["contextPolicy"] {

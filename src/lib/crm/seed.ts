@@ -401,6 +401,38 @@ export const seedData: CrmSnapshot = {
         timeoutMs: 10000,
         hasApiKey: Boolean(process.env.AI_API_KEY)
       },
+      providerProfiles: [
+        {
+          key: "openai",
+          name: "OpenAI",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4.1-mini",
+          timeoutMs: 10000,
+          hasApiKey: Boolean(process.env.AI_API_KEY),
+          enabled: true
+        },
+        {
+          key: "openrouter",
+          name: "OpenRouter",
+          provider: "openrouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "openai/gpt-4.1-mini",
+          timeoutMs: 10000,
+          hasApiKey: false,
+          enabled: true
+        },
+        {
+          key: "custom",
+          name: "Custom Provider",
+          provider: "custom",
+          baseUrl: "https://api.example.com/v1",
+          model: "custom-model",
+          timeoutMs: 10000,
+          hasApiKey: false,
+          enabled: true
+        }
+      ],
       defaultLocale: "zh-CN",
       requireSourceLinks: true,
       maxHistoryMessages: 8,

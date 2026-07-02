@@ -18,7 +18,7 @@ import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { isContactMethodsAdditionOnly, previousRecordApprovalPatch, stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
-import { decryptAiProviderConfig, encryptAiProviderConfig, mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
+import { decryptAiProviderConfig, decryptAiProviderSettingsBundle, encryptAiProviderSettingsBundle, mergeAiProviderConfigSecrets, mergeAiProviderProfilesSecrets, normalizeAiProviderConfig, publicAiProviderConfig, publicAiProviderProfiles, resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
 import { getGlobalAiAgentSetting, listAiAgentDefinitions, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings } from "@/lib/ai/agents";
 import { runAiAgent } from "@/lib/ai/harness";
 import {
@@ -59,6 +59,7 @@ import type {
   AiAgentRunResult,
   AiAgentSetting,
   AiProviderConfig,
+  AiProviderProfile,
   EmailConnectionConfig,
   EmailMessage,
   EmailSignature,
@@ -824,11 +825,13 @@ function mapEmailAiSettings(settings: {
   maxContextChars: number;
   updatedAt: Date;
 }): EmailAiSettings {
+  const providerBundle = readAiProviderSettingsBundleFromEncrypted(settings.encryptedProviderConfig);
   return {
     workspaceId: settings.workspaceId,
     features: normalizeEmailAiFeatures(settings.features as Partial<EmailAiSettings["features"]>),
     agents: normalizeGlobalAiAgentSettings(settings.agents),
-    providerConfig: publicAiProviderConfig(readAiProviderConfigFromEncrypted(settings.encryptedProviderConfig)),
+    providerConfig: publicAiProviderConfig(providerBundle.providerConfig),
+    providerProfiles: publicAiProviderProfiles(providerBundle.providerProfiles),
     defaultLocale: settings.defaultLocale,
     requireSourceLinks: settings.requireSourceLinks,
     maxHistoryMessages: settings.maxHistoryMessages,
@@ -924,6 +927,15 @@ function readAiProviderConfigFromEncrypted(value?: string | null): AiProviderCon
     return decryptAiProviderConfig(value);
   } catch {
     return normalizeAiProviderConfig(undefined);
+  }
+}
+
+function readAiProviderSettingsBundleFromEncrypted(value?: string | null): { providerConfig: AiProviderConfig; providerProfiles: AiProviderProfile[] } {
+  try {
+    return decryptAiProviderSettingsBundle(value);
+  } catch {
+    const providerConfig = readAiProviderConfigFromEncrypted(value);
+    return { providerConfig, providerProfiles: [] };
   }
 }
 
@@ -3137,6 +3149,13 @@ export class PrismaCrmRepository {
     return this.ensureEmailAiSettings(context.workspaceId);
   }
 
+  async getAiProviderConfigForAgent(context: RequestContext, agent: AiAgentSetting): Promise<AiProviderConfig> {
+    requirePermission(context, "ai.use");
+    const providerConfig = await this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+    const profiles = await this.getEmailAiProviderProfilesForWorkspace(context.workspaceId);
+    return resolveAiProviderConfigForAgent(providerConfig, profiles, agent);
+  }
+
   async listAiAgents(context: RequestContext): Promise<AiAgentSetting[]> {
     requirePermission(context, "ai.admin");
     const settings = await this.ensureEmailAiSettings(context.workspaceId);
@@ -3186,7 +3205,7 @@ export class PrismaCrmRepository {
         expectedOutput: agent.outputSchema,
         dryRun: input.dryRun
       },
-      { agent, providerConfig, sources: harnessContext.sources }
+      { agent, providerConfig, providerProfiles: settings.providerProfiles, sources: harnessContext.sources }
     );
     await this.writeAuditLog(context, "create", "ai_agent_run", agentKey, {
       summary: `Ran AI agent ${agent.name}`,
@@ -3235,6 +3254,7 @@ export class PrismaCrmRepository {
       features?: Partial<EmailAiSettings["features"]>;
       agents?: unknown;
       providerConfig?: Partial<AiProviderConfig>;
+      providerProfiles?: unknown;
     }
   ): Promise<EmailAiSettings> {
     requirePermission(context, "ai.admin");
@@ -3242,13 +3262,15 @@ export class PrismaCrmRepository {
     const features = normalizeEmailAiFeatures({ ...current.features, ...(patch.features ?? {}) });
     const agents = patch.agents !== undefined ? normalizeGlobalAiAgentSettings(patch.agents) : normalizeGlobalAiAgentSettings(current.agents);
     const currentProviderConfig = await this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+    const currentProviderProfiles = await this.getEmailAiProviderProfilesForWorkspace(context.workspaceId);
     const providerConfig = patch.providerConfig !== undefined ? mergeAiProviderConfigSecrets(currentProviderConfig, patch.providerConfig) : undefined;
+    const providerProfiles = patch.providerProfiles !== undefined ? mergeAiProviderProfilesSecrets(currentProviderProfiles, patch.providerProfiles, providerConfig ?? currentProviderConfig) : undefined;
     const updated = await this.db.emailAiSettings.update({
       where: { workspaceId: context.workspaceId },
       data: {
         features: features as Prisma.InputJsonValue,
         agents: agents as unknown as Prisma.InputJsonValue,
-        ...(providerConfig ? { encryptedProviderConfig: encryptAiProviderConfig(providerConfig) } : {}),
+        ...(providerConfig || providerProfiles ? { encryptedProviderConfig: encryptAiProviderSettingsBundle({ providerConfig: providerConfig ?? currentProviderConfig, providerProfiles: providerProfiles ?? currentProviderProfiles }) } : {}),
         defaultLocale: patch.defaultLocale?.trim() || current.defaultLocale,
         requireSourceLinks: patch.requireSourceLinks ?? current.requireSourceLinks,
         maxHistoryMessages: normalizeIntegerLimit(patch.maxHistoryMessages ?? current.maxHistoryMessages, 1, 20),
@@ -6964,7 +6986,12 @@ export class PrismaCrmRepository {
 
   private async getEmailAiProviderConfigForWorkspace(workspaceId: string): Promise<AiProviderConfig> {
     const settings = await this.db.emailAiSettings.findUnique({ where: { workspaceId } });
-    return readAiProviderConfigFromEncrypted(settings?.encryptedProviderConfig);
+    return readAiProviderSettingsBundleFromEncrypted(settings?.encryptedProviderConfig).providerConfig;
+  }
+
+  private async getEmailAiProviderProfilesForWorkspace(workspaceId: string): Promise<AiProviderProfile[]> {
+    const settings = await this.db.emailAiSettings.findUnique({ where: { workspaceId } });
+    return readAiProviderSettingsBundleFromEncrypted(settings?.encryptedProviderConfig).providerProfiles;
   }
 
   private async ensureEmailSyncSettings(workspaceId: string): Promise<EmailSyncSettings> {

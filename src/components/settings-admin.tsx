@@ -8,7 +8,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -170,7 +170,7 @@ const fieldTypes: FieldDefinition["type"][] = [
 
 type SettingsTabKey = "access" | "crm" | "pool" | "aiAgents" | "workflows" | "integrations" | "operations";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
-type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[] };
+type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[]; providerProfiles: AiProviderProfile[] };
 type TagSelectOption = { value: string; label: string; description?: string };
 
 const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
@@ -194,6 +194,14 @@ const aiAgentToolOptions: TagSelectOption[] = [
   { value: "summarize_thread", label: "Summarize thread", description: "Create compact email thread memory" },
   { value: "translate_email", label: "Translate email", description: "Translate selected email content" },
   { value: "analyze_context", label: "Analyze context", description: "Analyze CRM context and suggest next steps" }
+];
+
+const aiProviderTypeOptions: Array<{ value: AiProviderProfile["provider"]; label: string; baseUrl: string; model: string }> = [
+  { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
+  { value: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4.1-mini" },
+  { value: "gemini", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-1.5-flash" },
+  { value: "openai-compatible", label: "OpenAI Compatible", baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
+  { value: "custom", label: "Custom Provider", baseUrl: "https://api.example.com/v1", model: "custom-model" }
 ];
 
 export function SettingsAdmin(props: SettingsAdminProps) {
@@ -246,6 +254,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [workflowDraftJson, setWorkflowDraftJson] = useState("");
   const [aiAgentDefinitions, setAiAgentDefinitions] = useState<AiAgentDefinition[]>([]);
   const [aiAgents, setAiAgents] = useState<AiAgentSetting[]>(props.emailAiSettings.agents);
+  const [aiProviderProfiles, setAiProviderProfiles] = useState<AiProviderProfile[]>(props.emailAiSettings.providerProfiles);
   const [selectedAiAgentKey, setSelectedAiAgentKey] = useState(props.emailAiSettings.agents[0]?.key ?? "");
   const [aiAgentRuns, setAiAgentRuns] = useState<AiAgentRunLog[]>([]);
   const [aiAgentActionKey, setAiAgentActionKey] = useState("");
@@ -281,6 +290,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const selectedWebhookEdit = props.webhooks.find((webhook) => webhook.id === selectedWebhookEditId);
   const selectedAiAgent = aiAgents.find((agent) => agent.key === selectedAiAgentKey) ?? aiAgents[0];
   const selectedAiAgentDefinition = selectedAiAgent ? aiAgentDefinitions.find((definition) => definition.key === selectedAiAgent.key) : undefined;
+  const aiProviderProfileOptions = useMemo<TagSelectOption[]>(
+    () => aiProviderProfiles.filter((profile) => profile.enabled).map((profile) => ({ value: profile.key, label: profile.name, description: `${profile.provider} · ${profile.model}${profile.hasApiKey ? "" : " · missing API key"}` })),
+    [aiProviderProfiles]
+  );
   const selectedAiAgentFixtureRecord = props.records.find((record) => record.id === aiAgentTestRecordId);
   const currencyRecords = useMemo(() => props.records.filter((record) => record.objectKey === "currencies"), [props.records]);
   const selectedCurrency = currencyRecords.find((currency) => currency.id === selectedCurrencyId);
@@ -685,6 +698,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     const payload = await fetchJson<AiAgentsPayload>("/api/ai/agents", { method: "GET" });
     setAiAgentDefinitions(payload.definitions);
     setAiAgents(payload.agents);
+    setAiProviderProfiles(payload.providerProfiles);
     if (!selectedAiAgentKey && payload.agents[0]) {
       setSelectedAiAgentKey(payload.agents[0].key);
     }
@@ -698,6 +712,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         scenario: agent.scenario,
         enabled: agent.enabled,
         model: agent.model,
+        providerProfileKey: agent.providerProfileKey,
         provider: agent.provider,
         baseUrl: agent.baseUrl,
         agentMarkdown: agent.agentMarkdown,
@@ -727,6 +742,49 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     const runs = await fetchJson<AiAgentRunLog[]>(`/api/ai/agents/${encodeURIComponent(agent.key)}/runs`, { method: "GET" });
     setAiAgentRuns(runs);
     setMessage(`AI Agent 测试完成：${result.generationMode}`);
+  }
+
+  async function saveAiProviderProfiles() {
+    const updated = await fetchJson<EmailAiSettings>("/api/email/ai-settings", {
+      method: "PATCH",
+      body: { providerProfiles: aiProviderProfiles }
+    });
+    setAiProviderProfiles(updated.providerProfiles);
+    setMessage("AI Providers 已保存。");
+  }
+
+  function updateAiProviderProfile(key: string, patch: Partial<AiProviderProfile>) {
+    setAiProviderProfiles((current) => current.map((profile) => (profile.key === key ? { ...profile, ...patch } : profile)));
+  }
+
+  function addAiProviderProfile(provider: AiProviderProfile["provider"] = "custom") {
+    const defaults = aiProviderTypeOptions.find((option) => option.value === provider) ?? aiProviderTypeOptions[0];
+    const keyBase = provider === "custom" ? "custom-provider" : provider;
+    const existingKeys = new Set(aiProviderProfiles.map((profile) => profile.key));
+    let key = keyBase;
+    let counter = 2;
+    while (existingKeys.has(key)) {
+      key = `${keyBase}-${counter}`;
+      counter += 1;
+    }
+    setAiProviderProfiles((current) => [
+      ...current,
+      {
+        key,
+        name: defaults.label,
+        enabled: true,
+        provider,
+        baseUrl: defaults.baseUrl,
+        model: defaults.model,
+        timeoutMs: 10000,
+        hasApiKey: false
+      }
+    ]);
+  }
+
+  function removeAiProviderProfile(key: string) {
+    setAiProviderProfiles((current) => current.filter((profile) => profile.key !== key));
+    setAiAgents((current) => current.map((agent) => (agent.providerProfileKey === key ? { ...agent, providerProfileKey: undefined } : agent)));
   }
 
   function updateAiAgentDraft(agentKey: string, patch: Partial<AiAgentSetting>) {
@@ -1597,6 +1655,91 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 刷新
               </button>
             </div>
+            <div className="settings-panel harness-config-panel" data-testid="ai-provider-profiles">
+              <div className="settings-panel-header">
+                <div>
+                  <h3>AI Providers</h3>
+                  <p className="subtle">Configure OpenAI, OpenRouter, Gemini, OpenAI-compatible, or custom providers, then assign them to individual AI agents.</p>
+                </div>
+                <div className="button-row">
+                  <button className="secondary-button" type="button" onClick={() => addAiProviderProfile("openai")} disabled={Boolean(aiAgentActionKey)}>
+                    <Plus size={14} />
+                    OpenAI
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => addAiProviderProfile("openrouter")} disabled={Boolean(aiAgentActionKey)}>
+                    <Plus size={14} />
+                    OpenRouter
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => addAiProviderProfile("custom")} disabled={Boolean(aiAgentActionKey)}>
+                    <Plus size={14} />
+                    Custom
+                  </button>
+                  <button className="primary-button" type="button" onClick={() => { void runAiAgentAction("save-providers", saveAiProviderProfiles); }} disabled={Boolean(aiAgentActionKey)}>
+                    <Save size={15} />
+                    Save providers
+                  </button>
+                </div>
+              </div>
+              <div className="activity-list">
+                {aiProviderProfiles.map((profile) => (
+                  <article className="activity-item" key={profile.key}>
+                    <div className="form-grid">
+                      <label>
+                        <span className="subtle">Name</span>
+                        <input className="input" value={profile.name} onChange={(event) => updateAiProviderProfile(profile.key, { name: event.target.value })} />
+                      </label>
+                      <label>
+                        <span className="subtle">Provider</span>
+                        <select
+                          className="select"
+                          value={profile.provider}
+                          onChange={(event) => {
+                            const provider = event.target.value as AiProviderProfile["provider"];
+                            const defaults = aiProviderTypeOptions.find((option) => option.value === provider);
+                            updateAiProviderProfile(profile.key, {
+                              provider,
+                              baseUrl: defaults?.baseUrl ?? profile.baseUrl,
+                              model: defaults?.model ?? profile.model
+                            });
+                          }}
+                        >
+                          {aiProviderTypeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span className="subtle">Base URL</span>
+                        <input className="input" value={profile.baseUrl} onChange={(event) => updateAiProviderProfile(profile.key, { baseUrl: event.target.value })} />
+                      </label>
+                      <label>
+                        <span className="subtle">Model</span>
+                        <input className="input" value={profile.model} onChange={(event) => updateAiProviderProfile(profile.key, { model: event.target.value })} />
+                      </label>
+                      <label>
+                        <span className="subtle">API Key</span>
+                        <input className="input" type="password" placeholder={profile.hasApiKey ? "Saved; leave blank to keep existing key" : "Paste API key"} onChange={(event) => updateAiProviderProfile(profile.key, { apiKey: event.target.value || undefined })} />
+                      </label>
+                      <label>
+                        <span className="subtle">Timeout ms</span>
+                        <input className="input" inputMode="numeric" value={profile.timeoutMs} onChange={(event) => updateAiProviderProfile(profile.key, { timeoutMs: Number(event.target.value) || profile.timeoutMs })} />
+                      </label>
+                      <label className="settings-toggle">
+                        <input type="checkbox" checked={profile.enabled} onChange={(event) => updateAiProviderProfile(profile.key, { enabled: event.target.checked })} />
+                        Enabled
+                      </label>
+                      <div className="form-actions">
+                        <span className={profile.hasApiKey || profile.apiKey ? "badge" : "danger-badge"}>{profile.hasApiKey || profile.apiKey ? "API key set" : "missing API key"}</span>
+                        <button className="danger-button" type="button" onClick={() => removeAiProviderProfile(profile.key)} disabled={Boolean(aiAgentActionKey)}>
+                          <Trash2 size={14} />
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
             <div className="settings-grid settings-grid-wide">
               <div className="activity-list">
                 {aiAgents.map((agent) => {
@@ -1654,7 +1797,16 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                       </select>
                     </label>
                     <label>
-                      <span className="subtle">Provider</span>
+                      <span className="subtle">Provider profile</span>
+                      <SearchableTagInput
+                        label="Provider profile"
+                        options={aiProviderProfileOptions}
+                        values={selectedAiAgent.providerProfileKey ? [selectedAiAgent.providerProfileKey] : []}
+                        onChange={(values) => updateAiAgentDraft(selectedAiAgent.key, { providerProfileKey: values.at(-1), provider: undefined, baseUrl: undefined })}
+                        placeholder="Search provider profile"
+                        testId="ai-agent-provider-profile"
+                      />
+                      <span className="subtle">Legacy provider override</span>
                       <select
                         className="select"
                         value={selectedAiAgent.provider ?? ""}

@@ -424,6 +424,7 @@ export interface EmailAiSettings {
   features: Record<EmailAiFeature, boolean>;
   agents: AiAgentSetting[];
   providerConfig: AiProviderConfig;
+  providerProfiles: AiProviderProfile[];
   defaultLocale: string;
   requireSourceLinks: boolean;
   maxHistoryMessages: number;
@@ -490,6 +491,12 @@ export interface AiProviderConfig {
   timeoutMs: number;
 }
 
+export interface AiProviderProfile extends AiProviderConfig {
+  key: string;
+  name: string;
+  enabled: boolean;
+}
+
 export interface AiAgentContextPolicy {
   includeRecord?: boolean;
   includeActivities?: boolean;
@@ -527,6 +534,7 @@ export interface AiAgentSetting {
   model: string;
   agentMarkdown: string;
   maxOutputChars: number;
+  providerProfileKey?: string;
   provider?: AiProviderType;
   baseUrl?: string;
   contextPolicy?: AiAgentContextPolicy;

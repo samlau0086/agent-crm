@@ -783,6 +783,7 @@ const aiAgentSettingSchema = z
     name: labelSchema,
     scenario: aiAgentScenarioSchema,
     enabled: z.boolean(),
+    providerProfileKey: z.string().trim().regex(/^[a-z][a-z0-9_-]{1,60}$/).optional(),
     provider: aiAgentProviderSchema.optional(),
     baseUrl: z.string().trim().url().max(500).optional(),
     model: z.string().trim().min(1).max(120),
@@ -791,6 +792,20 @@ const aiAgentSettingSchema = z
     toolPolicy: aiAgentToolPolicySchema.optional(),
     outputSchema: aiAgentOutputSchema.optional(),
     maxOutputChars: z.number().int().min(500).max(12000)
+  })
+  .strict();
+
+const aiProviderProfileSchema = z
+  .object({
+    key: z.string().trim().regex(/^[a-z][a-z0-9_-]{1,60}$/),
+    name: z.string().trim().min(1).max(80),
+    enabled: z.boolean(),
+    provider: aiAgentProviderSchema,
+    baseUrl: z.string().trim().url().max(500),
+    apiKey: z.string().trim().max(500).optional(),
+    hasApiKey: z.boolean().optional(),
+    model: z.string().trim().min(1).max(120),
+    timeoutMs: z.number().int().min(1000).max(60000)
   })
   .strict();
 
@@ -808,6 +823,7 @@ export const emailAiSettingsUpdateSchema = z
       })
       .strict()
       .optional(),
+    providerProfiles: z.array(aiProviderProfileSchema).max(20).optional(),
     agents: z
       .array(aiAgentSettingSchema)
       .max(40)
@@ -826,6 +842,7 @@ export const aiAgentUpdateSchema = z
     scenario: aiAgentScenarioSchema.optional(),
     enabled: z.boolean().optional(),
     model: z.string().trim().min(1).max(120).optional(),
+    providerProfileKey: z.string().trim().regex(/^[a-z][a-z0-9_-]{1,60}$/).optional(),
     provider: aiAgentProviderSchema.optional(),
     baseUrl: z.string().trim().url().max(500).optional(),
     agentMarkdown: z.string().trim().min(1).max(12000).optional(),

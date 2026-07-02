@@ -12,7 +12,7 @@ import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { getEmailProviderCapability } from "@/lib/email/providers";
 import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } from "@/lib/email/tracking";
-import { mergeAiProviderConfigSecrets, normalizeAiProviderConfig, publicAiProviderConfig } from "@/lib/ai/provider-config";
+import { mergeAiProviderConfigSecrets, mergeAiProviderProfilesSecrets, normalizeAiProviderConfig, normalizeAiProviderProfiles, publicAiProviderConfig, publicAiProviderProfiles, resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
 import { getGlobalAiAgentSetting, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings } from "@/lib/ai/agents";
 import { runAiAgent } from "@/lib/ai/harness";
 import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
@@ -45,6 +45,7 @@ import type {
   AiAgentRunResult,
   AiAgentSetting,
   AiProviderConfig,
+  AiProviderProfile,
   EmailConnectionConfig,
   EmailMessage,
   EmailSignature,
@@ -1376,6 +1377,12 @@ export class CrmStore {
     return publicEmailAiSettings(this.ensureEmailAiSettings(context.workspaceId));
   }
 
+  getAiProviderConfigForAgent(context: RequestContext, agent: AiAgentSetting): AiProviderConfig {
+    requirePermission(context, "ai.use");
+    const settings = this.ensureEmailAiSettings(context.workspaceId);
+    return resolveAiProviderConfigForAgent(settings.providerConfig, settings.providerProfiles, agent);
+  }
+
   listAiAgents(context: RequestContext): AiAgentSetting[] {
     requirePermission(context, "ai.admin");
     return clone(normalizeGlobalAiAgentSettings(this.ensureEmailAiSettings(context.workspaceId).agents));
@@ -1420,7 +1427,7 @@ export class CrmStore {
         expectedOutput: agent.outputSchema,
         dryRun: input.dryRun
       },
-      { agent, providerConfig: normalizeAiProviderConfig(settings.providerConfig), sources: harnessContext.sources }
+      { agent, providerConfig: normalizeAiProviderConfig(settings.providerConfig), providerProfiles: settings.providerProfiles, sources: harnessContext.sources }
     );
     this.writeAuditLog(context, "create", "ai_agent_run", agentKey, {
       summary: `Ran AI agent ${agent.name}`,
@@ -1477,6 +1484,11 @@ export class CrmStore {
       settings.providerConfig = mergeAiProviderConfigSecrets(normalizeAiProviderConfig(settings.providerConfig), patch.providerConfig);
     } else {
       settings.providerConfig = normalizeAiProviderConfig(settings.providerConfig);
+    }
+    if (patch.providerProfiles !== undefined) {
+      settings.providerProfiles = mergeAiProviderProfilesSecrets(settings.providerProfiles, patch.providerProfiles, settings.providerConfig);
+    } else {
+      settings.providerProfiles = normalizeAiProviderProfiles(settings.providerProfiles, settings.providerConfig);
     }
     if (patch.defaultLocale !== undefined) settings.defaultLocale = normalizeRequiredText(patch.defaultLocale, "Default locale");
     if (patch.requireSourceLinks !== undefined) settings.requireSourceLinks = patch.requireSourceLinks;
@@ -4057,6 +4069,7 @@ export class CrmStore {
       settings.agents = normalizeGlobalAiAgentSettings(settings.agents);
       settings.features = normalizeEmailAiFeatures(settings.features);
       settings.providerConfig = normalizeAiProviderConfig(settings.providerConfig);
+      settings.providerProfiles = normalizeAiProviderProfiles(settings.providerProfiles, settings.providerConfig);
       return settings;
     }
     const created = createDefaultEmailAiSettings(workspaceId, stamp());
@@ -4948,6 +4961,7 @@ function normalizeEmailAiProviderError(value: string | undefined): string | unde
 function publicEmailAiSettings(settings: EmailAiSettings): EmailAiSettings {
   return {
     ...clone(settings),
-    providerConfig: publicAiProviderConfig(settings.providerConfig)
+    providerConfig: publicAiProviderConfig(settings.providerConfig),
+    providerProfiles: publicAiProviderProfiles(settings.providerProfiles)
   };
 }

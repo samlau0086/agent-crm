@@ -8,7 +8,8 @@ import type {
   EmailThread,
   FieldDefinition,
   KnowledgeArticle,
-  RequestContext
+  RequestContext,
+  AiProviderProfile
 } from "@/lib/crm/types";
 import { repairEmailMojibake } from "@/lib/email/mojibake";
 
@@ -346,6 +347,37 @@ export function normalizeEmailAiFeatures(features: Partial<Record<EmailAiFeature
 }
 
 export function createDefaultEmailAiSettings(workspaceId: string, now: string): EmailAiSettings {
+  const providerConfig = {
+    provider: "openai" as const,
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4.1-mini",
+    timeoutMs: 10000,
+    apiKey: process.env.AI_API_KEY,
+    hasApiKey: Boolean(process.env.AI_API_KEY)
+  };
+  const providerProfiles: AiProviderProfile[] = [
+    { key: "openai", name: "OpenAI", enabled: true, ...providerConfig },
+    {
+      key: "openrouter",
+      name: "OpenRouter",
+      enabled: true,
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "openai/gpt-4.1-mini",
+      timeoutMs: 10000,
+      hasApiKey: false
+    },
+    {
+      key: "custom",
+      name: "Custom Provider",
+      enabled: true,
+      provider: "custom",
+      baseUrl: "https://api.example.com/v1",
+      model: "custom-model",
+      timeoutMs: 10000,
+      hasApiKey: false
+    }
+  ];
   return {
     workspaceId,
     features: {
@@ -357,13 +389,8 @@ export function createDefaultEmailAiSettings(workspaceId: string, now: string): 
       auto_summarize: true
     },
     agents: createDefaultAiAgentSettings(),
-    providerConfig: {
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4.1-mini",
-      timeoutMs: 10000,
-      hasApiKey: Boolean(process.env.AI_API_KEY)
-    },
+    providerConfig,
+    providerProfiles,
     defaultLocale: "zh-CN",
     requireSourceLinks: true,
     maxHistoryMessages: 8,

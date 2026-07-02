@@ -49,7 +49,7 @@ async function postApiMetricsHandler(request: NextRequest) {
         },
         expectedOutput: "text"
       },
-      { agent, providerConfig: await repository.getEmailAiProviderConfig(context), sources: input.sources }
+      { agent, providerConfig: await repository.getAiProviderConfigForAgent(context, agent), sources: input.sources }
     );
     return ok(body.mode === "suggestion" ? { completion: normalizeTalkSuggestion(body.question, result.text), generationMode: result.generationMode } : result);
   } catch (error) {

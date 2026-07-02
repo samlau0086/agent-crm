@@ -9,9 +9,11 @@ async function getApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const repository = getCrmRepository();
+    const settings = await repository.getEmailAiSettings(context);
     return ok({
       definitions: listAiAgentDefinitions(),
-      agents: await repository.listAiAgents(context)
+      agents: await repository.listAiAgents(context),
+      providerProfiles: settings.providerProfiles
     });
   } catch (error) {
     return handleApiError(error, request);

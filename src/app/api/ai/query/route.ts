@@ -56,7 +56,7 @@ async function postApiMetricsHandler(request: NextRequest) {
         },
         {
           agent,
-          providerConfig: await repository.getEmailAiProviderConfig(context),
+          providerConfig: await repository.getAiProviderConfigForAgent(context, agent),
           sources: records.slice(0, 5).map((record) => ({ label: record.title, objectKey: record.objectKey, recordId: record.id }))
         }
       )
