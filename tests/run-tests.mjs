@@ -3045,6 +3045,39 @@ await run("contact and company lists render avatar and logo media fields", () =>
   assert.match(styles, /\.record-list-logo/);
 });
 
+await run("contact and company country fields use searchable sovereign country options", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const countries = readFileSync("src/lib/crm/countries.ts", "utf8");
+  const seed = readFileSync("src/lib/crm/seed.ts", "utf8");
+  const migration = readFileSync("prisma/migrations/20260702090000_add_contact_company_country_fields/migration.sql", "utf8");
+
+  assert.match(countries, /export const countryOptions/);
+  assert.equal((countries.match(/code: "/g) ?? []).length, 195);
+  assert.match(countries, /name: "United States"/);
+  assert.match(countries, /name: "China"/);
+  assert.match(countries, /name: "Holy See"/);
+  assert.match(countries, /name: "Palestine"/);
+  assert.match(countries, /name: "Zimbabwe"/);
+  assert.doesNotMatch(countries, /name: "Hong Kong"/);
+  assert.match(countries, /developmentTier: "advanced"[\s\S]*name: "China"[\s\S]*developmentTier: "upper_middle_income"[\s\S]*name: "India"[\s\S]*developmentTier: "lower_middle_income"/);
+  assert.match(countries, /meta: `\$\{country\.code\} - \$\{country\.developmentLabel\}`/);
+  assert.match(source, /import \{ getCountryLabel, getCountrySelectOptions \} from "@\/lib\/crm\/countries"/);
+  assert.match(source, /function CountrySearchInput/);
+  assert.match(source, /function isCountryField\(field: FieldDefinition\): boolean \{[\s\S]*contacts[\s\S]*companies[\s\S]*field\.key === "country"/);
+  assert.match(source, /options=\{getCountrySelectOptions\(\)\}/);
+  assert.match(source, /\$\{option\.label\} \$\{option\.value\} \$\{option\.meta \?\? ""\}/);
+  assert.match(source, /testId=\{`\$\{testIdPrefix\}-country-\$\{index\}`\}/);
+  assert.match(source, /testId=\{`\$\{testIdPrefix\}-country`\}/);
+  assert.match(source, /getCountryLabel\(address\.country\)/);
+  assert.match(seed, /objectKey: "contacts", key: "country"/);
+  assert.match(seed, /objectKey: "companies", key: "country"/);
+  assert.match(seed, /columns: \["title", "email", "phone", "companyId", "country", "birthday", "gender"\]/);
+  assert.match(seed, /columns: \["title", "domain", "industry", "country", "billingAddresses", "shippingAddresses"\]/);
+  assert.match(migration, /'country', '国家\/地区', 'text'/);
+  assert.match(migration, /ARRAY\['title', 'email', 'phone', 'companyId', 'country', 'birthday', 'gender'\]/);
+  assert.match(migration, /ARRAY\['title', 'domain', 'industry', 'country', 'billingAddresses', 'shippingAddresses'\]/);
+});
+
 await run("contact detail uses a social profile layout instead of a flat form", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");

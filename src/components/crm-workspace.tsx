@@ -56,6 +56,7 @@ import {
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
+import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
@@ -11589,6 +11590,10 @@ function FieldInput({
     );
   }
 
+  if (isCountryField(field)) {
+    return <CountrySearchInput label={field.label} testId={testId} value={value} onChange={onChange} />;
+  }
+
   if (field.type === "textarea") {
     return (
       <label className="wide">
@@ -11700,7 +11705,7 @@ function SelectSearchInput({
   onChange
 }: {
   label: string;
-  options: Array<{ label: string; value: string }>;
+  options: Array<{ label: string; value: string; meta?: string }>;
   testId?: string;
   value: string;
   onChange: (value: string) => void;
@@ -11708,7 +11713,7 @@ function SelectSearchInput({
   const [search, setSearch] = useState("");
   const normalizedSearch = search.trim().toLowerCase();
   const filteredOptions = normalizedSearch
-    ? options.filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(normalizedSearch))
+    ? options.filter((option) => `${option.label} ${option.value} ${option.meta ?? ""}`.toLowerCase().includes(normalizedSearch))
     : options;
 
   return (
@@ -11721,6 +11726,28 @@ function SelectSearchInput({
       value={value}
       onChange={onChange}
       onSearchChange={setSearch}
+    />
+  );
+}
+
+function CountrySearchInput({
+  label,
+  testId,
+  value,
+  onChange
+}: {
+  label: string;
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <SelectSearchInput
+      label={label}
+      options={getCountrySelectOptions()}
+      testId={testId}
+      value={value}
+      onChange={onChange}
     />
   );
 }
@@ -12468,6 +12495,9 @@ function formatRecordChangeValue(field: FieldDefinition, value: unknown, users: 
   }
   if (field.type === "user") {
     return ownerLabel(typeof value === "string" ? value : undefined, users);
+  }
+  if (isCountryField(field)) {
+    return getCountryLabel(value);
   }
   if (field.type === "boolean") {
     return value === true || value === "true" ? "是" : "否";
@@ -13533,10 +13563,12 @@ function CompanyAddressesEditor({
                 <span className="subtle">标签</span>
                 <input className="input" value={address.label ?? ""} onChange={(event) => updateAddress(address.id, { label: event.target.value })} placeholder="总部 / 仓库 / 办公室" />
               </label>
-              <label>
-                <span className="subtle">国家/地区</span>
-                <input className="input" value={address.country ?? ""} onChange={(event) => updateAddress(address.id, { country: event.target.value })} />
-              </label>
+              <CountrySearchInput
+                label="国家/地区"
+                testId={`${testIdPrefix}-country-${index}`}
+                value={address.country ?? ""}
+                onChange={(country) => updateAddress(address.id, { country })}
+              />
               <label>
                 <span className="subtle">省/州</span>
                 <input className="input" value={address.region ?? ""} onChange={(event) => updateAddress(address.id, { region: event.target.value })} />
@@ -13703,10 +13735,12 @@ function CompanyAddressSingleEditor({
           <span className="subtle">标签</span>
           <input className="input" value={address.label ?? ""} onChange={(event) => updateAddress({ label: event.target.value })} placeholder="总部 / 仓库 / 办公室" />
         </label>
-        <label>
-          <span className="subtle">国家/地区</span>
-          <input className="input" value={address.country ?? ""} onChange={(event) => updateAddress({ country: event.target.value })} />
-        </label>
+        <CountrySearchInput
+          label="国家/地区"
+          testId={`${testIdPrefix}-country`}
+          value={address.country ?? ""}
+          onChange={(country) => updateAddress({ country })}
+        />
         <label>
           <span className="subtle">省/州</span>
           <input className="input" value={address.region ?? ""} onChange={(event) => updateAddress({ region: event.target.value })} />
@@ -13733,7 +13767,7 @@ function CompanyAddressSingleEditor({
 }
 
 function formatCompanyAddressRegion(address: CompanyAddressDraft): string {
-  return [address.city, address.region, address.country].filter(Boolean).join(", ");
+  return [address.city, address.region, getCountryLabel(address.country)].filter(Boolean).join(", ");
 }
 
 function formatCompanyAddressLines(address: CompanyAddressDraft): string[] {
@@ -14245,6 +14279,9 @@ function displayValue(field: FieldDefinition | undefined, value: unknown, record
   if (!field) {
     return String(value ?? "-");
   }
+  if (isCountryField(field)) {
+    return getCountryLabel(value) || "-";
+  }
   if (field.type === "currency") {
     return currencies ? formatMoneyWithCurrency(value, getBaseCurrencyCode(currencies), currencies) : formatCurrency(value);
   }
@@ -14395,6 +14432,10 @@ function toDateTimeLocalValue(value?: string): string {
 
 function isCurrencyCodeField(field: FieldDefinition): boolean {
   return (field.objectKey === "products" && field.key === "unitPriceCurrency") || (field.objectKey === "quotes" && field.key === "quoteCurrency");
+}
+
+function isCountryField(field: FieldDefinition): boolean {
+  return (field.objectKey === "contacts" || field.objectKey === "companies") && field.key === "country";
 }
 
 function ownerLabel(ownerId: string | undefined, users: User[]): string {
