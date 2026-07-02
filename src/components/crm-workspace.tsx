@@ -4365,34 +4365,43 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </div>
                     ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
-                      <ContactProfileEditor
-                        allRecords={records}
-                        canManageOwners={canManageViews}
-                        contactMethodValue={editValues[contactMethodsValueKey] ?? ""}
-                        fields={selectedFormFields}
-                        isPending={isPending || isRecordSavePending}
-                        mediaAssets={mediaAssets}
-                        ownerId={editOwnerId}
-                        pendingDeleteRequest={selectedRecordPendingDeleteRequest}
-                        pendingUpdateRequest={selectedRecordPendingUpdateRequest}
-                        record={selectedRecord}
-                        saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
-                        title={editTitle}
-                        users={props.users}
-                        values={editValues}
-                        onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
-                        onContactMethodsChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
-                        onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
-                        onOwnerChange={setEditOwnerId}
-                        onRecordsLoaded={mergeLoadedRecords}
-                        onSave={() => runRecordSaveAction(submitUpdateRecord)}
-                        onTitleChange={setEditTitle}
-                        onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
-                        onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
-                        onUploadMediaAssets={uploadMediaAssets}
-                        onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
-                        showContactMethodEditor={selectedRecordQuickContactMethods.length === 0}
-                      />
+                      <>
+                        <ContactProfileEditor
+                          allRecords={records}
+                          canManageOwners={canManageViews}
+                          contactMethodValue={editValues[contactMethodsValueKey] ?? ""}
+                          fields={selectedFormFields}
+                          isPending={isPending || isRecordSavePending}
+                          mediaAssets={mediaAssets}
+                          ownerId={editOwnerId}
+                          pendingDeleteRequest={selectedRecordPendingDeleteRequest}
+                          pendingUpdateRequest={selectedRecordPendingUpdateRequest}
+                          record={selectedRecord}
+                          saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
+                          title={editTitle}
+                          users={props.users}
+                          values={editValues}
+                          onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                          onContactMethodsChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
+                          onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
+                          onOwnerChange={setEditOwnerId}
+                          onRecordsLoaded={mergeLoadedRecords}
+                          onSave={() => runRecordSaveAction(submitUpdateRecord)}
+                          onTitleChange={setEditTitle}
+                          onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                          onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
+                          onUploadMediaAssets={uploadMediaAssets}
+                          onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
+                          showContactMethodEditor={selectedRecordQuickContactMethods.length === 0}
+                        />
+                        <ContactDetailActivityTabs
+                          activityCount={selectedActivities.length}
+                          callCount={selectedCalls.length}
+                          emailCount={selectedRecordVisibleEmailThreads.length}
+                          noteCount={selectedNotes.length}
+                          taskCount={selectedTasks.length}
+                        />
+                      </>
                     ) : selectedRecord.objectKey === "companies" ? (
                       <CompanyProfileEditor
                         allRecords={records}
@@ -12584,6 +12593,8 @@ function ContactProfileEditor({
   const detailFields = fields.filter((field) => field.key !== "avatarUrl" && field.key !== "companyId");
   const primaryEmail = getPrimaryRecordEmail({ ...record, title, data: { ...record.data, ...values } });
   const company = typeof values.companyId === "string" ? allRecords.find((candidate) => candidate.id === values.companyId) : undefined;
+  const contactMethods = normalizeContactMethods(contactMethodValue);
+  const hasDirectChannel = Boolean(primaryEmail) || contactMethods.length > 0;
 
   return (
     <div className="contact-profile-layout" data-testid="contact-profile-layout">
@@ -12628,6 +12639,12 @@ function ContactProfileEditor({
             )}
           </div>
         </div>
+        <ContactProfileProgressStrip
+          companyLinked={Boolean(company)}
+          hasDirectChannel={hasDirectChannel}
+          hasPendingReview={Boolean(pendingDeleteRequest || pendingUpdateRequest)}
+          hasPrimaryEmail={Boolean(primaryEmail)}
+        />
       </section>
 
       <div className="contact-profile-grid">
@@ -12696,6 +12713,76 @@ function ContactProfileEditor({
           onChange={onContactMethodsChange}
         />
       ) : null}
+    </div>
+  );
+}
+
+function ContactProfileProgressStrip({
+  companyLinked,
+  hasDirectChannel,
+  hasPendingReview,
+  hasPrimaryEmail
+}: {
+  companyLinked: boolean;
+  hasDirectChannel: boolean;
+  hasPendingReview: boolean;
+  hasPrimaryEmail: boolean;
+}) {
+  const steps = [
+    { label: "资料已建立", done: true },
+    { label: "公司已关联", done: companyLinked },
+    { label: "可直接联系", done: hasPrimaryEmail || hasDirectChannel },
+    { label: hasPendingReview ? "待审核" : "可持续跟进", done: !hasPendingReview }
+  ];
+
+  return (
+    <div className="contact-profile-progress" data-testid="contact-profile-progress">
+      {steps.map((step, index) => (
+        <div className={`contact-profile-progress-step ${step.done ? "done" : ""}`} key={step.label}>
+          <span className="contact-profile-progress-icon">
+            {step.done ? <CheckCircle2 size={16} /> : index + 1}
+          </span>
+          <span>{step.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ContactDetailActivityTabs({
+  activityCount,
+  callCount,
+  emailCount,
+  noteCount,
+  taskCount
+}: {
+  activityCount: number;
+  callCount: number;
+  emailCount: number;
+  noteCount: number;
+  taskCount: number;
+}) {
+  const tabs = [
+    { label: "All", count: activityCount + emailCount, icon: LayoutList, active: true },
+    { label: "Activities", count: activityCount, icon: ActivityIcon },
+    { label: "Emails", count: emailCount, icon: Mail },
+    { label: "Calls", count: callCount, icon: Phone },
+    { label: "Notes", count: noteCount, icon: FileText },
+    { label: "Tasks", count: taskCount, icon: CheckCircle2 }
+  ];
+
+  return (
+    <div className="contact-detail-activity-tabs" data-testid="contact-detail-activity-tabs">
+      {tabs.map((tab) => {
+        const Icon = tab.icon;
+        return (
+          <span className={`contact-detail-activity-tab ${tab.active ? "active" : ""}`} key={tab.label}>
+            <Icon size={15} />
+            <span>{tab.label}</span>
+            {tab.count > 0 ? <span className="contact-detail-tab-count">{tab.count}</span> : null}
+          </span>
+        );
+      })}
     </div>
   );
 }

@@ -634,6 +634,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
 }
 
 .contact-profile-hero.delete-pending {
@@ -824,6 +825,58 @@ button {
   padding-bottom: 2px;
 }
 
+.contact-profile-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 0 16px 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.contact-profile-progress-step {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.contact-profile-progress-step:not(:last-child) {
+  border-right: 1px solid var(--line);
+}
+
+.contact-profile-progress-step.done {
+  color: var(--green);
+}
+
+.contact-profile-progress-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.contact-profile-progress-step.done .contact-profile-progress-icon {
+  border-color: rgba(20, 184, 166, 0.28);
+  background: rgba(20, 184, 166, 0.12);
+  color: var(--green);
+}
+
 .contact-profile-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
@@ -840,6 +893,47 @@ button {
 
 .contact-profile-form {
   margin-top: 12px;
+}
+
+.contact-detail-activity-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.contact-detail-activity-tab {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.contact-detail-activity-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.contact-detail-tab-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(20, 184, 166, 0.12);
+  color: var(--green);
+  font-size: 12px;
 }
 
 .company-profile-cover {
@@ -879,6 +973,10 @@ button {
 
   .contact-profile-actions {
     width: 100%;
+  }
+
+  .contact-profile-progress {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
