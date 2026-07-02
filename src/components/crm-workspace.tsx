@@ -53,7 +53,7 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type DragEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
@@ -12146,8 +12146,38 @@ function SearchDropdown({
   onSearchChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
   const visibleValue = open ? search : selectedLabel;
   const selectedOption = options.find((option) => option.value === value);
+
+  const updateMenuPosition = useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const rect = input.getBoundingClientRect();
+    setMenuStyle({
+      left: rect.left,
+      maxHeight: Math.max(160, Math.min(260, window.innerHeight - rect.bottom - 12)),
+      top: rect.bottom + 4,
+      width: rect.width
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [open, updateMenuPosition]);
+
+  function openMenu() {
+    updateMenuPosition();
+    setOpen(true);
+  }
 
   function selectValue(nextValue: string) {
     onChange(nextValue);
@@ -12163,15 +12193,16 @@ function SearchDropdown({
         data-testid={testId ? `${testId}-search` : undefined}
         disabled={disabled}
         placeholder={selectedOption?.label || placeholder}
+        ref={inputRef}
         value={visibleValue}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
         onChange={(event) => {
           onSearchChange(event.target.value);
-          setOpen(true);
+          openMenu();
         }}
         onFocus={() => {
           onSearchChange("");
-          setOpen(true);
+          openMenu();
         }}
       />
       <select
@@ -12191,7 +12222,7 @@ function SearchDropdown({
         ))}
       </select>
       {open && !disabled ? (
-        <div className="search-dropdown-menu">
+        <div className="search-dropdown-menu floating" style={menuStyle}>
           <button className="search-dropdown-option subtle" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => selectValue("")}>
             不选择
           </button>

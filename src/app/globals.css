@@ -441,6 +441,12 @@ button {
   box-shadow: var(--shadow);
 }
 
+.search-dropdown-menu.floating {
+  position: fixed;
+  right: auto;
+  z-index: 140;
+}
+
 .search-dropdown-option {
   width: 100%;
   display: flex;

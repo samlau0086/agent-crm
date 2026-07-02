@@ -3230,6 +3230,7 @@ await run("deal detail uses profile layout with a one-click stage bar", () => {
 
 await run("workspace exposes product and quote modules as first-class crm objects", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(source, /key: "products", label: "产品", icon: Package/);
   assert.match(source, /key: "quotes", label: "报价", icon: FileText/);
   assert.match(source, /new Set\(\["contacts", "companies", "deals", "products", "quotes"\]\)/);
@@ -3238,6 +3239,9 @@ await run("workspace exposes product and quote modules as first-class crm object
   assert.match(source, /QuotePricingEditor/);
   assert.match(source, /SearchDropdown/);
   assert.match(source, /compat-select/);
+  assert.match(source, /const inputRef = useRef<HTMLInputElement>\(null\)/);
+  assert.match(source, /className="search-dropdown-menu floating" style=\{menuStyle\}/);
+  assert.match(styles, /\.search-dropdown-menu\.floating \{[\s\S]*position: fixed;[\s\S]*z-index: 140;/);
 });
 
 await run("email workspace refreshes threads and selected messages after sync", () => {
