@@ -2728,8 +2728,11 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /setDealCardColor\(floatingColorDeal\.id, option\.key\)/);
   assert.match(source, /getFloatingLayerPosition/);
   assert.match(source, /function handleDealPointerDown/);
-  assert.match(source, /function handleDealPointerMove/);
-  assert.match(source, /function handleDealPointerUp/);
+  assert.match(source, /function finishDealDrag/);
+  assert.match(source, /window\.addEventListener\("pointermove"/);
+  assert.match(source, /window\.addEventListener\("pointerup"/);
+  assert.match(source, /window\.addEventListener\("pointercancel"/);
+  assert.doesNotMatch(source, /setPointerCapture/);
   assert.match(source, /function computeDealDropPreview/);
   assert.match(source, /function computeDealPipelineOrderForDrop/);
   assert.match(source, /pipelineOrder/);

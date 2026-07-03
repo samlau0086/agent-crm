@@ -5880,6 +5880,8 @@ function DealPipelineWorkspace({
   const suppressedClickDealId = useRef("");
   const [dragState, setDragState] = useState<DealPipelineDragState | null>(null);
   const [dropPreview, setDropPreview] = useState<DealPipelineDropPreview | null>(null);
+  const dragStateRef = useRef<DealPipelineDragState | null>(null);
+  const dropPreviewRef = useRef<DealPipelineDropPreview | null>(null);
   const [cardColors, setCardColors] = useState<Record<string, string>>({});
   const [floatingColorPicker, setFloatingColorPicker] = useState<DealCardFloatingLayer | null>(null);
   const [floatingDealMenu, setFloatingDealMenu] = useState<DealCardFloatingLayer | null>(null);
@@ -5914,6 +5916,49 @@ function DealPipelineWorkspace({
     document.body.classList.add("deal-pipeline-dragging");
     return () => document.body.classList.remove("deal-pipeline-dragging");
   }, [dragState]);
+
+  useEffect(() => {
+    dragStateRef.current = dragState;
+  }, [dragState]);
+
+  useEffect(() => {
+    dropPreviewRef.current = dropPreview;
+  }, [dropPreview]);
+
+  useEffect(() => {
+    if (!dragState?.dealId) {
+      return;
+    }
+    function handleWindowPointerMove(event: PointerEvent) {
+      const activeDrag = dragStateRef.current;
+      if (!activeDrag) {
+        return;
+      }
+      event.preventDefault();
+      setDragState((current) => {
+        if (!current) {
+          return current;
+        }
+        const hasMoved = current.hasMoved || Math.abs(event.clientX - current.startX) > 4 || Math.abs(event.clientY - current.startY) > 4;
+        return { ...current, currentX: event.clientX, currentY: event.clientY, hasMoved };
+      });
+      setDropPreview(computeDealDropPreview(event.clientX, event.clientY, activeDrag.dealId));
+    }
+    function handleWindowPointerUp(event: PointerEvent) {
+      event.preventDefault();
+      finishDealDrag(event.clientX, event.clientY);
+    }
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: false });
+    window.addEventListener("pointerup", handleWindowPointerUp, { passive: false });
+    window.addEventListener("pointercancel", handleWindowPointerUp, { passive: false });
+    return () => {
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("pointerup", handleWindowPointerUp);
+      window.removeEventListener("pointercancel", handleWindowPointerUp);
+    };
+    // Drag handlers read the latest mutable state from refs; adding helper functions here reattaches listeners on every pointer move.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragState?.dealId, sortedDealsByStage]);
 
   function setDealCardColor(dealId: string, colorKey: string) {
     setCardColors((current) => {
@@ -5958,9 +6003,7 @@ function DealPipelineWorkspace({
       return;
     }
     const rect = event.currentTarget.getBoundingClientRect();
-    setFloatingColorPicker(null);
-    setFloatingDealMenu(null);
-    setDragState({
+    const nextDragState = {
       dealId: deal.id,
       currentX: event.clientX,
       currentY: event.clientY,
@@ -5971,34 +6014,38 @@ function DealPipelineWorkspace({
       width: rect.width,
       height: rect.height,
       hasMoved: false
-    });
-    setDropPreview(computeDealDropPreview(event.clientX, event.clientY, deal.id));
-    event.currentTarget.setPointerCapture(event.pointerId);
+    };
+    const nextDropPreview = computeDealDropPreview(event.clientX, event.clientY, deal.id);
+    setFloatingColorPicker(null);
+    setFloatingDealMenu(null);
+    dragStateRef.current = nextDragState;
+    dropPreviewRef.current = nextDropPreview;
+    setDragState(nextDragState);
+    setDropPreview(nextDropPreview);
+    event.preventDefault();
   }
 
-  function handleDealPointerMove(event: ReactPointerEvent<HTMLElement>, deal: CrmRecord) {
-    if (!dragState || dragState.dealId !== deal.id) {
+  function finishDealDrag(clientX: number, clientY: number) {
+    const activeDrag = dragStateRef.current;
+    if (!activeDrag) {
       return;
     }
-    event.preventDefault();
-    const hasMoved = dragState.hasMoved || Math.abs(event.clientX - dragState.startX) > 4 || Math.abs(event.clientY - dragState.startY) > 4;
-    setDragState((current) =>
-      current && current.dealId === deal.id ? { ...current, currentX: event.clientX, currentY: event.clientY, hasMoved } : current
-    );
-    setDropPreview(computeDealDropPreview(event.clientX, event.clientY, deal.id));
-  }
-
-  function handleDealPointerUp(event: ReactPointerEvent<HTMLElement>, deal: CrmRecord) {
-    if (!dragState || dragState.dealId !== deal.id) {
+    const deal = deals.find((candidate) => candidate.id === activeDrag.dealId);
+    if (!deal) {
+      dragStateRef.current = null;
+      dropPreviewRef.current = null;
+      setDragState(null);
+      setDropPreview(null);
       return;
     }
-    event.preventDefault();
-    const preview = dropPreview ?? computeDealDropPreview(event.clientX, event.clientY, deal.id);
+    const preview = dropPreviewRef.current ?? computeDealDropPreview(clientX, clientY, deal.id);
     const nextOrder = computeDealPipelineOrderForDrop(preview.stageKey, preview.index, deal.id);
     const previousOrder = getDealPipelineOrder(deal);
-    if (dragState.hasMoved) {
+    if (activeDrag.hasMoved) {
       suppressedClickDealId.current = deal.id;
     }
+    dragStateRef.current = null;
+    dropPreviewRef.current = null;
     setDragState(null);
     setDropPreview(null);
     if (disabled || !preview.stageKey) {
@@ -6138,8 +6185,6 @@ function DealPipelineWorkspace({
                         }
                       }}
                       onPointerDown={(event) => handleDealPointerDown(event, deal)}
-                      onPointerMove={(event) => handleDealPointerMove(event, deal)}
-                      onPointerUp={(event) => handleDealPointerUp(event, deal)}
                     >
                       <DealPipelineCardContents
                         color={color}
