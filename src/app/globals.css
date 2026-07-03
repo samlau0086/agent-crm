@@ -1731,6 +1731,8 @@ button {
 
 .deal-pipeline-stage {
   min-height: 320px;
+  max-height: calc(100vh - 250px);
+  overflow-y: auto;
 }
 
 .deal-stage-header {
@@ -1738,13 +1740,135 @@ button {
 }
 
 .deal-pipeline-card {
+  display: block;
+  position: relative;
+  overflow: visible;
+  padding: 0;
+  background: var(--deal-card-bg, white);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.deal-pipeline-card:hover {
+  transform: translateY(-1px);
+}
+
+.deal-card-color-strip {
+  height: 10px;
+  border-radius: 7px 7px 0 0;
+  background: var(--deal-card-accent, var(--accent));
+}
+
+.deal-card-content {
   display: grid;
-  gap: 5px;
+  gap: 6px;
+  padding: 10px;
+}
+
+.deal-card-title-row,
+.deal-card-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.deal-card-title-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deal-card-controls {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.deal-card-color-button {
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.deal-pipeline-card:hover .deal-card-color-button,
+.deal-card-color-button:focus-visible {
+  opacity: 1;
+}
+
+.deal-card-menu-button {
+  opacity: 1;
+}
+
+.deal-card-color-popover,
+.deal-card-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 50;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
+}
+
+.deal-card-color-popover {
+  display: grid;
+  grid-template-columns: repeat(5, 26px);
+  gap: 8px;
+  width: max-content;
+  padding: 10px;
+}
+
+.deal-card-color-swatch {
+  width: 26px;
+  height: 26px;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.deal-card-color-swatch.selected {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px rgba(15, 118, 110, 0.28);
+}
+
+.deal-card-menu {
+  display: grid;
+  min-width: 178px;
+  padding: 6px;
+}
+
+.deal-card-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.deal-card-menu button:hover {
+  background: #f1f5f9;
+}
+
+.deal-card-activity-count {
+  color: #f59e0b;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .deal-card-amount {
   color: var(--text);
-  font-size: 15px;
+  flex: 0 0 auto;
+  font-size: 13px;
   font-weight: 750;
 }
 

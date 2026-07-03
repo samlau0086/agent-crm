@@ -2711,6 +2711,14 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /data-testid=\{`deal-pipeline-stage-\$\{stage\.key\}`\}/);
   assert.match(source, /data-testid=\{`deal-pipeline-deal-\$\{deal\.id\}`\}/);
   assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
+  assert.match(source, /const dealPipelineCardColorStorageKey = "ai-agent-crm:deal-pipeline-card-colors"/);
+  assert.match(source, /const dealCardColorOptions = \[/);
+  assert.match(source, /setDealCardColor\(deal\.id, option\.key\)/);
+  assert.match(source, /data-testid=\{`deal-card-color-popover-\$\{deal\.id\}`\}/);
+  assert.match(source, /data-testid=\{`deal-card-menu-\$\{deal\.id\}`\}/);
+  assert.match(source, /onCreateActivity\(deal\)/);
+  assert.match(source, /onEditDeal\(deal\)/);
+  assert.match(source, /createPipelineDealActivity/);
   assert.match(source, /\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}\/stage/);
   assert.match(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);
   assert.match(source, /draggable/);
@@ -2731,6 +2739,11 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.record-view-switch/);
   assert.match(styles, /\.deal-pipeline-workspace/);
   assert.match(styles, /\.deal-pipeline-board/);
+  assert.match(styles, /\.deal-card-color-strip/);
+  assert.match(styles, /\.deal-card-color-button/);
+  assert.match(styles, /\.deal-card-color-popover/);
+  assert.match(styles, /\.deal-card-menu/);
+  assert.match(styles, /\.deal-card-activity-count/);
   assert.match(schemas, /export const recordStageUpdateSchema/);
   assert.match(stageRoute, /recordStageUpdateSchema/);
   assert.match(stageRoute, /params\.objectKey !== "deals"/);

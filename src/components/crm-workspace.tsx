@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock3,
   Download,
+  Eye,
   Filter,
   Inbox,
   Image as ImageIcon,
@@ -30,6 +31,7 @@ import {
   Minus,
   MoreVertical,
   Package,
+  Palette,
   Paperclip,
   Pencil,
   FileText,
@@ -2863,6 +2865,28 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  async function createPipelineDealActivity(deal: CrmRecord) {
+    const title = await requestPrompt({
+      title: "创建交易 Activity",
+      message: `为“${deal.title}”创建一条快捷活动记录。`,
+      placeholder: "例如：电话跟进报价反馈 / 安排产品演示",
+      confirmLabel: "创建"
+    });
+    const trimmedTitle = title?.trim();
+    if (!trimmedTitle) {
+      setMessage("已取消创建活动");
+      return;
+    }
+    await createRecordActivity({
+      recordId: deal.id,
+      type: "note",
+      title: trimmedTitle,
+      body: "从交易 Pipeline 卡片快捷创建。"
+    });
+    setMessage("交易活动已创建");
+    router.refresh();
+  }
+
   async function toggleTaskCompletion(activity: Activity, completed: boolean) {
     const updated = await fetchJson<Activity>(`/api/activities/${activity.id}`, {
       method: "PATCH",
@@ -4097,13 +4121,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               ) : null}
               {isDealPipelineView ? (
                 <DealPipelineWorkspace
+                  activities={activities}
                   allRecords={records}
                   deals={filteredRecords}
                   disabled={isPending}
                   pipeline={activePipeline}
                   stages={activePipelineStages}
                   users={props.users}
+                  onCreateActivity={(deal) => runAction(() => createPipelineDealActivity(deal))}
                   onCreateDeal={() => setRecordPanelMode("create")}
+                  onEditDeal={openRecord}
                   onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
                   onOpenDeal={openRecord}
                 />
@@ -5673,30 +5700,82 @@ function ContactFollowUpDialog({
   );
 }
 
+const dealPipelineCardColorStorageKey = "ai-agent-crm:deal-pipeline-card-colors";
+
+const dealCardColorOptions = [
+  { key: "slate", label: "深灰", accent: "#334155", background: "#ffffff" },
+  { key: "red", label: "红色", accent: "#ef4444", background: "#fff1f2" },
+  { key: "amber", label: "琥珀", accent: "#f59e0b", background: "#fffbeb" },
+  { key: "emerald", label: "绿色", accent: "#10b981", background: "#ecfdf5" },
+  { key: "blue", label: "蓝色", accent: "#2563eb", background: "#eff6ff" },
+  { key: "violet", label: "紫色", accent: "#7c3aed", background: "#f5f3ff" },
+  { key: "pink", label: "粉色", accent: "#ec4899", background: "#fdf2f8" },
+  { key: "cyan", label: "青色", accent: "#06b6d4", background: "#ecfeff" },
+  { key: "lime", label: "亮绿", accent: "#65a30d", background: "#f7fee7" },
+  { key: "black", label: "黑色", accent: "#020617", background: "#f8fafc" }
+];
+
 function DealPipelineWorkspace({
+  activities,
   allRecords,
   deals,
   disabled,
   pipeline,
   stages,
   users,
+  onCreateActivity,
   onCreateDeal,
+  onEditDeal,
   onMoveDealStage,
   onOpenDeal
 }: {
+  activities: Activity[];
   allRecords: CrmRecord[];
   deals: CrmRecord[];
   disabled: boolean;
   pipeline: Pipeline | undefined;
   stages: Pipeline["stages"];
   users: User[];
+  onCreateActivity: (deal: CrmRecord) => void;
   onCreateDeal: () => void;
+  onEditDeal: (deal: CrmRecord) => void;
   onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
   onOpenDeal: (deal: CrmRecord) => void;
 }) {
   const [draggedDealId, setDraggedDealId] = useState("");
+  const [cardColors, setCardColors] = useState<Record<string, string>>({});
+  const [openColorPickerDealId, setOpenColorPickerDealId] = useState("");
+  const [openDealMenuId, setOpenDealMenuId] = useState("");
 
-  function handleDealDragStart(event: DragEvent<HTMLButtonElement>, deal: CrmRecord) {
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(dealPipelineCardColorStorageKey);
+      if (stored) {
+        setCardColors(JSON.parse(stored) as Record<string, string>);
+      }
+    } catch {
+      setCardColors({});
+    }
+  }, []);
+
+  function setDealCardColor(dealId: string, colorKey: string) {
+    setCardColors((current) => {
+      const next = { ...current, [dealId]: colorKey };
+      try {
+        window.localStorage.setItem(dealPipelineCardColorStorageKey, JSON.stringify(next));
+      } catch {
+        // Local visual preference only; ignore storage failures.
+      }
+      return next;
+    });
+  }
+
+  function getDealCardColor(deal: CrmRecord) {
+    const storedColor = cardColors[deal.id] || (typeof deal.data.pipelineCardColor === "string" ? deal.data.pipelineCardColor : "");
+    return dealCardColorOptions.find((option) => option.key === storedColor) ?? dealCardColorOptions[0];
+  }
+
+  function handleDealDragStart(event: DragEvent<HTMLElement>, deal: CrmRecord) {
     setDraggedDealId(deal.id);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", deal.id);
@@ -5761,25 +5840,103 @@ function DealPipelineWorkspace({
               </div>
               {stageDeals.map((deal) => {
                 const company = typeof deal.data.companyId === "string" ? allRecords.find((record) => record.id === deal.data.companyId) : undefined;
+                const color = getDealCardColor(deal);
+                const dealActivities = activities.filter((activity) => activity.recordId === deal.id);
                 return (
-                  <button
+                  <article
                     className={`deal-pill deal-pipeline-card ${draggedDealId === deal.id ? "dragging" : ""}`}
                     data-testid={`deal-pipeline-deal-${deal.id}`}
                     draggable={!disabled}
                     key={deal.id}
-                    type="button"
+                    role="button"
+                    style={{ "--deal-card-accent": color.accent, "--deal-card-bg": color.background } as CSSProperties}
+                    tabIndex={0}
                     onClick={() => onOpenDeal(deal)}
                     onDragEnd={() => setDraggedDealId("")}
                     onDragStart={(event) => handleDealDragStart(event, deal)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onOpenDeal(deal);
+                      }
+                    }}
                   >
-                    <strong>{deal.title}</strong>
-                    <div className="deal-card-amount">{formatCurrency(deal.data.amount)}</div>
-                    <div className="deal-card-meta">
-                      {company?.title ?? "未关联公司"}
-                      {deal.data.closeDate ? ` · ${formatDate(String(deal.data.closeDate))}` : ""}
+                    <div aria-hidden="true" className="deal-card-color-strip" />
+                    <div className="deal-card-content">
+                      <div className="deal-card-title-row">
+                        <strong>{deal.title}</strong>
+                        <div className="deal-card-controls" onClick={(event) => event.stopPropagation()}>
+                          <button
+                            aria-label="切换卡片颜色"
+                            className="icon-button deal-card-color-button"
+                            title="切换卡片颜色"
+                            type="button"
+                            onClick={() => {
+                              setOpenDealMenuId("");
+                              setOpenColorPickerDealId((current) => (current === deal.id ? "" : deal.id));
+                            }}
+                          >
+                            <Palette size={15} />
+                          </button>
+                          <button
+                            aria-label="交易操作"
+                            className="icon-button deal-card-menu-button"
+                            title="交易操作"
+                            type="button"
+                            onClick={() => {
+                              setOpenColorPickerDealId("");
+                              setOpenDealMenuId((current) => (current === deal.id ? "" : deal.id));
+                            }}
+                          >
+                            <MoreVertical size={16} />
+                          </button>
+                          {openColorPickerDealId === deal.id ? (
+                            <div className="deal-card-color-popover" data-testid={`deal-card-color-popover-${deal.id}`}>
+                              {dealCardColorOptions.map((option) => (
+                                <button
+                                  aria-label={`设置为${option.label}`}
+                                  className={`deal-card-color-swatch ${option.key === color.key ? "selected" : ""}`}
+                                  key={option.key}
+                                  style={{ background: option.accent }}
+                                  title={option.label}
+                                  type="button"
+                                  onClick={() => {
+                                    setDealCardColor(deal.id, option.key);
+                                    setOpenColorPickerDealId("");
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          ) : null}
+                          {openDealMenuId === deal.id ? (
+                            <div className="deal-card-menu" data-testid={`deal-card-menu-${deal.id}`}>
+                              <button type="button" onClick={() => { setOpenDealMenuId(""); onCreateActivity(deal); }}>
+                                <ActivityIcon size={16} />
+                                创建 Activity
+                              </button>
+                              <button type="button" onClick={() => { setOpenDealMenuId(""); onOpenDeal(deal); }}>
+                                <Eye size={16} />
+                                查看详情
+                              </button>
+                              <button type="button" onClick={() => { setOpenDealMenuId(""); onEditDeal(deal); }}>
+                                <Pencil size={16} />
+                                编辑交易
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="deal-card-line">
+                        <span className="deal-card-activity-count">{dealActivities.length} Activity</span>
+                        <span className="deal-card-amount">{formatCurrency(deal.data.amount)}</span>
+                      </div>
+                      <div className="deal-card-meta">
+                        {company?.title ?? "未关联公司"}
+                        {deal.data.closeDate ? ` · ${formatDate(String(deal.data.closeDate))}` : ""}
+                      </div>
+                      <div className="record-owner-meta">{recordPoolLabel(deal, users)}</div>
                     </div>
-                    <div className="record-owner-meta">{recordPoolLabel(deal, users)}</div>
-                  </button>
+                  </article>
                 );
               })}
               {stageDeals.length === 0 ? <div className="empty-state compact-empty">暂无交易</div> : null}
