@@ -4128,7 +4128,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   users={props.users}
                   onCreateActivity={openPipelineDealActivityDialog}
                   onCreateDeal={() => setRecordPanelMode("create")}
-                  onEditDeal={openRecord}
                   onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
                   onOpenDeal={openRecord}
                 />
@@ -5834,7 +5833,6 @@ function DealPipelineWorkspace({
   users,
   onCreateActivity,
   onCreateDeal,
-  onEditDeal,
   onMoveDealStage,
   onOpenDeal
 }: {
@@ -5847,7 +5845,6 @@ function DealPipelineWorkspace({
   users: User[];
   onCreateActivity: (deal: CrmRecord) => void;
   onCreateDeal: () => void;
-  onEditDeal: (deal: CrmRecord) => void;
   onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
   onOpenDeal: (deal: CrmRecord) => void;
 }) {
@@ -6095,19 +6092,6 @@ function DealPipelineWorkspace({
           >
             <Eye size={16} />
             查看详情
-          </button>
-          <button
-            type="button"
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setFloatingDealMenu(null);
-              onEditDeal(floatingMenuDeal);
-            }}
-            onClick={(event) => event.preventDefault()}
-          >
-            <Pencil size={16} />
-            编辑交易
           </button>
         </div>
       ) : null}

@@ -2719,7 +2719,8 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /data-testid=\{`deal-card-color-popover-\$\{floatingColorDeal\.id\}`\}/);
   assert.match(source, /data-testid=\{`deal-card-menu-\$\{floatingMenuDeal\.id\}`\}/);
   assert.match(source, /onCreateActivity\(floatingMenuDeal\)/);
-  assert.match(source, /onEditDeal\(floatingMenuDeal\)/);
+  assert.doesNotMatch(source, /编辑交易/);
+  assert.doesNotMatch(source, /onEditDeal\(floatingMenuDeal\)/);
   assert.match(source, /openPipelineDealActivityDialog/);
   assert.match(source, /function DealPipelineActivityDialog/);
   assert.match(source, /data-testid="deal-pipeline-activity-dialog"/);
