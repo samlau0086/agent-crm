@@ -2697,7 +2697,8 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /window\.localStorage\.setItem\(sidebarCollapsedStorageKey, String\(next\)\)/);
   assert.doesNotMatch(source, /item\.key === "email"[\s\S]{0,160}setAppSidebarCollapsed\(true\)/);
   assert.doesNotMatch(source, /function openObject\(objectKey: string\) \{[\s\S]{0,120}setAppSidebarCollapsed/);
-  assert.match(source, /className=\{`app-shell \$\{appSidebarCollapsed \? "sidebar-collapsed" : ""\}`\}/);
+  assert.match(source, /className=\{`app-shell \$\{appSidebarCollapsed \? "sidebar-collapsed" : ""\} theme-\$\{appTheme\}`\}/);
+  assert.match(source, /function ModuleWorkspaceHeader/);
   assert.match(source, /function AppSidebarToggleButton/);
   assert.match(source, /testId = "app-sidebar-toggle"/);
   assert.match(source, /testId="email-app-sidebar-toggle"/);
@@ -2968,7 +2969,7 @@ await run("record create and detail panels render full width in the main content
   const styles = readFileSync("src/app/globals.css", "utf8");
 
   assert.match(source, /recordPanelMode === "closed" && \([\s\S]*<section className="table-shell">/);
-  assert.match(source, /recordPanelMode !== "closed" && \([\s\S]*<aside className="detail-panel record-drawer">/);
+  assert.match(source, /recordPanelMode !== "closed" && \([\s\S]*<aside className=\{`detail-panel record-drawer \$\{recordPanelMode === "import" \? "import-drawer-modal" : ""\}`\}>/);
   assert.match(source, /className="drawer-header record-panel-header"/);
   assert.match(source, /data-testid="record-panel-back"[\s\S]*runAction\(closeRecordPanel\)[\s\S]*recordReturnEmailThreadId \? "返回邮件" : "返回列表"/);
   assert.match(source, /const \[recordActivityComposerType, setRecordActivityComposerType\] = useState<Activity\["type"\] \| "">\(""\)/);

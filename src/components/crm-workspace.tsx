@@ -29,6 +29,8 @@ import {
   MessageCircle,
   Menu,
   Minus,
+  Moon,
+  MoreHorizontal,
   MoreVertical,
   Package,
   Palette,
@@ -44,6 +46,7 @@ import {
   Send,
   Settings,
   Star,
+  Sun,
   Tag,
   Trash2,
   Trophy,
@@ -1031,6 +1034,7 @@ const navigationItems: typeof navItems = navItems.some((item) => item.key === "e
   ? navItems
   : [...navItems.slice(0, -1), { key: "email", label: "邮件", icon: Mail }, navItems[navItems.length - 1]];
 const sidebarCollapsedStorageKey = "ai-agent-crm:sidebar-collapsed";
+const appThemeStorageKey = "ai-agent-crm:theme";
 let emailOutboundServiceDraftCounter = 0;
 
 function createEmailOutboundServiceDraft(
@@ -1204,6 +1208,152 @@ function AppSidebarToggleButton({
   );
 }
 
+function ModuleWorkspaceHeader({
+  activeObject,
+  appSidebarCollapsed,
+  appTheme,
+  dealWorkspaceView,
+  exportRecordsUrl,
+  isRouteRefreshing,
+  moduleActionsOpen,
+  query,
+  quickAddMenuOpen,
+  quickAddObjects,
+  onChangeDealView,
+  onOpenExport,
+  onOpenImport,
+  onQuickCreate,
+  onQueryChange,
+  onRefresh,
+  onToggleAppSidebar,
+  onToggleModuleActions,
+  onToggleQuickAdd,
+  onToggleTheme
+}: {
+  activeObject: ObjectDefinition;
+  appSidebarCollapsed: boolean;
+  appTheme: "light" | "dark";
+  dealWorkspaceView: DealWorkspaceView;
+  exportRecordsUrl: string;
+  isRouteRefreshing: boolean;
+  moduleActionsOpen: boolean;
+  query: string;
+  quickAddMenuOpen: boolean;
+  quickAddObjects: ObjectDefinition[];
+  onChangeDealView: (view: DealWorkspaceView) => void;
+  onOpenExport: () => void;
+  onOpenImport: () => void;
+  onQuickCreate: (objectKey: string) => void;
+  onQueryChange: (value: string) => void;
+  onRefresh: () => void;
+  onToggleAppSidebar: () => void;
+  onToggleModuleActions: () => void;
+  onToggleQuickAdd: () => void;
+  onToggleTheme: () => void;
+}) {
+  const moduleIcon = navItems.find((item) => item.key === activeObject.key)?.icon ?? LayoutList;
+  const ModuleIcon = moduleIcon;
+
+  return (
+    <div className="module-topbar" data-testid={`module-header-${activeObject.key}`}>
+      <div className="module-topbar-title">
+        <AppSidebarToggleButton collapsed={appSidebarCollapsed} onToggle={onToggleAppSidebar} />
+        <div className="module-title-block">
+          <ModuleIcon size={18} />
+          <h1 className="module-title">{activeObject.pluralLabel}</h1>
+        </div>
+      </div>
+
+      <label className="module-search" aria-label={`搜索${activeObject.pluralLabel}`}>
+        <Search size={17} />
+        <input
+          data-testid={`record-search-${activeObject.key}`}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder={`搜索${activeObject.pluralLabel}`}
+        />
+        <kbd>Ctrl K</kbd>
+      </label>
+
+      <div className="module-topbar-actions">
+        <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={appTheme === "dark" ? "切换浅色模式" : "切换深色模式"} title={appTheme === "dark" ? "浅色模式" : "深色模式"}>
+          {appTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+        <button className="icon-button" type="button" onClick={onRefresh} aria-label="刷新" title="刷新">
+          <RefreshCw className={isRouteRefreshing ? "spin-icon" : undefined} size={16} />
+        </button>
+        <div className="toolbar-menu">
+          <button className="icon-button module-quick-add-button" type="button" onClick={onToggleQuickAdd} aria-label="Quick add" title="Quick add">
+            <Plus size={18} />
+          </button>
+          {quickAddMenuOpen ? (
+            <div className="toolbar-menu-panel module-menu-panel module-quick-add-panel">
+              <div className="module-menu-heading">
+                <span>Quick Create</span>
+                <Plus size={14} />
+              </div>
+              {quickAddObjects.map((object) => {
+                const Icon = navItems.find((item) => item.key === object.key)?.icon ?? LayoutList;
+                return (
+                  <button key={object.key} type="button" onClick={() => onQuickCreate(object.key)}>
+                    <Icon size={16} />
+                    <span>{object.label}</span>
+                    <kbd>{object.label.slice(0, 1).toUpperCase()}</kbd>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+        <div className="toolbar-menu">
+          <button className="icon-button" type="button" onClick={onToggleModuleActions} aria-label="更多操作" title="更多操作">
+            <MoreHorizontal size={18} />
+          </button>
+          {moduleActionsOpen ? (
+            <div className="toolbar-menu-panel module-menu-panel">
+              <button type="button" onClick={onOpenImport}>
+                <Upload size={16} />
+                Import {activeObject.pluralLabel}
+              </button>
+              <button type="button" onClick={onOpenExport}>
+                <Download size={16} />
+                Export {activeObject.pluralLabel}
+              </button>
+              <a className="module-menu-link" href={exportRecordsUrl} download={`${activeObject.key}-export.csv`}>
+                <Download size={16} />
+                Download CSV
+              </a>
+            </div>
+          ) : null}
+        </div>
+        <a className="module-hidden-export-link" data-testid="topbar-export-records" href={exportRecordsUrl} download={`${activeObject.key}-export.csv`} tabIndex={-1} aria-hidden="true">
+          Export
+        </a>
+        {activeObject.key === "deals" ? (
+          <div className="module-view-switch" data-testid="deal-view-switch">
+            <button className={dealWorkspaceView === "pipeline" ? "active" : ""} data-testid="deal-view-pipeline" type="button" onClick={() => onChangeDealView("pipeline")} aria-label="Pipeline view" title="Pipeline">
+              <BadgeDollarSign size={16} />
+            </button>
+            <button className={dealWorkspaceView === "list" ? "active" : ""} data-testid="deal-view-list" type="button" onClick={() => onChangeDealView("list")} aria-label="List view" title="列表">
+              <LayoutList size={16} />
+            </button>
+          </div>
+        ) : (
+          <div className="module-view-switch">
+            <button className="active" type="button" aria-label="List view" title="列表">
+              <LayoutList size={16} />
+            </button>
+          </div>
+        )}
+        <button className="primary-button module-create-button" data-testid={`open-create-record-${activeObject.key}`} type="button" onClick={() => onQuickCreate(activeObject.key)}>
+          <Plus size={16} />
+          新建{activeObject.label}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 type ContactDetailActivityTab = "all" | "activities" | "emails" | "calls" | "notes" | "tasks";
 
 export function CrmWorkspace(props: CrmWorkspaceProps) {
@@ -1242,6 +1392,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordList, setRecordList] = useState<RecordListResult>(() => props.initialRecordList);
   const [recordPool, setRecordPool] = useState<RecordPool>(routeRecordPool);
   const [dealWorkspaceView, setDealWorkspaceView] = useState<DealWorkspaceView>(routeDealView);
+  const [appTheme, setAppTheme] = useState<"light" | "dark">("light");
+  const [quickAddMenuOpen, setQuickAddMenuOpen] = useState(false);
+  const [moduleActionsOpen, setModuleActionsOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
   const [query, setQuery] = useState("");
@@ -1661,6 +1815,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () => importPresets.filter((preset) => preset.objectKey === activeObject?.key),
     [activeObject?.key, importPresets]
   );
+  const quickAddObjects = useMemo(() => {
+    const quickObjectKeys = ["deals", "activities", "contacts", "companies", "products", "quotes"];
+    const candidates = quickObjectKeys
+      .map((objectKey) => props.objects.find((object) => object.key === objectKey))
+      .filter((object): object is ObjectDefinition => Boolean(object));
+    if (!activeObject) {
+      return candidates;
+    }
+    return [activeObject, ...candidates.filter((object) => object.key !== activeObject.key)];
+  }, [activeObject, props.objects]);
   const selectedActiveImportJob = useMemo(
     () => (selectedImportJob?.objectKey === activeObject?.key ? selectedImportJob : activeImportJobs.find((job) => job.id === selectedImportJobId) ?? null),
     [activeImportJobs, activeObject?.key, selectedImportJob, selectedImportJobId]
@@ -1690,6 +1854,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const storedSidebarCollapsed = window.localStorage.getItem(sidebarCollapsedStorageKey);
     if (storedSidebarCollapsed === "true" || storedSidebarCollapsed === "false") {
       setAppSidebarCollapsed(storedSidebarCollapsed === "true");
+    }
+    const storedTheme = window.localStorage.getItem(appThemeStorageKey);
+    if (storedTheme === "dark" || storedTheme === "light") {
+      setAppTheme(storedTheme);
     }
     setIsHydrated(true);
   }, []);
@@ -4027,11 +4195,55 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
+  function toggleAppTheme() {
+    setAppTheme((current) => {
+      const next = current === "dark" ? "light" : "dark";
+      window.localStorage.setItem(appThemeStorageKey, next);
+      return next;
+    });
+  }
+
+  function openQuickCreateRecord(objectKey: string) {
+    const objectDefinition = props.objects.find((object) => object.key === objectKey);
+    if (!objectDefinition) {
+      return;
+    }
+    const nextNav = coreObjects.has(objectKey) ? (objectKey as NavKey) : "records";
+    const nextPath = `${crmPathForNav(nextNav, objectKey)}?mode=create`;
+    const nextFields = props.fields.filter((field) => field.objectKey === objectKey).sort((left, right) => left.position - right.position);
+    setQuickAddMenuOpen(false);
+    setModuleActionsOpen(false);
+    setActiveObjectKey(objectKey);
+    setActiveNav(nextNav);
+    setSelectedRecordId("");
+    setCreateFormObjectKey(objectKey);
+    setCreateTitle("");
+    setCreateOwnerId(props.contextUser.id);
+    setCreateValues(buildInitialValues(nextFields, objectKey));
+    setRecordReturnEmailThreadId("");
+    setRecordPanelMode("create");
+    if (`${pathname}?${searchParams.toString()}` !== nextPath) {
+      router.push(nextPath);
+    }
+  }
+
+  function openImportDialog() {
+    setModuleActionsOpen(false);
+    setQuickAddMenuOpen(false);
+    setRecordPanelMode("import");
+  }
+
+  function openExportDialog() {
+    setModuleActionsOpen(false);
+    setQuickAddMenuOpen(false);
+    setExportDialogOpen(true);
+  }
+
   const showRecordWorkspace = coreObjects.has(activeNav) || activeNav === "records";
 
   return (
     <div
-      className={`app-shell ${appSidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app-shell ${appSidebarCollapsed ? "sidebar-collapsed" : ""} theme-${appTheme}`}
       data-testid="crm-workspace"
       data-active-object={activeObject?.key ?? ""}
       data-create-form-object={createFormObjectKey}
@@ -4085,32 +4297,46 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
       <main className={`main ${activeNav === "email" ? "email-main" : ""}`}>
         {activeNav !== "email" ? (
-        <div className="topbar">
-          <div className="topbar-title">
-            <AppSidebarToggleButton collapsed={appSidebarCollapsed} onToggle={toggleAppSidebar} />
-            <div>
-              <h1 className="page-title">{titleFor(activeNav, activeObject?.pluralLabel)}</h1>
-              <div className="subtle">模块化单体、真实 API、真实表单和可配置 CRM 元数据已经接通。</div>
+          showRecordWorkspace && activeObject ? (
+            <ModuleWorkspaceHeader
+              activeObject={activeObject}
+              appSidebarCollapsed={appSidebarCollapsed}
+              appTheme={appTheme}
+              dealWorkspaceView={dealWorkspaceView}
+              exportRecordsUrl={exportRecordsUrl}
+              isRouteRefreshing={isRouteRefreshing || isRouteRefreshPending}
+              moduleActionsOpen={moduleActionsOpen}
+              query={query}
+              quickAddMenuOpen={quickAddMenuOpen}
+              quickAddObjects={quickAddObjects}
+              onChangeDealView={changeDealWorkspaceView}
+              onOpenExport={openExportDialog}
+              onOpenImport={openImportDialog}
+              onQuickCreate={openQuickCreateRecord}
+              onQueryChange={setQuery}
+              onRefresh={refreshRoute}
+              onToggleAppSidebar={toggleAppSidebar}
+              onToggleModuleActions={() => setModuleActionsOpen((current) => !current)}
+              onToggleQuickAdd={() => setQuickAddMenuOpen((current) => !current)}
+              onToggleTheme={toggleAppTheme}
+            />
+          ) : (
+            <div className="topbar">
+              <div className="topbar-title">
+                <AppSidebarToggleButton collapsed={appSidebarCollapsed} onToggle={toggleAppSidebar} />
+                <div>
+                  <h1 className="page-title">{titleFor(activeNav, activeObject?.pluralLabel)}</h1>
+                  <div className="subtle">模块化单体、真实 API、真实表单和可配置 CRM 元数据已经接通。</div>
+                </div>
+              </div>
+              <div className="toolbar">
+                <button className="secondary-button" type="button" onClick={refreshRoute}>
+                  <RefreshCw className={isRouteRefreshing || isRouteRefreshPending ? "spin-icon" : undefined} size={16} />
+                  刷新
+                </button>
+              </div>
             </div>
-          </div>
-          <div className="toolbar">
-            <button className="secondary-button" type="button" onClick={refreshRoute}>
-              <RefreshCw className={isRouteRefreshing || isRouteRefreshPending ? "spin-icon" : undefined} size={16} />
-              刷新
-            </button>
-            {showRecordWorkspace && activeObject ? (
-              <a
-                className="secondary-button"
-                data-testid="topbar-export-records"
-                download={`${activeObject.key}-export.csv`}
-                href={exportRecordsUrl}
-              >
-                <Download size={16} />
-                导出
-              </a>
-            ) : null}
-          </div>
-        </div>
+          )
         ) : null}
 
         {activeNav === "dashboard" && (
@@ -4136,28 +4362,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           <div className={`workspace-grid ${recordPanelMode !== "closed" ? "has-drawer" : ""}`}>
             {recordPanelMode === "closed" && (
             <section className="table-shell">
-              {activeObject.key === "deals" ? (
-                <div className="record-view-switch" data-testid="deal-view-switch">
-                  <button
-                    className={dealWorkspaceView === "pipeline" ? "primary-button" : "secondary-button"}
-                    data-testid="deal-view-pipeline"
-                    type="button"
-                    onClick={() => changeDealWorkspaceView("pipeline")}
-                  >
-                    <BadgeDollarSign size={16} />
-                    Pipeline
-                  </button>
-                  <button
-                    className={dealWorkspaceView === "list" ? "primary-button" : "secondary-button"}
-                    data-testid="deal-view-list"
-                    type="button"
-                    onClick={() => changeDealWorkspaceView("list")}
-                  >
-                    <LayoutList size={16} />
-                    列表
-                  </button>
-                </div>
-              ) : null}
               {isDealPipelineView ? (
                 <DealPipelineWorkspace
                   activities={activities}
@@ -4212,39 +4416,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     ))}
                   </div>
                 ) : null}
-                <label>
-                  <span className="subtle">搜索</span>
-                  <input
-                    className="input"
-                    data-testid={`record-search-${activeObject.key}`}
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder={`搜索${activeObject.pluralLabel}`}
-                  />
-                </label>
-                <span className="icon-button" aria-label="当前列表由保存视图驱动" title="当前列表由保存视图驱动">
-                  <Filter size={16} />
-                </span>
                 <button className="secondary-button" type="button" onClick={() => setShowListSettings((current) => !current)}>
                   <LayoutList size={16} />
                   列表设置
-                </button>
-                <a className="secondary-button" href={exportRecordsUrl} download={`${activeObject.key}-export.csv`} data-testid={`export-records-${activeObject.key}`}>
-                  <Download size={16} />
-                  导出
-                </a>
-                <button className="secondary-button" type="button" onClick={() => setRecordPanelMode("import")}>
-                  <Upload size={16} />
-                  导入
-                </button>
-                <button
-                  className="primary-button"
-                  data-testid={`open-create-record-${activeObject.key}`}
-                  type="button"
-                  onClick={() => setRecordPanelMode("create")}
-                >
-                  <UserRound size={16} />
-                  新建
                 </button>
               </div>
               <div className="list-tools" style={{ paddingTop: 0 }}>
@@ -4337,7 +4511,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             )}
 
             {recordPanelMode !== "closed" && (
-            <aside className="detail-panel record-drawer">
+            <aside className={`detail-panel record-drawer ${recordPanelMode === "import" ? "import-drawer-modal" : ""}`}>
               <div className="drawer-header record-panel-header">
                 <button className="secondary-button" data-testid="record-panel-back" type="button" onClick={() => runAction(closeRecordPanel)}>
                   <ChevronLeft size={16} />
@@ -5559,6 +5733,30 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
 
       </main>
+      {exportDialogOpen && activeObject ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setExportDialogOpen(false)}>
+          <div className="modal-card module-export-modal" role="dialog" aria-modal="true" aria-label={`导出${activeObject.pluralLabel}`} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header-row">
+              <div>
+                <h3 className="panel-title">导出{activeObject.pluralLabel}</h3>
+                <p className="subtle">按照当前搜索、筛选、公海/私海和保存视图导出 CSV。</p>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setExportDialogOpen(false)} aria-label="关闭导出弹窗">
+                <XCircle size={16} />
+              </button>
+            </div>
+            <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 16 }}>
+              <button className="secondary-button" type="button" onClick={() => setExportDialogOpen(false)}>
+                取消
+              </button>
+              <a className="primary-button" data-testid={`export-records-${activeObject.key}`} href={exportRecordsUrl} download={`${activeObject.key}-export.csv`} onClick={() => setExportDialogOpen(false)}>
+                <Download size={16} />
+                下载 CSV
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <ContactFollowUpDialog
         draft={contactFollowUpDraft}
         generating={isContactFollowUpGenerating}
