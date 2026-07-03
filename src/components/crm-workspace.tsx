@@ -1243,6 +1243,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [isContactFollowUpGenerating, setIsContactFollowUpGenerating] = useState(false);
   const [companyAddressEditing, setCompanyAddressEditing] = useState<{ valueKey: string; addressId: string } | null>(null);
   const [recordActivityComposerType, setRecordActivityComposerType] = useState<Activity["type"] | "">("");
+  const [pipelineActivityDeal, setPipelineActivityDeal] = useState<CrmRecord | null>(null);
+  const [pipelineActivityType, setPipelineActivityType] = useState<Activity["type"]>("note");
   const [showListSettings, setShowListSettings] = useState(false);
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
@@ -2865,25 +2867,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
-  async function createPipelineDealActivity(deal: CrmRecord) {
-    const title = await requestPrompt({
-      title: "创建交易 Activity",
-      message: `为“${deal.title}”创建一条快捷活动记录。`,
-      placeholder: "例如：电话跟进报价反馈 / 安排产品演示",
-      confirmLabel: "创建"
-    });
-    const trimmedTitle = title?.trim();
-    if (!trimmedTitle) {
-      setMessage("已取消创建活动");
+  function openPipelineDealActivityDialog(deal: CrmRecord) {
+    setPipelineActivityDeal(deal);
+    setPipelineActivityType("note");
+  }
+
+  async function submitPipelineDealActivity(input: RecordActivityComposerInput) {
+    if (!pipelineActivityDeal) {
       return;
     }
     await createRecordActivity({
-      recordId: deal.id,
-      type: "note",
-      title: trimmedTitle,
-      body: "从交易 Pipeline 卡片快捷创建。"
+      recordId: pipelineActivityDeal.id,
+      ...input
     });
-    setMessage("交易活动已创建");
+    setPipelineActivityDeal(null);
+    showSuccess("交易活动已创建");
     router.refresh();
   }
 
@@ -4128,7 +4126,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   pipeline={activePipeline}
                   stages={activePipelineStages}
                   users={props.users}
-                  onCreateActivity={(deal) => runAction(() => createPipelineDealActivity(deal))}
+                  onCreateActivity={openPipelineDealActivityDialog}
                   onCreateDeal={() => setRecordPanelMode("create")}
                   onEditDeal={openRecord}
                   onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
@@ -5527,6 +5525,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         onSubmit={() => runAction(submitContactFollowUp)}
         onUploadMediaAssets={uploadMediaAssets}
       />
+      <DealPipelineActivityDialog
+        deal={pipelineActivityDeal}
+        isPending={isPending}
+        mediaAssets={mediaAssets}
+        type={pipelineActivityType}
+        onCancel={() => setPipelineActivityDeal(null)}
+        onSubmit={(input) => runAction(() => submitPipelineDealActivity(input))}
+        onTypeChange={setPipelineActivityType}
+        onUploadMediaAssets={uploadMediaAssets}
+      />
       <ToastViewport toast={toast ?? (error ? { intent: "error", message: error } : message ? { intent: "success", message } : null)} onDismiss={() => { setToast(null); setMessage(null); setError(null); }} />
       <ConfirmDialog
         state={confirmDialog}
@@ -5621,6 +5629,105 @@ function PromptDialog({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function DealPipelineActivityDialog({
+  deal,
+  isPending,
+  mediaAssets,
+  type,
+  onCancel,
+  onSubmit,
+  onTypeChange,
+  onUploadMediaAssets
+}: {
+  deal: CrmRecord | null;
+  isPending: boolean;
+  mediaAssets: MediaAsset[];
+  type: Activity["type"];
+  onCancel: () => void;
+  onSubmit: (input: RecordActivityComposerInput) => void;
+  onTypeChange: (type: Activity["type"]) => void;
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+}) {
+  if (!deal) {
+    return null;
+  }
+
+  const composerCopy: Record<Activity["type"], { submitLabel: string; titlePlaceholder: string; bodyPlaceholder: string; dateLabel?: string }> = {
+    call: {
+      submitLabel: "记录电话",
+      titlePlaceholder: "例如：电话跟进报价反馈",
+      bodyPlaceholder: "记录电话沟通内容、客户疑问和下一步计划"
+    },
+    email: {
+      submitLabel: "记录邮件",
+      titlePlaceholder: "例如：发送报价跟进邮件",
+      bodyPlaceholder: "记录邮件沟通要点"
+    },
+    meeting: {
+      submitLabel: "安排会议",
+      titlePlaceholder: "例如：安排产品演示",
+      bodyPlaceholder: "记录会议议程、参会人和准备事项",
+      dateLabel: "会议日期"
+    },
+    note: {
+      submitLabel: "保存备注",
+      titlePlaceholder: "例如：客户需要补充价格明细",
+      bodyPlaceholder: "记录补充说明、客户背景或跟进线索"
+    },
+    stage_change: {
+      submitLabel: "记录阶段变更",
+      titlePlaceholder: "例如：阶段变更说明",
+      bodyPlaceholder: "记录阶段变化原因"
+    },
+    task: {
+      submitLabel: "创建任务",
+      titlePlaceholder: "例如：明天跟进报价反馈",
+      bodyPlaceholder: "记录任务说明、目标和注意事项",
+      dateLabel: "到期日期"
+    }
+  };
+  const copy = composerCopy[type];
+
+  return (
+    <div className="modal-backdrop" data-testid="deal-pipeline-activity-dialog" role="dialog" aria-modal="true" aria-label="创建交易 Activity">
+      <div className="modal-panel app-dialog">
+        <div className="email-pane-header compact">
+          <div>
+            <h2 className="page-title" style={{ fontSize: 18 }}>创建 Activity</h2>
+            <p className="subtle">{deal.title}</p>
+          </div>
+          <button className="icon-button" aria-label="关闭创建 Activity" type="button" onClick={onCancel}>
+            <XCircle size={16} />
+          </button>
+        </div>
+        <label>
+          <span className="subtle">类型</span>
+          <select className="input" value={type} onChange={(event) => onTypeChange(event.target.value as Activity["type"])}>
+            <option value="note">备注</option>
+            <option value="task">任务</option>
+            <option value="call">电话</option>
+            <option value="meeting">会议</option>
+            <option value="email">邮件记录</option>
+          </select>
+        </label>
+        <RecordActivityComposer
+          bodyPlaceholder={copy.bodyPlaceholder}
+          dateLabel={copy.dateLabel}
+          isPending={isPending}
+          key={type}
+          mediaAssets={mediaAssets}
+          submitLabel={copy.submitLabel}
+          testIdPrefix="deal-pipeline-activity"
+          titlePlaceholder={copy.titlePlaceholder}
+          type={type}
+          onSubmit={onSubmit}
+          onUploadMediaAssets={onUploadMediaAssets}
+        />
+      </div>
     </div>
   );
 }
@@ -5963,15 +6070,42 @@ function DealPipelineWorkspace({
           style={{ left: floatingDealMenu.left, top: floatingDealMenu.top }}
           onClick={(event) => event.stopPropagation()}
         >
-          <button type="button" onClick={() => { setFloatingDealMenu(null); onCreateActivity(floatingMenuDeal); }}>
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setFloatingDealMenu(null);
+              onCreateActivity(floatingMenuDeal);
+            }}
+            onClick={(event) => event.preventDefault()}
+          >
             <ActivityIcon size={16} />
             创建 Activity
           </button>
-          <button type="button" onClick={() => { setFloatingDealMenu(null); onOpenDeal(floatingMenuDeal); }}>
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setFloatingDealMenu(null);
+              onOpenDeal(floatingMenuDeal);
+            }}
+            onClick={(event) => event.preventDefault()}
+          >
             <Eye size={16} />
             查看详情
           </button>
-          <button type="button" onClick={() => { setFloatingDealMenu(null); onEditDeal(floatingMenuDeal); }}>
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setFloatingDealMenu(null);
+              onEditDeal(floatingMenuDeal);
+            }}
+            onClick={(event) => event.preventDefault()}
+          >
             <Pencil size={16} />
             编辑交易
           </button>
