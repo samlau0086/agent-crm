@@ -3785,6 +3785,9 @@ await run("notification channels support bark webhook and email event delivery",
   assert.match(settings, /settings-notification-bark-key/);
   assert.match(settings, /settings-notification-email-recipients/);
   assert.match(workspace, /notificationChannels=\{props\.notificationChannels\}/);
+  assert.match(workspace, /notificationChannels: props\.notificationChannels/);
+  assert.match(workspace, /notificationChannelsForEvents/);
+  assert.match(workspace, /同步到 \{formatNotificationChannelSummary\(notification\.syncedChannels\)\}/);
   assert.match(page, /repository\.listNotificationChannels\(context\)/);
 });
 

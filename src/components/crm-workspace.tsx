@@ -110,6 +110,7 @@ import type {
   KnowledgeArticle,
   MediaAsset,
   NotificationChannel,
+  NotificationEvent,
   ObjectDefinition,
   Pipeline,
   PipelineStage,
@@ -1372,6 +1373,8 @@ type HeaderNotification = {
   time?: string;
   icon: LucideIcon;
   intent: HeaderNotificationIntent;
+  event: NotificationEvent;
+  syncedChannels: Array<Pick<NotificationChannel, "id" | "name" | "type">>;
 };
 
 function StandaloneModuleHeader({
@@ -1534,6 +1537,7 @@ function HeaderNotificationsMenu({
                       <strong>{notification.title}</strong>
                       <span>{notification.description}</span>
                       {notification.time ? <small>{formatDateTimeSeconds(notification.time)}</small> : null}
+                      <small className="notification-sync">同步到 {formatNotificationChannelSummary(notification.syncedChannels)}</small>
                     </span>
                   </div>
                 );
@@ -1542,7 +1546,7 @@ function HeaderNotificationsMenu({
           ) : (
             <div className="notification-empty">
               <Bell size={18} />
-              <span>当前没有通知</span>
+              <span>当前没有匹配通知渠道的提醒</span>
             </div>
           )}
         </div>
@@ -2012,12 +2016,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         activities,
         deletedActivityIds,
         importJobs,
+        notificationChannels: props.notificationChannels,
         objectDefinitions: props.objects,
         recordChangeRequests,
         records,
         workflowApprovals: props.workflowApprovals
       }),
-    [activities, deletedActivityIds, importJobs, props.objects, props.workflowApprovals, recordChangeRequests, records]
+    [activities, deletedActivityIds, importJobs, props.notificationChannels, props.objects, props.workflowApprovals, recordChangeRequests, records]
   );
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
@@ -11294,6 +11299,7 @@ function buildHeaderNotifications({
   activities,
   deletedActivityIds,
   importJobs,
+  notificationChannels,
   objectDefinitions,
   recordChangeRequests,
   records,
@@ -11302,6 +11308,7 @@ function buildHeaderNotifications({
   activities: Activity[];
   deletedActivityIds: Set<string>;
   importJobs: CsvImportJob[];
+  notificationChannels: NotificationChannel[];
   objectDefinitions: ObjectDefinition[];
   recordChangeRequests: RecordChangeRequest[];
   records: CrmRecord[];
@@ -11324,6 +11331,11 @@ function buildHeaderNotifications({
       if (!overdue && !dueToday) {
         return;
       }
+      const event: NotificationEvent = "activity.created";
+      const syncedChannels = notificationChannelsForEvents(notificationChannels, [event]);
+      if (!syncedChannels.length) {
+        return;
+      }
       const linkedRecord = records.find((record) => record.id === activity.recordId);
       items.push({
         id: `task:${activity.id}`,
@@ -11331,7 +11343,9 @@ function buildHeaderNotifications({
         description: linkedRecord ? `${activity.title} · ${linkedRecord.title}` : activity.title,
         time: activity.dueAt,
         icon: CalendarClock,
-        intent: overdue ? "danger" : "warning"
+        intent: overdue ? "danger" : "warning",
+        event,
+        syncedChannels
       });
     });
 
@@ -11341,13 +11355,21 @@ function buildHeaderNotifications({
     .slice(0, 5)
     .forEach((request) => {
       const objectLabel = objectDefinitions.find((object) => object.key === request.objectKey)?.label ?? request.objectKey;
+      const event: NotificationEvent = request.action === "delete" ? "record.deleted" : "record.updated";
+      const scopedEvent = `record.${request.objectKey}.${request.action === "delete" ? "deleted" : "updated"}` as NotificationEvent;
+      const syncedChannels = notificationChannelsForEvents(notificationChannels, [scopedEvent, event]);
+      if (!syncedChannels.length) {
+        return;
+      }
       items.push({
         id: `record-change:${request.id}`,
         title: request.action === "delete" ? "删除申请待审核" : "修改申请待审核",
         description: `${objectLabel} · ${request.recordTitle}`,
         time: request.createdAt,
         icon: CheckCircle2,
-        intent: request.action === "delete" ? "danger" : "warning"
+        intent: request.action === "delete" ? "danger" : "warning",
+        event: scopedEvent,
+        syncedChannels
       });
     });
 
@@ -11356,13 +11378,20 @@ function buildHeaderNotifications({
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
     .slice(0, 4)
     .forEach((approval) => {
+      const event: NotificationEvent = "workflow.action_approval_requested";
+      const syncedChannels = notificationChannelsForEvents(notificationChannels, [event]);
+      if (!syncedChannels.length) {
+        return;
+      }
       items.push({
         id: `workflow-approval:${approval.id}`,
         title: "工作流动作待审批",
         description: approval.summary,
         time: approval.createdAt,
         icon: WorkflowIcon,
-        intent: "warning"
+        intent: "warning",
+        event,
+        syncedChannels
       });
     });
 
@@ -11372,19 +11401,52 @@ function buildHeaderNotifications({
     .slice(0, 3)
     .forEach((job) => {
       const objectLabel = objectDefinitions.find((object) => object.key === job.objectKey)?.label ?? job.objectKey;
+      const event: NotificationEvent = "import.failed";
+      const syncedChannels = notificationChannelsForEvents(notificationChannels, [event]);
+      if (!syncedChannels.length) {
+        return;
+      }
       items.push({
         id: `import-job:${job.id}`,
         title: "导入任务失败",
         description: `${objectLabel} · ${job.errorMessage ?? `${job.errorCount} 行错误`}`,
         time: job.completedAt ?? job.createdAt,
         icon: Upload,
-        intent: "danger"
+        intent: "danger",
+        event,
+        syncedChannels
       });
     });
 
   return items
     .sort((left, right) => new Date(right.time ?? "").getTime() - new Date(left.time ?? "").getTime())
     .slice(0, 12);
+}
+
+function notificationChannelsForEvents(
+  notificationChannels: NotificationChannel[],
+  events: NotificationEvent[]
+): Array<Pick<NotificationChannel, "id" | "name" | "type">> {
+  const eventSet = new Set(events);
+  return notificationChannels
+    .filter((channel) => channel.active && channel.events.some((event) => eventSet.has(event)))
+    .map((channel) => ({ id: channel.id, name: channel.name, type: channel.type }));
+}
+
+function formatNotificationChannelSummary(channels: Array<Pick<NotificationChannel, "name" | "type">>): string {
+  if (!channels.length) {
+    return "未配置通知渠道";
+  }
+  return channels
+    .slice(0, 3)
+    .map((channel) => `${channel.name} (${notificationChannelTypeLabel(channel.type)})`)
+    .join("、") + (channels.length > 3 ? ` 等 ${channels.length} 个渠道` : "");
+}
+
+function notificationChannelTypeLabel(type: NotificationChannel["type"]): string {
+  if (type === "bark") return "Bark";
+  if (type === "email") return "Email";
+  return "Webhook";
 }
 
 function buildActivitiesCsv(activities: Activity[], records: CrmRecord[], users: User[]): string {

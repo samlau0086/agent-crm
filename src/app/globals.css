@@ -404,6 +404,10 @@ button {
   font-size: 12px;
 }
 
+.notification-item-body .notification-sync {
+  color: var(--accent-strong);
+}
+
 .notification-empty {
   display: flex;
   align-items: center;
