@@ -2870,7 +2870,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
-  async function moveDealStage(record: CrmRecord, stageKey: string, pipelineOrder?: number) {
+  async function moveDealStage(record: CrmRecord, stageKey: string, pipelineOrder?: number, options: { refresh?: boolean } = {}) {
+    const shouldRefresh = options.refresh ?? true;
     const optimisticRecord: CrmRecord = {
       ...record,
       stageKey,
@@ -2896,7 +2897,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setRecords((current) => mergeRecords(current, [updated]));
       mergeRecordIntoCurrentList(updated);
       setMessage(record.stageKey === stageKey ? "交易顺序已更新" : "交易阶段已更新");
-      router.refresh();
+      if (shouldRefresh) {
+        router.refresh();
+      }
     } catch (moveError) {
       setRecords((current) => mergeRecords(current, [record]));
       mergeRecordIntoCurrentList(record);
@@ -4159,13 +4162,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   activities={activities}
                   allRecords={records}
                   deals={filteredRecords}
-                  disabled={isPending}
+                  disabled={false}
                   pipeline={activePipeline}
                   stages={activePipelineStages}
                   users={props.users}
                   onCreateActivity={openPipelineDealActivityDialog}
                   onCreateDeal={() => setRecordPanelMode("create")}
-                  onMoveDealStage={(deal, stageKey, pipelineOrder) => runAction(() => moveDealStage(deal, stageKey, pipelineOrder))}
+                  onMoveDealStage={(deal, stageKey, pipelineOrder) =>
+                    moveDealStage(deal, stageKey, pipelineOrder, { refresh: false }).catch((moveError) => {
+                      showError(moveError instanceof Error ? moveError.message : "交易阶段更新失败");
+                      throw moveError;
+                    })
+                  }
                   onOpenDeal={openRecord}
                 />
               ) : (
@@ -5895,13 +5903,15 @@ function DealPipelineWorkspace({
   users: User[];
   onCreateActivity: (deal: CrmRecord) => void;
   onCreateDeal: () => void;
-  onMoveDealStage: (deal: CrmRecord, stageKey: string, pipelineOrder?: number) => void;
+  onMoveDealStage: (deal: CrmRecord, stageKey: string, pipelineOrder?: number) => Promise<void> | void;
   onOpenDeal: (deal: CrmRecord) => void;
 }) {
   const boardRef = useRef<HTMLDivElement | null>(null);
   const stageRefs = useRef<Record<string, HTMLElement | null>>({});
   const cardRefs = useRef<Record<string, HTMLElement | null>>({});
   const suppressedClickDealId = useRef("");
+  const pendingDealMovesRef = useRef<Record<string, { pipelineOrder?: number; stageKey: string }>>({});
+  const [pipelineDeals, setPipelineDeals] = useState(deals);
   const [dragState, setDragState] = useState<DealPipelineDragState | null>(null);
   const [dropPreview, setDropPreview] = useState<DealPipelineDropPreview | null>(null);
   const dragStateRef = useRef<DealPipelineDragState | null>(null);
@@ -5910,16 +5920,42 @@ function DealPipelineWorkspace({
   const [floatingColorPicker, setFloatingColorPicker] = useState<DealCardFloatingLayer | null>(null);
   const [floatingDealMenu, setFloatingDealMenu] = useState<DealCardFloatingLayer | null>(null);
 
-  const dealSourceIndex = useMemo(() => new Map(deals.map((deal, index) => [deal.id, index])), [deals]);
+  useEffect(() => {
+    const nextPendingMoves = { ...pendingDealMovesRef.current };
+    const mergedDeals = deals.map((deal) => {
+      const pendingMove = nextPendingMoves[deal.id];
+      if (!pendingMove) {
+        return deal;
+      }
+      const serverOrder = Number(deal.data.pipelineOrder);
+      const serverHasMatchingOrder = typeof pendingMove.pipelineOrder !== "number" || (Number.isFinite(serverOrder) && serverOrder === pendingMove.pipelineOrder);
+      if (deal.stageKey === pendingMove.stageKey && serverHasMatchingOrder) {
+        delete nextPendingMoves[deal.id];
+        return deal;
+      }
+      return {
+        ...deal,
+        stageKey: pendingMove.stageKey,
+        data: {
+          ...deal.data,
+          ...(typeof pendingMove.pipelineOrder === "number" ? { pipelineOrder: pendingMove.pipelineOrder } : {})
+        }
+      };
+    });
+    pendingDealMovesRef.current = nextPendingMoves;
+    setPipelineDeals(mergedDeals);
+  }, [deals]);
+
+  const dealSourceIndex = useMemo(() => new Map(pipelineDeals.map((deal, index) => [deal.id, index])), [pipelineDeals]);
   const sortedDealsByStage = useMemo(() => {
     const grouped: Record<string, CrmRecord[]> = {};
     for (const stage of stages) {
-      grouped[stage.key] = deals
+      grouped[stage.key] = pipelineDeals
         .filter((deal) => deal.stageKey === stage.key)
         .sort((left, right) => getDealPipelineSortValue(left, dealSourceIndex) - getDealPipelineSortValue(right, dealSourceIndex));
     }
     return grouped;
-  }, [dealSourceIndex, deals, stages]);
+  }, [dealSourceIndex, pipelineDeals, stages]);
 
   useEffect(() => {
     try {
@@ -6054,7 +6090,7 @@ function DealPipelineWorkspace({
     if (!activeDrag) {
       return;
     }
-    const deal = deals.find((candidate) => candidate.id === activeDrag.dealId);
+    const deal = pipelineDeals.find((candidate) => candidate.id === activeDrag.dealId);
     if (!deal) {
       dragStateRef.current = null;
       dropPreviewRef.current = null;
@@ -6068,16 +6104,28 @@ function DealPipelineWorkspace({
     if (activeDrag.hasMoved) {
       suppressedClickDealId.current = deal.id;
     }
+    const shouldMove = !disabled && Boolean(preview.stageKey) && (deal.stageKey !== preview.stageKey || previousOrder !== nextOrder);
+    if (shouldMove) {
+      const optimisticDeal: CrmRecord = {
+        ...deal,
+        stageKey: preview.stageKey,
+        data: {
+          ...deal.data,
+          pipelineOrder: nextOrder
+        }
+      };
+      pendingDealMovesRef.current[deal.id] = { pipelineOrder: nextOrder, stageKey: preview.stageKey };
+      setPipelineDeals((current) => mergeRecords(current, [optimisticDeal]));
+      const moveResult = onMoveDealStage(deal, preview.stageKey, nextOrder);
+      void Promise.resolve(moveResult).catch(() => {
+        delete pendingDealMovesRef.current[deal.id];
+        setPipelineDeals((current) => mergeRecords(current, [deal]));
+      });
+    }
     dragStateRef.current = null;
     dropPreviewRef.current = null;
     setDragState(null);
     setDropPreview(null);
-    if (disabled || !preview.stageKey) {
-      return;
-    }
-    if (deal.stageKey !== preview.stageKey || previousOrder !== nextOrder) {
-      onMoveDealStage(deal, preview.stageKey, nextOrder);
-    }
   }
 
   function computeDealDropPreview(clientX: number, clientY: number, draggedDealId: string): DealPipelineDropPreview {
@@ -6131,9 +6179,9 @@ function DealPipelineWorkspace({
     return 1000;
   }
 
-  const floatingColorDeal = floatingColorPicker ? deals.find((deal) => deal.id === floatingColorPicker.dealId) : undefined;
-  const floatingMenuDeal = floatingDealMenu ? deals.find((deal) => deal.id === floatingDealMenu.dealId) : undefined;
-  const draggedDeal = dragState ? deals.find((deal) => deal.id === dragState.dealId) : undefined;
+  const floatingColorDeal = floatingColorPicker ? pipelineDeals.find((deal) => deal.id === floatingColorPicker.dealId) : undefined;
+  const floatingMenuDeal = floatingDealMenu ? pipelineDeals.find((deal) => deal.id === floatingDealMenu.dealId) : undefined;
+  const draggedDeal = dragState ? pipelineDeals.find((deal) => deal.id === dragState.dealId) : undefined;
 
   if (!pipeline || stages.length === 0) {
     return (

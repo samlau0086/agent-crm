@@ -2729,6 +2729,12 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /getFloatingLayerPosition/);
   assert.match(source, /function handleDealPointerDown/);
   assert.match(source, /function finishDealDrag/);
+  assert.match(source, /const \[pipelineDeals, setPipelineDeals\] = useState\(deals\)/);
+  assert.match(source, /pendingDealMovesRef\.current\[deal\.id\] = \{ pipelineOrder: nextOrder, stageKey: preview\.stageKey \}/);
+  assert.match(source, /setPipelineDeals\(\(current\) => mergeRecords\(current, \[optimisticDeal\]\)\)/);
+  assert.match(source, /moveDealStage\(deal, stageKey, pipelineOrder, \{ refresh: false \}\)/);
+  assert.match(source, /mergeRecordIntoCurrentList\(optimisticRecord\)/);
+  assert.match(source, /disabled=\{false\}/);
   assert.match(source, /window\.addEventListener\("pointermove"/);
   assert.match(source, /window\.addEventListener\("pointerup"/);
   assert.match(source, /window\.addEventListener\("pointercancel"/);
