@@ -1475,7 +1475,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }, [effectiveView.columns, objectFields]);
   const recordListFields = useMemo(() => {
     const mediaField = activeObject?.key === "contacts" ? "avatarUrl" : activeObject?.key === "companies" ? "logoUrl" : undefined;
-    return Array.from(new Set(["title", ...(mediaField ? [mediaField] : []), ...visibleTableColumns.map((column) => column.key)]));
+    const systemFields = activeObject?.key === "deals" ? ["pipelineOrder"] : [];
+    return Array.from(new Set(["title", ...(mediaField ? [mediaField] : []), ...systemFields, ...visibleTableColumns.map((column) => column.key)]));
   }, [activeObject?.key, visibleTableColumns]);
   const recordCursor = recordCursorStack[recordPage - 1] ?? "";
   const filteredRecords = objectRecords;

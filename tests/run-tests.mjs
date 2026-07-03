@@ -2734,6 +2734,7 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /setPipelineDeals\(\(current\) => mergeRecords\(current, \[optimisticDeal\]\)\)/);
   assert.match(source, /moveDealStage\(deal, stageKey, pipelineOrder, \{ refresh: false \}\)/);
   assert.match(source, /mergeRecordIntoCurrentList\(optimisticRecord\)/);
+  assert.match(source, /const systemFields = activeObject\?\.key === "deals" \? \["pipelineOrder"\] : \[\]/);
   assert.match(source, /disabled=\{false\}/);
   assert.match(source, /window\.addEventListener\("pointermove"/);
   assert.match(source, /window\.addEventListener\("pointerup"/);
