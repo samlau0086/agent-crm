@@ -2871,13 +2871,27 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function moveDealStage(record: CrmRecord, stageKey: string, pipelineOrder?: number) {
-    const updated = await fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}/stage`, {
-      method: "PATCH",
-      body: { stageKey, ...(typeof pipelineOrder === "number" ? { pipelineOrder } : {}) }
-    });
-    setRecords((current) => mergeRecords(current, [updated]));
-    setMessage(record.stageKey === stageKey ? "交易顺序已更新" : "交易阶段已更新");
-    router.refresh();
+    const optimisticRecord: CrmRecord = {
+      ...record,
+      stageKey,
+      data: {
+        ...record.data,
+        ...(typeof pipelineOrder === "number" ? { pipelineOrder } : {})
+      }
+    };
+    setRecords((current) => mergeRecords(current, [optimisticRecord]));
+    try {
+      const updated = await fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}/stage`, {
+        method: "PATCH",
+        body: { stageKey, ...(typeof pipelineOrder === "number" ? { pipelineOrder } : {}) }
+      });
+      setRecords((current) => mergeRecords(current, [updated]));
+      setMessage(record.stageKey === stageKey ? "交易顺序已更新" : "交易阶段已更新");
+      router.refresh();
+    } catch (moveError) {
+      setRecords((current) => mergeRecords(current, [record]));
+      throw moveError;
+    }
   }
 
   function openPipelineDealActivityDialog(deal: CrmRecord) {
@@ -4141,7 +4155,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   users={props.users}
                   onCreateActivity={openPipelineDealActivityDialog}
                   onCreateDeal={() => setRecordPanelMode("create")}
-                  onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
+                  onMoveDealStage={(deal, stageKey, pipelineOrder) => runAction(() => moveDealStage(deal, stageKey, pipelineOrder))}
                   onOpenDeal={openRecord}
                 />
               ) : (
