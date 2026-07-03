@@ -2879,17 +2879,27 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         ...(typeof pipelineOrder === "number" ? { pipelineOrder } : {})
       }
     };
+    const mergeRecordIntoCurrentList = (nextRecord: CrmRecord) => {
+      setRecordList((current) =>
+        current.records.some((candidate) => candidate.id === nextRecord.id)
+          ? { ...current, records: mergeRecords(current.records, [nextRecord]) }
+          : current
+      );
+    };
     setRecords((current) => mergeRecords(current, [optimisticRecord]));
+    mergeRecordIntoCurrentList(optimisticRecord);
     try {
       const updated = await fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}/stage`, {
         method: "PATCH",
         body: { stageKey, ...(typeof pipelineOrder === "number" ? { pipelineOrder } : {}) }
       });
       setRecords((current) => mergeRecords(current, [updated]));
+      mergeRecordIntoCurrentList(updated);
       setMessage(record.stageKey === stageKey ? "交易顺序已更新" : "交易阶段已更新");
       router.refresh();
     } catch (moveError) {
       setRecords((current) => mergeRecords(current, [record]));
+      mergeRecordIntoCurrentList(record);
       throw moveError;
     }
   }
