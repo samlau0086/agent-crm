@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+﻿import { Prisma } from "@prisma/client";
 import { createApiKeyToken, getApiKeyTokenPrefix, hashApiKeyToken } from "@/lib/auth/api-key";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
@@ -19,7 +19,7 @@ import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { isContactMethodsAdditionOnly, previousRecordApprovalPatch, stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
 import { decryptAiProviderConfig, decryptAiProviderSettingsBundle, encryptAiProviderSettingsBundle, mergeAiProviderConfigSecrets, mergeAiProviderProfilesSecrets, normalizeAiProviderConfig, publicAiProviderConfig, publicAiProviderProfiles, resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
-import { getGlobalAiAgentSetting, listAiAgentDefinitions, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings } from "@/lib/ai/agents";
+import { getGlobalAiAgentSetting, listAiAgentDefinitions, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings, smartReminderPlannerAgentKey } from "@/lib/ai/agents";
 import { runAiAgent } from "@/lib/ai/harness";
 import {
   buildEmailAssistantContext as buildEmailAssistantPromptContext,
@@ -85,6 +85,11 @@ import type {
   RequestContext,
   Role,
   SavedView,
+  SmartReminder,
+  SmartReminderKind,
+  SmartReminderPriority,
+  SmartReminderRun,
+  SmartReminderSettings,
   Team,
   TalkMessage,
   User,
@@ -125,6 +130,26 @@ type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: str
 const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
 const EDIT_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals"] as const;
 const DELETE_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals", "products", "quotes"] as const;
+type SmartReminderCandidate = {
+  kind: SmartReminderKind;
+  priority: SmartReminderPriority;
+  title: string;
+  body?: string;
+  actionLabel?: string;
+  objectKey?: string;
+  recordId?: string;
+  dueAt?: string;
+  sources: SmartReminder["sources"];
+  score: number;
+};
+type SmartReminderGenerationContext = {
+  user: { id: string; name: string; email: string };
+  records: Array<Pick<CrmRecord, "id" | "objectKey" | "title" | "stageKey" | "ownerId" | "data" | "updatedAt">>;
+  tasks: Activity[];
+  recentActivities: Activity[];
+  emailThreads: EmailThread[];
+  knowledge: KnowledgeArticle[];
+};
 
 function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
   return (value ?? {}) as Record<string, unknown>;
@@ -1323,13 +1348,13 @@ function normalizeEmailThreadCategory(value: unknown): EmailThread["category"] {
 
 function classifyEmailCategory(message: EmailMessage): NonNullable<EmailThread["category"]> {
   const text = `${message.from} ${message.subject} ${message.bodyText}`.toLowerCase();
-  if (/(unsubscribe|sale|discount|coupon|offer|promo|promotion|limited time|shop|store|newsletter|marketing|广告|促销|优惠|折扣|订阅)/.test(text)) {
+  if (/(unsubscribe|sale|discount|coupon|offer|promo|promotion|limited time|shop|store|newsletter|marketing|骞垮憡|淇冮攢|浼樻儬|鎶樻墸|璁㈤槄)/.test(text)) {
     return "promotions";
   }
-  if (/(linkedin|facebook|instagram|twitter|x\.com|wechat|whatsapp|social|follower|connection|commented|liked|社交|关注|评论|点赞)/.test(text)) {
+  if (/(linkedin|facebook|instagram|twitter|x\.com|wechat|whatsapp|social|follower|connection|commented|liked|绀句氦|鍏虫敞|璇勮|鐐硅禐)/.test(text)) {
     return "social";
   }
-  if (/(receipt|invoice|statement|security|alert|notification|update|verify|verification|password|billing|report|system|提醒|通知|更新|账单|验证|安全)/.test(text)) {
+  if (/(receipt|invoice|statement|security|alert|notification|update|verify|verification|password|billing|report|system|鎻愰啋|閫氱煡|鏇存柊|璐﹀崟|楠岃瘉|瀹夊叏)/.test(text)) {
     return "updates";
   }
   return "primary";
@@ -3859,8 +3884,198 @@ export class PrismaCrmRepository {
       openTaskCount,
       deals: deals.map(mapRecord),
       openTasks: openTasks.map(mapActivity),
-      recentActivities: recentActivities.map(mapActivity)
+      recentActivities: recentActivities.map(mapActivity),
+      smartReminders: context.role.permissions.includes("ai.use") ? await this.listSmartReminders(context, { status: "open", snoozed: false, limit: 10 }) : []
     };
+  }
+
+  async getSmartReminderSettings(context: RequestContext): Promise<SmartReminderSettings> {
+    requirePermission(context, "crm.read");
+    return this.ensureSmartReminderSettings(context.workspaceId);
+  }
+
+  async updateSmartReminderSettings(
+    context: RequestContext,
+    patch: Partial<Pick<SmartReminderSettings, "enabled" | "dailyAt" | "maxPerUser" | "objectKeys" | "notifyCreated" | "notifyDailyDigest">>
+  ): Promise<SmartReminderSettings> {
+    requirePermission(context, "ai.admin");
+    const current = await this.ensureSmartReminderSettings(context.workspaceId);
+    const nextObjectKeys = Array.isArray(patch.objectKeys)
+      ? patch.objectKeys.filter((key) => ["contacts", "companies", "deals", "emails", "tasks", "activities"].includes(key)).slice(0, 10)
+      : current.objectKeys;
+    const updated = await this.db.smartReminderSettings.update({
+      where: { workspaceId: context.workspaceId },
+      data: {
+        enabled: patch.enabled ?? current.enabled,
+        dailyAt: patch.dailyAt && /^([01]\d|2[0-3]):([0-5]\d)$/.test(patch.dailyAt) ? patch.dailyAt : current.dailyAt,
+        maxPerUser: patch.maxPerUser ? Math.max(1, Math.min(50, Math.floor(patch.maxPerUser))) : current.maxPerUser,
+        objectKeys: nextObjectKeys.length > 0 ? nextObjectKeys : current.objectKeys,
+        notifyCreated: patch.notifyCreated ?? current.notifyCreated,
+        notifyDailyDigest: patch.notifyDailyDigest ?? current.notifyDailyDigest
+      }
+    });
+    await this.writeAuditLog(context, "update", "smart_reminder_settings", context.workspaceId, {
+      summary: "Updated smart reminder settings",
+      details: { patch }
+    });
+    return mapSmartReminderSettings(updated);
+  }
+
+  async listSmartReminders(
+    context: RequestContext,
+    query: { status?: SmartReminder["status"]; snoozed?: boolean; objectKey?: string; recordId?: string; limit?: number } = {}
+  ): Promise<SmartReminder[]> {
+    requirePermission(context, "ai.use");
+    const now = new Date();
+    const where: Prisma.SmartReminderWhereInput = {
+      workspaceId: context.workspaceId,
+      ...(canManageAllRecords(context) ? {} : { userId: context.user.id }),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.objectKey ? { objectKey: query.objectKey } : {}),
+      ...(query.recordId ? { recordId: query.recordId } : {}),
+      ...(query.snoozed === false ? { OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }] } : {})
+    };
+    const reminders = await this.db.smartReminder.findMany({
+      where,
+      orderBy: [{ priority: "desc" }, { dueAt: "asc" }, { score: "desc" }, { createdAt: "desc" }],
+      take: Math.max(1, Math.min(100, query.limit ?? 50))
+    });
+    return reminders.map(mapSmartReminder).sort(compareSmartReminders);
+  }
+
+  async generateSmartReminders(
+    context: RequestContext,
+    input: { objectKey?: string; recordId?: string; force?: boolean; daily?: boolean } = {}
+  ): Promise<{ reminders: SmartReminder[]; run: SmartReminderRun }> {
+    requirePermission(context, "ai.use");
+    const startedAt = Date.now();
+    const settings = await this.ensureSmartReminderSettings(context.workspaceId);
+    const run = await this.db.smartReminderRun.create({
+      data: {
+        workspaceId: context.workspaceId,
+        userId: context.user.id,
+        status: "running",
+        scope: { userId: context.user.id, objectKey: input.objectKey, recordId: input.recordId, force: input.force, daily: input.daily } as Prisma.InputJsonValue,
+        agentKey: smartReminderPlannerAgentKey
+      }
+    });
+    try {
+      const contextPayload = await this.buildSmartReminderContext(context, { ...input, objectKeys: settings.objectKeys });
+      const aiCandidates = await this.generateAiSmartReminderCandidates(context, contextPayload).catch(() => []);
+      const fallbackCandidates = buildFallbackSmartReminderCandidates(context, contextPayload);
+      const candidates = dedupeSmartReminderCandidates([...aiCandidates, ...fallbackCandidates])
+        .sort((a, b) => b.score - a.score)
+        .slice(0, settings.maxPerUser);
+      const reminders: SmartReminder[] = [];
+      for (const candidate of candidates) {
+        const created = await this.upsertSmartReminderCandidate(context, candidate);
+        reminders.push(created);
+      }
+      const completed = await this.db.smartReminderRun.update({
+        where: { id: run.id },
+        data: {
+          status: "completed",
+          generatedCount: reminders.length,
+          fallback: aiCandidates.length === 0,
+          completedAt: new Date(),
+          durationMs: Date.now() - startedAt
+        }
+      });
+      if (settings.notifyDailyDigest && reminders.length > 0) {
+        this.emitNotificationEvent(context, "ai.reminder.daily_digest", {
+          title: `今日最佳行动 ${reminders.length} 条`,
+          userId: context.user.id,
+          reminderCount: reminders.length
+        });
+      }
+      return { reminders, run: mapSmartReminderRun(completed) };
+    } catch (error) {
+      const completed = await this.db.smartReminderRun.update({
+        where: { id: run.id },
+        data: {
+          status: "failed",
+          fallback: true,
+          errorMessage: normalizeErrorMessage(error),
+          completedAt: new Date(),
+          durationMs: Date.now() - startedAt
+        }
+      });
+      this.emitNotificationEvent(context, "ai.reminder.failed", {
+        title: "AI 智能提醒生成失败",
+        userId: context.user.id,
+        error: normalizeErrorMessage(error)
+      });
+      return { reminders: [], run: mapSmartReminderRun(completed) };
+    }
+  }
+
+  async runDailySmartReminderGenerationIfDue(
+    context: RequestContext
+  ): Promise<{ ran: boolean; reason?: string; reminders: number; runId?: string }> {
+    requirePermission(context, "ai.use");
+    const settings = await this.ensureSmartReminderSettings(context.workspaceId);
+    if (!settings.enabled) {
+      return { ran: false, reason: "disabled", reminders: 0 };
+    }
+    const windowStart = smartReminderDailyWindowStart(settings.dailyAt);
+    if (Date.now() < windowStart.getTime()) {
+      return { ran: false, reason: "not_due", reminders: 0 };
+    }
+    const existing = await this.db.smartReminderRun.findFirst({
+      where: {
+        workspaceId: context.workspaceId,
+        userId: context.user.id,
+        startedAt: { gte: windowStart },
+        scope: { path: ["daily"], equals: true }
+      },
+      orderBy: { startedAt: "desc" }
+    });
+    if (existing) {
+      return { ran: false, reason: "already_ran", reminders: existing.generatedCount, runId: existing.id };
+    }
+    const result = await this.generateSmartReminders(context, { daily: true });
+    return { ran: true, reminders: result.reminders.length, runId: result.run.id };
+  }
+
+  async updateSmartReminder(
+    context: RequestContext,
+    id: string,
+    patch: { status?: SmartReminder["status"]; snoozedUntil?: string | null }
+  ): Promise<SmartReminder> {
+    requirePermission(context, "ai.use");
+    const existing = await this.getSmartReminderForAction(context, id);
+    const status = patch.status ?? existing.status;
+    const now = new Date();
+    const updated = await this.db.smartReminder.update({
+      where: { id },
+      data: {
+        status,
+        snoozedUntil: patch.snoozedUntil === undefined ? undefined : patch.snoozedUntil ? new Date(patch.snoozedUntil) : null,
+        completedAt: status === "done" ? now : status === "open" ? null : undefined,
+        dismissedAt: status === "dismissed" ? now : status === "open" ? null : undefined
+      }
+    });
+    await this.writeAuditLog(context, "update", "smart_reminder", id, {
+      summary: `Updated smart reminder ${updated.title}`,
+      details: { status, snoozedUntil: patch.snoozedUntil }
+    });
+    return mapSmartReminder(updated);
+  }
+
+  async convertSmartReminderToTask(context: RequestContext, id: string): Promise<{ reminder: SmartReminder; task: Activity }> {
+    requirePermission(context, "crm.write");
+    const reminder = await this.getSmartReminderForAction(context, id);
+    const task = await this.createActivity(context, {
+      recordId: reminder.recordId,
+      type: "task",
+      title: reminder.actionLabel || reminder.title,
+      body: reminder.body,
+      dueAt: reminder.dueAt,
+      completedAt: undefined,
+      archivedAt: undefined
+    });
+    const updated = await this.updateSmartReminder(context, id, { status: "done" });
+    return { reminder: updated, task };
   }
 
   async listObjectDefinitions(context: RequestContext): Promise<ObjectDefinition[]> {
@@ -4473,7 +4688,7 @@ export class PrismaCrmRepository {
         select: { id: true }
       });
       if (!user) {
-        throw new Error("目标负责人不存在或已停用");
+        throw new Error("鐩爣璐熻矗浜轰笉瀛樺湪鎴栧凡鍋滅敤");
       }
     }
     const updated = await this.db.crmRecord.update({
@@ -4725,7 +4940,7 @@ export class PrismaCrmRepository {
       throw new Error("审批申请不存在");
     }
     if (request.status !== "pending") {
-      throw new Error("审批申请已经处理");
+      throw new Error("瀹℃壒鐢宠宸茬粡澶勭悊");
     }
     const canCancel = canManageAllRecords(context) || request.requestedById === context.user.id;
     if (!canCancel) {
@@ -4761,7 +4976,7 @@ export class PrismaCrmRepository {
       throw new Error("审批申请不存在");
     }
     if (request.status !== "pending") {
-      throw new Error("审批申请已经处理");
+      throw new Error("瀹℃壒鐢宠宸茬粡澶勭悊");
     }
     const reviewedAt = new Date();
     if (input.decision === "reject") {
@@ -6984,6 +7199,188 @@ export class PrismaCrmRepository {
     return mapEmailAiSettings(created);
   }
 
+  private async ensureSmartReminderSettings(workspaceId: string): Promise<SmartReminderSettings> {
+    const settings = await this.db.smartReminderSettings.findUnique({ where: { workspaceId } });
+    if (settings) {
+      return mapSmartReminderSettings(settings);
+    }
+    const created = await this.db.smartReminderSettings.create({
+      data: {
+        workspaceId,
+        enabled: true,
+        dailyAt: "08:30",
+        maxPerUser: 10,
+        objectKeys: ["contacts", "companies", "deals", "emails", "tasks", "activities"],
+        notifyCreated: false,
+        notifyDailyDigest: false
+      }
+    });
+    return mapSmartReminderSettings(created);
+  }
+
+  private async buildSmartReminderContext(
+    context: RequestContext,
+    input: { objectKey?: string; recordId?: string; objectKeys?: string[] }
+  ): Promise<SmartReminderGenerationContext> {
+    const accessWhere = await this.recordAccessWhere(context);
+    const activityWhere = await this.visibleActivityWhere(context);
+    const enabledKeys = new Set(input.objectKeys?.length ? input.objectKeys : ["contacts", "companies", "deals", "emails", "tasks", "activities"]);
+    const crmObjectKeys = ["contacts", "companies", "deals"].filter((key) => enabledKeys.has(key));
+    const recordWhere: Prisma.CrmRecordWhereInput = {
+      workspaceId: context.workspaceId,
+      ...(input.objectKey ? { objectKey: input.objectKey } : { objectKey: { in: crmObjectKeys } }),
+      ...(input.recordId ? { id: input.recordId } : {}),
+      ...accessWhere
+    };
+    const [records, tasks, recentActivities, emailThreads, knowledge] = await Promise.all([
+      this.db.crmRecord.findMany({ where: recordWhere, orderBy: { updatedAt: "asc" }, take: 80 }),
+      enabledKeys.has("tasks")
+        ? this.db.activity.findMany({
+            where: { ...activityWhere, type: "task", completedAt: null, archivedAt: null },
+            orderBy: [{ dueAt: "asc" }, { createdAt: "desc" }],
+            take: 80
+          })
+        : Promise.resolve([]),
+      enabledKeys.has("activities") ? this.db.activity.findMany({ where: activityWhere, orderBy: { createdAt: "desc" }, take: 120 }) : Promise.resolve([]),
+      enabledKeys.has("emails")
+        ? this.db.emailThread.findMany({
+            where: {
+              workspaceId: context.workspaceId,
+              ...(input.recordId ? { recordId: input.recordId } : {})
+            },
+            orderBy: { lastMessageAt: "desc" },
+            take: 40
+          })
+        : Promise.resolve([]),
+      this.db.knowledgeArticle.findMany({ where: { workspaceId: context.workspaceId, active: true }, orderBy: { updatedAt: "desc" }, take: 6 })
+    ]);
+    const visibleRecordIds = new Set(records.map((record) => record.id));
+    return {
+      user: { id: context.user.id, name: context.user.name, email: context.user.email },
+      records: records.map(mapRecord),
+      tasks: tasks.map(mapActivity).filter((activity) => !activity.recordId || visibleRecordIds.has(activity.recordId)),
+      recentActivities: recentActivities.map(mapActivity).filter((activity) => !activity.recordId || visibleRecordIds.has(activity.recordId)).slice(0, 80),
+      emailThreads: emailThreads.map((thread) => mapEmailThread(thread)).filter((thread) => !thread.recordId || visibleRecordIds.has(thread.recordId)).slice(0, 30),
+      knowledge: knowledge.map(mapKnowledgeArticle)
+    };
+  }
+
+  private async generateAiSmartReminderCandidates(
+    context: RequestContext,
+    payload: SmartReminderGenerationContext
+  ): Promise<SmartReminderCandidate[]> {
+    const settings = await this.ensureEmailAiSettings(context.workspaceId);
+    const agent = getGlobalAiAgentSetting(settings, smartReminderPlannerAgentKey);
+    if (!agent) {
+      return [];
+    }
+    const providerConfig = await this.getEmailAiProviderConfigForWorkspace(context.workspaceId);
+    const result = await runAiAgent(
+      {
+        agentKey: smartReminderPlannerAgentKey,
+        task: "Generate today's best sales actions and follow-up reminders. Return JSON only.",
+        context: {
+          user: payload.user,
+          records: payload.records.slice(0, 60).map((record) => ({
+            id: record.id,
+            objectKey: record.objectKey,
+            title: record.title,
+            stageKey: record.stageKey,
+            ownerId: record.ownerId,
+            updatedAt: record.updatedAt,
+            data: record.data
+          })),
+          tasks: payload.tasks.slice(0, 40),
+          recentActivities: payload.recentActivities.slice(0, 40),
+          emailThreads: payload.emailThreads.slice(0, 20).map((thread) => ({
+            id: thread.id,
+            recordId: thread.recordId,
+            subject: thread.subject,
+            summary: thread.summary,
+            aiAnalysis: thread.aiAnalysis,
+            lastMessageAt: thread.lastMessageAt
+          })),
+          knowledge: payload.knowledge.slice(0, 4).map((article) => ({ title: article.title, tags: article.tags, body: article.body.slice(0, 800) }))
+        },
+        expectedOutput: "text"
+      },
+      { agent, providerConfig, providerProfiles: settings.providerProfiles }
+    );
+    return parseSmartReminderCandidates(result.structured ?? result.text, payload);
+  }
+
+  private async upsertSmartReminderCandidate(context: RequestContext, candidate: SmartReminderCandidate): Promise<SmartReminder> {
+    const settings = await this.ensureSmartReminderSettings(context.workspaceId);
+    const dateKey = new Date().toISOString().slice(0, 10);
+    const idempotencyKey = [
+      dateKey,
+      candidate.kind,
+      candidate.objectKey ?? "none",
+      candidate.recordId ?? "none",
+      normalizeIdempotencyText(candidate.title)
+    ].join(":");
+    const reminder = await this.db.smartReminder.upsert({
+      where: {
+        workspaceId_userId_idempotencyKey: {
+          workspaceId: context.workspaceId,
+          userId: context.user.id,
+          idempotencyKey
+        }
+      },
+      create: {
+        workspaceId: context.workspaceId,
+        userId: context.user.id,
+        objectKey: candidate.objectKey,
+        recordId: candidate.recordId,
+        kind: candidate.kind,
+        priority: candidate.priority,
+        title: candidate.title,
+        body: candidate.body,
+        actionLabel: candidate.actionLabel,
+        dueAt: candidate.dueAt ? new Date(candidate.dueAt) : undefined,
+        sources: candidate.sources as unknown as Prisma.InputJsonValue,
+        score: candidate.score,
+        idempotencyKey,
+        generatedByAgentKey: smartReminderPlannerAgentKey
+      },
+      update: {
+        priority: candidate.priority,
+        body: candidate.body,
+        actionLabel: candidate.actionLabel,
+        dueAt: candidate.dueAt ? new Date(candidate.dueAt) : undefined,
+        sources: candidate.sources as unknown as Prisma.InputJsonValue,
+        score: candidate.score,
+        status: "open"
+      }
+    });
+    const mapped = mapSmartReminder(reminder);
+    if (settings.notifyCreated) {
+      this.emitNotificationEvent(context, "ai.reminder.created", {
+        reminderId: mapped.id,
+        title: mapped.title,
+        objectKey: mapped.objectKey,
+        recordId: mapped.recordId,
+        priority: mapped.priority,
+        dueAt: mapped.dueAt
+      });
+    }
+    return mapped;
+  }
+
+  private async getSmartReminderForAction(context: RequestContext, id: string): Promise<SmartReminder> {
+    const reminder = await this.db.smartReminder.findFirst({
+      where: {
+        id,
+        workspaceId: context.workspaceId,
+        ...(canManageAllRecords(context) ? {} : { userId: context.user.id })
+      }
+    });
+    if (!reminder) {
+      throw new Error("Smart reminder not found");
+    }
+    return mapSmartReminder(reminder);
+  }
+
   private async getEmailAiProviderConfigForWorkspace(workspaceId: string): Promise<AiProviderConfig> {
     const settings = await this.db.emailAiSettings.findUnique({ where: { workspaceId } });
     return readAiProviderSettingsBundleFromEncrypted(settings?.encryptedProviderConfig).providerConfig;
@@ -7040,7 +7437,7 @@ export class PrismaCrmRepository {
           id: `email_signature_default_${context.workspaceId}`,
           workspaceId: context.workspaceId,
           accountId: null,
-          name: "默认签名",
+          name: "榛樿绛惧悕",
           bodyText: "Best regards,\n{{senderEmail}}",
           bodyHtml: "<p>Best regards,<br>{{senderEmail}}</p>",
           isDefault: true,
@@ -7051,9 +7448,9 @@ export class PrismaCrmRepository {
           id: `email_signature_cn_sales_${context.workspaceId}`,
           workspaceId: context.workspaceId,
           accountId: null,
-          name: "中文商务签名",
-          bodyText: "谢谢，\n{{senderEmail}}",
-          bodyHtml: "<p>谢谢，<br>{{senderEmail}}</p>",
+          name: "涓枃鍟嗗姟绛惧悕",
+          bodyText: "璋㈣阿锛孿n{{senderEmail}}",
+          bodyHtml: "<p>璋㈣阿锛?br>{{senderEmail}}</p>",
           isDefault: false,
           active: true,
           createdById: context.user.id
@@ -7451,14 +7848,240 @@ function normalizeNotificationChannelInput(input: {
 
 function buildNotificationBody(event: NotificationEvent, data: Record<string, unknown>): string {
   const lines = [
-    `事件：${event}`,
-    typeof data.title === "string" ? `标题：${data.title}` : "",
-    typeof data.objectKey === "string" ? `对象：${data.objectKey}` : "",
-    typeof data.recordId === "string" ? `记录 ID：${data.recordId}` : "",
-    typeof data.activityId === "string" ? `活动 ID：${data.activityId}` : "",
-    `时间：${new Date().toISOString()}`
+    `Event: ${event}`,
+    typeof data.title === "string" ? `Title: ${data.title}` : "",
+    typeof data.objectKey === "string" ? `Object: ${data.objectKey}` : "",
+    typeof data.recordId === "string" ? `Record ID: ${data.recordId}` : "",
+    typeof data.activityId === "string" ? `Activity ID: ${data.activityId}` : "",
+    `Time: ${new Date().toISOString()}`
   ].filter(Boolean);
   return lines.join("\n");
+}
+
+function normalizeSmartReminderKind(value: string): SmartReminderKind {
+  return ["today_best_action", "follow_up", "overdue", "email_reply", "deal_close", "risk"].includes(value) ? (value as SmartReminderKind) : "follow_up";
+}
+
+function normalizeSmartReminderPriority(value: string): SmartReminderPriority {
+  return ["low", "medium", "high", "urgent"].includes(value) ? (value as SmartReminderPriority) : "medium";
+}
+
+function smartReminderDailyWindowStart(value: string): Date {
+  const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  const hours = match ? Number(match[1]) : 8;
+  const minutes = match ? Number(match[2]) : 30;
+  const now = new Date();
+  const windowStart = new Date(now);
+  windowStart.setHours(hours, minutes, 0, 0);
+  return windowStart;
+}
+
+function compareSmartReminders(a: SmartReminder, b: SmartReminder): number {
+  const priority = smartReminderPriorityWeight(b.priority) - smartReminderPriorityWeight(a.priority);
+  if (priority !== 0) return priority;
+  const dueA = a.dueAt ? Date.parse(a.dueAt) : Number.MAX_SAFE_INTEGER;
+  const dueB = b.dueAt ? Date.parse(b.dueAt) : Number.MAX_SAFE_INTEGER;
+  if (dueA !== dueB) return dueA - dueB;
+  return b.score - a.score;
+}
+
+function smartReminderPriorityWeight(priority: SmartReminderPriority): number {
+  return { low: 1, medium: 2, high: 3, urgent: 4 }[priority];
+}
+
+function buildFallbackSmartReminderCandidates(context: RequestContext, payload: SmartReminderGenerationContext): SmartReminderCandidate[] {
+  const now = new Date();
+  const todayEnd = new Date(now);
+  todayEnd.setHours(23, 59, 59, 999);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const sevenDaysAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const candidates: SmartReminderCandidate[] = [];
+
+  for (const task of payload.tasks) {
+    const dueAt = task.dueAt ? new Date(task.dueAt) : undefined;
+    if (dueAt && dueAt < now) {
+      candidates.push({
+        kind: "overdue",
+        priority: "urgent",
+        title: `逾期任务：${task.title}`,
+        body: task.body || "该任务已逾期，建议今天处理或重新安排。",
+        actionLabel: "处理逾期任务",
+        objectKey: task.recordId ? undefined : "tasks",
+        recordId: task.recordId,
+        dueAt: task.dueAt,
+        sources: [{ label: task.title, recordId: task.recordId, activityId: task.id }],
+        score: 95
+      });
+    } else if (dueAt && dueAt <= todayEnd) {
+      candidates.push({
+        kind: "today_best_action",
+        priority: "high",
+        title: `今日任务：${task.title}`,
+        body: task.body || "该任务今天到期，建议优先完成。",
+        actionLabel: "完成今日任务",
+        recordId: task.recordId,
+        dueAt: task.dueAt,
+        sources: [{ label: task.title, recordId: task.recordId, activityId: task.id }],
+        score: 82
+      });
+    }
+  }
+
+  for (const record of payload.records) {
+    const lastActivity = payload.recentActivities.find((activity) => activity.recordId === record.id);
+    const lastTouchedAt = lastActivity?.createdAt ? new Date(lastActivity.createdAt) : new Date(record.updatedAt);
+    const data = record.data ?? {};
+    if (record.objectKey === "deals") {
+      const expectedCloseRaw = typeof data.expectedCloseDate === "string" ? data.expectedCloseDate : typeof data.closeDate === "string" ? data.closeDate : "";
+      const expectedCloseAt = expectedCloseRaw ? new Date(expectedCloseRaw) : undefined;
+      if (expectedCloseAt && expectedCloseAt >= now && expectedCloseAt <= sevenDaysAhead) {
+        candidates.push({
+          kind: "deal_close",
+          priority: "high",
+          title: `推进临近成交：${record.title}`,
+          body: `预计成交日临近（${expectedCloseAt.toISOString().slice(0, 10)}），建议确认阻塞点、下一步和报价有效期。`,
+          actionLabel: "安排成交推进",
+          objectKey: record.objectKey,
+          recordId: record.id,
+          dueAt: expectedCloseAt.toISOString(),
+          sources: [{ label: record.title, objectKey: record.objectKey, recordId: record.id }],
+          score: 88
+        });
+      }
+      if (lastTouchedAt < sevenDaysAgo) {
+        candidates.push({
+          kind: "follow_up",
+          priority: "medium",
+          title: `7 天未跟进交易：${record.title}`,
+          body: "该交易最近 7 天没有新的活动记录，建议联系客户确认当前状态。",
+          actionLabel: "创建跟进任务",
+          objectKey: record.objectKey,
+          recordId: record.id,
+          dueAt: todayEnd.toISOString(),
+          sources: [{ label: record.title, objectKey: record.objectKey, recordId: record.id }],
+          score: 72
+        });
+      }
+    } else if (["contacts", "companies"].includes(record.objectKey) && lastTouchedAt < sevenDaysAgo) {
+      candidates.push({
+        kind: "follow_up",
+        priority: record.ownerId === context.user.id ? "medium" : "low",
+        title: `客户久未跟进：${record.title}`,
+        body: "该客户最近缺少活动记录，建议查看邮件历史并安排一次低打扰跟进。",
+        actionLabel: "安排客户跟进",
+        objectKey: record.objectKey,
+        recordId: record.id,
+        dueAt: todayEnd.toISOString(),
+        sources: [{ label: record.title, objectKey: record.objectKey, recordId: record.id }],
+        score: 64
+      });
+    }
+  }
+
+  for (const thread of payload.emailThreads) {
+    if (!thread.recordId || !thread.lastMessageAt) continue;
+    const lastMessageAt = new Date(thread.lastMessageAt);
+    if (lastMessageAt >= sevenDaysAgo) {
+      const record = payload.records.find((item) => item.id === thread.recordId);
+      candidates.push({
+        kind: "email_reply",
+        priority: "high",
+        title: `处理邮件跟进：${thread.subject}`,
+        body: thread.summary || thread.aiAnalysis || "最近有客户邮件线程需要确认是否回复或继续跟进。",
+        actionLabel: "查看邮件并回复",
+        objectKey: record?.objectKey,
+        recordId: thread.recordId,
+        dueAt: todayEnd.toISOString(),
+        sources: [{ label: thread.subject, objectKey: record?.objectKey, recordId: thread.recordId, threadId: thread.id }],
+        score: 78
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function parseSmartReminderCandidates(value: unknown, payload: SmartReminderGenerationContext): SmartReminderCandidate[] {
+  const parsed = typeof value === "string" ? parseJsonObject(value) : value;
+  const reminders = isJsonRecord(parsed) && Array.isArray(parsed.reminders) ? parsed.reminders : Array.isArray(parsed) ? parsed : [];
+  const visibleRecordIds = new Set(payload.records.map((record) => record.id));
+  return reminders
+    .filter(isJsonRecord)
+    .map((raw): SmartReminderCandidate | undefined => {
+      const recordId = typeof raw.recordId === "string" && visibleRecordIds.has(raw.recordId) ? raw.recordId : undefined;
+      const record = recordId ? payload.records.find((item) => item.id === recordId) : undefined;
+      const title = normalizeShortText(raw.title, "");
+      if (!title) return undefined;
+      const sourceList = Array.isArray(raw.sources) ? raw.sources.filter(isJsonRecord) : [];
+      return {
+        kind: normalizeSmartReminderKind(typeof raw.kind === "string" ? raw.kind : ""),
+        priority: normalizeSmartReminderPriority(typeof raw.priority === "string" ? raw.priority : ""),
+        title,
+        body: normalizeOptionalText(raw.body, 1000),
+        actionLabel: normalizeOptionalText(raw.actionLabel, 80),
+        objectKey: typeof raw.objectKey === "string" ? raw.objectKey : record?.objectKey,
+        recordId,
+        dueAt: normalizeOptionalDate(raw.dueAt),
+        sources: sourceList.length > 0 ? sourceList.map((source) => ({
+          label: normalizeShortText(source.label, "AI source"),
+          objectKey: typeof source.objectKey === "string" ? source.objectKey : record?.objectKey,
+          recordId: typeof source.recordId === "string" && visibleRecordIds.has(source.recordId) ? source.recordId : recordId,
+          threadId: typeof source.threadId === "string" ? source.threadId : undefined,
+          activityId: typeof source.activityId === "string" ? source.activityId : undefined,
+          messageId: typeof source.messageId === "string" ? source.messageId : undefined
+        })) : record ? [{ label: record.title, objectKey: record.objectKey, recordId: record.id }] : [],
+        score: normalizeScore(raw.score, 70)
+      };
+    })
+    .filter((candidate): candidate is SmartReminderCandidate => Boolean(candidate));
+}
+
+function dedupeSmartReminderCandidates(candidates: SmartReminderCandidate[]): SmartReminderCandidate[] {
+  const byKey = new Map<string, SmartReminderCandidate>();
+  for (const candidate of candidates) {
+    const key = `${candidate.kind}:${candidate.objectKey ?? ""}:${candidate.recordId ?? ""}:${normalizeIdempotencyText(candidate.title)}`;
+    const existing = byKey.get(key);
+    if (!existing || candidate.score > existing.score) {
+      byKey.set(key, candidate);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function parseJsonObject(value: string): unknown {
+  const text = value.match(/\{[\s\S]*\}/)?.[0] ?? value;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeShortText(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 160) : fallback;
+}
+
+function normalizeOptionalText(value: unknown, maxLength: number): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : undefined;
+}
+
+function normalizeOptionalDate(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function normalizeScore(value: unknown, fallback: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : fallback;
+}
+
+function normalizeIdempotencyText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "reminder";
+}
+
+function normalizeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 10000): Promise<Response> {
@@ -7864,6 +8487,121 @@ function buildEmailMessageEventPayload(message: EmailMessage, recordId?: string)
   };
 }
 
+function mapSmartReminderSettings(settings: {
+  workspaceId: string;
+  enabled: boolean;
+  dailyAt: string;
+  maxPerUser: number;
+  objectKeys: string[];
+  notifyCreated: boolean;
+  notifyDailyDigest: boolean;
+  updatedAt: Date;
+}): SmartReminderSettings {
+  return {
+    workspaceId: settings.workspaceId,
+    enabled: settings.enabled,
+    dailyAt: settings.dailyAt,
+    maxPerUser: settings.maxPerUser,
+    objectKeys: settings.objectKeys,
+    notifyCreated: settings.notifyCreated,
+    notifyDailyDigest: settings.notifyDailyDigest,
+    updatedAt: settings.updatedAt.toISOString()
+  };
+}
+
+function mapSmartReminder(reminder: {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  objectKey: string | null;
+  recordId: string | null;
+  kind: string;
+  priority: string;
+  title: string;
+  body: string | null;
+  actionLabel: string | null;
+  dueAt: Date | null;
+  status: string;
+  snoozedUntil: Date | null;
+  sources: Prisma.JsonValue | null;
+  score: number;
+  idempotencyKey: string;
+  generatedByAgentKey: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+  dismissedAt: Date | null;
+}): SmartReminder {
+  const sources = Array.isArray(reminder.sources)
+    ? reminder.sources.flatMap((source) => {
+        if (!isJsonRecord(source)) return [];
+        return [{
+          label: typeof source.label === "string" ? source.label : "Source",
+          objectKey: typeof source.objectKey === "string" ? source.objectKey : undefined,
+          recordId: typeof source.recordId === "string" ? source.recordId : undefined,
+          activityId: typeof source.activityId === "string" ? source.activityId : undefined,
+          threadId: typeof source.threadId === "string" ? source.threadId : undefined,
+          messageId: typeof source.messageId === "string" ? source.messageId : undefined
+        }];
+      })
+    : [];
+  return {
+    id: reminder.id,
+    workspaceId: reminder.workspaceId,
+    userId: reminder.userId,
+    objectKey: reminder.objectKey ?? undefined,
+    recordId: reminder.recordId ?? undefined,
+    kind: normalizeSmartReminderKind(reminder.kind),
+    priority: normalizeSmartReminderPriority(reminder.priority),
+    title: reminder.title,
+    body: reminder.body ?? undefined,
+    actionLabel: reminder.actionLabel ?? undefined,
+    dueAt: reminder.dueAt?.toISOString(),
+    status: reminder.status === "done" || reminder.status === "dismissed" ? reminder.status : "open",
+    snoozedUntil: reminder.snoozedUntil?.toISOString(),
+    sources,
+    score: reminder.score,
+    idempotencyKey: reminder.idempotencyKey,
+    generatedByAgentKey: reminder.generatedByAgentKey as SmartReminder["generatedByAgentKey"],
+    createdAt: reminder.createdAt.toISOString(),
+    updatedAt: reminder.updatedAt.toISOString(),
+    completedAt: reminder.completedAt?.toISOString(),
+    dismissedAt: reminder.dismissedAt?.toISOString()
+  };
+}
+
+function mapSmartReminderRun(run: {
+  id: string;
+  workspaceId: string;
+  userId: string | null;
+  status: string;
+  scope: Prisma.JsonValue;
+  generatedCount: number;
+  fallback: boolean;
+  agentKey: string | null;
+  provider: string | null;
+  errorMessage: string | null;
+  startedAt: Date;
+  completedAt: Date | null;
+  durationMs: number | null;
+}): SmartReminderRun {
+  return {
+    id: run.id,
+    workspaceId: run.workspaceId,
+    userId: run.userId ?? undefined,
+    status: run.status === "completed" || run.status === "failed" ? run.status : "running",
+    scope: asRecord(run.scope),
+    generatedCount: run.generatedCount,
+    fallback: run.fallback,
+    agentKey: run.agentKey as SmartReminderRun["agentKey"],
+    provider: run.provider ?? undefined,
+    errorMessage: run.errorMessage ?? undefined,
+    startedAt: run.startedAt.toISOString(),
+    completedAt: run.completedAt?.toISOString(),
+    durationMs: run.durationMs ?? undefined
+  };
+}
+
 function emailMessageLifecycleEvent(message: Pick<EmailMessage, "direction" | "status">): WebhookEvent | undefined {
   if (message.direction === "inbound" && message.status === "received") {
     return "email.message.received";
@@ -7975,7 +8713,7 @@ function buildImportTemplateFieldGuideCsv(fields: FieldDefinition[], objects: Ob
   return buildCsv(importTemplateFieldGuideHeaders, [
     {
       column: "title",
-      label: "名称",
+      label: "鍚嶇О",
       type: "text",
       required: "yes",
       unique: "no",

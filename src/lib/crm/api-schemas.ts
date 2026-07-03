@@ -323,6 +323,32 @@ export const notificationChannelCreateSchema = z
 
 export const notificationChannelUpdateSchema = notificationChannelCreateSchema.partial().strict();
 
+export const smartReminderGenerateSchema = z
+  .object({
+    objectKey: objectKeySchema.optional(),
+    recordId: z.string().trim().min(1).optional(),
+    force: z.boolean().optional()
+  })
+  .strict();
+
+export const smartReminderUpdateSchema = z
+  .object({
+    status: z.enum(["open", "done", "dismissed"]).optional(),
+    snoozedUntil: z.union([z.string().trim().datetime(), z.literal(""), z.null()]).optional()
+  })
+  .strict();
+
+export const smartReminderSettingsUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    dailyAt: z.string().trim().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+    maxPerUser: z.number().int().min(1).max(50).optional(),
+    objectKeys: z.array(z.string().trim().min(1)).max(10).optional(),
+    notifyCreated: z.boolean().optional(),
+    notifyDailyDigest: z.boolean().optional()
+  })
+  .strict();
+
 export const workflowTriggerSchema = z
   .object({
     type: z.enum(["crm_event", "email_event", "task_event", "schedule", "manual"]),

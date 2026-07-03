@@ -37,6 +37,9 @@ export const webhookEvents = [
   "workflow.action_approval_requested",
   "workflow.action_approved",
   "workflow.action_rejected",
+  "ai.reminder.created",
+  "ai.reminder.daily_digest",
+  "ai.reminder.failed",
   "webhook.test"
 ] as const;
 

@@ -15,6 +15,7 @@ export const nextActionSuggestionAgentKey = "next_action_suggestion";
 export const aiQueryPlannerAgentKey = "ai_query_planner";
 export const talkAboutThisAgentKey = "talk_about_this";
 export const workflowAiAgentNodeKey = "workflow_ai_agent_node";
+export const smartReminderPlannerAgentKey = "smart_reminder_planner";
 
 const defaultModel = process.env.AI_MODEL || "gpt-4.1-mini";
 
@@ -228,6 +229,26 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
     contextPolicy: { includeRecord: true, includeEmailThread: true, includeKnowledge: true, maxContextChars: 10000 },
     toolPolicy: { allowRead: true, allowWrite: false, allowedTools: [], highRiskRequiresApproval: true },
     maxOutputChars: 4000
+  },
+  {
+    key: smartReminderPlannerAgentKey,
+    name: "Smart Reminder Planner Agent",
+    scenario: "sales",
+    description: "Plan today-best actions and follow-up reminders from CRM context.",
+    defaultModel,
+    defaultAgentMarkdown: [
+      "# Smart Reminder Planner Agent",
+      "",
+      "You plan sales follow-up reminders for a private CRM.",
+      "Use only supplied CRM context: owned contacts, companies, deals, tasks, emails, activities, and knowledge snippets.",
+      "Return JSON only with this shape: {\"reminders\":[{\"kind\":\"today_best_action|follow_up|overdue|email_reply|deal_close|risk\",\"priority\":\"low|medium|high|urgent\",\"title\":\"...\",\"body\":\"...\",\"actionLabel\":\"...\",\"objectKey\":\"contacts|companies|deals|tasks|emails|activities\",\"recordId\":\"optional\",\"dueAt\":\"ISO optional\",\"score\":0.0,\"sources\":[{\"label\":\"...\",\"objectKey\":\"...\",\"recordId\":\"...\"}]}]}.",
+      "Do not modify CRM data, do not send messages, and do not invent unavailable record IDs.",
+      "Prefer concrete actions that can be completed today."
+    ].join("\n"),
+    outputSchema: "text",
+    contextPolicy: { includeRecord: true, includeEmailThread: true, includeActivities: true, includeKnowledge: true, maxContextChars: 14000 },
+    toolPolicy: { allowRead: true, allowWrite: false, allowedTools: ["create_task"], highRiskRequiresApproval: true },
+    maxOutputChars: 6000
   }
 ];
 

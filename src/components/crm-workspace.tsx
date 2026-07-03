@@ -121,6 +121,9 @@ import type {
   RelationDefinition,
   Role,
   SavedView,
+  SmartReminder,
+  SmartReminderRun,
+  SmartReminderSettings,
   Team,
   User,
   WebhookEndpoint,
@@ -167,6 +170,7 @@ interface CrmWorkspaceProps {
   emailAiSettings: EmailAiSettings;
   emailSyncSettings?: EmailSyncSettings;
   poolSettings: CrmPoolSettings;
+  smartReminderSettings: SmartReminderSettings;
   recordChangeRequests: RecordChangeRequest[];
   knowledgeArticles: KnowledgeArticle[];
   mediaAssets: MediaAsset[];
@@ -1673,6 +1677,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailConnectionTestRun, setEmailConnectionTestRun] = useState<EmailConnectionTestRun | null>(null);
   const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>(props.knowledgeArticles);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>(props.mediaAssets);
+  const [smartReminders, setSmartReminders] = useState<SmartReminder[]>(props.dashboardSummary.smartReminders);
+  const [isGeneratingSmartReminders, setIsGeneratingSmartReminders] = useState(false);
   const [recordChangeRequests, setRecordChangeRequests] = useState<RecordChangeRequest[]>(props.recordChangeRequests);
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeArticleDraft>({ title: "", body: "", tags: "", active: true });
   const [deletedActivityIds, setDeletedActivityIds] = useState<Set<string>>(() => new Set());
@@ -1855,6 +1861,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () => (selectedRecord ? props.workflows.filter((workflow) => isWorkflowScopedToRecord(workflow, selectedRecord)) : []),
     [props.workflows, selectedRecord]
   );
+  const selectedRecordSmartReminders = useMemo(
+    () =>
+      selectedRecord
+        ? smartReminders
+            .filter((reminder) => reminder.status === "open")
+            .filter((reminder) => reminder.objectKey === selectedRecord.objectKey && reminder.recordId === selectedRecord.id)
+            .filter((reminder) => !reminder.snoozedUntil || new Date(reminder.snoozedUntil).getTime() <= Date.now())
+            .sort(compareSmartReminderForUi)
+        : [],
+    [selectedRecord, smartReminders]
+  );
   const selectedRecordPendingDeleteRequest = useMemo(
     () =>
       selectedRecord
@@ -2020,9 +2037,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         objectDefinitions: props.objects,
         recordChangeRequests,
         records,
+        smartReminders,
         workflowApprovals: props.workflowApprovals
       }),
-    [activities, deletedActivityIds, importJobs, props.notificationChannels, props.objects, props.workflowApprovals, recordChangeRequests, records]
+    [activities, deletedActivityIds, importJobs, props.notificationChannels, props.objects, props.workflowApprovals, recordChangeRequests, records, smartReminders]
   );
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
@@ -2183,9 +2201,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setRecords(mergeRecords(props.records, props.initialRecordList.records, props.dashboardSummary.deals));
     setActivities(mergeActivities(props.activities, props.dashboardSummary.openTasks, props.dashboardSummary.recentActivities));
+    setSmartReminders((current) => mergeSmartReminders(current, props.dashboardSummary.smartReminders));
     setRecordList(props.initialRecordList);
     setRecordListObjectKey(props.initialObjectKey);
-  }, [props.activities, props.dashboardSummary.deals, props.dashboardSummary.openTasks, props.dashboardSummary.recentActivities, props.initialObjectKey, props.initialRecordList, props.records]);
+  }, [props.activities, props.dashboardSummary.deals, props.dashboardSummary.openTasks, props.dashboardSummary.recentActivities, props.dashboardSummary.smartReminders, props.initialObjectKey, props.initialRecordList, props.records]);
 
   useEffect(() => {
     setSelectedRecordId((current) => {
@@ -2665,6 +2684,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     const fetchedRecord = await fetchJson<CrmRecord>(`/api/records/${source.objectKey}/${source.recordId}`, { method: "GET" });
     openRecord(fetchedRecord);
+  }
+
+  async function openSmartReminderRecord(reminder: SmartReminder) {
+    if (!reminder.objectKey || !reminder.recordId) {
+      showToast({ intent: "info", message: "这条提醒没有绑定具体记录" });
+      return;
+    }
+    await openTalkSourceRecord({ objectKey: reminder.objectKey, recordId: reminder.recordId });
   }
 
   function startCreateContactForCompany(company: CrmRecord) {
@@ -4435,6 +4462,43 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     showSuccess(`媒体文件已删除：${asset.name}`);
   }
 
+  async function generateSmartReminders(input: { objectKey?: string; recordId?: string } = {}) {
+    setIsGeneratingSmartReminders(true);
+    try {
+      const result = await fetchJson<{ reminders: SmartReminder[]; run: SmartReminderRun }>("/api/smart-reminders/generate", {
+        method: "POST",
+        body: input
+      });
+      setSmartReminders((current) => mergeSmartReminders(current, result.reminders));
+      showSuccess(result.reminders.length > 0 ? `已生成 ${result.reminders.length} 条智能提醒` : "暂无新的智能提醒");
+    } finally {
+      setIsGeneratingSmartReminders(false);
+    }
+  }
+
+  async function updateSmartReminder(reminder: SmartReminder, patch: { status?: SmartReminder["status"]; snoozedUntil?: string | null }) {
+    const updated = await fetchJson<SmartReminder>(`/api/smart-reminders/${reminder.id}`, {
+      method: "PATCH",
+      body: patch
+    });
+    setSmartReminders((current) => mergeSmartReminders(current, [updated]));
+  }
+
+  async function snoozeSmartReminder(reminder: SmartReminder) {
+    const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await updateSmartReminder(reminder, { status: "open", snoozedUntil });
+    showSuccess("已稍后提醒：明天再显示");
+  }
+
+  async function convertSmartReminderToTask(reminder: SmartReminder) {
+    const result = await fetchJson<{ reminder: SmartReminder; task: Activity }>(`/api/smart-reminders/${reminder.id}/convert-task`, {
+      method: "POST"
+    });
+    setSmartReminders((current) => mergeSmartReminders(current, [result.reminder]));
+    setActivities((current) => mergeActivities(current, [result.task]));
+    showSuccess("已转为任务");
+  }
+
   function runAction(action: () => Promise<void>) {
     setMessage(null);
     setError(null);
@@ -4734,8 +4798,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             totalPipeline={totalPipeline}
             pipelines={props.pipelines}
             deals={deals}
+            smartReminders={smartReminders}
+            smartReminderGenerating={isGeneratingSmartReminders}
             onOpenObject={openObject}
             onOpenDeal={openRecord}
+            onOpenSmartReminder={(reminder) => runAction(() => openSmartReminderRecord(reminder))}
+            onGenerateSmartReminders={() => runAction(generateSmartReminders)}
+            onCompleteSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "done" }))}
+            onDismissSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+            onSnoozeSmartReminder={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
+            onConvertSmartReminderToTask={(reminder) => runAction(() => convertSmartReminderToTask(reminder))}
             onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
           />
         )}
@@ -5061,6 +5133,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
                         )}
                       </div>
+                    ) : null}
+                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
+                      <SmartReminderPanel
+                        compact
+                        generating={isGeneratingSmartReminders}
+                        reminders={selectedRecordSmartReminders}
+                        title="AI 跟进提醒"
+                        emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
+                        onComplete={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "done" }))}
+                        onConvertTask={(reminder) => runAction(() => convertSmartReminderToTask(reminder))}
+                        onDismiss={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+                        onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
+                        onOpenRecord={(reminder) => runAction(() => openSmartReminderRecord(reminder))}
+                        onSnooze={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
+                      />
                     ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
                       <>
@@ -6111,6 +6198,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             backupFiles={props.backupFiles}
             importJobQueueSummary={props.importJobQueueSummary}
             poolSettings={props.poolSettings}
+            smartReminderSettings={props.smartReminderSettings}
             recordChangeRequests={recordChangeRequests}
             workflows={props.workflows}
             workflowRuns={props.workflowRuns}
@@ -7110,8 +7198,16 @@ function Dashboard({
   totalPipeline,
   pipelines,
   deals,
+  smartReminders,
+  smartReminderGenerating,
   onOpenObject,
   onOpenDeal,
+  onOpenSmartReminder,
+  onGenerateSmartReminders,
+  onCompleteSmartReminder,
+  onDismissSmartReminder,
+  onSnoozeSmartReminder,
+  onConvertSmartReminderToTask,
   onMoveDealStage
 }: {
   objects: ObjectDefinition[];
@@ -7121,12 +7217,29 @@ function Dashboard({
   totalPipeline: number;
   pipelines: Pipeline[];
   deals: CrmRecord[];
+  smartReminders: SmartReminder[];
+  smartReminderGenerating: boolean;
   onOpenObject: (objectKey: string) => void;
   onOpenDeal: (deal: CrmRecord) => void;
+  onOpenSmartReminder: (reminder: SmartReminder) => void;
+  onGenerateSmartReminders: () => void;
+  onCompleteSmartReminder: (reminder: SmartReminder) => void;
+  onDismissSmartReminder: (reminder: SmartReminder) => void;
+  onSnoozeSmartReminder: (reminder: SmartReminder) => void;
+  onConvertSmartReminderToTask: (reminder: SmartReminder) => void;
   onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
 }) {
   const defaultPipeline = pipelines.find((pipeline) => pipeline.objectKey === "deals" && pipeline.isDefault);
   const [draggedDealId, setDraggedDealId] = useState("");
+  const visibleSmartReminders = useMemo(
+    () =>
+      smartReminders
+        .filter((reminder) => reminder.status === "open")
+        .filter((reminder) => !reminder.snoozedUntil || new Date(reminder.snoozedUntil).getTime() <= Date.now())
+        .sort(compareSmartReminderForUi)
+        .slice(0, 10),
+    [smartReminders]
+  );
 
   function handleDealDragStart(event: DragEvent<HTMLButtonElement>, deal: CrmRecord) {
     setDraggedDealId(deal.id);
@@ -7159,6 +7272,20 @@ function Dashboard({
         <Metric label="交易金额" value={formatCurrency(totalPipeline)} icon={BadgeDollarSign} />
         <Metric label="待办任务" value={openTaskCount || openTasks.length} icon={CalendarClock} />
       </section>
+
+      <SmartReminderPanel
+        compact={false}
+        generating={smartReminderGenerating}
+        reminders={visibleSmartReminders}
+        title="今日最佳行动"
+        emptyMessage="暂无 AI 智能提醒。可手动刷新生成今日跟进建议。"
+        onComplete={onCompleteSmartReminder}
+        onConvertTask={onConvertSmartReminderToTask}
+        onDismiss={onDismissSmartReminder}
+        onGenerate={onGenerateSmartReminders}
+        onOpenRecord={onOpenSmartReminder}
+        onSnooze={onSnoozeSmartReminder}
+      />
 
       <div className="workspace-grid">
         <section className="section">
@@ -10217,6 +10344,97 @@ function ObjectDirectory({
   );
 }
 
+function SmartReminderPanel({
+  compact,
+  emptyMessage,
+  generating,
+  reminders,
+  title,
+  onComplete,
+  onConvertTask,
+  onDismiss,
+  onGenerate,
+  onOpenRecord,
+  onSnooze
+}: {
+  compact: boolean;
+  emptyMessage: string;
+  generating: boolean;
+  reminders: SmartReminder[];
+  title: string;
+  onComplete: (reminder: SmartReminder) => void;
+  onConvertTask: (reminder: SmartReminder) => void;
+  onDismiss: (reminder: SmartReminder) => void;
+  onGenerate: () => void;
+  onOpenRecord: (reminder: SmartReminder) => void;
+  onSnooze: (reminder: SmartReminder) => void;
+}) {
+  return (
+    <section className={`section smart-reminder-panel ${compact ? "compact" : ""}`}>
+      <div className="stage-header">
+        <div>
+          <h2 className="page-title">{title}</h2>
+          <div className="subtle">AI 只生成跟进建议，不会自动修改 CRM 数据。</div>
+        </div>
+        <button className="secondary-button" type="button" disabled={generating} onClick={onGenerate}>
+          <RefreshCw className={generating ? "spin-icon" : undefined} size={16} />
+          {generating ? "生成中" : "刷新提醒"}
+        </button>
+      </div>
+      {reminders.length ? (
+        <div className="smart-reminder-list">
+          {reminders.map((reminder) => (
+            <article className={`smart-reminder-card smart-reminder-${reminder.priority}`} key={reminder.id}>
+              <div className="smart-reminder-main">
+                <span className="smart-reminder-icon">
+                  <Bot size={16} />
+                </span>
+                <div>
+                  <div className="smart-reminder-title-row">
+                    <strong>{reminder.title}</strong>
+                    <span className="badge">AI</span>
+                    <span className="subtle-badge">{smartReminderPriorityLabel(reminder.priority)}</span>
+                    <span className="subtle-badge">{smartReminderKindLabel(reminder.kind)}</span>
+                  </div>
+                  <p>{reminder.body}</p>
+                  <div className="smart-reminder-meta">
+                    {reminder.actionLabel ? <span>{reminder.actionLabel}</span> : null}
+                    {reminder.dueAt ? <span>建议截止 {formatDateTimeSeconds(reminder.dueAt)}</span> : null}
+                    {reminder.sources.length ? <span>{reminder.sources.slice(0, 2).map((source) => source.label).join("、")}</span> : null}
+                  </div>
+                </div>
+              </div>
+              <div className="smart-reminder-actions">
+                <button type="button" className="secondary-button" onClick={() => onOpenRecord(reminder)}>
+                  <Eye size={14} />
+                  打开记录
+                </button>
+                <button type="button" className="secondary-button" onClick={() => onComplete(reminder)}>
+                  <CheckCircle2 size={14} />
+                  完成
+                </button>
+                <button type="button" className="secondary-button" onClick={() => onSnooze(reminder)}>
+                  <Clock3 size={14} />
+                  稍后
+                </button>
+                <button type="button" className="secondary-button" onClick={() => onConvertTask(reminder)}>
+                  <CalendarClock size={14} />
+                  转任务
+                </button>
+                <button type="button" className="ghost-button" onClick={() => onDismiss(reminder)}>
+                  忽略
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state compact">{emptyMessage}</div>
+      )}
+    </section>
+  );
+}
+
 function Metric({ label, value, icon: Icon }: { label: string; value: string | number; icon: LucideIcon }) {
   return (
     <div className="metric">
@@ -11303,6 +11521,7 @@ function buildHeaderNotifications({
   objectDefinitions,
   recordChangeRequests,
   records,
+  smartReminders,
   workflowApprovals
 }: {
   activities: Activity[];
@@ -11312,6 +11531,7 @@ function buildHeaderNotifications({
   objectDefinitions: ObjectDefinition[];
   recordChangeRequests: RecordChangeRequest[];
   records: CrmRecord[];
+  smartReminders: SmartReminder[];
   workflowApprovals: WorkflowActionApproval[];
 }): HeaderNotification[] {
   const now = new Date();
@@ -11369,6 +11589,31 @@ function buildHeaderNotifications({
         icon: CheckCircle2,
         intent: request.action === "delete" ? "danger" : "warning",
         event: scopedEvent,
+        syncedChannels
+      });
+    });
+
+  smartReminders
+    .filter((reminder) => reminder.status === "open")
+    .filter((reminder) => !reminder.snoozedUntil || new Date(reminder.snoozedUntil).getTime() <= now.getTime())
+    .sort(compareSmartReminderForUi)
+    .slice(0, 6)
+    .forEach((reminder) => {
+      const event: NotificationEvent = "ai.reminder.created";
+      const digestEvent: NotificationEvent = "ai.reminder.daily_digest";
+      const syncedChannels = notificationChannelsForEvents(notificationChannels, [event, digestEvent]);
+      if (!syncedChannels.length) {
+        return;
+      }
+      const linkedRecord = records.find((record) => record.id === reminder.recordId && record.objectKey === reminder.objectKey);
+      items.push({
+        id: `smart-reminder:${reminder.id}`,
+        title: `AI 提醒：${reminder.title}`,
+        description: [smartReminderPriorityLabel(reminder.priority), linkedRecord?.title, reminder.actionLabel].filter(Boolean).join(" · "),
+        time: reminder.dueAt ?? reminder.createdAt,
+        icon: Bot,
+        intent: reminder.priority === "urgent" ? "danger" : reminder.priority === "high" ? "warning" : "info",
+        event,
         syncedChannels
       });
     });
@@ -17042,6 +17287,69 @@ function mergeActivities(...groups: Array<Array<Activity | null | undefined> | n
   return [...new Map(activities.map((activity) => [activity.id, activity])).values()].sort(
     (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
   );
+}
+
+function mergeSmartReminders(...groups: Array<Array<SmartReminder | null | undefined> | null | undefined>): SmartReminder[] {
+  const reminders = groups.flatMap((group) => group ?? []).filter((reminder): reminder is SmartReminder => Boolean(reminder?.id));
+  return [...new Map(reminders.map((reminder) => [reminder.id, reminder])).values()].sort(compareSmartReminderForUi);
+}
+
+function compareSmartReminderForUi(left: SmartReminder, right: SmartReminder): number {
+  const priorityDelta = smartReminderPriorityWeightForUi(right.priority) - smartReminderPriorityWeightForUi(left.priority);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+  const leftDue = left.dueAt ? new Date(left.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+  const rightDue = right.dueAt ? new Date(right.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+  if (leftDue !== rightDue) {
+    return leftDue - rightDue;
+  }
+  return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+}
+
+function smartReminderPriorityWeightForUi(priority: SmartReminder["priority"]): number {
+  if (priority === "urgent") {
+    return 4;
+  }
+  if (priority === "high") {
+    return 3;
+  }
+  if (priority === "medium") {
+    return 2;
+  }
+  return 1;
+}
+
+function smartReminderPriorityLabel(priority: SmartReminder["priority"]): string {
+  if (priority === "urgent") {
+    return "紧急";
+  }
+  if (priority === "high") {
+    return "高优先级";
+  }
+  if (priority === "medium") {
+    return "中优先级";
+  }
+  return "低优先级";
+}
+
+function smartReminderKindLabel(kind: SmartReminder["kind"]): string {
+  if (kind === "today_best_action") {
+    return "今日最佳行动";
+  }
+  if (kind === "overdue") {
+    return "逾期";
+  }
+  if (kind === "email_reply") {
+    return "邮件回复";
+  }
+  if (kind === "deal_close") {
+    return "交易推进";
+  }
+  if (kind === "risk") {
+    return "风险";
+  }
+  return "跟进";
 }
 
 function mergeRecordChangeRequests(...groups: Array<Array<RecordChangeRequest | null | undefined> | null | undefined>): RecordChangeRequest[] {

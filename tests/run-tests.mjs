@@ -2538,7 +2538,7 @@ await run("settings admin groups configuration panels by tabs", () => {
   const source = readFileSync("src/components/settings-admin.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "aiAgents" \| "workflows" \| "integrations" \| "operations"/);
+  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "smartReminders" \| "aiAgents" \| "workflows" \| "integrations" \| "operations"/);
   assert.match(source, /const settingsTabs/);
   assert.match(source, /AI Agents/);
   assert.match(source, /type AiAgentConfigTabKey = "providers" \| "agents"/);

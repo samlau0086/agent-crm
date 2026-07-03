@@ -57,6 +57,7 @@ try {
     });
     const context = userResolution.context;
     await runSync(context, userResolution);
+    await runSmartReminderGenerationIfDue(context);
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
@@ -86,6 +87,7 @@ async function runSyncCycle(): Promise<number> {
     }
     await runSync(userResolution.context, userResolution, settings);
     await runPoolAutoReclaimIfDue(userResolution.context);
+    await runSmartReminderGenerationIfDue(userResolution.context);
     return settings.mode === "interval" ? settings.intervalMinutes * 60_000 : 60_000;
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Email sync scheduling failed.");
@@ -143,6 +145,43 @@ async function runPoolAutoReclaimIfDue(context: Awaited<ReturnType<typeof getReq
     console.log(JSON.stringify({ event: "crm_pool_auto_reclaim", workspaceId: context.workspaceId, userId: context.user.id, ...result }, null, 2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : "CRM pool auto reclaim failed.");
+  }
+}
+
+async function runSmartReminderGenerationIfDue(context: Awaited<ReturnType<typeof getRequestContextByUserId>>): Promise<void> {
+  try {
+    const repository = getCrmRepository();
+    const users = await repository.getUsers(context);
+    for (const user of users) {
+      if (!user.active) {
+        continue;
+      }
+      try {
+        const userContext = await getRequestContextByUserId(user.id);
+        if (!userContext.role.permissions.includes("ai.use")) {
+          continue;
+        }
+        const result = await repository.runDailySmartReminderGenerationIfDue(userContext);
+        if (result.ran) {
+          console.log(
+            JSON.stringify(
+              {
+                event: "ai_smart_reminders_daily",
+                workspaceId: userContext.workspaceId,
+                userId: userContext.user.id,
+                ...result
+              },
+              null,
+              2
+            )
+          );
+        }
+      } catch (error) {
+        console.error(error instanceof Error ? `AI smart reminders failed for ${user.id}: ${error.message}` : `AI smart reminders failed for ${user.id}.`);
+      }
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "AI smart reminder scheduling failed.");
   }
 }
 

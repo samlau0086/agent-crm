@@ -417,6 +417,97 @@ button {
   font-size: 13px;
 }
 
+.smart-reminder-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.smart-reminder-panel.compact {
+  margin-bottom: 12px;
+}
+
+.smart-reminder-list {
+  display: grid;
+  gap: 10px;
+}
+
+.smart-reminder-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.smart-reminder-high,
+.smart-reminder-urgent {
+  border-left-color: #d97706;
+}
+
+.smart-reminder-urgent {
+  background: color-mix(in srgb, #fef2f2 42%, var(--surface));
+}
+
+.smart-reminder-main {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.smart-reminder-icon {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-strong);
+}
+
+.smart-reminder-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.smart-reminder-card p {
+  margin: 6px 0 0;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.smart-reminder-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.smart-reminder-meta span:not(:last-child)::after {
+  content: "·";
+  margin-left: 8px;
+  color: var(--muted);
+}
+
+.smart-reminder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 42px;
+}
+
+@media (max-width: 720px) {
+  .smart-reminder-actions {
+    padding-left: 0;
+  }
+}
+
 .module-menu-heading {
   display: flex;
   align-items: center;
@@ -5108,6 +5199,45 @@ body.deal-pipeline-dragging {
 
 .harness-config-panel .form-grid {
   margin-top: 0;
+}
+
+.settings-subsection {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-subsection h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.tag-select-list,
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-select-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  background: var(--surface-strong);
+}
+
+.tag-select-option:hover {
+  border-color: rgba(20, 184, 166, 0.45);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-strong));
 }
 
 .tag-select {

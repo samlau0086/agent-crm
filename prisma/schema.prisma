@@ -40,6 +40,9 @@ model Workspace {
   talkMessages        TalkMessage[]
   emailAiSettings     EmailAiSettings?
   emailSyncSettings   EmailSyncSettings?
+  smartReminderSettings SmartReminderSettings?
+  smartReminders      SmartReminder[]
+  smartReminderRuns   SmartReminderRun[]
   poolSettings        CrmPoolSettings?
   mediaAssets         MediaAsset[]
   recordChangeRequests RecordChangeRequest[]
@@ -71,6 +74,8 @@ model User {
   emailThreadStates   EmailThreadState[]
   emailSignaturesCreated EmailSignature[]
   mediaAssetsCreated  MediaAsset[]
+  smartReminders      SmartReminder[]
+  smartReminderRuns   SmartReminderRun[]
 
   @@unique([workspaceId, email])
   @@index([workspaceId, teamId])
@@ -166,6 +171,7 @@ model CrmRecord {
   updatedAt   DateTime   @updatedAt
   workspace   Workspace  @relation(fields: [workspaceId], references: [id])
   activities  Activity[]
+  smartReminders SmartReminder[]
 
   @@index([workspaceId, objectKey])
   @@index([workspaceId, objectKey, updatedAt])
@@ -255,6 +261,71 @@ model CrmPoolSettings {
   lastAutoReclaimCount    Int       @default(0)
   updatedAt               DateTime  @updatedAt
   workspace               Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model SmartReminderSettings {
+  workspaceId       String    @id
+  enabled           Boolean   @default(true)
+  dailyAt           String    @default("08:30")
+  maxPerUser        Int       @default(10)
+  objectKeys        String[]  @default(["contacts", "companies", "deals"])
+  notifyCreated     Boolean   @default(false)
+  notifyDailyDigest Boolean   @default(false)
+  updatedAt         DateTime  @updatedAt
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model SmartReminder {
+  id                  String     @id @default(cuid())
+  workspaceId          String
+  userId               String
+  objectKey            String?
+  recordId             String?
+  kind                 String
+  priority             String
+  title                String
+  body                 String?
+  actionLabel          String?
+  dueAt                DateTime?
+  status               String     @default("open")
+  snoozedUntil         DateTime?
+  sources              Json?
+  score                Float      @default(0)
+  idempotencyKey       String
+  generatedByAgentKey  String?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  completedAt          DateTime?
+  dismissedAt          DateTime?
+  workspace            Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  record               CrmRecord? @relation(fields: [recordId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, userId, idempotencyKey])
+  @@index([workspaceId, userId, status, dueAt])
+  @@index([workspaceId, objectKey, recordId])
+  @@index([workspaceId, createdAt])
+}
+
+model SmartReminderRun {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  userId         String?
+  status         String
+  scope          Json
+  generatedCount Int       @default(0)
+  fallback       Boolean   @default(false)
+  agentKey       String?
+  provider       String?
+  errorMessage   String?
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  durationMs     Int?
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, userId, startedAt])
+  @@index([workspaceId, status, startedAt])
 }
 
 model RecordChangeRequest {

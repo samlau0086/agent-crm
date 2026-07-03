@@ -95,6 +95,9 @@ export type WebhookEvent =
   | "workflow.action_approval_requested"
   | "workflow.action_approved"
   | "workflow.action_rejected"
+  | "ai.reminder.created"
+  | "ai.reminder.daily_digest"
+  | "ai.reminder.failed"
   | "webhook.test";
 
 export type WebhookDeliveryStatus = "pending" | "success" | "failed";
@@ -170,7 +173,8 @@ export type AiAgentKey =
   | "ai_query_planner"
   | "talk_about_this"
   | "workflow_designer"
-  | "workflow_ai_agent_node";
+  | "workflow_ai_agent_node"
+  | "smart_reminder_planner";
 
 export interface EmailAccount {
   id: string;
@@ -700,6 +704,71 @@ export interface DashboardSummary {
   deals: CrmRecord[];
   openTasks: Activity[];
   recentActivities: Activity[];
+  smartReminders: SmartReminder[];
+}
+
+export type SmartReminderKind = "today_best_action" | "follow_up" | "overdue" | "email_reply" | "deal_close" | "risk";
+export type SmartReminderPriority = "low" | "medium" | "high" | "urgent";
+export type SmartReminderStatus = "open" | "done" | "dismissed";
+
+export interface SmartReminderSource {
+  label: string;
+  objectKey?: string;
+  recordId?: string;
+  activityId?: string;
+  threadId?: string;
+  messageId?: string;
+}
+
+export interface SmartReminder {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  objectKey?: string;
+  recordId?: string;
+  kind: SmartReminderKind;
+  priority: SmartReminderPriority;
+  title: string;
+  body?: string;
+  actionLabel?: string;
+  dueAt?: string;
+  status: SmartReminderStatus;
+  snoozedUntil?: string;
+  sources: SmartReminderSource[];
+  score: number;
+  idempotencyKey: string;
+  generatedByAgentKey?: AiAgentKey;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  dismissedAt?: string;
+}
+
+export interface SmartReminderRun {
+  id: string;
+  workspaceId: string;
+  userId?: string;
+  status: "running" | "completed" | "failed";
+  scope: Record<string, unknown>;
+  generatedCount: number;
+  fallback: boolean;
+  agentKey?: AiAgentKey;
+  provider?: string;
+  errorMessage?: string;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+}
+
+export interface SmartReminderSettings {
+  workspaceId: string;
+  enabled: boolean;
+  dailyAt: string;
+  maxPerUser: number;
+  objectKeys: string[];
+  notifyCreated: boolean;
+  notifyDailyDigest: boolean;
+  updatedAt: string;
 }
 
 export interface PipelineStage {
@@ -1079,6 +1148,9 @@ export interface CrmSnapshot {
   workflowDefinitions?: WorkflowDefinition[];
   workflowRuns?: WorkflowRun[];
   workflowActionApprovals?: WorkflowActionApproval[];
+  smartReminderSettings?: SmartReminderSettings[];
+  smartReminders?: SmartReminder[];
+  smartReminderRuns?: SmartReminderRun[];
 }
 
 export interface RequestContext {

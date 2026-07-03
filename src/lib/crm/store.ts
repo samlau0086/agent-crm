@@ -2374,7 +2374,8 @@ export class CrmStore {
       openTaskCount: openTasks.length,
       deals: deals.slice(0, 50),
       openTasks: openTasks.slice(0, 50),
-      recentActivities: visibleActivities.slice(0, 100)
+      recentActivities: visibleActivities.slice(0, 100),
+      smartReminders: []
     });
   }
 

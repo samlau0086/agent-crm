@@ -8,7 +8,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -32,6 +32,7 @@ interface SettingsAdminProps {
   backupFiles: BackupFile[];
   importJobQueueSummary?: ImportJobQueueSummary;
   poolSettings: CrmPoolSettings;
+  smartReminderSettings: SmartReminderSettings;
   recordChangeRequests: RecordChangeRequest[];
   workflows: WorkflowDefinition[];
   workflowRuns: WorkflowRun[];
@@ -142,6 +143,14 @@ type PoolSettingsDraft = {
   autoReclaimEnabled: boolean;
   autoReclaimDays: string;
 };
+type SmartReminderSettingsDraft = {
+  enabled: boolean;
+  dailyAt: string;
+  maxPerUser: string;
+  objectKeys: string[];
+  notifyCreated: boolean;
+  notifyDailyDigest: boolean;
+};
 type ToastState = { intent: "success" | "error" | "info"; message: string };
 type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
@@ -154,6 +163,15 @@ const emailWebhookEventOptions: WebhookEvent[] = [
   "email.message.failed",
   "email.thread.updated",
   "email.thread.deleted"
+];
+const aiReminderWebhookEventOptions: WebhookEvent[] = ["ai.reminder.created", "ai.reminder.daily_digest", "ai.reminder.failed"];
+const smartReminderObjectOptions = [
+  { key: "contacts", label: "联系人" },
+  { key: "companies", label: "公司" },
+  { key: "deals", label: "交易" },
+  { key: "emails", label: "邮件" },
+  { key: "tasks", label: "任务" },
+  { key: "activities", label: "活动" }
 ];
 
 const fieldTypes: FieldDefinition["type"][] = [
@@ -168,7 +186,7 @@ const fieldTypes: FieldDefinition["type"][] = [
   "reference"
 ];
 
-type SettingsTabKey = "access" | "crm" | "pool" | "aiAgents" | "workflows" | "integrations" | "operations";
+type SettingsTabKey = "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations";
 type AiAgentConfigTabKey = "providers" | "agents";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[]; providerProfiles: AiProviderProfile[] };
@@ -246,6 +264,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     privateLimit: String(props.poolSettings.privateLimit),
     autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
     autoReclaimDays: String(props.poolSettings.autoReclaimDays)
+  }));
+  const [smartReminderSettingsDraft, setSmartReminderSettingsDraft] = useState<SmartReminderSettingsDraft>(() => ({
+    enabled: props.smartReminderSettings.enabled,
+    dailyAt: props.smartReminderSettings.dailyAt,
+    maxPerUser: String(props.smartReminderSettings.maxPerUser),
+    objectKeys: props.smartReminderSettings.objectKeys,
+    notifyCreated: props.smartReminderSettings.notifyCreated,
+    notifyDailyDigest: props.smartReminderSettings.notifyDailyDigest
   }));
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>(props.workflows);
   const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>(props.workflowRuns);
@@ -345,6 +371,16 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       autoReclaimDays: String(props.poolSettings.autoReclaimDays)
     });
   }, [props.poolSettings]);
+  useEffect(() => {
+    setSmartReminderSettingsDraft({
+      enabled: props.smartReminderSettings.enabled,
+      dailyAt: props.smartReminderSettings.dailyAt,
+      maxPerUser: String(props.smartReminderSettings.maxPerUser),
+      objectKeys: props.smartReminderSettings.objectKeys,
+      notifyCreated: props.smartReminderSettings.notifyCreated,
+      notifyDailyDigest: props.smartReminderSettings.notifyDailyDigest
+    });
+  }, [props.smartReminderSettings]);
   const fieldObject = props.objects.find((object) => object.key === fieldDraft.objectKey);
   const quotePaymentTermField = props.fields.find((field) => field.objectKey === "quotes" && field.key === "paymentTerm");
 
@@ -1428,6 +1464,45 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setMessage("公海规则已保存");
   }
 
+  async function saveSmartReminderSettings() {
+    const maxPerUser = Number.parseInt(smartReminderSettingsDraft.maxPerUser, 10);
+    if (!Number.isFinite(maxPerUser) || maxPerUser < 1) {
+      throw new Error("每人最大提醒数必须大于 0");
+    }
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(smartReminderSettingsDraft.dailyAt)) {
+      throw new Error("每日生成时间必须使用 HH:mm 格式");
+    }
+    const updated = await fetchJson<SmartReminderSettings>("/api/smart-reminder-settings", {
+      method: "PATCH",
+      body: {
+        enabled: smartReminderSettingsDraft.enabled,
+        dailyAt: smartReminderSettingsDraft.dailyAt,
+        maxPerUser,
+        objectKeys: smartReminderSettingsDraft.objectKeys,
+        notifyCreated: smartReminderSettingsDraft.notifyCreated,
+        notifyDailyDigest: smartReminderSettingsDraft.notifyDailyDigest
+      }
+    });
+    setSmartReminderSettingsDraft({
+      enabled: updated.enabled,
+      dailyAt: updated.dailyAt,
+      maxPerUser: String(updated.maxPerUser),
+      objectKeys: updated.objectKeys,
+      notifyCreated: updated.notifyCreated,
+      notifyDailyDigest: updated.notifyDailyDigest
+    });
+    setMessage("智能提醒设置已保存");
+  }
+
+  function toggleSmartReminderObjectKey(objectKey: string, enabled: boolean) {
+    setSmartReminderSettingsDraft((current) => {
+      const next = enabled
+        ? Array.from(new Set([...current.objectKeys, objectKey]))
+        : current.objectKeys.filter((key) => key !== objectKey);
+      return { ...current, objectKeys: next.length > 0 ? next : current.objectKeys };
+    });
+  }
+
   async function generateWorkflowDraft() {
     const goal = workflowGoal.trim();
     if (!goal) {
@@ -1516,7 +1591,12 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     <div className="settings-stack">
       <section className="settings-tabs-shell" aria-label="设置分类">
         <div className="settings-tab-list" role="tablist" aria-label="设置分类">
-          {[...settingsTabs.slice(0, 2), { key: "pool" as SettingsTabKey, label: "公海规则", description: "联系人和公司的领取、释放、私海上限与自动回收" }, ...settingsTabs.slice(2)].map((tab) => (
+          {[
+            ...settingsTabs.slice(0, 2),
+            { key: "pool" as SettingsTabKey, label: "公海规则", description: "联系人和公司的领取、释放、私海上限与自动回收" },
+            { key: "smartReminders" as SettingsTabKey, label: "智能提醒", description: "今日最佳行动、跟进提醒、生成时间与通知策略" },
+            ...settingsTabs.slice(2)
+          ].map((tab) => (
             <button
               key={tab.key}
               className={`settings-tab-button ${activeSettingsTab === tab.key ? "active" : ""}`}
@@ -1673,6 +1753,103 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 最近回收：
                 {props.poolSettings.lastAutoReclaimAt ? `${props.poolSettings.lastAutoReclaimCount} 条 · ${props.poolSettings.lastAutoReclaimAt}` : "尚未执行"}
               </span>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {activeSettingsTab === "smartReminders" ? (
+        <div className="settings-tab-panel" role="tabpanel">
+          <section className="settings-panel">
+            <div className="settings-panel-header">
+              <div>
+                <h2 className="page-title">智能提醒</h2>
+                <div className="subtle">每日按负责人生成今日最佳行动，也可在仪表盘和记录详情页手动刷新。</div>
+              </div>
+              <span className="badge">smart_reminder_planner</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span className="subtle">启用智能提醒</span>
+                <select
+                  className="select"
+                  value={smartReminderSettingsDraft.enabled ? "1" : "0"}
+                  onChange={(event) => setSmartReminderSettingsDraft((current) => ({ ...current, enabled: event.target.value === "1" }))}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">停用</option>
+                </select>
+              </label>
+              <label>
+                <span className="subtle">每日生成时间</span>
+                <input
+                  className="input"
+                  placeholder="08:30"
+                  value={smartReminderSettingsDraft.dailyAt}
+                  onChange={(event) => setSmartReminderSettingsDraft((current) => ({ ...current, dailyAt: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span className="subtle">每人最大提醒数</span>
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  value={smartReminderSettingsDraft.maxPerUser}
+                  onChange={(event) => setSmartReminderSettingsDraft((current) => ({ ...current, maxPerUser: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span className="subtle">生成新提醒后发通知</span>
+                <select
+                  className="select"
+                  value={smartReminderSettingsDraft.notifyCreated ? "1" : "0"}
+                  onChange={(event) => setSmartReminderSettingsDraft((current) => ({ ...current, notifyCreated: event.target.value === "1" }))}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">停用</option>
+                </select>
+              </label>
+              <label>
+                <span className="subtle">每日摘要通知</span>
+                <select
+                  className="select"
+                  value={smartReminderSettingsDraft.notifyDailyDigest ? "1" : "0"}
+                  onChange={(event) => setSmartReminderSettingsDraft((current) => ({ ...current, notifyDailyDigest: event.target.value === "1" }))}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">停用</option>
+                </select>
+              </label>
+            </div>
+            <div className="settings-subsection">
+              <h3>对象范围</h3>
+              <p className="subtle">提醒生成会遵守 CRM 可见性，普通销售只会基于自己可见的记录生成。</p>
+              <div className="tag-select-list">
+                {smartReminderObjectOptions.map((option) => (
+                  <label className="tag-select-option" key={option.key}>
+                    <input
+                      type="checkbox"
+                      checked={smartReminderSettingsDraft.objectKeys.includes(option.key)}
+                      onChange={(event) => toggleSmartReminderObjectKey(option.key, event.target.checked)}
+                    />
+                    <span>{option.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="settings-subsection">
+              <h3>通知事件</h3>
+              <p className="subtle">在“集成接口”的通知渠道中订阅 ai.reminder.created、ai.reminder.daily_digest 或 ai.reminder.failed 后，Bark/Webhook/Email 和 Header 通知会同步这些提醒。</p>
+              <div className="tag-cloud">
+                {aiReminderWebhookEventOptions.map((event) => <span className="subtle-badge" key={event}>{event}</span>)}
+              </div>
+            </div>
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              <button className="primary-button" type="button" onClick={() => runAction(saveSmartReminderSettings)} disabled={isPending || !props.role.permissions.includes("ai.admin")}>
+                <Save size={16} />
+                保存智能提醒
+              </button>
+              {!props.role.permissions.includes("ai.admin") ? <span className="subtle">需要 ai.admin 权限才能修改设置。</span> : null}
             </div>
           </section>
         </div>
@@ -4313,7 +4490,7 @@ function NotificationChannelAdminPanel({
               启用
             </label>
             <div className="wide permission-picker">
-              {[...baseWebhookEventOptions, ...emailWebhookEventOptions].map((event) => (
+              {[...baseWebhookEventOptions, ...emailWebhookEventOptions, ...aiReminderWebhookEventOptions].map((event) => (
                 <label className="permission-option" key={event}>
                   <input data-testid={`settings-notification-event-${event}`} type="checkbox" checked={draft.events.includes(event)} onChange={(change) => onToggleEvent(event, change.target.checked)} />
                   <span>
