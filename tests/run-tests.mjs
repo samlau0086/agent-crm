@@ -2713,11 +2713,13 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
   assert.match(source, /const dealPipelineCardColorStorageKey = "ai-agent-crm:deal-pipeline-card-colors"/);
   assert.match(source, /const dealCardColorOptions = \[/);
-  assert.match(source, /setDealCardColor\(deal\.id, option\.key\)/);
-  assert.match(source, /data-testid=\{`deal-card-color-popover-\$\{deal\.id\}`\}/);
-  assert.match(source, /data-testid=\{`deal-card-menu-\$\{deal\.id\}`\}/);
-  assert.match(source, /onCreateActivity\(deal\)/);
-  assert.match(source, /onEditDeal\(deal\)/);
+  assert.match(source, /setDealCardColor\(floatingColorDeal\.id, option\.key\)/);
+  assert.match(source, /getFloatingLayerPosition/);
+  assert.match(source, /className="deal-card-menu floating"/);
+  assert.match(source, /data-testid=\{`deal-card-color-popover-\$\{floatingColorDeal\.id\}`\}/);
+  assert.match(source, /data-testid=\{`deal-card-menu-\$\{floatingMenuDeal\.id\}`\}/);
+  assert.match(source, /onCreateActivity\(floatingMenuDeal\)/);
+  assert.match(source, /onEditDeal\(floatingMenuDeal\)/);
   assert.match(source, /createPipelineDealActivity/);
   assert.match(source, /\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}\/stage/);
   assert.match(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);

@@ -1814,6 +1814,14 @@ button {
   box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
 }
 
+.deal-card-color-popover.floating,
+.deal-card-menu.floating {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 1200;
+}
+
 .deal-card-color-popover {
   display: grid;
   grid-template-columns: repeat(5, 26px);

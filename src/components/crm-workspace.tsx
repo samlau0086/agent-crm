@@ -55,7 +55,7 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type DragEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
@@ -5715,6 +5715,8 @@ const dealCardColorOptions = [
   { key: "black", label: "黑色", accent: "#020617", background: "#f8fafc" }
 ];
 
+type DealCardFloatingLayer = { dealId: string; top: number; left: number };
+
 function DealPipelineWorkspace({
   activities,
   allRecords,
@@ -5744,8 +5746,8 @@ function DealPipelineWorkspace({
 }) {
   const [draggedDealId, setDraggedDealId] = useState("");
   const [cardColors, setCardColors] = useState<Record<string, string>>({});
-  const [openColorPickerDealId, setOpenColorPickerDealId] = useState("");
-  const [openDealMenuId, setOpenDealMenuId] = useState("");
+  const [floatingColorPicker, setFloatingColorPicker] = useState<DealCardFloatingLayer | null>(null);
+  const [floatingDealMenu, setFloatingDealMenu] = useState<DealCardFloatingLayer | null>(null);
 
   useEffect(() => {
     try {
@@ -5775,6 +5777,27 @@ function DealPipelineWorkspace({
     return dealCardColorOptions.find((option) => option.key === storedColor) ?? dealCardColorOptions[0];
   }
 
+  function getFloatingLayerPosition(target: HTMLElement, width: number, height = 180) {
+    const rect = target.getBoundingClientRect();
+    const margin = 10;
+    const left = Math.min(Math.max(margin, rect.right - width), window.innerWidth - width - margin);
+    const preferredTop = rect.bottom + 6;
+    const top = preferredTop + height > window.innerHeight - margin ? Math.max(margin, rect.top - height - 6) : preferredTop;
+    return { left, top };
+  }
+
+  function toggleColorPicker(dealId: string, event: ReactMouseEvent<HTMLButtonElement>) {
+    const position = getFloatingLayerPosition(event.currentTarget, 178, 104);
+    setFloatingDealMenu(null);
+    setFloatingColorPicker((current) => (current?.dealId === dealId ? null : { dealId, ...position }));
+  }
+
+  function toggleDealMenu(dealId: string, event: ReactMouseEvent<HTMLButtonElement>) {
+    const position = getFloatingLayerPosition(event.currentTarget, 178, 140);
+    setFloatingColorPicker(null);
+    setFloatingDealMenu((current) => (current?.dealId === dealId ? null : { dealId, ...position }));
+  }
+
   function handleDealDragStart(event: DragEvent<HTMLElement>, deal: CrmRecord) {
     setDraggedDealId(deal.id);
     event.dataTransfer.effectAllowed = "move";
@@ -5797,6 +5820,9 @@ function DealPipelineWorkspace({
     }
     onMoveDealStage(deal, stageKey);
   }
+
+  const floatingColorDeal = floatingColorPicker ? deals.find((deal) => deal.id === floatingColorPicker.dealId) : undefined;
+  const floatingMenuDeal = floatingDealMenu ? deals.find((deal) => deal.id === floatingDealMenu.dealId) : undefined;
 
   if (!pipeline || stages.length === 0) {
     return (
@@ -5871,10 +5897,7 @@ function DealPipelineWorkspace({
                             className="icon-button deal-card-color-button"
                             title="切换卡片颜色"
                             type="button"
-                            onClick={() => {
-                              setOpenDealMenuId("");
-                              setOpenColorPickerDealId((current) => (current === deal.id ? "" : deal.id));
-                            }}
+                            onClick={(event) => toggleColorPicker(deal.id, event)}
                           >
                             <Palette size={15} />
                           </button>
@@ -5883,47 +5906,10 @@ function DealPipelineWorkspace({
                             className="icon-button deal-card-menu-button"
                             title="交易操作"
                             type="button"
-                            onClick={() => {
-                              setOpenColorPickerDealId("");
-                              setOpenDealMenuId((current) => (current === deal.id ? "" : deal.id));
-                            }}
+                            onClick={(event) => toggleDealMenu(deal.id, event)}
                           >
                             <MoreVertical size={16} />
                           </button>
-                          {openColorPickerDealId === deal.id ? (
-                            <div className="deal-card-color-popover" data-testid={`deal-card-color-popover-${deal.id}`}>
-                              {dealCardColorOptions.map((option) => (
-                                <button
-                                  aria-label={`设置为${option.label}`}
-                                  className={`deal-card-color-swatch ${option.key === color.key ? "selected" : ""}`}
-                                  key={option.key}
-                                  style={{ background: option.accent }}
-                                  title={option.label}
-                                  type="button"
-                                  onClick={() => {
-                                    setDealCardColor(deal.id, option.key);
-                                    setOpenColorPickerDealId("");
-                                  }}
-                                />
-                              ))}
-                            </div>
-                          ) : null}
-                          {openDealMenuId === deal.id ? (
-                            <div className="deal-card-menu" data-testid={`deal-card-menu-${deal.id}`}>
-                              <button type="button" onClick={() => { setOpenDealMenuId(""); onCreateActivity(deal); }}>
-                                <ActivityIcon size={16} />
-                                创建 Activity
-                              </button>
-                              <button type="button" onClick={() => { setOpenDealMenuId(""); onOpenDeal(deal); }}>
-                                <Eye size={16} />
-                                查看详情
-                              </button>
-                              <button type="button" onClick={() => { setOpenDealMenuId(""); onEditDeal(deal); }}>
-                                <Pencil size={16} />
-                                编辑交易
-                              </button>
-                            </div>
-                          ) : null}
                         </div>
                       </div>
                       <div className="deal-card-line">
@@ -5944,6 +5930,53 @@ function DealPipelineWorkspace({
           );
         })}
       </div>
+      {floatingColorPicker && floatingColorDeal ? (
+        <div
+          className="deal-card-color-popover floating"
+          data-testid={`deal-card-color-popover-${floatingColorDeal.id}`}
+          style={{ left: floatingColorPicker.left, top: floatingColorPicker.top }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {dealCardColorOptions.map((option) => {
+            const activeColor = getDealCardColor(floatingColorDeal);
+            return (
+              <button
+                aria-label={`设置为${option.label}`}
+                className={`deal-card-color-swatch ${option.key === activeColor.key ? "selected" : ""}`}
+                key={option.key}
+                style={{ background: option.accent }}
+                title={option.label}
+                type="button"
+                onClick={() => {
+                  setDealCardColor(floatingColorDeal.id, option.key);
+                  setFloatingColorPicker(null);
+                }}
+              />
+            );
+          })}
+        </div>
+      ) : null}
+      {floatingDealMenu && floatingMenuDeal ? (
+        <div
+          className="deal-card-menu floating"
+          data-testid={`deal-card-menu-${floatingMenuDeal.id}`}
+          style={{ left: floatingDealMenu.left, top: floatingDealMenu.top }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => { setFloatingDealMenu(null); onCreateActivity(floatingMenuDeal); }}>
+            <ActivityIcon size={16} />
+            创建 Activity
+          </button>
+          <button type="button" onClick={() => { setFloatingDealMenu(null); onOpenDeal(floatingMenuDeal); }}>
+            <Eye size={16} />
+            查看详情
+          </button>
+          <button type="button" onClick={() => { setFloatingDealMenu(null); onEditDeal(floatingMenuDeal); }}>
+            <Pencil size={16} />
+            编辑交易
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
