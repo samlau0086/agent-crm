@@ -135,7 +135,8 @@ export const recordPatchWithReasonSchema = recordWriteSchema
 
 export const recordStageUpdateSchema = z
   .object({
-    stageKey: optionalIdSchema
+    stageKey: optionalIdSchema,
+    pipelineOrder: z.number().finite().optional()
   })
   .strict();
 

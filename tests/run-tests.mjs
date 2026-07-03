@@ -2720,11 +2720,19 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /data-testid="deal-pipeline-workspace"/);
   assert.match(source, /data-testid=\{`deal-pipeline-stage-\$\{stage\.key\}`\}/);
   assert.match(source, /data-testid=\{`deal-pipeline-deal-\$\{deal\.id\}`\}/);
+  assert.match(source, /data-testid="deal-pipeline-drag-overlay"/);
+  assert.match(source, /data-testid="deal-pipeline-drop-placeholder"/);
   assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
   assert.match(source, /const dealPipelineCardColorStorageKey = "ai-agent-crm:deal-pipeline-card-colors"/);
   assert.match(source, /const dealCardColorOptions = \[/);
   assert.match(source, /setDealCardColor\(floatingColorDeal\.id, option\.key\)/);
   assert.match(source, /getFloatingLayerPosition/);
+  assert.match(source, /function handleDealPointerDown/);
+  assert.match(source, /function handleDealPointerMove/);
+  assert.match(source, /function handleDealPointerUp/);
+  assert.match(source, /function computeDealDropPreview/);
+  assert.match(source, /function computeDealPipelineOrderForDrop/);
+  assert.match(source, /pipelineOrder/);
   assert.match(source, /className="deal-card-menu floating"/);
   assert.match(source, /data-testid=\{`deal-card-color-popover-\$\{floatingColorDeal\.id\}`\}/);
   assert.match(source, /data-testid=\{`deal-card-menu-\$\{floatingMenuDeal\.id\}`\}/);
@@ -2737,7 +2745,6 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /submitPipelineDealActivity/);
   assert.match(source, /\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}\/stage/);
   assert.match(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);
-  assert.match(source, /draggable/);
   assert.match(source, /data-testid=\{`pipeline-stage-\$\{stage\.key\}`\}/);
   assert.match(source, /onDrop=\{\(event\) => handleStageDrop\(event, stage\.key\)\}/);
   assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
@@ -2760,10 +2767,14 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.deal-card-color-popover/);
   assert.match(styles, /\.deal-card-menu/);
   assert.match(styles, /\.deal-card-activity-count/);
+  assert.match(styles, /\.deal-pipeline-drop-placeholder/);
+  assert.match(styles, /\.deal-pipeline-drag-overlay/);
+  assert.match(styles, /body\.deal-pipeline-dragging/);
   assert.match(schemas, /export const recordStageUpdateSchema/);
+  assert.match(schemas, /pipelineOrder: z\.number\(\)\.finite\(\)\.optional\(\)/);
   assert.match(stageRoute, /recordStageUpdateSchema/);
   assert.match(stageRoute, /params\.objectKey !== "deals"/);
-  assert.match(stageRoute, /updateRecord\(context, params\.objectKey, params\.recordId, \{ stageKey: body\.stageKey \?\? undefined \}\)/);
+  assert.match(stageRoute, /data: \{ pipelineOrder: body\.pipelineOrder \}/);
 });
 
 await run("email thread contact linking is driven by sender email and can return to the email", () => {

@@ -55,7 +55,20 @@ import {
   XCircle,
   type LucideIcon
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+  type CSSProperties,
+  type DragEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
@@ -2857,13 +2870,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
-  async function moveDealStage(record: CrmRecord, stageKey: string) {
+  async function moveDealStage(record: CrmRecord, stageKey: string, pipelineOrder?: number) {
     const updated = await fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}/stage`, {
       method: "PATCH",
-      body: { stageKey }
+      body: { stageKey, ...(typeof pipelineOrder === "number" ? { pipelineOrder } : {}) }
     });
     setRecords((current) => mergeRecords(current, [updated]));
-    setMessage("交易阶段已更新");
+    setMessage(record.stageKey === stageKey ? "交易顺序已更新" : "交易阶段已更新");
     router.refresh();
   }
 
@@ -5822,6 +5835,19 @@ const dealCardColorOptions = [
 ];
 
 type DealCardFloatingLayer = { dealId: string; top: number; left: number };
+type DealPipelineDropPreview = { stageKey: string; index: number };
+type DealPipelineDragState = {
+  dealId: string;
+  currentX: number;
+  currentY: number;
+  offsetX: number;
+  offsetY: number;
+  startX: number;
+  startY: number;
+  width: number;
+  height: number;
+  hasMoved: boolean;
+};
 
 function DealPipelineWorkspace({
   activities,
@@ -5845,13 +5871,29 @@ function DealPipelineWorkspace({
   users: User[];
   onCreateActivity: (deal: CrmRecord) => void;
   onCreateDeal: () => void;
-  onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
+  onMoveDealStage: (deal: CrmRecord, stageKey: string, pipelineOrder?: number) => void;
   onOpenDeal: (deal: CrmRecord) => void;
 }) {
-  const [draggedDealId, setDraggedDealId] = useState("");
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const stageRefs = useRef<Record<string, HTMLElement | null>>({});
+  const cardRefs = useRef<Record<string, HTMLElement | null>>({});
+  const suppressedClickDealId = useRef("");
+  const [dragState, setDragState] = useState<DealPipelineDragState | null>(null);
+  const [dropPreview, setDropPreview] = useState<DealPipelineDropPreview | null>(null);
   const [cardColors, setCardColors] = useState<Record<string, string>>({});
   const [floatingColorPicker, setFloatingColorPicker] = useState<DealCardFloatingLayer | null>(null);
   const [floatingDealMenu, setFloatingDealMenu] = useState<DealCardFloatingLayer | null>(null);
+
+  const dealSourceIndex = useMemo(() => new Map(deals.map((deal, index) => [deal.id, index])), [deals]);
+  const sortedDealsByStage = useMemo(() => {
+    const grouped: Record<string, CrmRecord[]> = {};
+    for (const stage of stages) {
+      grouped[stage.key] = deals
+        .filter((deal) => deal.stageKey === stage.key)
+        .sort((left, right) => getDealPipelineSortValue(left, dealSourceIndex) - getDealPipelineSortValue(right, dealSourceIndex));
+    }
+    return grouped;
+  }, [dealSourceIndex, deals, stages]);
 
   useEffect(() => {
     try {
@@ -5863,6 +5905,15 @@ function DealPipelineWorkspace({
       setCardColors({});
     }
   }, []);
+
+  useEffect(() => {
+    if (!dragState) {
+      document.body.classList.remove("deal-pipeline-dragging");
+      return;
+    }
+    document.body.classList.add("deal-pipeline-dragging");
+    return () => document.body.classList.remove("deal-pipeline-dragging");
+  }, [dragState]);
 
   function setDealCardColor(dealId: string, colorKey: string) {
     setCardColors((current) => {
@@ -5902,31 +5953,116 @@ function DealPipelineWorkspace({
     setFloatingDealMenu((current) => (current?.dealId === dealId ? null : { dealId, ...position }));
   }
 
-  function handleDealDragStart(event: DragEvent<HTMLElement>, deal: CrmRecord) {
-    setDraggedDealId(deal.id);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", deal.id);
-    event.dataTransfer.setData("application/x-crm-deal-id", deal.id);
-  }
-
-  function handleStageDragOver(event: DragEvent<HTMLElement>) {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-  }
-
-  function handleStageDrop(event: DragEvent<HTMLElement>, stageKey: string) {
-    event.preventDefault();
-    const dealId = event.dataTransfer.getData("application/x-crm-deal-id") || event.dataTransfer.getData("text/plain");
-    const deal = deals.find((candidate) => candidate.id === dealId);
-    setDraggedDealId("");
-    if (!deal || deal.stageKey === stageKey || disabled) {
+  function handleDealPointerDown(event: ReactPointerEvent<HTMLElement>, deal: CrmRecord) {
+    if (disabled || event.button !== 0 || isDealPipelineInteractiveTarget(event.target)) {
       return;
     }
-    onMoveDealStage(deal, stageKey);
+    const rect = event.currentTarget.getBoundingClientRect();
+    setFloatingColorPicker(null);
+    setFloatingDealMenu(null);
+    setDragState({
+      dealId: deal.id,
+      currentX: event.clientX,
+      currentY: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: rect.width,
+      height: rect.height,
+      hasMoved: false
+    });
+    setDropPreview(computeDealDropPreview(event.clientX, event.clientY, deal.id));
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleDealPointerMove(event: ReactPointerEvent<HTMLElement>, deal: CrmRecord) {
+    if (!dragState || dragState.dealId !== deal.id) {
+      return;
+    }
+    event.preventDefault();
+    const hasMoved = dragState.hasMoved || Math.abs(event.clientX - dragState.startX) > 4 || Math.abs(event.clientY - dragState.startY) > 4;
+    setDragState((current) =>
+      current && current.dealId === deal.id ? { ...current, currentX: event.clientX, currentY: event.clientY, hasMoved } : current
+    );
+    setDropPreview(computeDealDropPreview(event.clientX, event.clientY, deal.id));
+  }
+
+  function handleDealPointerUp(event: ReactPointerEvent<HTMLElement>, deal: CrmRecord) {
+    if (!dragState || dragState.dealId !== deal.id) {
+      return;
+    }
+    event.preventDefault();
+    const preview = dropPreview ?? computeDealDropPreview(event.clientX, event.clientY, deal.id);
+    const nextOrder = computeDealPipelineOrderForDrop(preview.stageKey, preview.index, deal.id);
+    const previousOrder = getDealPipelineOrder(deal);
+    if (dragState.hasMoved) {
+      suppressedClickDealId.current = deal.id;
+    }
+    setDragState(null);
+    setDropPreview(null);
+    if (disabled || !preview.stageKey) {
+      return;
+    }
+    if (deal.stageKey !== preview.stageKey || previousOrder !== nextOrder) {
+      onMoveDealStage(deal, preview.stageKey, nextOrder);
+    }
+  }
+
+  function computeDealDropPreview(clientX: number, clientY: number, draggedDealId: string): DealPipelineDropPreview {
+    const boardRect = boardRef.current?.getBoundingClientRect();
+    const stageEntries = stages
+      .map((stage) => ({ stage, element: stageRefs.current[stage.key] }))
+      .filter((entry): entry is { stage: Pipeline["stages"][number]; element: HTMLElement } => Boolean(entry.element));
+    const containingStage = stageEntries.find(({ element }) => {
+      const rect = element.getBoundingClientRect();
+      return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    });
+    const nearestStage =
+      containingStage ??
+      stageEntries
+        .map((entry) => {
+          const rect = entry.element.getBoundingClientRect();
+          const centerX = rect.left + rect.width / 2;
+          const yPenalty = boardRect && (clientY < boardRect.top || clientY > boardRect.bottom) ? Math.abs(clientY - (boardRect.top + boardRect.height / 2)) : 0;
+          return { ...entry, distance: Math.abs(clientX - centerX) + yPenalty };
+        })
+        .sort((left, right) => left.distance - right.distance)[0];
+
+    const stageKey = nearestStage?.stage.key ?? stages[0]?.key ?? "";
+    const stageDeals = (sortedDealsByStage[stageKey] ?? []).filter((candidate) => candidate.id !== draggedDealId);
+    let index = stageDeals.length;
+    for (let dealIndex = 0; dealIndex < stageDeals.length; dealIndex += 1) {
+      const rect = cardRefs.current[stageDeals[dealIndex].id]?.getBoundingClientRect();
+      if (rect && clientY < rect.top + rect.height / 2) {
+        index = dealIndex;
+        break;
+      }
+    }
+    return { stageKey, index };
+  }
+
+  function computeDealPipelineOrderForDrop(stageKey: string, index: number, draggedDealId: string) {
+    const stageDeals = (sortedDealsByStage[stageKey] ?? []).filter((candidate) => candidate.id !== draggedDealId);
+    const previous = stageDeals[index - 1];
+    const next = stageDeals[index];
+    const previousOrder = previous ? getDealPipelineOrder(previous, dealSourceIndex) : undefined;
+    const nextOrder = next ? getDealPipelineOrder(next, dealSourceIndex) : undefined;
+    if (typeof previousOrder === "number" && typeof nextOrder === "number") {
+      return (previousOrder + nextOrder) / 2;
+    }
+    if (typeof previousOrder === "number") {
+      return previousOrder + 1000;
+    }
+    if (typeof nextOrder === "number") {
+      return nextOrder - 1000;
+    }
+    return 1000;
   }
 
   const floatingColorDeal = floatingColorPicker ? deals.find((deal) => deal.id === floatingColorPicker.dealId) : undefined;
   const floatingMenuDeal = floatingDealMenu ? deals.find((deal) => deal.id === floatingDealMenu.dealId) : undefined;
+  const draggedDeal = dragState ? deals.find((deal) => deal.id === dragState.dealId) : undefined;
 
   if (!pipeline || stages.length === 0) {
     return (
@@ -5949,17 +6085,19 @@ function DealPipelineWorkspace({
           新建交易
         </button>
       </div>
-      <div className="pipeline-board deal-pipeline-board">
+      <div className="pipeline-board deal-pipeline-board" ref={boardRef}>
         {stages.map((stage) => {
-          const stageDeals = deals.filter((deal) => deal.stageKey === stage.key);
+          const stageDeals = sortedDealsByStage[stage.key] ?? [];
           const stageTotal = stageDeals.reduce((sum, deal) => sum + Number(deal.data.amount ?? 0), 0);
+          const visibleDeals = dragState ? stageDeals.filter((deal) => deal.id !== dragState.dealId) : stageDeals;
           return (
             <section
-              className={`pipeline-stage deal-pipeline-stage ${draggedDealId ? "drag-active" : ""}`}
+              className={`pipeline-stage deal-pipeline-stage ${dragState ? "drag-active" : ""} ${dropPreview?.stageKey === stage.key ? "drop-target" : ""}`}
               data-testid={`deal-pipeline-stage-${stage.key}`}
               key={stage.key}
-              onDragOver={handleStageDragOver}
-              onDrop={(event) => handleStageDrop(event, stage.key)}
+              ref={(node) => {
+                stageRefs.current[stage.key] = node;
+              }}
             >
               <div className="stage-header deal-stage-header">
                 <div>
@@ -5968,72 +6106,90 @@ function DealPipelineWorkspace({
                 </div>
                 <span className="badge">{Math.round(stage.probability * 100)}%</span>
               </div>
-              {stageDeals.map((deal) => {
+              {visibleDeals.map((deal, dealIndex) => {
                 const company = typeof deal.data.companyId === "string" ? allRecords.find((record) => record.id === deal.data.companyId) : undefined;
                 const color = getDealCardColor(deal);
                 const dealActivities = activities.filter((activity) => activity.recordId === deal.id);
                 return (
-                  <article
-                    className={`deal-pill deal-pipeline-card ${draggedDealId === deal.id ? "dragging" : ""}`}
-                    data-testid={`deal-pipeline-deal-${deal.id}`}
-                    draggable={!disabled}
-                    key={deal.id}
-                    role="button"
-                    style={{ "--deal-card-accent": color.accent, "--deal-card-bg": color.background } as CSSProperties}
-                    tabIndex={0}
-                    onClick={() => onOpenDeal(deal)}
-                    onDragEnd={() => setDraggedDealId("")}
-                    onDragStart={(event) => handleDealDragStart(event, deal)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
+                  <Fragment key={deal.id}>
+                    {dropPreview?.stageKey === stage.key && dropPreview.index === dealIndex ? (
+                      <div className="deal-pipeline-drop-placeholder" data-testid="deal-pipeline-drop-placeholder" style={{ height: dragState?.height ?? 106 }} />
+                    ) : null}
+                    <article
+                      className="deal-pill deal-pipeline-card"
+                      data-testid={`deal-pipeline-deal-${deal.id}`}
+                      ref={(node) => {
+                        cardRefs.current[deal.id] = node;
+                      }}
+                      role="button"
+                      style={{ "--deal-card-accent": color.accent, "--deal-card-bg": color.background } as CSSProperties}
+                      tabIndex={0}
+                      onClick={() => {
+                        if (suppressedClickDealId.current === deal.id) {
+                          suppressedClickDealId.current = "";
+                          return;
+                        }
                         onOpenDeal(deal);
-                      }
-                    }}
-                  >
-                    <div aria-hidden="true" className="deal-card-color-strip" />
-                    <div className="deal-card-content">
-                      <div className="deal-card-title-row">
-                        <strong>{deal.title}</strong>
-                        <div className="deal-card-controls" onClick={(event) => event.stopPropagation()}>
-                          <button
-                            aria-label="切换卡片颜色"
-                            className="icon-button deal-card-color-button"
-                            title="切换卡片颜色"
-                            type="button"
-                            onClick={(event) => toggleColorPicker(deal.id, event)}
-                          >
-                            <Palette size={15} />
-                          </button>
-                          <button
-                            aria-label="交易操作"
-                            className="icon-button deal-card-menu-button"
-                            title="交易操作"
-                            type="button"
-                            onClick={(event) => toggleDealMenu(deal.id, event)}
-                          >
-                            <MoreVertical size={16} />
-                          </button>
-                        </div>
-                      </div>
-                      <div className="deal-card-line">
-                        <span className="deal-card-activity-count">{dealActivities.length} Activity</span>
-                        <span className="deal-card-amount">{formatCurrency(deal.data.amount)}</span>
-                      </div>
-                      <div className="deal-card-meta">
-                        {company?.title ?? "未关联公司"}
-                        {deal.data.closeDate ? ` · ${formatDate(String(deal.data.closeDate))}` : ""}
-                      </div>
-                      <div className="record-owner-meta">{recordPoolLabel(deal, users)}</div>
-                    </div>
-                  </article>
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onOpenDeal(deal);
+                        }
+                      }}
+                      onPointerDown={(event) => handleDealPointerDown(event, deal)}
+                      onPointerMove={(event) => handleDealPointerMove(event, deal)}
+                      onPointerUp={(event) => handleDealPointerUp(event, deal)}
+                    >
+                      <DealPipelineCardContents
+                        color={color}
+                        deal={deal}
+                        dealActivities={dealActivities}
+                        company={company}
+                        users={users}
+                        onToggleColorPicker={toggleColorPicker}
+                        onToggleDealMenu={toggleDealMenu}
+                      />
+                    </article>
+                  </Fragment>
                 );
               })}
-              {stageDeals.length === 0 ? <div className="empty-state compact-empty">暂无交易</div> : null}
+              {dropPreview?.stageKey === stage.key && dropPreview.index === visibleDeals.length ? (
+                <div className="deal-pipeline-drop-placeholder" data-testid="deal-pipeline-drop-placeholder" style={{ height: dragState?.height ?? 106 }} />
+              ) : null}
+              {stageDeals.length === 0 && !(dropPreview?.stageKey === stage.key) ? <div className="empty-state compact-empty">暂无交易</div> : null}
             </section>
           );
         })}
       </div>
+      {dragState && draggedDeal ? (
+        <article
+          aria-hidden="true"
+          className="deal-pill deal-pipeline-card deal-pipeline-drag-overlay"
+          data-testid="deal-pipeline-drag-overlay"
+          style={
+            {
+              "--deal-card-accent": getDealCardColor(draggedDeal).accent,
+              "--deal-card-bg": getDealCardColor(draggedDeal).background,
+              height: dragState.height,
+              left: dragState.currentX - dragState.offsetX,
+              top: dragState.currentY - dragState.offsetY,
+              width: dragState.width
+            } as CSSProperties
+          }
+        >
+          <DealPipelineCardContents
+            color={getDealCardColor(draggedDeal)}
+            deal={draggedDeal}
+            dealActivities={activities.filter((activity) => activity.recordId === draggedDeal.id)}
+            company={typeof draggedDeal.data.companyId === "string" ? allRecords.find((record) => record.id === draggedDeal.data.companyId) : undefined}
+            users={users}
+            readonly
+            onToggleColorPicker={toggleColorPicker}
+            onToggleDealMenu={toggleDealMenu}
+          />
+        </article>
+      ) : null}
       {floatingColorPicker && floatingColorDeal ? (
         <div
           className="deal-card-color-popover floating"
@@ -6097,6 +6253,86 @@ function DealPipelineWorkspace({
       ) : null}
     </section>
   );
+}
+
+function DealPipelineCardContents({
+  color,
+  deal,
+  dealActivities,
+  company,
+  users,
+  readonly = false,
+  onToggleColorPicker,
+  onToggleDealMenu
+}: {
+  color: (typeof dealCardColorOptions)[number];
+  deal: CrmRecord;
+  dealActivities: Activity[];
+  company: CrmRecord | undefined;
+  users: User[];
+  readonly?: boolean;
+  onToggleColorPicker: (dealId: string, event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onToggleDealMenu: (dealId: string, event: ReactMouseEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <>
+      <div aria-hidden="true" className="deal-card-color-strip" style={{ background: color.accent }} />
+      <div className="deal-card-content">
+        <div className="deal-card-title-row">
+          <strong>{deal.title}</strong>
+          {!readonly ? (
+            <div className="deal-card-controls" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+              <button
+                aria-label="切换卡片颜色"
+                className="icon-button deal-card-color-button"
+                data-no-deal-drag="true"
+                title="切换卡片颜色"
+                type="button"
+                onClick={(event) => onToggleColorPicker(deal.id, event)}
+              >
+                <Palette size={15} />
+              </button>
+              <button
+                aria-label="交易操作"
+                className="icon-button deal-card-menu-button"
+                data-no-deal-drag="true"
+                title="交易操作"
+                type="button"
+                onClick={(event) => onToggleDealMenu(deal.id, event)}
+              >
+                <MoreVertical size={16} />
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <div className="deal-card-line">
+          <span className="deal-card-activity-count">{dealActivities.length} Activity</span>
+          <span className="deal-card-amount">{formatCurrency(deal.data.amount)}</span>
+        </div>
+        <div className="deal-card-meta">
+          {company?.title ?? "未关联公司"}
+          {deal.data.closeDate ? ` · ${formatDate(String(deal.data.closeDate))}` : ""}
+        </div>
+        <div className="record-owner-meta">{recordPoolLabel(deal, users)}</div>
+      </div>
+    </>
+  );
+}
+
+function isDealPipelineInteractiveTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest("button, input, select, textarea, a, [data-no-deal-drag]"));
+}
+
+function getDealPipelineOrder(deal: CrmRecord, sourceIndex?: Map<string, number>) {
+  const value = Number(deal.data.pipelineOrder);
+  if (Number.isFinite(value)) {
+    return value;
+  }
+  return (sourceIndex?.get(deal.id) ?? 0) * 1000;
+}
+
+function getDealPipelineSortValue(deal: CrmRecord, sourceIndex: Map<string, number>) {
+  return getDealPipelineOrder(deal, sourceIndex);
 }
 
 function Dashboard({

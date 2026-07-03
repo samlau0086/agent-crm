@@ -16,7 +16,12 @@ async function patchApiMetricsHandler(request: NextRequest, { params }: RoutePar
     }
     const context = await getRequestContext(request);
     const body = await parseJson(request, recordStageUpdateSchema);
-    return ok(await getCrmRepository().updateRecord(context, params.objectKey, params.recordId, { stageKey: body.stageKey ?? undefined }));
+    return ok(
+      await getCrmRepository().updateRecord(context, params.objectKey, params.recordId, {
+        stageKey: body.stageKey ?? undefined,
+        ...(typeof body.pipelineOrder === "number" ? { data: { pipelineOrder: body.pipelineOrder } } : {})
+      })
+    );
   } catch (error) {
     return handleApiError(error, request);
   }
