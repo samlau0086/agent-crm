@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import { permissionCatalog } from "@/lib/auth/permissions";
@@ -70,7 +70,7 @@ type PipelineDraft = {
   objectKey: string;
   name: string;
   isDefault: boolean;
-  stagesText: string;
+  stages: Pipeline["stages"];
 };
 
 type ViewDraft = {
@@ -545,7 +545,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             objectKey: selectedPipeline.objectKey,
             name: selectedPipeline.name,
             isDefault: selectedPipeline.isDefault,
-            stagesText: formatStages(selectedPipeline.stages)
+            stages: normalizePipelineStagesForDraft(selectedPipeline.stages)
           }
         : emptyPipelineDraft(props.objects[0]?.key ?? "")
     );
@@ -598,6 +598,40 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   function resetPipelineForm() {
     setSelectedPipelineId("");
     setPipelineDraft(emptyPipelineDraft(props.objects[0]?.key ?? ""));
+  }
+
+  function updatePipelineStage(index: number, patch: Partial<Pipeline["stages"][number]>) {
+    setPipelineDraft((current) => ({
+      ...current,
+      stages: current.stages.map((stage, stageIndex) => (stageIndex === index ? { ...stage, ...patch } : stage))
+    }));
+  }
+
+  function addPipelineStage() {
+    setPipelineDraft((current) => ({
+      ...current,
+      stages: [...current.stages, createPipelineStageDraft(current.stages.length)]
+    }));
+  }
+
+  function removePipelineStage(index: number) {
+    setPipelineDraft((current) => ({
+      ...current,
+      stages: current.stages.length <= 1 ? current.stages : current.stages.filter((_, stageIndex) => stageIndex !== index)
+    }));
+  }
+
+  function movePipelineStage(index: number, direction: -1 | 1) {
+    setPipelineDraft((current) => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= current.stages.length) {
+        return current;
+      }
+      const nextStages = [...current.stages];
+      const [stage] = nextStages.splice(index, 1);
+      nextStages.splice(nextIndex, 0, stage);
+      return { ...current, stages: nextStages };
+    });
   }
 
   function resetViewForm() {
@@ -912,7 +946,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       objectKey: pipelineDraft.objectKey,
       name: pipelineDraft.name.trim(),
       isDefault: pipelineDraft.isDefault,
-      stages: parseStages(pipelineDraft.stagesText)
+      stages: normalizePipelineStagesForSave(pipelineDraft.stages)
     };
 
     if (selectedPipeline) {
@@ -2739,14 +2773,104 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                   />
                   <span>设为默认管道</span>
                 </label>
-                <label className="wide">
-                  <span className="subtle">阶段配置（每行 `key|名称|概率|颜色`）</span>
-                  <textarea
-                    className="textarea"
-                    value={pipelineDraft.stagesText}
-                    onChange={(event) => setPipelineDraft((current) => ({ ...current, stagesText: event.target.value }))}
-                  />
-                </label>
+                <div className="wide">
+                  <div className="subtle">Pipeline stages</div>
+                  <div className="pipeline-stage-editor" data-testid="pipeline-stage-editor">
+                    <div className="pipeline-stage-editor-header">
+                      <div>
+                        <strong>Stage configuration</strong>
+                        <div className="subtle">The deal board uses this order, color, and win probability.</div>
+                      </div>
+                      <button className="secondary-button" type="button" onClick={addPipelineStage} disabled={isPending}>
+                        <Plus size={16} />
+                        Add Stage
+                      </button>
+                    </div>
+                    <div className="pipeline-stage-table">
+                      <div className="pipeline-stage-table-head">
+                        <span>Order</span>
+                        <span>Stage Key</span>
+                        <span>Stage Name</span>
+                        <span>Win Probability</span>
+                        <span>Color</span>
+                        <span />
+                      </div>
+                      {pipelineDraft.stages.map((stage, index) => (
+                        <div className="pipeline-stage-row" key={`${stage.key}-${index}`} data-testid={`pipeline-stage-row-${index}`}>
+                          <div className="pipeline-stage-order-controls">
+                            <span className="badge">ID: {index + 1}</span>
+                            <button className="icon-button" type="button" onClick={() => movePipelineStage(index, -1)} disabled={isPending || index === 0} aria-label="Move stage up">
+                              <ArrowUp size={14} />
+                            </button>
+                            <button
+                              className="icon-button"
+                              type="button"
+                              onClick={() => movePipelineStage(index, 1)}
+                              disabled={isPending || index === pipelineDraft.stages.length - 1}
+                              aria-label="Move stage down"
+                            >
+                              <ArrowDown size={14} />
+                            </button>
+                          </div>
+                          <input
+                            className="input"
+                            value={stage.key}
+                            onChange={(event) => updatePipelineStage(index, { key: sanitizePipelineStageKey(event.target.value, `stage-${index + 1}`) })}
+                            placeholder="qualified"
+                          />
+                          <input
+                            className="input"
+                            value={stage.label}
+                            onChange={(event) => updatePipelineStage(index, { label: event.target.value })}
+                            onBlur={() => {
+                              if (!stage.key.trim() && stage.label.trim()) {
+                                updatePipelineStage(index, { key: sanitizePipelineStageKey(stage.label, `stage-${index + 1}`) });
+                              }
+                            }}
+                            placeholder="Qualified To Buy"
+                          />
+                          <div className="pipeline-stage-probability">
+                            <input
+                              aria-label={`Win probability for ${stage.label || stage.key}`}
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={Math.round(stage.probability * 100)}
+                              onChange={(event) => updatePipelineStage(index, { probability: Number(event.target.value) / 100 })}
+                            />
+                            <input
+                              className="input"
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={Math.round(stage.probability * 100)}
+                              onChange={(event) => updatePipelineStage(index, { probability: normalizeStageProbability(Number(event.target.value) / 100) })}
+                            />
+                            <span className="subtle">%</span>
+                          </div>
+                          <div className="pipeline-stage-color">
+                            <input
+                              aria-label={`Color for ${stage.label || stage.key}`}
+                              type="color"
+                              value={normalizeStageColor(stage.color)}
+                              onChange={(event) => updatePipelineStage(index, { color: event.target.value })}
+                            />
+                            <input className="input" value={stage.color} onChange={(event) => updatePipelineStage(index, { color: event.target.value })} />
+                          </div>
+                          <button
+                            className="icon-button danger-inline"
+                            type="button"
+                            onClick={() => removePipelineStage(index)}
+                            disabled={isPending || pipelineDraft.stages.length <= 1}
+                            aria-label="Remove stage"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="toolbar" style={{ marginTop: 12 }}>
@@ -2754,7 +2878,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                   className="primary-button"
                   type="button"
                   onClick={() => runAction(savePipeline)}
-                  disabled={isPending || !pipelineDraft.objectKey || !pipelineDraft.name.trim() || !pipelineDraft.stagesText.trim()}
+                  disabled={isPending || !pipelineDraft.objectKey || !pipelineDraft.name.trim() || !isPipelineDraftValid(pipelineDraft)}
                 >
                   <Save size={16} />
                   {selectedPipeline ? "保存管道" : "创建管道"}
@@ -5124,7 +5248,7 @@ function emptyPipelineDraft(objectKey: string): PipelineDraft {
     objectKey,
     name: "",
     isDefault: false,
-    stagesText: "new|新阶段|0.1|#2563eb"
+    stages: [createPipelineStageDraft(0)]
   };
 }
 
@@ -5325,25 +5449,77 @@ function parseSelectOptionsText(text: string) {
     });
 }
 
-function formatStages(stages: Pipeline["stages"]): string {
-  return stages.map((stage) => `${stage.key}|${stage.label}|${stage.probability}|${stage.color}`).join("\n");
+const pipelineStageColors = ["#2563eb", "#059669", "#7c3aed", "#ea580c", "#dc2626", "#0891b2", "#4f46e5", "#475569"];
+
+function createPipelineStageDraft(index: number): Pipeline["stages"][number] {
+  return {
+    key: `stage-${index + 1}`,
+    label: index === 0 ? "新阶段" : `Stage ${index + 1}`,
+    probability: normalizeStageProbability((index + 1) / 10),
+    position: index + 1,
+    color: pipelineStageColors[index % pipelineStageColors.length] ?? "#2563eb"
+  };
 }
 
-function parseStages(text: string): Pipeline["stages"] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => {
-      const [key, label, probability, color] = line.split("|").map((part) => part.trim());
-      return {
-        key,
-        label,
-        probability: Number(probability),
-        color: color || "#2563eb",
-        position: index + 1
-      };
-    });
+function normalizePipelineStagesForDraft(stages: Pipeline["stages"]): Pipeline["stages"] {
+  if (!stages.length) {
+    return [createPipelineStageDraft(0)];
+  }
+
+  return stages.map((stage, index) => ({
+    key: sanitizePipelineStageKey(stage.key, `stage-${index + 1}`),
+    label: stage.label || `Stage ${index + 1}`,
+    probability: normalizeStageProbability(stage.probability),
+    position: index + 1,
+    color: normalizeStageColor(stage.color)
+  }));
+}
+
+function normalizePipelineStagesForSave(stages: PipelineDraft["stages"]): Pipeline["stages"] {
+  const seenKeys = new Set<string>();
+
+  return stages.map((stage, index) => {
+    const baseKey = sanitizePipelineStageKey(stage.key || stage.label, `stage-${index + 1}`);
+    let key = baseKey;
+    let counter = 2;
+    while (seenKeys.has(key)) {
+      key = `${baseKey}-${counter}`;
+      counter += 1;
+    }
+    seenKeys.add(key);
+
+    return {
+      key,
+      label: stage.label.trim(),
+      probability: normalizeStageProbability(stage.probability),
+      position: index + 1,
+      color: normalizeStageColor(stage.color)
+    };
+  });
+}
+
+function isPipelineDraftValid(draft: PipelineDraft): boolean {
+  return draft.stages.length > 0 && draft.stages.every((stage) => stage.key.trim() && stage.label.trim());
+}
+
+function sanitizePipelineStageKey(value: string, fallback: string): string {
+  const key = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return key || fallback;
+}
+
+function normalizeStageProbability(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
+function normalizeStageColor(value: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#2563eb";
 }
 
 function formatViewDraft(view: SavedView): ViewDraft {

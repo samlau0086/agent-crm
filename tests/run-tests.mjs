@@ -2568,6 +2568,14 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(source, /aria-selected=\{activeSettingsTab === tab\.key\}/);
   assert.match(source, /activeSettingsTab === "access"[\s\S]*UserTeamAdminPanel[\s\S]*RoleAdminPanel[\s\S]*PermissionMatrix/);
   assert.match(source, /activeSettingsTab === "crm"[\s\S]*CurrencyAdminPanel[\s\S]*settings-grid settings-grid-wide[\s\S]*settings-grid settings-grid-wide/);
+  assert.match(source, /data-testid="pipeline-stage-editor"/);
+  assert.match(source, /pipelineDraft\.stages\.map/);
+  assert.match(source, /function addPipelineStage/);
+  assert.match(source, /function movePipelineStage/);
+  assert.match(source, /function removePipelineStage/);
+  assert.match(source, /normalizePipelineStagesForSave\(pipelineDraft\.stages\)/);
+  assert.match(source, /Win Probability[\s\S]*type="range"/);
+  assert.doesNotMatch(source, /stagesText/);
   assert.match(source, /activeSettingsTab === "integrations"[\s\S]*ApiKeyAdminPanel[\s\S]*WebhookAdminPanel/);
   assert.match(source, /activeSettingsTab === "operations"[\s\S]*ImportQueueMonitor[\s\S]*BackupOperationsPanel[\s\S]*audit-panel/);
   assert.match(styles, /\.settings-tabs-shell/);
@@ -2577,6 +2585,8 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(styles, /\.tag-select-input/);
   assert.match(styles, /\.tag-select-menu/);
   assert.match(styles, /\.tag-select-token/);
+  assert.match(styles, /\.pipeline-stage-editor/);
+  assert.match(styles, /\.pipeline-stage-row/);
 });
 
 await run("workspace and settings use friendly feedback instead of browser dialogs", () => {
