@@ -4,6 +4,7 @@ import {
   Activity as ActivityIcon,
   Archive,
   BadgeDollarSign,
+  Bell,
   Bold,
   Bot,
   Building2,
@@ -1217,6 +1218,8 @@ function ModuleWorkspaceHeader({
   exportRecordsUrl,
   isRouteRefreshing,
   moduleActionsOpen,
+  notificationMenuOpen,
+  notifications,
   query,
   quickAddMenuOpen,
   quickAddObjects,
@@ -1228,6 +1231,7 @@ function ModuleWorkspaceHeader({
   onRefresh,
   onToggleAppSidebar,
   onToggleModuleActions,
+  onToggleNotifications,
   onToggleQuickAdd,
   onToggleTheme
 }: {
@@ -1238,6 +1242,8 @@ function ModuleWorkspaceHeader({
   exportRecordsUrl: string;
   isRouteRefreshing: boolean;
   moduleActionsOpen: boolean;
+  notificationMenuOpen: boolean;
+  notifications: HeaderNotification[];
   query: string;
   quickAddMenuOpen: boolean;
   quickAddObjects: ObjectDefinition[];
@@ -1249,6 +1255,7 @@ function ModuleWorkspaceHeader({
   onRefresh: () => void;
   onToggleAppSidebar: () => void;
   onToggleModuleActions: () => void;
+  onToggleNotifications: () => void;
   onToggleQuickAdd: () => void;
   onToggleTheme: () => void;
 }) {
@@ -1280,6 +1287,7 @@ function ModuleWorkspaceHeader({
         <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={appTheme === "dark" ? "切换浅色模式" : "切换深色模式"} title={appTheme === "dark" ? "浅色模式" : "深色模式"}>
           {appTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
         </button>
+        <HeaderNotificationsMenu notifications={notifications} open={notificationMenuOpen} onToggle={onToggleNotifications} />
         <button className="icon-button" type="button" onClick={onRefresh} aria-label="刷新" title="刷新">
           <RefreshCw className={isRouteRefreshing ? "spin-icon" : undefined} size={16} />
         </button>
@@ -1356,6 +1364,15 @@ function ModuleWorkspaceHeader({
 }
 
 type StandaloneModuleKey = "tasks" | "activities";
+type HeaderNotificationIntent = "info" | "warning" | "danger";
+type HeaderNotification = {
+  id: string;
+  title: string;
+  description: string;
+  time?: string;
+  icon: LucideIcon;
+  intent: HeaderNotificationIntent;
+};
 
 function StandaloneModuleHeader({
   appSidebarCollapsed,
@@ -1365,6 +1382,8 @@ function StandaloneModuleHeader({
   moduleActionsOpen,
   moduleKey,
   moduleTitle,
+  notificationMenuOpen,
+  notifications,
   query,
   taskView,
   onChangeTaskView,
@@ -1375,6 +1394,7 @@ function StandaloneModuleHeader({
   onRefresh,
   onToggleAppSidebar,
   onToggleModuleActions,
+  onToggleNotifications,
   onToggleTheme
 }: {
   appSidebarCollapsed: boolean;
@@ -1384,6 +1404,8 @@ function StandaloneModuleHeader({
   moduleActionsOpen: boolean;
   moduleKey: StandaloneModuleKey;
   moduleTitle: string;
+  notificationMenuOpen: boolean;
+  notifications: HeaderNotification[];
   query: string;
   taskView?: TaskCalendarView;
   onChangeTaskView?: (view: TaskCalendarView) => void;
@@ -1394,6 +1416,7 @@ function StandaloneModuleHeader({
   onRefresh: () => void;
   onToggleAppSidebar: () => void;
   onToggleModuleActions: () => void;
+  onToggleNotifications: () => void;
   onToggleTheme: () => void;
 }) {
   const ModuleIcon = moduleKey === "tasks" ? CheckCircle2 : ActivityIcon;
@@ -1423,6 +1446,7 @@ function StandaloneModuleHeader({
         <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={appTheme === "dark" ? "切换浅色模式" : "切换深色模式"} title={appTheme === "dark" ? "浅色模式" : "深色模式"}>
           {appTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
         </button>
+        <HeaderNotificationsMenu notifications={notifications} open={notificationMenuOpen} onToggle={onToggleNotifications} />
         <button className="icon-button" type="button" onClick={onRefresh} aria-label="刷新" title="刷新">
           <RefreshCw className={isRouteRefreshing ? "spin-icon" : undefined} size={16} />
         </button>
@@ -1478,6 +1502,55 @@ function StandaloneModuleHeader({
   );
 }
 
+function HeaderNotificationsMenu({
+  notifications,
+  onToggle,
+  open
+}: {
+  notifications: HeaderNotification[];
+  onToggle: () => void;
+  open: boolean;
+}) {
+  return (
+    <div className="toolbar-menu">
+      <button className="icon-button notification-button" type="button" onClick={onToggle} aria-label="通知" title="通知">
+        <Bell size={17} />
+        {notifications.length ? <span className="notification-badge">{notifications.length > 99 ? "99+" : notifications.length}</span> : null}
+      </button>
+      {open ? (
+        <div className="toolbar-menu-panel notification-menu-panel">
+          <div className="module-menu-heading notification-menu-heading">
+            <span>通知</span>
+            <Settings size={14} />
+          </div>
+          {notifications.length ? (
+            <div className="notification-list">
+              {notifications.map((notification) => {
+                const Icon = notification.icon;
+                return (
+                  <div className={`notification-item notification-${notification.intent}`} key={notification.id}>
+                    <span className="notification-item-icon"><Icon size={15} /></span>
+                    <span className="notification-item-body">
+                      <strong>{notification.title}</strong>
+                      <span>{notification.description}</span>
+                      {notification.time ? <small>{formatDateTimeSeconds(notification.time)}</small> : null}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="notification-empty">
+              <Bell size={18} />
+              <span>当前没有通知</span>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 type ContactDetailActivityTab = "all" | "activities" | "emails" | "calls" | "notes" | "tasks";
 
 export function CrmWorkspace(props: CrmWorkspaceProps) {
@@ -1519,6 +1592,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [appTheme, setAppTheme] = useState<"light" | "dark">("light");
   const [quickAddMenuOpen, setQuickAddMenuOpen] = useState(false);
   const [moduleActionsOpen, setModuleActionsOpen] = useState(false);
+  const [notificationMenuOpen, setNotificationMenuOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
@@ -1932,6 +2006,19 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         .some((value) => String(value).toLowerCase().includes(normalizedQuery));
     });
   }, [activities, activityQuery, deletedActivityIds, props.users, records]);
+  const headerNotifications = useMemo(
+    () =>
+      buildHeaderNotifications({
+        activities,
+        deletedActivityIds,
+        importJobs,
+        objectDefinitions: props.objects,
+        recordChangeRequests,
+        records,
+        workflowApprovals: props.workflowApprovals
+      }),
+    [activities, deletedActivityIds, importJobs, props.objects, props.workflowApprovals, recordChangeRequests, records]
+  );
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
   const currencies = useMemo(() => getCurrencyDefinitions(currencyRecords), [currencyRecords]);
@@ -4440,12 +4527,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   function openImportDialog() {
     setModuleActionsOpen(false);
     setQuickAddMenuOpen(false);
+    setNotificationMenuOpen(false);
     setRecordPanelMode("import");
   }
 
   function openExportDialog() {
     setModuleActionsOpen(false);
     setQuickAddMenuOpen(false);
+    setNotificationMenuOpen(false);
     setExportDialogOpen(true);
   }
 
@@ -4516,6 +4605,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               exportRecordsUrl={exportRecordsUrl}
               isRouteRefreshing={isRouteRefreshing || isRouteRefreshPending}
               moduleActionsOpen={moduleActionsOpen}
+              notificationMenuOpen={notificationMenuOpen}
+              notifications={headerNotifications}
               query={query}
               quickAddMenuOpen={quickAddMenuOpen}
               quickAddObjects={quickAddObjects}
@@ -4526,8 +4617,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               onQueryChange={setQuery}
               onRefresh={refreshRoute}
               onToggleAppSidebar={toggleAppSidebar}
-              onToggleModuleActions={() => setModuleActionsOpen((current) => !current)}
-              onToggleQuickAdd={() => setQuickAddMenuOpen((current) => !current)}
+              onToggleModuleActions={() => {
+                setNotificationMenuOpen(false);
+                setQuickAddMenuOpen(false);
+                setModuleActionsOpen((current) => !current);
+              }}
+              onToggleNotifications={() => {
+                setModuleActionsOpen(false);
+                setQuickAddMenuOpen(false);
+                setNotificationMenuOpen((current) => !current);
+              }}
+              onToggleQuickAdd={() => {
+                setModuleActionsOpen(false);
+                setNotificationMenuOpen(false);
+                setQuickAddMenuOpen((current) => !current);
+              }}
               onToggleTheme={toggleAppTheme}
             />
           ) : activeNav === "tasks" ? (
@@ -4539,6 +4643,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               moduleActionsOpen={moduleActionsOpen}
               moduleKey="tasks"
               moduleTitle="任务"
+              notificationMenuOpen={notificationMenuOpen}
+              notifications={headerNotifications}
               query={taskQuery}
               taskView={taskWorkspaceView}
               onChangeTaskView={setTaskWorkspaceView}
@@ -4548,7 +4654,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               onQueryChange={setTaskQuery}
               onRefresh={refreshRoute}
               onToggleAppSidebar={toggleAppSidebar}
-              onToggleModuleActions={() => setModuleActionsOpen((current) => !current)}
+              onToggleModuleActions={() => {
+                setNotificationMenuOpen(false);
+                setModuleActionsOpen((current) => !current);
+              }}
+              onToggleNotifications={() => {
+                setModuleActionsOpen(false);
+                setNotificationMenuOpen((current) => !current);
+              }}
               onToggleTheme={toggleAppTheme}
             />
           ) : activeNav === "activities" ? (
@@ -4560,6 +4673,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               moduleActionsOpen={moduleActionsOpen}
               moduleKey="activities"
               moduleTitle="活动"
+              notificationMenuOpen={notificationMenuOpen}
+              notifications={headerNotifications}
               query={activityQuery}
               onCreate={() => { void runAction(requestStandaloneActivityCreate); }}
               onExport={() => exportStandaloneActivitiesCsv("activities")}
@@ -4567,7 +4682,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               onQueryChange={setActivityQuery}
               onRefresh={refreshRoute}
               onToggleAppSidebar={toggleAppSidebar}
-              onToggleModuleActions={() => setModuleActionsOpen((current) => !current)}
+              onToggleModuleActions={() => {
+                setNotificationMenuOpen(false);
+                setModuleActionsOpen((current) => !current);
+              }}
+              onToggleNotifications={() => {
+                setModuleActionsOpen(false);
+                setNotificationMenuOpen((current) => !current);
+              }}
               onToggleTheme={toggleAppTheme}
             />
           ) : (
@@ -4580,6 +4702,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 </div>
               </div>
               <div className="toolbar">
+                <HeaderNotificationsMenu
+                  notifications={headerNotifications}
+                  open={notificationMenuOpen}
+                  onToggle={() => {
+                    setModuleActionsOpen(false);
+                    setQuickAddMenuOpen(false);
+                    setNotificationMenuOpen((current) => !current);
+                  }}
+                />
                 <button className="secondary-button" type="button" onClick={refreshRoute}>
                   <RefreshCw className={isRouteRefreshing || isRouteRefreshPending ? "spin-icon" : undefined} size={16} />
                   刷新
@@ -11157,6 +11288,103 @@ function formatTaskCalendarTime(value?: string): string {
 
 function formatCalendarDateTime(date: Date): string {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function buildHeaderNotifications({
+  activities,
+  deletedActivityIds,
+  importJobs,
+  objectDefinitions,
+  recordChangeRequests,
+  records,
+  workflowApprovals
+}: {
+  activities: Activity[];
+  deletedActivityIds: Set<string>;
+  importJobs: CsvImportJob[];
+  objectDefinitions: ObjectDefinition[];
+  recordChangeRequests: RecordChangeRequest[];
+  records: CrmRecord[];
+  workflowApprovals: WorkflowActionApproval[];
+}): HeaderNotification[] {
+  const now = new Date();
+  const today = startOfCalendarDay(now);
+  const tomorrow = addCalendarDays(today, 1);
+  const items: HeaderNotification[] = [];
+
+  activities
+    .filter((activity) => !deletedActivityIds.has(activity.id))
+    .filter((activity) => activity.type === "task" && !activity.completedAt && !activity.archivedAt && activity.dueAt)
+    .sort((left, right) => new Date(left.dueAt ?? left.createdAt).getTime() - new Date(right.dueAt ?? right.createdAt).getTime())
+    .slice(0, 6)
+    .forEach((activity) => {
+      const dueAt = new Date(activity.dueAt ?? activity.createdAt);
+      const overdue = dueAt.getTime() < now.getTime();
+      const dueToday = dueAt.getTime() >= today.getTime() && dueAt.getTime() < tomorrow.getTime();
+      if (!overdue && !dueToday) {
+        return;
+      }
+      const linkedRecord = records.find((record) => record.id === activity.recordId);
+      items.push({
+        id: `task:${activity.id}`,
+        title: overdue ? "任务已逾期" : "今日任务提醒",
+        description: linkedRecord ? `${activity.title} · ${linkedRecord.title}` : activity.title,
+        time: activity.dueAt,
+        icon: CalendarClock,
+        intent: overdue ? "danger" : "warning"
+      });
+    });
+
+  recordChangeRequests
+    .filter((request) => request.status === "pending")
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, 5)
+    .forEach((request) => {
+      const objectLabel = objectDefinitions.find((object) => object.key === request.objectKey)?.label ?? request.objectKey;
+      items.push({
+        id: `record-change:${request.id}`,
+        title: request.action === "delete" ? "删除申请待审核" : "修改申请待审核",
+        description: `${objectLabel} · ${request.recordTitle}`,
+        time: request.createdAt,
+        icon: CheckCircle2,
+        intent: request.action === "delete" ? "danger" : "warning"
+      });
+    });
+
+  workflowApprovals
+    .filter((approval) => approval.status === "pending")
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, 4)
+    .forEach((approval) => {
+      items.push({
+        id: `workflow-approval:${approval.id}`,
+        title: "工作流动作待审批",
+        description: approval.summary,
+        time: approval.createdAt,
+        icon: WorkflowIcon,
+        intent: "warning"
+      });
+    });
+
+  importJobs
+    .filter((job) => job.status === "failed")
+    .sort((left, right) => new Date(right.completedAt ?? right.createdAt).getTime() - new Date(left.completedAt ?? left.createdAt).getTime())
+    .slice(0, 3)
+    .forEach((job) => {
+      const objectLabel = objectDefinitions.find((object) => object.key === job.objectKey)?.label ?? job.objectKey;
+      items.push({
+        id: `import-job:${job.id}`,
+        title: "导入任务失败",
+        description: `${objectLabel} · ${job.errorMessage ?? `${job.errorCount} 行错误`}`,
+        time: job.completedAt ?? job.createdAt,
+        icon: Upload,
+        intent: "danger"
+      });
+    });
+
+  return items
+    .sort((left, right) => new Date(right.time ?? "").getTime() - new Date(left.time ?? "").getTime())
+    .slice(0, 12);
 }
 
 function buildActivitiesCsv(activities: Activity[], records: CrmRecord[], users: User[]): string {
