@@ -1926,9 +1926,10 @@ button {
 }
 
 .deal-pipeline-stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 320px;
-  max-height: calc(100vh - 250px);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .deal-pipeline-stage.drop-target {
@@ -1944,6 +1945,7 @@ button {
   display: block;
   position: relative;
   overflow: visible;
+  margin-top: 0;
   padding: 0;
   touch-action: none;
   background: var(--deal-card-bg, white);
@@ -1963,11 +1965,42 @@ button {
 
 .deal-pipeline-drop-placeholder {
   width: 100%;
-  margin-top: 10px;
   border: 1px dashed rgba(37, 99, 235, 0.55);
   border-radius: 8px;
   background: rgba(37, 99, 235, 0.08);
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+
+.deal-pipeline-stage-scroll {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  max-height: min(1180px, calc(100vh - 310px));
+  overflow-y: auto;
+  padding: 0 4px 4px 0;
+  scrollbar-gutter: stable;
+}
+
+.deal-pipeline-load-more {
+  width: 100%;
+  min-height: 36px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+}
+
+.deal-pipeline-load-more:hover:not(:disabled) {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.deal-pipeline-stage-end {
+  padding: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .deal-pipeline-drag-overlay {

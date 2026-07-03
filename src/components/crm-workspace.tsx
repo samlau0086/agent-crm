@@ -70,6 +70,7 @@ import {
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type UIEvent,
   type ReactNode
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -6051,6 +6052,8 @@ function ContactFollowUpDialog({
 }
 
 const dealPipelineCardColorStorageKey = "ai-agent-crm:deal-pipeline-card-colors";
+const dealPipelineInitialStageLimit = 20;
+const dealPipelineStagePageSize = 20;
 
 const dealCardColorOptions = [
   { key: "slate", label: "深灰", accent: "#334155", background: "#ffffff" },
@@ -6118,6 +6121,9 @@ function DealPipelineWorkspace({
   const [cardColors, setCardColors] = useState<Record<string, string>>({});
   const [floatingColorPicker, setFloatingColorPicker] = useState<DealCardFloatingLayer | null>(null);
   const [floatingDealMenu, setFloatingDealMenu] = useState<DealCardFloatingLayer | null>(null);
+  const [stageVisibleCounts, setStageVisibleCounts] = useState<Record<string, number>>({});
+  const [stageLoadingKeys, setStageLoadingKeys] = useState<Record<string, boolean>>({});
+  const stageLoadTimersRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     const nextPendingMoves = { ...pendingDealMovesRef.current };
@@ -6155,6 +6161,25 @@ function DealPipelineWorkspace({
     }
     return grouped;
   }, [dealSourceIndex, pipelineDeals, stages]);
+
+  useEffect(() => {
+    setStageVisibleCounts((current) => {
+      const next: Record<string, number> = {};
+      for (const stage of stages) {
+        next[stage.key] = current[stage.key] ?? dealPipelineInitialStageLimit;
+      }
+      return next;
+    });
+  }, [stages]);
+
+  useEffect(() => {
+    const timers = stageLoadTimersRef.current;
+    return () => {
+      for (const timerId of Object.values(timers)) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -6229,6 +6254,32 @@ function DealPipelineWorkspace({
       }
       return next;
     });
+  }
+
+  function loadMoreStageDeals(stageKey: string) {
+    const total = sortedDealsByStage[stageKey]?.length ?? 0;
+    const currentCount = stageVisibleCounts[stageKey] ?? dealPipelineInitialStageLimit;
+    if (currentCount >= total || stageLoadingKeys[stageKey]) {
+      return;
+    }
+    setStageLoadingKeys((current) => ({ ...current, [stageKey]: true }));
+    window.clearTimeout(stageLoadTimersRef.current[stageKey]);
+    stageLoadTimersRef.current[stageKey] = window.setTimeout(() => {
+      setStageVisibleCounts((current) => ({
+        ...current,
+        [stageKey]: Math.min((current[stageKey] ?? dealPipelineInitialStageLimit) + dealPipelineStagePageSize, total)
+      }));
+      setStageLoadingKeys((current) => ({ ...current, [stageKey]: false }));
+      delete stageLoadTimersRef.current[stageKey];
+    }, 120);
+  }
+
+  function handleStageDealListScroll(stageKey: string, event: UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget;
+    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceToBottom <= 180) {
+      loadMoreStageDeals(stageKey);
+    }
   }
 
   function getDealCardColor(deal: CrmRecord) {
@@ -6348,7 +6399,8 @@ function DealPipelineWorkspace({
         .sort((left, right) => left.distance - right.distance)[0];
 
     const stageKey = nearestStage?.stage.key ?? stages[0]?.key ?? "";
-    const stageDeals = (sortedDealsByStage[stageKey] ?? []).filter((candidate) => candidate.id !== draggedDealId);
+    const visibleCount = stageVisibleCounts[stageKey] ?? dealPipelineInitialStageLimit;
+    const stageDeals = (sortedDealsByStage[stageKey] ?? []).slice(0, visibleCount).filter((candidate) => candidate.id !== draggedDealId);
     let index = stageDeals.length;
     for (let dealIndex = 0; dealIndex < stageDeals.length; dealIndex += 1) {
       const rect = cardRefs.current[stageDeals[dealIndex].id]?.getBoundingClientRect();
@@ -6406,8 +6458,12 @@ function DealPipelineWorkspace({
       <div className="pipeline-board deal-pipeline-board" ref={boardRef}>
         {stages.map((stage) => {
           const stageDeals = sortedDealsByStage[stage.key] ?? [];
+          const visibleCount = stageVisibleCounts[stage.key] ?? dealPipelineInitialStageLimit;
+          const renderedStageDeals = stageDeals.slice(0, visibleCount);
+          const hasMoreStageDeals = visibleCount < stageDeals.length;
+          const stageIsLoadingMore = Boolean(stageLoadingKeys[stage.key]);
           const stageTotal = stageDeals.reduce((sum, deal) => sum + Number(deal.data.amount ?? 0), 0);
-          const visibleDeals = dragState ? stageDeals.filter((deal) => deal.id !== dragState.dealId) : stageDeals;
+          const visibleDeals = dragState ? renderedStageDeals.filter((deal) => deal.id !== dragState.dealId) : renderedStageDeals;
           return (
             <section
               className={`pipeline-stage deal-pipeline-stage ${dragState ? "drag-active" : ""} ${dropPreview?.stageKey === stage.key ? "drop-target" : ""}`}
@@ -6424,56 +6480,65 @@ function DealPipelineWorkspace({
                 </div>
                 <span className="badge">{Math.round(stage.probability * 100)}%</span>
               </div>
-              {visibleDeals.map((deal, dealIndex) => {
-                const company = typeof deal.data.companyId === "string" ? allRecords.find((record) => record.id === deal.data.companyId) : undefined;
-                const color = getDealCardColor(deal);
-                const dealActivities = activities.filter((activity) => activity.recordId === deal.id);
-                return (
-                  <Fragment key={deal.id}>
-                    {dropPreview?.stageKey === stage.key && dropPreview.index === dealIndex ? (
-                      <div className="deal-pipeline-drop-placeholder" data-testid="deal-pipeline-drop-placeholder" style={{ height: dragState?.height ?? 106 }} />
-                    ) : null}
-                    <article
-                      className="deal-pill deal-pipeline-card"
-                      data-testid={`deal-pipeline-deal-${deal.id}`}
-                      ref={(node) => {
-                        cardRefs.current[deal.id] = node;
-                      }}
-                      role="button"
-                      style={{ "--deal-card-accent": color.accent, "--deal-card-bg": color.background } as CSSProperties}
-                      tabIndex={0}
-                      onClick={() => {
-                        if (suppressedClickDealId.current === deal.id) {
-                          suppressedClickDealId.current = "";
-                          return;
-                        }
-                        onOpenDeal(deal);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
+              <div className="deal-pipeline-stage-scroll" data-testid={`deal-pipeline-stage-scroll-${stage.key}`} onScroll={(event) => handleStageDealListScroll(stage.key, event)}>
+                {visibleDeals.map((deal, dealIndex) => {
+                  const company = typeof deal.data.companyId === "string" ? allRecords.find((record) => record.id === deal.data.companyId) : undefined;
+                  const color = getDealCardColor(deal);
+                  const dealActivities = activities.filter((activity) => activity.recordId === deal.id);
+                  return (
+                    <Fragment key={deal.id}>
+                      {dropPreview?.stageKey === stage.key && dropPreview.index === dealIndex ? (
+                        <div className="deal-pipeline-drop-placeholder" data-testid="deal-pipeline-drop-placeholder" style={{ height: dragState?.height ?? 106 }} />
+                      ) : null}
+                      <article
+                        className="deal-pill deal-pipeline-card"
+                        data-testid={`deal-pipeline-deal-${deal.id}`}
+                        ref={(node) => {
+                          cardRefs.current[deal.id] = node;
+                        }}
+                        role="button"
+                        style={{ "--deal-card-accent": color.accent, "--deal-card-bg": color.background } as CSSProperties}
+                        tabIndex={0}
+                        onClick={() => {
+                          if (suppressedClickDealId.current === deal.id) {
+                            suppressedClickDealId.current = "";
+                            return;
+                          }
                           onOpenDeal(deal);
-                        }
-                      }}
-                      onPointerDown={(event) => handleDealPointerDown(event, deal)}
-                    >
-                      <DealPipelineCardContents
-                        color={color}
-                        deal={deal}
-                        dealActivities={dealActivities}
-                        company={company}
-                        users={users}
-                        onToggleColorPicker={toggleColorPicker}
-                        onToggleDealMenu={toggleDealMenu}
-                      />
-                    </article>
-                  </Fragment>
-                );
-              })}
-              {dropPreview?.stageKey === stage.key && dropPreview.index === visibleDeals.length ? (
-                <div className="deal-pipeline-drop-placeholder" data-testid="deal-pipeline-drop-placeholder" style={{ height: dragState?.height ?? 106 }} />
-              ) : null}
-              {stageDeals.length === 0 && !(dropPreview?.stageKey === stage.key) ? <div className="empty-state compact-empty">暂无交易</div> : null}
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onOpenDeal(deal);
+                          }
+                        }}
+                        onPointerDown={(event) => handleDealPointerDown(event, deal)}
+                      >
+                        <DealPipelineCardContents
+                          color={color}
+                          deal={deal}
+                          dealActivities={dealActivities}
+                          company={company}
+                          users={users}
+                          onToggleColorPicker={toggleColorPicker}
+                          onToggleDealMenu={toggleDealMenu}
+                        />
+                      </article>
+                    </Fragment>
+                  );
+                })}
+                {dropPreview?.stageKey === stage.key && dropPreview.index === visibleDeals.length ? (
+                  <div className="deal-pipeline-drop-placeholder" data-testid="deal-pipeline-drop-placeholder" style={{ height: dragState?.height ?? 106 }} />
+                ) : null}
+                {stageDeals.length === 0 && !(dropPreview?.stageKey === stage.key) ? <div className="empty-state compact-empty">暂无交易</div> : null}
+                {hasMoreStageDeals ? (
+                  <button className="deal-pipeline-load-more" type="button" disabled={stageIsLoadingMore} onClick={() => loadMoreStageDeals(stage.key)}>
+                    {stageIsLoadingMore ? "加载中..." : `加载更多 (${Math.min(dealPipelineStagePageSize, stageDeals.length - visibleCount)} / ${stageDeals.length - visibleCount})`}
+                  </button>
+                ) : stageDeals.length > dealPipelineInitialStageLimit ? (
+                  <div className="deal-pipeline-stage-end">已显示全部 {stageDeals.length} 笔</div>
+                ) : null}
+              </div>
             </section>
           );
         })}
