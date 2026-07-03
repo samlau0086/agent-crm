@@ -1355,6 +1355,129 @@ function ModuleWorkspaceHeader({
   );
 }
 
+type StandaloneModuleKey = "tasks" | "activities";
+
+function StandaloneModuleHeader({
+  appSidebarCollapsed,
+  appTheme,
+  createLabel,
+  isRouteRefreshing,
+  moduleActionsOpen,
+  moduleKey,
+  moduleTitle,
+  query,
+  taskView,
+  onChangeTaskView,
+  onCreate,
+  onImport,
+  onExport,
+  onQueryChange,
+  onRefresh,
+  onToggleAppSidebar,
+  onToggleModuleActions,
+  onToggleTheme
+}: {
+  appSidebarCollapsed: boolean;
+  appTheme: "light" | "dark";
+  createLabel: string;
+  isRouteRefreshing: boolean;
+  moduleActionsOpen: boolean;
+  moduleKey: StandaloneModuleKey;
+  moduleTitle: string;
+  query: string;
+  taskView?: TaskCalendarView;
+  onChangeTaskView?: (view: TaskCalendarView) => void;
+  onCreate: () => void;
+  onImport: () => void;
+  onExport: () => void;
+  onQueryChange: (value: string) => void;
+  onRefresh: () => void;
+  onToggleAppSidebar: () => void;
+  onToggleModuleActions: () => void;
+  onToggleTheme: () => void;
+}) {
+  const ModuleIcon = moduleKey === "tasks" ? CheckCircle2 : ActivityIcon;
+
+  return (
+    <div className="module-topbar" data-testid={`module-header-${moduleKey}`}>
+      <div className="module-topbar-title">
+        <AppSidebarToggleButton collapsed={appSidebarCollapsed} onToggle={onToggleAppSidebar} />
+        <div className="module-title-block">
+          <ModuleIcon size={18} />
+          <h1 className="module-title">{moduleTitle}</h1>
+        </div>
+      </div>
+
+      <label className="module-search" aria-label={`搜索${moduleTitle}`}>
+        <Search size={17} />
+        <input
+          data-testid={`${moduleKey}-search`}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder={`搜索${moduleTitle}`}
+        />
+        <kbd>Ctrl K</kbd>
+      </label>
+
+      <div className="module-topbar-actions">
+        <button className="icon-button" type="button" onClick={onToggleTheme} aria-label={appTheme === "dark" ? "切换浅色模式" : "切换深色模式"} title={appTheme === "dark" ? "浅色模式" : "深色模式"}>
+          {appTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+        <button className="icon-button" type="button" onClick={onRefresh} aria-label="刷新" title="刷新">
+          <RefreshCw className={isRouteRefreshing ? "spin-icon" : undefined} size={16} />
+        </button>
+        <button className="icon-button module-quick-add-button" type="button" onClick={onCreate} aria-label={`新建${createLabel}`} title={`新建${createLabel}`}>
+          <Plus size={18} />
+        </button>
+        <div className="toolbar-menu">
+          <button className="icon-button" type="button" onClick={onToggleModuleActions} aria-label="更多操作" title="更多操作">
+            <MoreHorizontal size={18} />
+          </button>
+          {moduleActionsOpen ? (
+            <div className="toolbar-menu-panel module-menu-panel">
+              <button type="button" onClick={onImport}>
+                <Upload size={16} />
+                Import {moduleTitle}
+              </button>
+              <button type="button" onClick={onExport}>
+                <Download size={16} />
+                Export {moduleTitle}
+              </button>
+            </div>
+          ) : null}
+        </div>
+        {moduleKey === "tasks" && taskView && onChangeTaskView ? (
+          <div className="module-view-switch" data-testid="task-header-view-switch">
+            {(["list", "month", "week", "day"] as TaskCalendarView[]).map((mode) => (
+              <button
+                aria-label={taskViewLabel(mode)}
+                className={taskView === mode ? "active" : ""}
+                data-testid={`task-view-${mode}`}
+                key={mode}
+                type="button"
+                title={taskViewLabel(mode)}
+                onClick={() => onChangeTaskView(mode)}
+              >
+                {mode === "list" ? <LayoutList size={16} /> : <CalendarClock size={16} />}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="module-view-switch">
+            <button className="active" type="button" aria-label="List view" title="列表">
+              <LayoutList size={16} />
+            </button>
+          </div>
+        )}
+        <button className="primary-button module-create-button" data-testid={`open-create-${moduleKey}`} type="button" onClick={onCreate}>
+          <Plus size={16} />
+          新建{createLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 type ContactDetailActivityTab = "all" | "activities" | "emails" | "calls" | "notes" | "tasks";
 
 export function CrmWorkspace(props: CrmWorkspaceProps) {
@@ -1400,6 +1523,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [isRecordListLoading, setIsRecordListLoading] = useState(false);
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft);
   const [query, setQuery] = useState("");
+  const [taskQuery, setTaskQuery] = useState("");
+  const [activityQuery, setActivityQuery] = useState("");
+  const [taskWorkspaceView, setTaskWorkspaceView] = useState<TaskCalendarView>("list");
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
@@ -1776,6 +1902,36 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         .sort((left, right) => new Date(left.dueAt ?? left.createdAt).getTime() - new Date(right.dueAt ?? right.createdAt).getTime()),
     [activities, deletedActivityIds]
   );
+  const filteredTaskActivities = useMemo(() => {
+    const normalizedQuery = taskQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return taskActivities;
+    }
+    return taskActivities.filter((activity) => {
+      const details = parseTaskDetails(activity.body);
+      const owner = props.users.find((user) => user.id === activity.actorId);
+      return [activity.title, details.text, activity.dueAt, owner?.name, owner?.email]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedQuery));
+    });
+  }, [props.users, taskActivities, taskQuery]);
+  const filteredActivities = useMemo(() => {
+    const normalizedQuery = activityQuery.trim().toLowerCase();
+    const visibleActivities = activities
+      .filter((activity) => !deletedActivityIds.has(activity.id))
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+    if (!normalizedQuery) {
+      return visibleActivities;
+    }
+    return visibleActivities.filter((activity) => {
+      const details = parseActivityDetails(activity.body);
+      const linkedRecord = records.find((record) => record.id === activity.recordId);
+      const owner = props.users.find((user) => user.id === activity.actorId);
+      return [formatActivityType(activity.type), activityTimelineTitle(activity), activity.title, details.text, linkedRecord?.title, owner?.name, owner?.email]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedQuery));
+    });
+  }, [activities, activityQuery, deletedActivityIds, props.users, records]);
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
   const currencies = useMemo(() => getCurrencyDefinitions(currencyRecords), [currencyRecords]);
@@ -3178,6 +3334,59 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  async function requestStandaloneTaskCreate() {
+    const title = await requestPrompt({
+      title: "新建任务",
+      message: "创建一个未排期任务，之后可在任务详情或日历中补充截止时间。",
+      placeholder: "输入任务标题",
+      confirmLabel: "创建任务"
+    });
+    const trimmedTitle = title?.trim();
+    if (!trimmedTitle) {
+      return;
+    }
+    await createTaskFromCalendar({ title: trimmedTitle });
+  }
+
+  async function requestStandaloneActivityCreate() {
+    const title = await requestPrompt({
+      title: "新建活动",
+      message: "创建一条通用活动记录，可在后续关联到联系人、公司或交易。",
+      placeholder: "输入活动标题",
+      confirmLabel: "创建活动"
+    });
+    const trimmedTitle = title?.trim();
+    if (!trimmedTitle) {
+      return;
+    }
+    const created = await fetchJson<Activity>("/api/activities", {
+      method: "POST",
+      body: {
+        type: "note",
+        title: trimmedTitle
+      }
+    });
+    setActivities((current) => mergeActivities(current, [created]));
+    showSuccess(`已创建活动：${created.title}`);
+    router.refresh();
+  }
+
+  function exportStandaloneActivitiesCsv(kind: StandaloneModuleKey) {
+    const sourceActivities = kind === "tasks" ? filteredTaskActivities : filteredActivities;
+    const csv = buildActivitiesCsv(sourceActivities, records, props.users);
+    downloadTextFile(`${kind}-export.csv`, csv, "text/csv;charset=utf-8");
+    setModuleActionsOpen(false);
+    showSuccess(`已导出${kind === "tasks" ? "任务" : "活动"} CSV`);
+  }
+
+  function showStandaloneImportNotice(kind: StandaloneModuleKey) {
+    setModuleActionsOpen(false);
+    showToast({
+      intent: "info",
+      message: `${kind === "tasks" ? "任务" : "活动"}导入将使用专用字段映射流程，当前版本请先通过对应记录详情添加。`
+    });
+  }
+
   async function closeDeal(record: CrmRecord, outcome: "won" | "lost") {
     if (
       outcome === "lost" &&
@@ -4319,6 +4528,46 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               onToggleAppSidebar={toggleAppSidebar}
               onToggleModuleActions={() => setModuleActionsOpen((current) => !current)}
               onToggleQuickAdd={() => setQuickAddMenuOpen((current) => !current)}
+              onToggleTheme={toggleAppTheme}
+            />
+          ) : activeNav === "tasks" ? (
+            <StandaloneModuleHeader
+              appSidebarCollapsed={appSidebarCollapsed}
+              appTheme={appTheme}
+              createLabel="任务"
+              isRouteRefreshing={isRouteRefreshing || isRouteRefreshPending}
+              moduleActionsOpen={moduleActionsOpen}
+              moduleKey="tasks"
+              moduleTitle="任务"
+              query={taskQuery}
+              taskView={taskWorkspaceView}
+              onChangeTaskView={setTaskWorkspaceView}
+              onCreate={() => { void runAction(requestStandaloneTaskCreate); }}
+              onExport={() => exportStandaloneActivitiesCsv("tasks")}
+              onImport={() => showStandaloneImportNotice("tasks")}
+              onQueryChange={setTaskQuery}
+              onRefresh={refreshRoute}
+              onToggleAppSidebar={toggleAppSidebar}
+              onToggleModuleActions={() => setModuleActionsOpen((current) => !current)}
+              onToggleTheme={toggleAppTheme}
+            />
+          ) : activeNav === "activities" ? (
+            <StandaloneModuleHeader
+              appSidebarCollapsed={appSidebarCollapsed}
+              appTheme={appTheme}
+              createLabel="活动"
+              isRouteRefreshing={isRouteRefreshing || isRouteRefreshPending}
+              moduleActionsOpen={moduleActionsOpen}
+              moduleKey="activities"
+              moduleTitle="活动"
+              query={activityQuery}
+              onCreate={() => { void runAction(requestStandaloneActivityCreate); }}
+              onExport={() => exportStandaloneActivitiesCsv("activities")}
+              onImport={() => showStandaloneImportNotice("activities")}
+              onQueryChange={setActivityQuery}
+              onRefresh={refreshRoute}
+              onToggleAppSidebar={toggleAppSidebar}
+              onToggleModuleActions={() => setModuleActionsOpen((current) => !current)}
               onToggleTheme={toggleAppTheme}
             />
           ) : (
@@ -5670,10 +5919,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
         {activeNav === "tasks" && (
           <TaskView
-            activities={taskActivities}
+            activities={filteredTaskActivities}
             mediaAssets={mediaAssets}
             pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
             users={props.users}
+            view={taskWorkspaceView}
             onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
             onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
             onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
@@ -5686,7 +5936,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
         {activeNav === "activities" && (
           <ActivityTimeline
-            activities={activities}
+            activities={filteredActivities}
             mediaAssets={mediaAssets}
             pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
             records={records}
@@ -10160,6 +10410,7 @@ function TaskView({
   mediaAssets,
   pendingDeleteRequestsById,
   users,
+  view,
   onToggle,
   onArchive,
   onDelete,
@@ -10173,6 +10424,7 @@ function TaskView({
   mediaAssets: MediaAsset[];
   pendingDeleteRequestsById: Map<string, RecordChangeRequest>;
   users: User[];
+  view: TaskCalendarView;
   onToggle: (activity: Activity, completed: boolean) => void;
   onArchive: (activity: Activity, archived: boolean) => void;
   onDelete: (activity: Activity) => void;
@@ -10183,7 +10435,6 @@ function TaskView({
   onShowToast: (toast: ToastState) => void;
 }) {
   const [status, setStatus] = useState<"todo" | "completed" | "archived">("todo");
-  const [view, setView] = useState<TaskCalendarView>("list");
   const [calendarCursor, setCalendarCursor] = useState(() => startOfCalendarDay(new Date()));
   const [editingTask, setEditingTask] = useState<Activity | null>(null);
   const [editDraft, setEditDraft] = useState<TaskEditDraft>(() => createTaskEditDraft(null));
@@ -10276,29 +10527,15 @@ function TaskView({
 
   return (
     <section className="section">
-      <div className="section-header task-view-header">
+      <div className="section-header task-view-header compact">
         <div>
-          <h2 className="page-title">任务</h2>
           <p className="subtle">按待办、已完成、归档管理销售跟进事项，也可以在日历中按日期和时间直接创建任务。</p>
         </div>
-        <div className="toolbar" role="group" aria-label="任务视图">
+        <div className="toolbar" role="group" aria-label="任务快捷操作">
           <button className="primary-button" data-testid="task-create-from-list" type="button" onClick={requestTaskWithoutDate}>
             <CheckCircle2 size={16} />
             新建任务
           </button>
-          {(["list", "month", "week", "day"] as TaskCalendarView[]).map((mode) => (
-            <button
-              aria-pressed={view === mode}
-              className={view === mode ? "primary-button" : "secondary-button"}
-              data-testid={`task-view-${mode}`}
-              key={mode}
-              type="button"
-              onClick={() => setView(mode)}
-            >
-              {mode === "list" ? <List size={16} /> : <CalendarClock size={16} />}
-              {taskViewLabel(mode)}
-            </button>
-          ))}
         </div>
       </div>
       <div className="toolbar" style={{ marginTop: 12 }}>
@@ -10920,6 +11157,45 @@ function formatTaskCalendarTime(value?: string): string {
 
 function formatCalendarDateTime(date: Date): string {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function buildActivitiesCsv(activities: Activity[], records: CrmRecord[], users: User[]): string {
+  const headers = ["id", "type", "title", "body", "record", "owner", "dueAt", "completedAt", "archivedAt", "createdAt"];
+  const rows = activities.map((activity) => {
+    const details = activity.type === "task" ? parseTaskDetails(activity.body) : parseActivityDetails(activity.body);
+    const record = records.find((candidate) => candidate.id === activity.recordId);
+    const owner = users.find((candidate) => candidate.id === activity.actorId);
+    return [
+      activity.id,
+      formatActivityType(activity.type),
+      activity.title,
+      details.text,
+      record?.title ?? "",
+      owner ? `${owner.name} <${owner.email}>` : "",
+      activity.dueAt ?? "",
+      activity.completedAt ?? "",
+      activity.archivedAt ?? "",
+      activity.createdAt
+    ];
+  });
+  return [headers, ...rows].map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+}
+
+function escapeCsvCell(value: unknown): string {
+  const text = String(value ?? "");
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadTextFile(filename: string, text: string, contentType = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: contentType });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 function ActivityTimeline({
