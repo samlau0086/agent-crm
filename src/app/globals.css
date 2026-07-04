@@ -3504,6 +3504,53 @@ body.deal-pipeline-dragging {
   margin-top: 10px;
 }
 
+.email-preference-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.email-preference-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferred-window-editor {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.preferred-window-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.segmented-button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.segmented-button.active {
+  border-color: var(--accent);
+  background: #ccfbf1;
+  color: var(--accent-strong);
+}
+
 .checkbox-label {
   display: inline-flex;
   align-items: center;

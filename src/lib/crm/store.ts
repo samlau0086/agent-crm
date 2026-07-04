@@ -1037,7 +1037,7 @@ export class CrmStore {
   recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
         recordId?: string;
         skipAutoLink?: boolean;
       }
@@ -1091,6 +1091,7 @@ export class CrmStore {
     if (input.aiAssisted && settings.requireSourceLinks && aiSources.length === 0) {
       throw new Error("AI assisted email requires at least one visible source");
     }
+    const translatedSources = input.translatedSources ? this.assertVisibleEmailAiSources(context, input.translatedSources) : [];
     const trackingEnabled = input.direction === "outbound" && input.trackingEnabled === true;
     const trackingId = trackingEnabled ? input.trackingId?.trim() || createEmailTrackingId() : undefined;
     const message: EmailMessage = {
@@ -1108,6 +1109,10 @@ export class CrmStore {
       bodyText: normalizeRequiredText(input.bodyText, "Email body"),
       bodyHtml: trackingEnabled ? appendEmailTrackingHtml(input.bodyHtml, trackingId!) : input.bodyHtml,
       attachments: normalizeEmailAttachments(input.attachments),
+      translatedBodyText: input.translatedBodyText?.trim() || undefined,
+      translatedLocale: input.translatedLocale?.trim() || undefined,
+      translatedSources: translatedSources.length ? translatedSources : undefined,
+      translatedAt: input.translatedAt,
       aiAssisted: input.aiAssisted || undefined,
       aiPurpose: input.aiPurpose,
       aiSourceMessageId,
@@ -1162,7 +1167,7 @@ export class CrmStore {
   queueEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
   ): EmailMessage {
     requirePermission(context, "crm.write");
     const account = this.assertEmailAccount(context, input.accountId);

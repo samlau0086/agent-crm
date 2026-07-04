@@ -50,6 +50,7 @@ import {
   workflowCreateSchema
 } from "../src/lib/crm/api-schemas.ts";
 import { defaultWorkspaceId, seedData } from "../src/lib/crm/seed.ts";
+import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "../src/lib/crm/languages.ts";
 import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
 import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, getDefaultOutboundService, getInboundConnectionConfig, normalizeEmailConnectionConfig } from "../src/lib/email/connection-config.ts";
@@ -3145,6 +3146,49 @@ await run("contact and company country fields use searchable sovereign country o
   assert.match(migration, /'country', '国家\/地区', 'text'/);
   assert.match(migration, /ARRAY\['title', 'email', 'phone', 'companyId', 'country', 'birthday', 'gender'\]/);
   assert.match(migration, /ARRAY\['title', 'domain', 'industry', 'country', 'billingAddresses', 'shippingAddresses'\]/);
+});
+
+await run("contact and company communication preferences drive compose translation and scheduling", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const languages = readFileSync("src/lib/crm/languages.ts", "utf8");
+  const seed = readFileSync("src/lib/crm/seed.ts", "utf8");
+  const migration = readFileSync("prisma/migrations/20260704120000_contact_company_preferences/migration.sql", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.equal(getCountryOfficialLanguage("China"), "zh-CN");
+  assert.equal(getCountryOfficialLanguage("US"), "en");
+  assert.equal(getLanguageLabel("zh-CN"), "Chinese (Simplified)");
+  assert.equal(getLanguageSelectOptions().some((option) => option.value === "es" && option.label.includes("Spanish")), true);
+  assert.match(languages, /export const languageOptions/);
+  assert.match(languages, /officialLanguageByCountryCode/);
+  assert.match(languages, /resolveCountry\(country\)/);
+
+  assert.match(seed, /objectKey: "contacts", key: "preferredLanguage"/);
+  assert.match(seed, /objectKey: "contacts", key: "preferredContactWindow"/);
+  assert.match(seed, /objectKey: "companies", key: "preferredLanguage"/);
+  assert.match(seed, /objectKey: "companies", key: "preferredContactWindow"/);
+  assert.match(seed, /preferredLanguage: "zh-CN"/);
+  assert.match(seed, /preferredContactWindow: \{ timezone: "Asia\/Shanghai", daysOfWeek: \[1, 2, 3, 4, 5\], startTime: "09:00", endTime: "18:00" \}/);
+  assert.match(migration, /'preferredLanguage'/);
+  assert.match(migration, /'preferredContactWindow'/);
+  assert.match(migration, /jsonb_set\("data", '\{preferredLanguage\}', '"zh-CN"', true\)/);
+
+  assert.match(source, /function LanguageSearchInput/);
+  assert.match(source, /function PreferredContactWindowInput/);
+  assert.match(source, /isPreferredLanguageField\(field\)/);
+  assert.match(source, /isPreferredContactWindowField\(field\)/);
+  assert.match(source, /getLanguageSelectOptions\(\)/);
+  assert.match(source, /data-testid="email-compose-auto-translate"/);
+  assert.match(source, /data-testid="email-compose-preferred-time"/);
+  assert.match(source, /data-testid="email-compose-preference-preview"/);
+  assert.match(source, /computeNextPreferredSendAt/);
+  assert.match(source, /buildPreferenceAwareDrafts/);
+  assert.match(source, /purpose: "translate"/);
+  assert.match(source, /targetLocale: preference\.language/);
+  assert.match(source, /translatedBodyText: translatedText/);
+  assert.match(source, /scheduledSendAt: sendAt/);
+  assert.match(styles, /\.email-preference-preview/);
+  assert.match(styles, /\.preferred-window-editor/);
 });
 
 await run("contact detail uses a social profile layout instead of a flat form", () => {
@@ -11440,6 +11484,19 @@ await run("email send sync and ai schemas validate bounded payloads", () => {
     }).attachments?.[0]?.providerMessageId,
     "provider-message-id"
   );
+  const translatedSend = emailSendSchema.parse({
+    accountId: "email-account",
+    to: ["buyer@example.com"],
+    subject: "Translated follow-up",
+    bodyText: "Original body",
+    translatedBodyText: "Translated body",
+    translatedLocale: "zh-CN",
+    translatedSources: [{ label: "Recipient preference", recordId: "contact-lin" }],
+    translatedAt: "2026-07-04T09:00:00.000Z"
+  });
+  assert.equal(translatedSend.translatedBodyText, "Translated body");
+  assert.equal(translatedSend.translatedLocale, "zh-CN");
+  assert.equal(translatedSend.translatedSources?.[0]?.recordId, "contact-lin");
   const aiProvenance = emailSendSchema.parse({
     accountId: "email-account",
     to: ["buyer@example.com"],

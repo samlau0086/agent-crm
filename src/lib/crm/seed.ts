@@ -149,12 +149,16 @@ export const seedData: CrmSnapshot = {
     { id: "field-contact-country", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "country", label: "国家/地区", type: "text", required: false, unique: false, isSystem: true, position: 6 },
     { id: "field-contact-address", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "address", label: "地址", type: "textarea", required: false, unique: false, isSystem: true, position: 7 },
     { id: "field-contact-avatar", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "avatarUrl", label: "头像 URL", type: "text", required: false, unique: false, isSystem: true, position: 8 },
+    { id: "field-contact-preferred-language", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "preferredLanguage", label: "偏好语言", type: "text", required: false, unique: false, isSystem: true, position: 9 },
+    { id: "field-contact-preferred-contact-window", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "preferredContactWindow", label: "偏好沟通时段", type: "textarea", required: false, unique: false, isSystem: true, position: 10 },
     { id: "field-company-domain", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "domain", label: "域名", type: "text", required: true, unique: true, isSystem: true, position: 1 },
     { id: "field-company-industry", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "industry", label: "行业", type: "select", required: false, unique: false, options: [{ label: "软件", value: "software" }, { label: "制造", value: "manufacturing" }, { label: "金融", value: "finance" }], isSystem: true, position: 2 },
     { id: "field-company-country", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "country", label: "国家/地区", type: "text", required: false, unique: false, isSystem: true, position: 3 },
     { id: "field-company-billing-addresses", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "billingAddresses", label: "Billing addresses", type: "textarea", required: false, unique: false, isSystem: true, position: 4 },
     { id: "field-company-shipping-addresses", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "shippingAddresses", label: "Shipping addresses", type: "textarea", required: false, unique: false, isSystem: true, position: 5 },
     { id: "field-company-logo", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "logoUrl", label: "Logo URL", type: "text", required: false, unique: false, isSystem: true, position: 6 },
+    { id: "field-company-preferred-language", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "preferredLanguage", label: "偏好语言", type: "text", required: false, unique: false, isSystem: true, position: 7 },
+    { id: "field-company-preferred-contact-window", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "preferredContactWindow", label: "偏好沟通时段", type: "textarea", required: false, unique: false, isSystem: true, position: 8 },
     { id: "field-deal-amount", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "amount", label: "金额", type: "currency", required: true, unique: false, isSystem: true, position: 1 },
     { id: "field-deal-close-date", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "closeDate", label: "预计成交日", type: "date", required: false, unique: false, isSystem: true, position: 2 },
     { id: "field-deal-company", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "companyId", label: "关联公司", type: "reference", required: false, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 3 },
@@ -227,7 +231,14 @@ export const seedData: CrmSnapshot = {
       objectKey: "companies",
       title: "Acme China",
       ownerId: salesUserId,
-      data: { domain: "acme.example", industry: "software", country: "China", annualRevenue: 12000000 },
+      data: {
+        domain: "acme.example",
+        industry: "software",
+        country: "China",
+        annualRevenue: 12000000,
+        preferredLanguage: "zh-CN",
+        preferredContactWindow: { timezone: "Asia/Shanghai", daysOfWeek: [1, 2, 3, 4, 5], startTime: "09:00", endTime: "18:00" }
+      },
       createdAt: now,
       updatedAt: now
     },
@@ -237,7 +248,14 @@ export const seedData: CrmSnapshot = {
       objectKey: "contacts",
       title: "林晓",
       ownerId: salesUserId,
-      data: { email: "lin@example.com", phone: "+86 138 0000 0000", companyId: "company-acme", country: "China" },
+      data: {
+        email: "lin@example.com",
+        phone: "+86 138 0000 0000",
+        companyId: "company-acme",
+        country: "China",
+        preferredLanguage: "zh-CN",
+        preferredContactWindow: { timezone: "Asia/Shanghai", daysOfWeek: [1, 2, 3, 4, 5], startTime: "09:00", endTime: "18:00" }
+      },
       createdAt: now,
       updatedAt: now
     },

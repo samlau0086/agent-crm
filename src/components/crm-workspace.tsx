@@ -77,6 +77,7 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
+import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "@/lib/crm/languages";
 import { SettingsAdmin } from "@/components/settings-admin";
 import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
@@ -355,6 +356,44 @@ type EmailComposeDraft = EmailComposeReplyDraft & {
   scheduledSendAt?: string;
   trackingEnabled?: boolean;
   groupSendMode?: boolean;
+  autoTranslateEnabled?: boolean;
+  preferredTimeSendEnabled?: boolean;
+  translatedBodyText?: string;
+  translatedLocale?: string;
+  translatedSources?: EmailAiSource[];
+  translatedAt?: string;
+};
+type PreferredContactWindow = {
+  timezone: string;
+  daysOfWeek: number[];
+  startTime: string;
+  endTime: string;
+};
+type RecipientPreferenceResolution = {
+  email: string;
+  language: string;
+  languageLabel: string;
+  languageSourceLabel: string;
+  contactWindow?: PreferredContactWindow;
+  contactWindowLabel?: string;
+  contact?: CrmRecord;
+  company?: CrmRecord;
+  scheduledSendAt?: string;
+};
+const preferredContactDayOptions = [
+  { label: "周一", value: 1 },
+  { label: "周二", value: 2 },
+  { label: "周三", value: 3 },
+  { label: "周四", value: 4 },
+  { label: "周五", value: 5 },
+  { label: "周六", value: 6 },
+  { label: "周日", value: 0 }
+];
+const defaultPreferredContactWindow: PreferredContactWindow = {
+  timezone: "Asia/Shanghai",
+  daysOfWeek: [1, 2, 3, 4, 5],
+  startTime: "09:00",
+  endTime: "18:00"
 };
 type EmailSignatureOption = {
   id: string;
@@ -1668,6 +1707,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     scheduledSendAt: "",
     trackingEnabled: false,
     groupSendMode: false,
+    autoTranslateEnabled: false,
+    preferredTimeSendEnabled: false,
     aiAssisted: false
   });
   const [emailAiPurpose, setEmailAiPurpose] = useState<"draft" | "translate" | "context_analysis" | "summarize">("draft");
@@ -3987,7 +4028,53 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return true;
   }
 
-  async function sendEmail() {
+  function resolveRecipientPreferences(email: string): RecipientPreferenceResolution {
+    return resolveRecipientPreferenceFromRecords(email, records, emailDraft.recordId, selectedRecord);
+  }
+
+  async function translateEmailDraftForRecipient(draft: EmailComposeDraft, preference: RecipientPreferenceResolution): Promise<EmailComposeDraft> {
+    if (!draft.autoTranslateEnabled) {
+      return draft;
+    }
+    if (!emailAiSettings.features.translate) {
+      throw new Error("自动翻译功能已关闭，请先在邮件 AI 设置中启用翻译。");
+    }
+    const sourceText = getDraftBodyText(draft).trim();
+    if (!sourceText) {
+      return draft;
+    }
+    const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
+      method: "POST",
+      body: {
+        purpose: "translate",
+        threadId: draft.threadId || selectedEmailThreadId || undefined,
+        recordId: preference.contact?.id ?? preference.company?.id ?? draft.recordId ?? selectedRecord?.id,
+        sourceText,
+        targetLocale: preference.language,
+        userPrompt: `Translate only the email body into ${preference.languageLabel}. Do not translate or include the signature. Do not include source notes, explanations, or quoted original email content. Return only the translated body.`
+      }
+    });
+    const translatedText = result.text.trim();
+    if (!result.enabled || result.generationMode !== "provider" || !translatedText) {
+      throw new Error(`自动翻译 ${preference.email} 失败，请检查 email_translation Agent 和 AI Provider 配置。`);
+    }
+    return {
+      ...draft,
+      bodyText: translatedText,
+      bodyHtml: emailTextToHtml(translatedText),
+      aiAssisted: true,
+      aiPurpose: "translate",
+      aiSourceMessageId: result.sourceMessageId,
+      aiSources: result.sources,
+      aiGeneratedAt: new Date().toISOString(),
+      translatedBodyText: translatedText,
+      translatedLocale: preference.language,
+      translatedSources: result.sources,
+      translatedAt: new Date().toISOString()
+    };
+  }
+
+  async function sendSingleEmailDraft(emailDraft: EmailComposeDraft): Promise<EmailMessage[]> {
     const preparedDraft = prepareEmailDraftForSend(emailDraft, emailSignatures, emailAccounts);
     const result = await fetchJson<EmailMessage | { messages: EmailMessage[] }>("/api/email/send", {
       method: "POST",
@@ -4011,10 +4098,47 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         aiPurpose: emailDraft.aiAssisted ? emailDraft.aiPurpose : undefined,
         aiSourceMessageId: emailDraft.aiAssisted ? emailDraft.aiSourceMessageId : undefined,
         aiSources: emailDraft.aiAssisted ? emailDraft.aiSources : undefined,
-        aiGeneratedAt: emailDraft.aiAssisted ? emailDraft.aiGeneratedAt : undefined
+        aiGeneratedAt: emailDraft.aiAssisted ? emailDraft.aiGeneratedAt : undefined,
+        translatedBodyText: emailDraft.translatedBodyText || undefined,
+        translatedLocale: emailDraft.translatedLocale || undefined,
+        translatedSources: emailDraft.translatedSources?.length ? emailDraft.translatedSources : undefined,
+        translatedAt: emailDraft.translatedAt || undefined
       }
     });
     const messages = "messages" in result ? result.messages : [result];
+    return messages;
+  }
+
+  async function buildPreferenceAwareDrafts(): Promise<EmailComposeDraft[]> {
+    const recipients = splitEmailList(emailDraft.to);
+    const shouldSplitByRecipient = Boolean(emailDraft.autoTranslateEnabled || emailDraft.preferredTimeSendEnabled);
+    if (!shouldSplitByRecipient) {
+      return [emailDraft];
+    }
+    const drafts: EmailComposeDraft[] = [];
+    for (const [index, recipient] of recipients.entries()) {
+      const preference = resolveRecipientPreferences(recipient);
+      const sendAt = emailDraft.preferredTimeSendEnabled
+        ? preference.scheduledSendAt ?? emailDraft.scheduledSendAt ?? ""
+        : emailDraft.scheduledSendAt ?? "";
+      const recipientDraft = await translateEmailDraftForRecipient(
+        {
+          ...emailDraft,
+          to: recipient,
+          clientRequestId: `${emailDraft.clientRequestId}:pref${index}`,
+          scheduledSendAt: sendAt,
+          groupSendMode: recipients.length > 1 || emailDraft.groupSendMode
+        },
+        preference
+      );
+      drafts.push(recipientDraft);
+    }
+    return drafts;
+  }
+
+  async function sendEmail() {
+    const drafts = await buildPreferenceAwareDrafts();
+    const messages = (await Promise.all(drafts.map((draft) => sendSingleEmailDraft(draft)))).flat();
     const message = messages[0];
     const sentThreadIds = Array.from(new Set(messages.map((item) => item.threadId).filter(Boolean)));
     setEmailMessagesByThread((current) => {
@@ -4046,14 +4170,30 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       scheduledSendAt: "",
       trackingEnabled: false,
       groupSendMode: false,
+      autoTranslateEnabled: false,
+      preferredTimeSendEnabled: false,
       aiAssisted: false,
       aiPurpose: undefined,
       aiSourceMessageId: undefined,
       aiSources: undefined,
-      aiGeneratedAt: undefined
+      aiGeneratedAt: undefined,
+      translatedBodyText: undefined,
+      translatedLocale: undefined,
+      translatedSources: undefined,
+      translatedAt: undefined
     }));
     setMessage(messages.length > 1 ? `已创建 ${messages.length} 封单显邮件${message.scheduledSendAt ? `，将在 ${formatDate(message.scheduledSendAt)} 发送` : ""}` : formatEmailSendResultMessage(message));
     router.refresh();
+  }
+
+  async function sendEmailFromCompose(): Promise<boolean> {
+    try {
+      await sendEmail();
+      return true;
+    } catch (error) {
+      showError(error instanceof Error ? error.message : "发送邮件失败");
+      return false;
+    }
   }
 
   async function retryEmailMessage(messageId: string) {
@@ -6128,7 +6268,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onEditSignature={(signature) => setEmailSignatureDraft(createEmailSignatureEditDraft(signature))}
             onDeleteSignature={(signature) => runAction(() => deleteEmailSignature(signature))}
             onResetSignatureDraft={() => setEmailSignatureDraft(createEmptyEmailSignatureDraft())}
-            onSend={() => runAction(sendEmail)}
+            onSend={sendEmailFromCompose}
             onReplyToMessage={replyToEmailMessage}
             onRetryMessage={(messageId) => runAction(() => retryEmailMessage(messageId))}
             onGenerateAiForMessage={(message, purpose) => runAction(() => generateEmailAiForMessage(message, purpose))}
@@ -7509,7 +7649,7 @@ function EmailWorkspace({
   onEditSignature: (signature: EmailSignature) => void;
   onDeleteSignature: (signature: EmailSignature) => void;
   onResetSignatureDraft: () => void;
-  onSend: () => void;
+  onSend: () => Promise<boolean>;
   onReplyToMessage: (message: EmailMessage) => void;
   onRetryMessage: (messageId: string) => void;
   onGenerateAiForMessage: (message: EmailMessage, purpose: "translate" | "context_analysis") => void;
@@ -7613,6 +7753,13 @@ function EmailWorkspace({
   const signatureOptions = useMemo(() => getEmailSignatureOptions(signatures, accounts, emailDraft.accountId), [accounts, emailDraft.accountId, signatures]);
   const selectedSignature = getSelectedEmailSignature(emailDraft, signatures, accounts);
   const draftEditorHtml = getDraftBodyHtml(emailDraft);
+  const recipientPreferencePreview = useMemo(
+    () =>
+      splitEmailList(emailDraft.to).map((email) =>
+        resolveRecipientPreferenceFromRecords(email, records, emailDraft.recordId, selectedRecord)
+      ),
+    [emailDraft.recordId, emailDraft.to, records, selectedRecord]
+  );
   const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
     onUpdateAiSettings({
       agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
@@ -8029,9 +8176,11 @@ function EmailWorkspace({
     onComposeClosed();
   }
 
-  function sendEmailFromPopup() {
-    onSend();
-    closeComposePopup();
+  async function sendEmailFromPopup() {
+    const sent = await onSend();
+    if (sent) {
+      closeComposePopup();
+    }
   }
 
   function updateComposeBodyFromEditor() {
@@ -9847,8 +9996,46 @@ function EmailWorkspace({
                     />
                     跟踪打开/点击
                   </label>
+                  <label className="checkbox-label">
+                    <input
+                      data-testid="email-compose-auto-translate"
+                      type="checkbox"
+                      checked={Boolean(emailDraft.autoTranslateEnabled)}
+                      onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, autoTranslateEnabled: event.target.checked }))}
+                    />
+                    自动翻译正文
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      data-testid="email-compose-preferred-time"
+                      type="checkbox"
+                      checked={Boolean(emailDraft.preferredTimeSendEnabled)}
+                      onChange={(event) => onEmailDraftChange({ ...emailDraft, preferredTimeSendEnabled: event.target.checked })}
+                    />
+                    按偏好时段发送
+                  </label>
                   {emailDraft.scheduledSendAt ? <span className="badge"><CalendarClock size={12} /> 将在 {formatDate(emailDraft.scheduledSendAt)} 发送</span> : null}
                 </div>
+                {(emailDraft.autoTranslateEnabled || emailDraft.preferredTimeSendEnabled) && recipientPreferencePreview.length ? (
+                  <div className="email-preference-preview" data-testid="email-compose-preference-preview">
+                    <strong>收件人偏好预览</strong>
+                    {recipientPreferencePreview.map((preference) => (
+                      <div className="email-preference-preview-row" key={preference.email}>
+                        <span>{preference.email}</span>
+                        {emailDraft.autoTranslateEnabled ? (
+                          <span className="badge">{preference.languageLabel} · {preference.languageSourceLabel}</span>
+                        ) : null}
+                        {emailDraft.preferredTimeSendEnabled ? (
+                          <span className={preference.scheduledSendAt ? "badge" : "danger-badge"}>
+                            <CalendarClock size={12} />
+                            {preference.scheduledSendAt ? formatDate(preference.scheduledSendAt) : "未配置偏好时段"}
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                    <span className="subtle">开启偏好能力后，多收件人会拆分成独立邮件；签名和原邮件引用不会参与正文翻译。</span>
+                  </div>
+                ) : null}
                 <div className="email-compose-ai-bar">
                   <Bot size={16} />
                   <input className="input" data-testid="email-compose-ai-prompt" value={composeAiPrompt} onChange={(event) => setComposeAiPrompt(event.target.value)} placeholder="告诉 AI 这封邮件要表达什么，例如：礼貌跟进报价并约下周会议" />
@@ -13667,6 +13854,14 @@ function FieldInput({
     return <CountrySearchInput label={field.label} testId={testId} value={value} onChange={onChange} />;
   }
 
+  if (isPreferredLanguageField(field)) {
+    return <LanguageSearchInput label={field.label} testId={testId} value={value} onChange={onChange} />;
+  }
+
+  if (isPreferredContactWindowField(field)) {
+    return <PreferredContactWindowInput label={field.label} testId={testId} value={value} onChange={onChange} />;
+  }
+
   if (field.type === "textarea") {
     return (
       <label className="wide">
@@ -13752,6 +13947,12 @@ function formatEditableFieldValue(field: FieldDefinition, value: string, allReco
   }
   if (isCountryField(field)) {
     return getCountryLabel(value);
+  }
+  if (isPreferredLanguageField(field)) {
+    return getLanguageLabel(value) || value;
+  }
+  if (isPreferredContactWindowField(field)) {
+    return formatPreferredContactWindow(value) || "未设置";
   }
   if (field.type === "boolean") {
     return value === "true" ? "是" : "否";
@@ -14033,6 +14234,85 @@ function CountrySearchInput({
       value={value}
       onChange={onChange}
     />
+  );
+}
+
+function LanguageSearchInput({
+  label,
+  testId,
+  value,
+  onChange
+}: {
+  label: string;
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <SelectSearchInput
+      label={label}
+      options={getLanguageSelectOptions()}
+      testId={testId}
+      value={value}
+      onChange={onChange}
+    />
+  );
+}
+
+function PreferredContactWindowInput({
+  label,
+  testId,
+  value,
+  onChange
+}: {
+  label: string;
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const windowValue = normalizePreferredContactWindow(value) ?? defaultPreferredContactWindow;
+  function updateWindow(patch: Partial<PreferredContactWindow>) {
+    const next = normalizePreferredContactWindow({ ...windowValue, ...patch }) ?? defaultPreferredContactWindow;
+    onChange(JSON.stringify(next));
+  }
+
+  return (
+    <div className="preferred-window-editor wide" data-testid={testId}>
+      <span className="subtle">{label}</span>
+      <label>
+        <span className="subtle">时区</span>
+        <input className="input" value={windowValue.timezone} onChange={(event) => updateWindow({ timezone: event.target.value })} placeholder="Asia/Shanghai" />
+      </label>
+      <div className="form-grid two">
+        <label>
+          <span className="subtle">开始时间</span>
+          <input className="input" type="time" value={windowValue.startTime} onChange={(event) => updateWindow({ startTime: event.target.value })} />
+        </label>
+        <label>
+          <span className="subtle">结束时间</span>
+          <input className="input" type="time" value={windowValue.endTime} onChange={(event) => updateWindow({ endTime: event.target.value })} />
+        </label>
+      </div>
+      <div className="preferred-window-days">
+        {preferredContactDayOptions.map((day) => {
+          const selected = windowValue.daysOfWeek.includes(day.value);
+          return (
+            <button
+              className={selected ? "segmented-button active" : "segmented-button"}
+              key={day.value}
+              type="button"
+              onClick={() => {
+                const nextDays = selected ? windowValue.daysOfWeek.filter((value) => value !== day.value) : [...windowValue.daysOfWeek, day.value];
+                updateWindow({ daysOfWeek: nextDays.length ? nextDays : [day.value] });
+              }}
+            >
+              {day.label}
+            </button>
+          );
+        })}
+      </div>
+      <span className="subtle">{formatPreferredContactWindow(windowValue)}</span>
+    </div>
   );
 }
 
@@ -17034,9 +17314,147 @@ function toInputValue(value: unknown): string {
   return String(value);
 }
 
+function normalizePreferredContactWindow(value: unknown): PreferredContactWindow | undefined {
+  const raw = typeof value === "string"
+    ? (() => {
+        try {
+          return JSON.parse(value) as unknown;
+        } catch {
+          return undefined;
+        }
+      })()
+    : value;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const candidate = raw as Partial<PreferredContactWindow>;
+  const timezone = typeof candidate.timezone === "string" && candidate.timezone.trim() ? candidate.timezone.trim() : defaultPreferredContactWindow.timezone;
+  const startTime = normalizePreferredTime(candidate.startTime) ?? defaultPreferredContactWindow.startTime;
+  const endTime = normalizePreferredTime(candidate.endTime) ?? defaultPreferredContactWindow.endTime;
+  const daysOfWeek = Array.isArray(candidate.daysOfWeek)
+    ? Array.from(new Set(candidate.daysOfWeek.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)))
+    : defaultPreferredContactWindow.daysOfWeek;
+  if (!daysOfWeek.length) {
+    return undefined;
+  }
+  return { timezone, daysOfWeek, startTime, endTime };
+}
+
+function normalizePreferredTime(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = value.trim().match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  return match ? `${match[1]}:${match[2]}` : undefined;
+}
+
+function formatPreferredContactWindow(value: unknown): string {
+  const window = normalizePreferredContactWindow(value);
+  if (!window) {
+    return "";
+  }
+  const days = preferredContactDayOptions.filter((day) => window.daysOfWeek.includes(day.value)).map((day) => day.label).join("、");
+  return `${days || "未选星期"} ${window.startTime}-${window.endTime} · ${window.timezone}`;
+}
+
+function preferredContactWindowToInputValue(value: unknown): string {
+  const window = normalizePreferredContactWindow(value);
+  return window ? JSON.stringify(window) : "";
+}
+
+function minutesFromPreferredTime(time: string): number {
+  const [hours, minutes] = time.split(":").map((part) => Number(part));
+  return hours * 60 + minutes;
+}
+
+function getTimeZoneDateParts(date: Date, timezone: string): { day: number; minutes: number } {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: timezone,
+      weekday: "short"
+    }).formatToParts(date);
+    const weekday = parts.find((part) => part.type === "weekday")?.value ?? "Sun";
+    const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+    const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+    const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    return { day: dayMap[weekday] ?? date.getUTCDay(), minutes: hour * 60 + minute };
+  } catch {
+    return { day: date.getDay(), minutes: date.getHours() * 60 + date.getMinutes() };
+  }
+}
+
+function isDateInPreferredContactWindow(date: Date, window: PreferredContactWindow): boolean {
+  const parts = getTimeZoneDateParts(date, window.timezone);
+  const start = minutesFromPreferredTime(window.startTime);
+  const end = minutesFromPreferredTime(window.endTime);
+  return window.daysOfWeek.includes(parts.day) && parts.minutes >= start && parts.minutes < end;
+}
+
+function computeNextPreferredSendAt(window?: PreferredContactWindow): string | undefined {
+  if (!window) {
+    return undefined;
+  }
+  const minDelayMs = 5 * 60 * 1000;
+  const firstCandidate = new Date(Date.now() + minDelayMs);
+  if (isDateInPreferredContactWindow(firstCandidate, window)) {
+    return firstCandidate.toISOString();
+  }
+  const stepMs = 5 * 60 * 1000;
+  const maxMs = 21 * 24 * 60 * 60 * 1000;
+  const startAt = Math.ceil(firstCandidate.getTime() / stepMs) * stepMs;
+  for (let offset = 0; offset <= maxMs; offset += stepMs) {
+    const candidate = new Date(startAt + offset);
+    if (isDateInPreferredContactWindow(candidate, window)) {
+      return candidate.toISOString();
+    }
+  }
+  return undefined;
+}
+
+function resolveRecipientPreferenceFromRecords(
+  email: string,
+  records: CrmRecord[],
+  linkedRecordId?: string,
+  selectedRecord?: CrmRecord
+): RecipientPreferenceResolution {
+  const contact = findContactByEmail(records, email);
+  const linkedRecord = linkedRecordId ? records.find((record) => record.id === linkedRecordId) : selectedRecord;
+  const companyFromContact = contact?.data.companyId ? records.find((record) => record.id === contact.data.companyId && record.objectKey === "companies") : undefined;
+  const companyFromLinkedRecord = linkedRecord?.objectKey === "companies"
+    ? linkedRecord
+    : linkedRecord?.objectKey === "contacts" && typeof linkedRecord.data.companyId === "string"
+      ? records.find((record) => record.id === linkedRecord.data.companyId && record.objectKey === "companies")
+      : undefined;
+  const company = companyFromContact ?? companyFromLinkedRecord;
+  const contactLanguage = typeof contact?.data.preferredLanguage === "string" ? contact.data.preferredLanguage : "";
+  const companyLanguage = typeof company?.data.preferredLanguage === "string" ? company.data.preferredLanguage : "";
+  const countryLanguage = getCountryOfficialLanguage(contact?.data.country ?? company?.data.country);
+  const language = contactLanguage || companyLanguage || countryLanguage || "en";
+  const languageSourceLabel = contactLanguage ? "联系人偏好" : companyLanguage ? "公司偏好" : countryLanguage ? "国家官方语言" : "默认英语";
+  const contactWindow = normalizePreferredContactWindow(contact?.data.preferredContactWindow) ?? normalizePreferredContactWindow(company?.data.preferredContactWindow);
+  const contactWindowLabel = contactWindow ? formatPreferredContactWindow(contactWindow) : undefined;
+  return {
+    email,
+    language,
+    languageLabel: getLanguageLabel(language) || language,
+    languageSourceLabel,
+    contactWindow,
+    contactWindowLabel,
+    contact,
+    company,
+    scheduledSendAt: computeNextPreferredSendAt(contactWindow)
+  };
+}
+
 function parseSingleFieldValue(field: FieldDefinition, raw: string): unknown {
   if (raw === "") {
     return "";
+  }
+  if (isPreferredContactWindowField(field)) {
+    return normalizePreferredContactWindow(raw) ?? "";
   }
   if (field.type === "number" || field.type === "currency") {
     return Number(raw);
@@ -17054,7 +17472,12 @@ function parseFormValues(fields: FieldDefinition[], values: Record<string, strin
       return accumulator;
     }
 
-    if (field.type === "number" || field.type === "currency") {
+    if (isPreferredContactWindowField(field)) {
+      const window = normalizePreferredContactWindow(raw);
+      if (window) {
+        accumulator[field.key] = window;
+      }
+    } else if (field.type === "number" || field.type === "currency") {
       accumulator[field.key] = Number(raw);
     } else if (field.type === "boolean") {
       accumulator[field.key] = raw === "true";
@@ -17133,6 +17556,12 @@ function displayValue(field: FieldDefinition | undefined, value: unknown, record
   }
   if (isCountryField(field)) {
     return getCountryLabel(value) || "-";
+  }
+  if (isPreferredLanguageField(field)) {
+    return getLanguageLabel(value) || "-";
+  }
+  if (isPreferredContactWindowField(field)) {
+    return formatPreferredContactWindow(value) || "-";
   }
   if (field.type === "currency") {
     return currencies ? formatMoneyWithCurrency(value, getBaseCurrencyCode(currencies), currencies) : formatCurrency(value);
@@ -17288,6 +17717,14 @@ function isCurrencyCodeField(field: FieldDefinition): boolean {
 
 function isCountryField(field: FieldDefinition): boolean {
   return (field.objectKey === "contacts" || field.objectKey === "companies") && field.key === "country";
+}
+
+function isPreferredLanguageField(field: FieldDefinition): boolean {
+  return (field.objectKey === "contacts" || field.objectKey === "companies") && field.key === "preferredLanguage";
+}
+
+function isPreferredContactWindowField(field: FieldDefinition): boolean {
+  return (field.objectKey === "contacts" || field.objectKey === "companies") && field.key === "preferredContactWindow";
 }
 
 function ownerLabel(ownerId: string | undefined, users: User[]): string {

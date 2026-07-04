@@ -2433,7 +2433,7 @@ export class PrismaCrmRepository {
   async recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
         recordId?: string;
         skipAutoLink?: boolean;
     }
@@ -2513,6 +2513,7 @@ export class PrismaCrmRepository {
     const trackingEnabled = input.direction === "outbound" && input.trackingEnabled === true;
     const trackingId = trackingEnabled ? input.trackingId?.trim() || createEmailTrackingId() : undefined;
     const attachments = normalizeEmailAttachments(input.attachments);
+    const translatedSources = input.translatedSources ? await this.assertVisibleEmailAiSources(context, input.translatedSources) : [];
     let message: Awaited<ReturnType<typeof this.db.emailMessage.create>>;
     try {
       message = await this.db.emailMessage.create({
@@ -2530,6 +2531,10 @@ export class PrismaCrmRepository {
           bodyText: normalizeRequiredText(input.bodyText, "Email body"),
           bodyHtml: trackingEnabled ? appendEmailTrackingHtml(input.bodyHtml?.trim() || undefined, trackingId!) : input.bodyHtml?.trim() || undefined,
           attachments: attachments ? ((attachments as unknown) as Prisma.InputJsonValue) : Prisma.JsonNull,
+          translatedBodyText: input.translatedBodyText?.trim() || undefined,
+          translatedLocale: input.translatedLocale?.trim() || undefined,
+          translatedSources: translatedSources.length ? (translatedSources as Prisma.InputJsonValue) : Prisma.JsonNull,
+          translatedAt: input.translatedAt ? new Date(input.translatedAt) : undefined,
           aiAssisted: input.aiAssisted ?? false,
           aiPurpose: input.aiPurpose,
           aiSourceMessageId,
@@ -2624,7 +2629,7 @@ export class PrismaCrmRepository {
   async sendEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "trackingEnabled" | "trackingId" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "trackingEnabled" | "trackingId" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
@@ -2644,7 +2649,7 @@ export class PrismaCrmRepository {
   async queueEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "clientRequestId" | "scheduledSendAt" | "trackingEnabled" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
