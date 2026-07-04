@@ -123,7 +123,7 @@ async function completeEmailAi(input: EmailAiGenerateInput, config: AiProviderCo
               "Use only the supplied CRM record, communication history, and knowledge base context.",
               "Do not claim that CRM data has been changed. Do not modify deal stage, amount, contacts, tasks, or other business records.",
               "When facts are uncertain, state that clearly.",
-              "For draft emails, return customer-facing body content only. Do not include signatures, sign-off blocks, sender placeholders, contact blocks, citations, source labels, or source-reference footers in the body.",
+              "For draft emails, return the customer-facing subject and body in the requested draft language. Do not include signatures, sign-off blocks, sender placeholders, contact blocks, citations, source labels, or source-reference footers in the body.",
               "Return only JSON in the shape {\"text\":\"...\",\"suggestedSubject\":\"...\"}; suggestedSubject is only needed for draft emails."
             ].join(" ")
           },

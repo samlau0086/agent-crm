@@ -3252,6 +3252,11 @@ await run("contact and company communication preferences drive compose translati
   assert.match(source, /buildPreferenceAwareDrafts/);
   assert.match(source, /purpose: "translate"/);
   assert.match(source, /targetLocale: preference\.language/);
+  assert.match(source, /function resolveEmailDraftAiTargetLocale\(\): string \| undefined/);
+  assert.match(source, /targetLocale,\s*userPrompt: prompt \|\| undefined/);
+  assert.match(source, /targetLocale,\s*userPrompt: `Generate a concise, actionable prompt/);
+  assert.match(source, /const contact = contactByEmail \?\? linkedContact/);
+  assert.match(source, /主题和正文都必须使用该语言/);
   assert.match(source, /translatedBodyText: translatedText/);
   assert.match(source, /scheduledSendAt: sendAt/);
   assert.match(styles, /\.email-preference-preview/);
@@ -3735,6 +3740,11 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);
   assert.match(source, /onGenerateAiPromptForDraft=\{\(prompt\) => generateEmailAiPromptForDraft\(prompt\)\}/);
   assert.match(source, /async function generateEmailAiPromptForDraft\(currentPrompt: string\): Promise<string>/);
+  assert.match(source, /const targetLocale = resolveEmailDraftAiTargetLocale\(\)/);
+  assert.match(source, /const targetPreference = resolveEmailDraftAiRecipientPreference\(\)/);
+  assert.match(source, /The prompt must instruct the drafting agent to write both the subject and body in this language/);
+  const aiGenerationSource = readFileSync("src/lib/email/ai-generation.ts", "utf8");
+  assert.match(aiGenerationSource, /return the customer-facing subject and body in the requested draft language/);
   assert.ok(source.includes("不要在正文里加入签名"));
   assert.match(source, /data-testid="email-compose-ai-prompt"/);
   assert.match(source, /data-testid="email-compose-ai-prompt-generate"/);

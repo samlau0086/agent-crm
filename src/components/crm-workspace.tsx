@@ -852,7 +852,7 @@ function buildDraftAiSourceText(draft: EmailComposeDraft, thread?: EmailThread, 
     .join("\n\n");
 }
 
-function buildComposePromptFromAiResult(result: EmailAiGenerateResult, currentPrompt: string, draft: EmailComposeDraft, thread?: EmailThread): string {
+function buildComposePromptFromAiResult(result: EmailAiGenerateResult, currentPrompt: string, draft: EmailComposeDraft, thread?: EmailThread, targetPreference?: RecipientPreferenceResolution): string {
   const text = result.text.trim();
   const looksLikeEmailBody = /^hello,?/i.test(text) || /best regards/i.test(text) || text.split(/\r?\n/).length > 6;
   if (text && !looksLikeEmailBody) {
@@ -862,6 +862,7 @@ function buildComposePromptFromAiResult(result: EmailAiGenerateResult, currentPr
     "请根据当前 CRM 客户背景、邮件线程摘要、AI 上下文分析和系统知识库撰写一封销售邮件。",
     draft.to.trim() ? `收件人：${draft.to.trim()}` : "",
     draft.subject.trim() ? `当前主题：${draft.subject.trim()}` : thread?.subject ? `邮件线程：${thread.subject}` : "",
+    targetPreference ? `输出语言：${targetPreference.languageLabel}（${targetPreference.language}，来源：${targetPreference.languageSourceLabel}）。主题和正文都必须使用该语言。` : "输出语言：若无法识别收件人偏好语言或国家官方语言，则使用英语。主题和正文保持同一语言。",
     currentPrompt.trim() ? `我的补充要求：${currentPrompt.trim()}` : "",
     "语气：专业、简洁、礼貌，避免夸大承诺。",
     "内容要求：回应最近一封邮件的关键点，结合客户背景给出明确下一步，并保留人工确认空间。",
@@ -4150,6 +4151,22 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return resolveRecipientPreferenceFromRecords(email, records, emailDraft.recordId, selectedRecord);
   }
 
+  function resolveEmailDraftAiRecipientPreference(): RecipientPreferenceResolution | undefined {
+    const primaryRecipient = splitEmailList(emailDraft.to)[0];
+    if (primaryRecipient) {
+      return resolveRecipientPreferences(primaryRecipient);
+    }
+    const linkedRecord = emailDraft.recordId ? records.find((record) => record.id === emailDraft.recordId) : selectedRecord;
+    if (!linkedRecord || !["contacts", "companies"].includes(linkedRecord.objectKey)) {
+      return undefined;
+    }
+    return resolveRecipientPreferenceFromRecords("", records, linkedRecord.id, linkedRecord);
+  }
+
+  function resolveEmailDraftAiTargetLocale(): string | undefined {
+    return resolveEmailDraftAiRecipientPreference()?.language;
+  }
+
   async function translateEmailDraftForRecipient(draft: EmailComposeDraft, preference: RecipientPreferenceResolution): Promise<EmailComposeDraft> {
     if (!draft.autoTranslateEnabled) {
       return draft;
@@ -4383,6 +4400,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       ? emailMessagesByThread[selectedEmailThreadId]?.at(-1)?.id
       : undefined;
     const selectedThread = selectedEmailThreadId ? emailThreads.find((thread) => thread.id === selectedEmailThreadId) : undefined;
+    const targetLocale = resolveEmailDraftAiTargetLocale();
     const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
       method: "POST",
       body: {
@@ -4390,6 +4408,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         threadId: selectedEmailThreadId || undefined,
         recordId: emailDraft.recordId || selectedRecord?.id,
         sourceMessageId: selectedSourceMessageId,
+        targetLocale,
         userPrompt: prompt || undefined,
         sourceText: buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : [])
       }
@@ -4417,6 +4436,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       ? emailMessagesByThread[selectedEmailThreadId]?.at(-1)?.id
       : undefined;
     const selectedThread = selectedEmailThreadId ? emailThreads.find((thread) => thread.id === selectedEmailThreadId) : undefined;
+    const targetPreference = resolveEmailDraftAiRecipientPreference();
+    const targetLocale = targetPreference?.language;
+    const targetLanguageInstruction = targetPreference
+      ? `Target output language: ${targetPreference.languageLabel} (${targetPreference.language}) from ${targetPreference.languageSourceLabel}. The prompt must instruct the drafting agent to write both the subject and body in this language.`
+      : "Target output language: English unless recipient preferences or country official language are available.";
     const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
       method: "POST",
       body: {
@@ -4424,8 +4448,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         threadId: selectedEmailThreadId || undefined,
         recordId: emailDraft.recordId || selectedRecord?.id,
         sourceMessageId: selectedSourceMessageId,
-        userPrompt: "Generate a concise, actionable prompt for the email drafting agent. Include recipient/customer context, desired tone, key points, current draft intent, and the next sales action. Return only the prompt text, not the email body.",
+        targetLocale,
+        userPrompt: `Generate a concise, actionable prompt for the email drafting agent. Include recipient/customer context, desired tone, key points, current draft intent, the next sales action, and this language requirement: ${targetLanguageInstruction} Return only the prompt text, not the email body.`,
         sourceText: [
+          targetLanguageInstruction,
           buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : []),
           currentPrompt.trim() ? `Current prompt idea:\n${currentPrompt.trim()}` : ""
         ]
@@ -4437,7 +4463,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailAiPrompt(currentPrompt);
     setEmailAiResult(result);
     setMessage("AI 提示词已生成，请确认后再一键生成正文。");
-    return buildComposePromptFromAiResult(result, currentPrompt, emailDraft, selectedThread);
+    return buildComposePromptFromAiResult(result, currentPrompt, emailDraft, selectedThread, targetPreference);
   }
 
   async function generateEmailAiForMessage(message: EmailMessage, purpose: "translate" | "context_analysis") {
@@ -17995,8 +18021,10 @@ function resolveRecipientPreferenceFromRecords(
   linkedRecordId?: string,
   selectedRecord?: CrmRecord
 ): RecipientPreferenceResolution {
-  const contact = findContactByEmail(records, email);
   const linkedRecord = linkedRecordId ? records.find((record) => record.id === linkedRecordId) : selectedRecord;
+  const contactByEmail = findContactByEmail(records, email);
+  const linkedContact = linkedRecord?.objectKey === "contacts" ? linkedRecord : undefined;
+  const contact = contactByEmail ?? linkedContact;
   const companyFromContact = contact?.data.companyId ? records.find((record) => record.id === contact.data.companyId && record.objectKey === "companies") : undefined;
   const companyFromLinkedRecord = linkedRecord?.objectKey === "companies"
     ? linkedRecord
