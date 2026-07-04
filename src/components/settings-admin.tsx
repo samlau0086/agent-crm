@@ -2367,6 +2367,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                         <label className="settings-toggle">
                           <input
                             type="checkbox"
+                            checked={selectedAiAgent.contextPolicy?.includeProducts ?? selectedAiAgentDefinition?.contextPolicy.includeProducts ?? false}
+                            onChange={(event) => updateAiAgentContextPolicy(selectedAiAgent.key, { includeProducts: event.target.checked })}
+                          />
+                          Include product catalog
+                        </label>
+                        <label className="settings-toggle">
+                          <input
+                            type="checkbox"
                             checked={selectedAiAgent.toolPolicy?.allowRead ?? selectedAiAgentDefinition?.toolPolicy.allowRead ?? true}
                             onChange={(event) => updateAiAgentToolPolicy(selectedAiAgent.key, { allowRead: event.target.checked })}
                           />

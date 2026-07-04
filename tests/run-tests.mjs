@@ -3705,6 +3705,9 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /data-testid="email-compose-account"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, accountId: event\.target\.value \}\)/);
   assert.match(source, /<EmailLinkedRecordPicker[\s\S]*testId="email-compose-record"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, recordId: nextRecordId \}\)/);
   assert.match(source, /function EmailLinkedRecordPicker\(/);
+  assert.match(source, /<EmailProductContextPicker[\s\S]*selectedProductIds=\{emailDraft\.productIds \?\? \[\]\}/);
+  assert.match(source, /function EmailProductContextPicker\(/);
+  assert.match(source, /testId="email-compose-product"/);
   assert.match(source, /onOpenRecord=\{\(record\) => onOpenTalkSourceRecord\(\{ objectKey: record\.objectKey, recordId: record\.id \}\)\}/);
   assert.match(source, /aria-label="编辑关联记录"/);
   assert.match(source, /testId="email-compose-to"[\s\S]*onChange=\{\(nextValue\) => onEmailDraftChange\(clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, to: nextValue \}\)\)\}/);
@@ -10543,6 +10546,46 @@ await run("email assistant context ranks knowledge by customer context relevance
   assert.equal(assistantContext.sources.some((source) => source.knowledgeArticleId === billingArticle.id), false);
 });
 
+await run("email assistant injects active product catalog into draft prompts", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateEmailAiSettings(context, { features: { draft: true } });
+  const activeProduct = store.createRecord(context, "products", {
+    title: "Docker Compose Deployment",
+    data: {
+      active: true,
+      sku: "DC-01",
+      description: "Private deployment package with web, PostgreSQL, Redis, and worker services.",
+      unitPrice: 499,
+      unitPriceCurrency: "USD",
+      billingCycle: "one_time",
+      mainImageUrl: "https://example.com/docker-compose.png",
+      attachments: [{ title: "Deployment overview", url: "https://example.com/overview.pdf" }]
+    }
+  });
+  const inactiveProduct = store.createRecord(context, "products", {
+    title: "Legacy Product",
+    data: { active: false, sku: "OLD-01", unitPrice: 99, unitPriceCurrency: "USD", description: "This inactive product must not be injected." }
+  });
+
+  const assistantContext = store.buildEmailAssistantContext(context, {
+    purpose: "draft",
+    productIds: [inactiveProduct.id, activeProduct.id],
+    productQuery: "docker compose private deployment",
+    userPrompt: "Ask whether the customer is interested in our product"
+  });
+  const prompt = buildEmailModelPrompt({ context: assistantContext, userPrompt: "Ask whether the customer is interested in our product" });
+
+  assert.match(assistantContext.productBrief, /Docker Compose Deployment/);
+  assert.match(assistantContext.productBrief, /SKU: DC-01/);
+  assert.match(assistantContext.productBrief, /Price: 499 USD/);
+  assert.doesNotMatch(assistantContext.productBrief, /Legacy Product/);
+  assert.equal(assistantContext.sources.some((source) => source.objectKey === "products" && source.recordId === activeProduct.id), true);
+  assert.equal(assistantContext.sources.some((source) => source.recordId === inactiveProduct.id), false);
+  assert.match(prompt, /Product catalog:/);
+  assert.match(prompt, /do not invent product names/i);
+});
+
 await run("email assistant context excludes uncommitted outbound history", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
@@ -11496,6 +11539,7 @@ await run("email send sync and ai schemas validate bounded payloads", () => {
   );
   assert.equal(emailAiSettingsUpdateSchema.parse({ features: { auto_context_analysis: true } }).features.auto_context_analysis, true);
   assert.equal(emailAiGenerateSchema.parse({ purpose: "draft", recordId: "record-1", userPrompt: "short follow-up" }).purpose, "draft");
+  assert.deepEqual(emailAiGenerateSchema.parse({ purpose: "draft", recordId: "record-1", userPrompt: "short follow-up", productIds: ["product-1"], productQuery: "docker" }).productIds, ["product-1"]);
   assert.equal(emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "Hello", bodyText: "Body", skipAutoLink: true }).skipAutoLink, true);
   assert.equal(emailAiGenerateSchema.parse({ purpose: "draft", sourceMessageId: "message-1" }).sourceMessageId, "message-1");
   assert.equal(emailAiGenerateSchema.parse({ purpose: "translate", threadId: "thread-1", sourceMessageId: "message-1", sourceText: "hola" }).sourceMessageId, "message-1");

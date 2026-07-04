@@ -120,7 +120,8 @@ async function completeEmailAi(input: EmailAiGenerateInput, config: AiProviderCo
             role: "system",
             content: [
               "You are a private-deployment sales CRM email assistant.",
-              "Use only the supplied CRM record, communication history, and knowledge base context.",
+              "Use only the supplied CRM record, communication history, product catalog, and knowledge base context.",
+              "Product catalog is the authoritative product source; do not invent product names, features, prices, or availability when the catalog has no match.",
               "Do not claim that CRM data has been changed. Do not modify deal stage, amount, contacts, tasks, or other business records.",
               "When facts are uncertain, state that clearly.",
               "For draft emails, return the customer-facing subject and body in the requested draft language. Do not include signatures, sign-off blocks, sender placeholders, contact blocks, citations, source labels, or source-reference footers in the body.",
@@ -160,6 +161,7 @@ export function buildEmailModelPrompt(input: EmailAiGenerateInput): string {
     input.sourceText?.trim() ? `Source text: ${truncate(input.sourceText.trim(), sourceTextBudget)}` : undefined,
     `Customer background:\n${context.customerBrief || "None"}`,
     `Communication history:\n${context.communicationSummary || "None"}`,
+    `Product catalog:\n${context.productBrief || "None. Do not invent product names, features, prices, or availability."}`,
     `Knowledge base:\n${context.knowledgeBrief || "None"}`,
     `Sources:\n${truncate(JSON.stringify(context.sources), Math.min(2000, Math.floor(budget * 0.15)))}`
   ].filter(Boolean);

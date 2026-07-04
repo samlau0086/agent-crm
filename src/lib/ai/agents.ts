@@ -65,12 +65,14 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
     defaultAgentMarkdown: [
       "# Email Draft Agent",
       "",
-      "Draft sales emails using customer background, communication history, and knowledge base facts.",
+      "Draft sales emails using customer background, communication history, product catalog, and knowledge base facts.",
+      "Treat the Product catalog context as authoritative for product names, SKU, pricing, descriptions, billing cycles, images, and attachments.",
+      "Do not invent product names, features, prices, availability, or bundles when product context is absent or does not match.",
       "Return body content only unless a schema explicitly requests a subject.",
       "Do not include signatures, source footers, or sender placeholders."
     ].join("\n"),
     outputSchema: "email",
-    contextPolicy: { includeEmailThread: true, includeRecord: true, includeActivities: true, includeKnowledge: true, maxContextChars: 12000 },
+    contextPolicy: { includeEmailThread: true, includeRecord: true, includeActivities: true, includeKnowledge: true, includeProducts: true, maxContextChars: 12000 },
     toolPolicy: { allowRead: true, allowWrite: false, allowedTools: ["create_email_draft"], highRiskRequiresApproval: true },
     maxOutputChars: 4000
   },
@@ -186,12 +188,13 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
     defaultAgentMarkdown: [
       "# Talk About This Agent",
       "",
-      "Discuss the selected CRM record or email thread using supplied CRM context and knowledge snippets.",
+      "Discuss the selected CRM record or email thread using supplied CRM context, product catalog, and knowledge snippets.",
+      "When the user asks about products, plans, or quotes, use product catalog facts first and do not invent unavailable product details.",
       "Keep responses suitable for saving into RAG knowledge.",
       "Do not claim that CRM data was changed."
     ].join("\n"),
     outputSchema: "text",
-    contextPolicy: { includeRecord: true, includeEmailThread: true, includeActivities: true, includeKnowledge: true, maxContextChars: 12000 },
+    contextPolicy: { includeRecord: true, includeEmailThread: true, includeActivities: true, includeKnowledge: true, includeProducts: true, maxContextChars: 12000 },
     toolPolicy: { allowRead: true, allowWrite: false, allowedTools: ["save_to_rag"], highRiskRequiresApproval: true },
     maxOutputChars: 4000
   },
@@ -223,10 +226,11 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Workflow AI Agent Node",
       "",
       "Reason inside a workflow run and choose only explicitly allowed tools.",
+      "When planning product-related messaging or actions, use product catalog facts and do not invent unavailable product details.",
       "Return a short plan and never execute high-risk actions without approval."
     ].join("\n"),
     outputSchema: "text",
-    contextPolicy: { includeRecord: true, includeEmailThread: true, includeKnowledge: true, maxContextChars: 10000 },
+    contextPolicy: { includeRecord: true, includeEmailThread: true, includeKnowledge: true, includeProducts: true, maxContextChars: 10000 },
     toolPolicy: { allowRead: true, allowWrite: false, allowedTools: [], highRiskRequiresApproval: true },
     maxOutputChars: 4000
   },
@@ -333,6 +337,7 @@ function normalizeContextPolicy(value: unknown, fallback?: AiAgentSetting["conte
     includeActivities: input?.includeActivities ?? fallback?.includeActivities ?? false,
     includeEmailThread: input?.includeEmailThread ?? fallback?.includeEmailThread ?? false,
     includeKnowledge: input?.includeKnowledge ?? fallback?.includeKnowledge ?? false,
+    includeProducts: input?.includeProducts ?? fallback?.includeProducts ?? false,
     maxContextChars: normalizeNumber(input?.maxContextChars, fallback?.maxContextChars ?? 8000, 1000, 30000),
     maxHistoryMessages: normalizeNumber(input?.maxHistoryMessages, fallback?.maxHistoryMessages ?? 8, 1, 50)
   };

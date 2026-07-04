@@ -943,6 +943,11 @@ button {
   text-overflow: ellipsis;
 }
 
+.email-compose-product-tags {
+  display: grid;
+  gap: 6px;
+}
+
 .quote-editor {
   padding: 12px;
   border: 1px solid var(--line);

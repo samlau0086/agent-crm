@@ -25,6 +25,10 @@ export interface EmailAssistantContextInput {
   messages?: EmailMessage[];
   sourceMessage?: EmailMessage;
   knowledgeArticles?: KnowledgeArticle[];
+  products?: CrmRecord[];
+  productQuery?: string;
+  userPrompt?: string;
+  sourceText?: string;
   targetLocale?: string;
 }
 
@@ -44,9 +48,10 @@ export interface EmailAssistantContext {
   truncated: boolean;
   customerBrief: string;
   communicationSummary: string;
+  productBrief: string;
   knowledgeBrief: string;
   instruction: string;
-  sources: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  sources: Array<{ label: string; objectKey?: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
 }
 
 const purposeFeature: Record<EmailAssistantPurpose, EmailAiFeature> = {
@@ -86,7 +91,9 @@ const defaultEmailClassificationAgentMarkdown = [
 const defaultEmailDraftAgentMarkdown = [
   "# Email Draft Agent",
   "",
-  "Draft sales emails using customer background, communication history, and the system knowledge base.",
+  "Draft sales emails using customer background, communication history, product catalog, and the system knowledge base.",
+  "Use Product catalog as the authoritative source for product names, SKU, pricing, descriptions, billing cycles, images, and attachments.",
+  "Never invent product names, features, prices, availability, or packaging when the product catalog has no match.",
   "Keep output source-grounded and suitable for human review.",
   "Do not modify CRM records or send mail automatically."
 ].join("\n");
@@ -285,21 +292,24 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
     input.knowledgeArticles ?? [],
     buildKnowledgeQuery(input, rawCustomerBrief, messages, activities)
   ).slice(0, normalizeLimit(input.settings.maxKnowledgeArticles, 5, 0, 20));
+  const products = rankProductRecords(input.products ?? [], buildProductQuery(input, rawCustomerBrief, messages, activities)).slice(0, 5);
 
-  const customerBrief = truncate(rawCustomerBrief, maxContextChars * 0.25);
-  const communicationSummary = truncate(buildCommunicationSummary(input.thread, messages, activities), maxContextChars * 0.45);
-  const knowledgeBrief = truncate(buildKnowledgeBrief(knowledgeArticles), maxContextChars * 0.25);
-  const contextCharCount = customerBrief.length + communicationSummary.length + knowledgeBrief.length;
-  const truncated = [customerBrief, communicationSummary, knowledgeBrief].some((value) => value.includes("[truncated]"));
+  const customerBrief = truncate(rawCustomerBrief, maxContextChars * 0.2);
+  const communicationSummary = truncate(buildCommunicationSummary(input.thread, messages, activities), maxContextChars * 0.4);
+  const productBrief = truncate(buildProductBrief(products), maxContextChars * 0.2);
+  const knowledgeBrief = truncate(buildKnowledgeBrief(knowledgeArticles), maxContextChars * 0.2);
+  const contextCharCount = customerBrief.length + communicationSummary.length + productBrief.length + knowledgeBrief.length;
+  const truncated = [customerBrief, communicationSummary, productBrief, knowledgeBrief].some((value) => value.includes("[truncated]"));
   const sourceMessageSource =
     input.sourceMessage && !messages.some((message) => message.id === input.sourceMessage?.id)
       ? [{ label: input.sourceMessage.subject, messageId: input.sourceMessage.id }]
       : [];
   const sources = [
-    ...(input.record ? [{ label: input.record.title, recordId: input.record.id }] : []),
+    ...(input.record ? [{ label: input.record.title, objectKey: input.record.objectKey, recordId: input.record.id }] : []),
     ...activities.slice(0, 3).map((activity) => ({ label: activity.title, activityId: activity.id })),
     ...sourceMessageSource,
     ...messages.slice(0, 5).map((message) => ({ label: message.subject, messageId: message.id })),
+    ...products.map((product) => ({ label: product.title, objectKey: product.objectKey, recordId: product.id })),
     ...knowledgeArticles.map((article) => ({ label: article.title, knowledgeArticleId: article.id }))
   ];
   const missingRequiredSources = input.settings.requireSourceLinks && sources.length === 0;
@@ -322,6 +332,7 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
     truncated,
     customerBrief,
     communicationSummary,
+    productBrief,
     knowledgeBrief,
     instruction: buildInstruction(
       input,
@@ -480,6 +491,98 @@ function buildKnowledgeBrief(articles: KnowledgeArticle[]): string {
     .join("\n\n");
 }
 
+function buildProductBrief(products: CrmRecord[]): string {
+  return products
+    .map((product) => {
+      const data = product.data ?? {};
+      const price =
+        data.unitPrice !== undefined && data.unitPrice !== null && data.unitPrice !== "" && typeof data.unitPriceCurrency === "string" && data.unitPriceCurrency.trim()
+          ? `Price: ${cleanEmailContextText(formatValue(data.unitPrice))} ${cleanEmailContextText(data.unitPriceCurrency)}`
+          : undefined;
+      const attachments = Array.isArray(data.attachments)
+        ? data.attachments
+            .slice(0, 3)
+            .map(formatProductAttachment)
+            .filter(Boolean)
+            .join(", ")
+        : "";
+      return [
+        `Product: ${cleanEmailContextText(product.title)}`,
+        `Record ID: ${product.id}`,
+        data.sku ? `SKU: ${cleanEmailContextText(formatValue(data.sku))}` : undefined,
+        data.description ? `Description: ${truncate(cleanEmailContextText(formatValue(data.description)), 700)}` : undefined,
+        price,
+        data.billingCycle ? `Billing cycle: ${cleanEmailContextText(formatValue(data.billingCycle))}` : undefined,
+        data.mainImageUrl ? `Main image: ${cleanEmailContextText(formatValue(data.mainImageUrl))}` : undefined,
+        attachments ? `Attachments: ${attachments}` : undefined
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n\n");
+}
+
+function formatProductAttachment(value: unknown): string {
+  if (typeof value === "string") {
+    return cleanEmailContextText(value);
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const attachment = value as Record<string, unknown>;
+  const label = attachment.title ?? attachment.name ?? attachment.fileName ?? attachment.label ?? "attachment";
+  const url = attachment.url ?? attachment.href ?? attachment.externalUrl;
+  return [cleanEmailContextText(formatValue(label)), typeof url === "string" && url.trim() ? cleanEmailContextText(url) : undefined].filter(Boolean).join(" ");
+}
+
+function rankProductRecords(products: CrmRecord[], queryText: string): CrmRecord[] {
+  const terms = tokenizeKnowledgeQuery(queryText);
+  return products
+    .filter((product) => product.objectKey === "products" && product.data.active !== false)
+    .map((product, index) => ({
+      product,
+      index,
+      score: scoreProductRecord(product, terms)
+    }))
+    .sort((left, right) => right.score - left.score || right.product.updatedAt.localeCompare(left.product.updatedAt) || left.index - right.index)
+    .map((item) => item.product);
+}
+
+function buildProductQuery(input: EmailAssistantContextInput, customerBrief: string, messages: EmailMessage[], activities: Activity[]): string {
+  return [
+    input.productQuery,
+    input.userPrompt,
+    input.sourceText,
+    input.purpose,
+    input.thread?.subject ? cleanEmailContextText(input.thread.subject) : undefined,
+    customerBrief,
+    input.sourceMessage?.subject ? cleanEmailContextText(input.sourceMessage.subject) : undefined,
+    input.sourceMessage?.bodyText ? cleanEmailContextText(input.sourceMessage.bodyText) : undefined,
+    ...messages.flatMap((message) => [cleanEmailContextText(message.subject), cleanEmailContextText(message.bodyText)]),
+    ...activities.flatMap((activity) => [cleanEmailContextText(activity.title), activity.body ? cleanEmailContextText(activity.body) : undefined])
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function scoreProductRecord(product: CrmRecord, terms: string[]): number {
+  if (!terms.length) {
+    return 0;
+  }
+  const title = normalizeKnowledgeText(product.title);
+  const sku = normalizeKnowledgeText(formatValue(product.data.sku));
+  const description = normalizeKnowledgeText(formatValue(product.data.description));
+  const billingCycle = normalizeKnowledgeText(formatValue(product.data.billingCycle));
+  let score = 0;
+  for (const term of terms) {
+    if (title.includes(term)) score += 8;
+    if (sku && (sku.includes(term) || term.includes(sku))) score += 10;
+    if (description.includes(term)) score += 3;
+    if (billingCycle.includes(term)) score += 1;
+  }
+  return score;
+}
+
 function rankKnowledgeArticles(articles: KnowledgeArticle[], queryText: string): KnowledgeArticle[] {
   const terms = tokenizeKnowledgeQuery(queryText);
   return articles
@@ -556,7 +659,11 @@ function buildInstruction(
   }
 
   const locale = input.targetLocale ?? input.settings.defaultLocale;
-  const sourceRequirement = input.settings.requireSourceLinks ? "Include source references to CRM records, email messages, activities, or knowledge articles." : "Source references are optional.";
+  const productRequirement =
+    "Product catalog is the authoritative source for product names, SKU, descriptions, prices, billing cycles, images, and attachments. If Product catalog is empty or has no matching product, do not invent product names, features, prices, or availability.";
+  const sourceRequirement = input.settings.requireSourceLinks
+    ? `Include source references to CRM records, product records, email messages, activities, or knowledge articles. ${productRequirement}`
+    : `Source references are optional. ${productRequirement}`;
   const agentInstruction = agent?.agentMarkdown ? `\n\nAgent.md:\n${truncate(agent.agentMarkdown, 4000)}` : "";
 
   if (input.purpose === "draft") {

@@ -277,7 +277,7 @@ export interface EmailThread {
   summary?: string;
   summaryUpdatedAt?: string;
   aiAnalysis?: string;
-  aiAnalysisSources?: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  aiAnalysisSources?: Array<{ label: string; objectKey?: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
   aiAnalysisUpdatedAt?: string;
   lastMessageAt?: string;
   archived?: boolean;
@@ -357,12 +357,12 @@ export interface EmailMessage {
   attachments?: EmailAttachment[];
   translatedBodyText?: string;
   translatedLocale?: string;
-  translatedSources?: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  translatedSources?: Array<{ label: string; objectKey?: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
   translatedAt?: string;
   aiAssisted?: boolean;
   aiPurpose?: EmailAssistantPurpose;
   aiSourceMessageId?: string;
-  aiSources?: Array<{ label: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
+  aiSources?: Array<{ label: string; objectKey?: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
   aiGeneratedAt?: string;
   externalMessageId?: string;
   clientRequestId?: string;
@@ -509,6 +509,7 @@ export interface AiAgentContextPolicy {
   includeActivities?: boolean;
   includeEmailThread?: boolean;
   includeKnowledge?: boolean;
+  includeProducts?: boolean;
   maxContextChars?: number;
   maxHistoryMessages?: number;
 }

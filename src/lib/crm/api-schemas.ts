@@ -837,6 +837,7 @@ const aiAgentContextPolicySchema = z
     includeActivities: z.boolean().optional(),
     includeEmailThread: z.boolean().optional(),
     includeKnowledge: z.boolean().optional(),
+    includeProducts: z.boolean().optional(),
     maxContextChars: z.number().int().min(1000).max(30000).optional(),
     maxHistoryMessages: z.number().int().min(1).max(50).optional()
   })
@@ -1028,7 +1029,9 @@ export const emailAssistantContextSchema = z
     recordId: z.string().trim().min(1).optional(),
     threadId: z.string().trim().min(1).optional(),
     sourceMessageId: z.string().trim().min(1).optional(),
-    targetLocale: z.string().trim().min(2).max(20).optional()
+    targetLocale: z.string().trim().min(2).max(20).optional(),
+    productIds: z.array(z.string().trim().min(1).max(120)).max(10).optional(),
+    productQuery: z.string().trim().max(500).optional()
   })
   .strict();
 

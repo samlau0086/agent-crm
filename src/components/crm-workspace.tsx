@@ -365,6 +365,7 @@ type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress
 };
 type EmailComposeDraft = EmailComposeReplyDraft & {
   clientRequestId: string;
+  productIds?: string[];
   scheduledSendAt?: string;
   trackingEnabled?: boolean;
   groupSendMode?: boolean;
@@ -1711,6 +1712,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     bodyText: "",
     bodyHtml: "",
     signatureId: "",
+    productIds: [],
     attachments: [],
     scheduledSendAt: "",
     trackingEnabled: true,
@@ -4291,6 +4293,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       bodyText: "",
       bodyHtml: "",
       signatureId: "",
+      productIds: [],
       replyOriginalBodyText: undefined,
       replyOriginalBodyHtml: undefined,
       replyOriginalFrom: undefined,
@@ -4349,6 +4352,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         recordId: thread?.recordId || current.recordId || selectedRecord?.id || ""
       }),
       aiAssisted: false,
+      productIds: current.productIds ?? [],
       aiPurpose: undefined,
       aiSourceMessageId: undefined,
       aiSources: undefined,
@@ -4368,7 +4372,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         recordId: emailDraft.recordId || selectedRecord?.id,
         sourceMessageId: selectedSourceMessageId,
         userPrompt: emailAiPrompt || undefined,
-        sourceText: emailDraft.bodyText || undefined
+        sourceText: emailDraft.bodyText || undefined,
+        productIds: emailDraft.productIds?.length ? emailDraft.productIds : undefined,
+        productQuery: [emailAiPrompt, emailDraft.subject, getDraftBodyText(emailDraft)].filter(Boolean).join("\n").slice(0, 500) || undefined
       }
     });
     setEmailAiResult(result);
@@ -4395,6 +4401,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       : undefined;
     const selectedThread = selectedEmailThreadId ? emailThreads.find((thread) => thread.id === selectedEmailThreadId) : undefined;
     const targetLocale = resolveEmailDraftAiTargetLocale();
+    const sourceText = buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : []);
     const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
       method: "POST",
       body: {
@@ -4404,7 +4411,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         sourceMessageId: selectedSourceMessageId,
         targetLocale,
         userPrompt: prompt || undefined,
-        sourceText: buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : [])
+        sourceText,
+        productIds: emailDraft.productIds?.length ? emailDraft.productIds : undefined,
+        productQuery: [prompt, emailDraft.subject, sourceText].filter(Boolean).join("\n").slice(0, 500) || undefined
       }
     });
     setEmailAiPurpose("draft");
@@ -4435,6 +4444,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const targetLanguageInstruction = targetPreference
       ? `Target output language: ${targetPreference.languageLabel} (${targetPreference.language}) from ${targetPreference.languageSourceLabel}. The prompt must instruct the drafting agent to write both the subject and body in this language.`
       : "Target output language: English unless recipient preferences or country official language are available.";
+    const sourceText = [
+      targetLanguageInstruction,
+      buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : []),
+      currentPrompt.trim() ? `Current prompt idea:\n${currentPrompt.trim()}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const result = await fetchJson<EmailAiGenerateResult>("/api/email/ai-generate", {
       method: "POST",
       body: {
@@ -4444,13 +4460,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         sourceMessageId: selectedSourceMessageId,
         targetLocale,
         userPrompt: `Generate a concise, actionable prompt for the email drafting agent. Include recipient/customer context, desired tone, key points, current draft intent, the next sales action, and this language requirement: ${targetLanguageInstruction} Return only the prompt text, not the email body.`,
-        sourceText: [
-          targetLanguageInstruction,
-          buildDraftAiSourceText(emailDraft, selectedThread, selectedEmailThreadId ? emailMessagesByThread[selectedEmailThreadId] ?? [] : []),
-          currentPrompt.trim() ? `Current prompt idea:\n${currentPrompt.trim()}` : ""
-        ]
-          .filter(Boolean)
-          .join("\n\n")
+        sourceText,
+        productIds: emailDraft.productIds?.length ? emailDraft.productIds : undefined,
+        productQuery: [currentPrompt, emailDraft.subject, sourceText].filter(Boolean).join("\n").slice(0, 500) || undefined
       }
     });
     setEmailAiPurpose("draft");
@@ -7878,6 +7890,8 @@ function EmailWorkspace({
   const linkedRecordId = emailDraft.recordId ?? "";
   const selectedThreadRecordId = selectedThread?.recordId || "";
   const contactRecords = useMemo(() => records.filter((record) => record.objectKey === "contacts"), [records]);
+  const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
+  const currencies = useMemo(() => getCurrencyDefinitions(currencyRecords), [currencyRecords]);
   const contactByEmail = useMemo(() => {
     const map = new Map<string, CrmRecord>();
     for (const contact of contactRecords) {
@@ -10112,6 +10126,14 @@ function EmailWorkspace({
                     onOpenRecord={(record) => onOpenTalkSourceRecord({ objectKey: record.objectKey, recordId: record.id })}
                     onRecordsLoaded={onRecordsLoaded}
                   />
+                  <EmailProductContextPicker
+                    currencies={currencies}
+                    records={records}
+                    selectedProductIds={emailDraft.productIds ?? []}
+                    onChange={(productIds) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, productIds }))}
+                    onOpenRecord={(record) => onOpenTalkSourceRecord({ objectKey: record.objectKey, recordId: record.id })}
+                    onRecordsLoaded={onRecordsLoaded}
+                  />
                   <div className="email-compose-recipient-row">
                     <EmailRecipientInput
                       label="收件人"
@@ -11024,6 +11046,71 @@ function EmailLinkedRecordPicker({
           <Pencil size={14} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function EmailProductContextPicker({
+  currencies,
+  records,
+  selectedProductIds,
+  onChange,
+  onOpenRecord,
+  onRecordsLoaded
+}: {
+  currencies: ReturnType<typeof getCurrencyDefinitions>;
+  records: CrmRecord[];
+  selectedProductIds: string[];
+  onChange: (productIds: string[]) => void;
+  onOpenRecord: (record: CrmRecord) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+}) {
+  const selectedProducts = selectedProductIds
+    .map((productId) => records.find((record) => record.id === productId && record.objectKey === "products" && record.data.active !== false))
+    .filter((record): record is CrmRecord => Boolean(record));
+
+  function addProduct(product: CrmRecord) {
+    if (selectedProductIds.includes(product.id)) {
+      return;
+    }
+    onChange([...selectedProductIds, product.id]);
+  }
+
+  function removeProduct(productId: string) {
+    onChange(selectedProductIds.filter((id) => id !== productId));
+  }
+
+  return (
+    <div className="email-compose-linked-record-field" data-testid="email-compose-products">
+      <span className="subtle">关联产品</span>
+      {selectedProducts.length ? (
+        <div className="email-compose-product-tags">
+          {selectedProducts.map((product) => (
+            <div className="email-compose-linked-record" key={product.id}>
+              <button className="secondary-button email-compose-linked-record-link" type="button" onClick={() => onOpenRecord(product)}>
+                <Package size={14} />
+                <span>{product.title}</span>
+                {product.data.sku ? <span className="subtle">{String(product.data.sku)}</span> : null}
+              </button>
+              <button className="icon-button" type="button" aria-label={`移除产品 ${product.title}`} title="移除产品" onClick={() => removeProduct(product.id)}>
+                <XCircle size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="subtle">不选择时，AI 会按提示词和邮件上下文自动匹配启用产品。</span>
+      )}
+      <QuoteProductSearchDropdown
+        allRecords={records}
+        currencies={currencies}
+        label="添加产品"
+        testId="email-compose-product"
+        value=""
+        onClear={() => undefined}
+        onRecordsLoaded={onRecordsLoaded}
+        onSelect={addProduct}
+      />
     </div>
   );
 }
@@ -15158,7 +15245,11 @@ function QuoteProductSearchDropdown({
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const candidates = useMemo(
-    () => mergeRecords(allRecords.filter((record) => record.objectKey === "products"), remoteCandidates.filter((record) => record.objectKey === "products")),
+    () =>
+      mergeRecords(
+        allRecords.filter((record) => record.objectKey === "products" && record.data.active !== false),
+        remoteCandidates.filter((record) => record.objectKey === "products" && record.data.active !== false)
+      ),
     [allRecords, remoteCandidates]
   );
 
@@ -15183,8 +15274,9 @@ function QuoteProductSearchDropdown({
         }
       )
         .then((result) => {
-          setRemoteCandidates(result.records);
-          onRecordsLoaded?.(result.records);
+          const activeProducts = result.records.filter((record) => record.objectKey === "products" && record.data.active !== false);
+          setRemoteCandidates(activeProducts);
+          onRecordsLoaded?.(activeProducts);
         })
         .catch((error) => {
           if (error instanceof DOMException && error.name === "AbortError") {
@@ -15206,7 +15298,7 @@ function QuoteProductSearchDropdown({
   }, [onRecordsLoaded, search]);
 
   const normalizedSearch = search.trim().toLowerCase();
-  const visibleCandidates = normalizedSearch ? remoteCandidates.filter((candidate) => candidate.objectKey === "products") : candidates;
+  const visibleCandidates = normalizedSearch ? remoteCandidates.filter((candidate) => candidate.objectKey === "products" && candidate.data.active !== false) : candidates;
   const selectedRecord = candidates.find((candidate) => candidate.id === value);
 
   return (

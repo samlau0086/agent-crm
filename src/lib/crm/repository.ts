@@ -1417,6 +1417,7 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
       }
       return {
         label,
+        ...(typeof item.objectKey === "string" && item.objectKey.trim() ? { objectKey: item.objectKey.trim() } : {}),
         ...(typeof item.recordId === "string" && item.recordId.trim() ? { recordId: item.recordId.trim() } : {}),
         ...(typeof item.activityId === "string" && item.activityId.trim() ? { activityId: item.activityId.trim() } : {}),
         ...(typeof item.messageId === "string" && item.messageId.trim() ? { messageId: item.messageId.trim() } : {}),
@@ -3555,7 +3556,17 @@ export class PrismaCrmRepository {
 
   async buildEmailAssistantContext(
     context: RequestContext,
-    input: { purpose: EmailAssistantPurpose; recordId?: string; threadId?: string; sourceMessageId?: string; targetLocale?: string }
+    input: {
+      purpose: EmailAssistantPurpose;
+      recordId?: string;
+      threadId?: string;
+      sourceMessageId?: string;
+      targetLocale?: string;
+      productIds?: string[];
+      productQuery?: string;
+      userPrompt?: string;
+      sourceText?: string;
+    }
   ): Promise<EmailAssistantContext> {
     requirePermission(context, "ai.use");
     const settings = await this.ensureEmailAiSettings(context.workspaceId);
@@ -3575,6 +3586,16 @@ export class PrismaCrmRepository {
     const activities = record ? await this.listActivities(context, record.id) : [];
     const messages = thread ? await this.listEmailMessages(context, thread.id) : [];
     const knowledgeArticles = await this.listKnowledgeArticles(context, true);
+    const products = await this.loadEmailAssistantProducts(context, {
+      productIds: input.productIds,
+      productQuery: input.productQuery,
+      userPrompt: input.userPrompt,
+      sourceText: input.sourceText,
+      record,
+      thread,
+      sourceMessage,
+      messages
+    });
 
     return buildEmailAssistantPromptContext({
       settings,
@@ -3586,8 +3607,65 @@ export class PrismaCrmRepository {
       messages,
       sourceMessage,
       knowledgeArticles,
+      products,
+      productQuery: input.productQuery,
+      userPrompt: input.userPrompt,
+      sourceText: input.sourceText,
       targetLocale: input.targetLocale
     });
+  }
+
+  private async loadEmailAssistantProducts(
+    context: RequestContext,
+    input: {
+      productIds?: string[];
+      productQuery?: string;
+      userPrompt?: string;
+      sourceText?: string;
+      record?: CrmRecord;
+      thread?: EmailThread;
+      sourceMessage?: EmailMessage;
+      messages?: EmailMessage[];
+    }
+  ): Promise<CrmRecord[]> {
+    const productsById = new Map<string, CrmRecord>();
+    for (const productId of Array.from(new Set(input.productIds ?? [])).slice(0, 10)) {
+      const record = await this.assertVisibleRecord(context, productId);
+      if (record.objectKey === "products" && record.data.active !== false) {
+        productsById.set(record.id, record);
+      }
+    }
+
+    const queryText = [
+      input.productQuery,
+      input.userPrompt,
+      input.sourceText,
+      input.thread?.subject,
+      input.sourceMessage?.subject,
+      input.sourceMessage?.bodyText,
+      ...(input.messages ?? []).flatMap((message) => [message.subject, message.bodyText]),
+      input.record?.title,
+      input.record ? JSON.stringify(input.record.data).slice(0, 1200) : undefined
+    ]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join("\n")
+      .slice(0, 1500);
+
+    if (queryText.trim().length >= 2) {
+      const result = await this.queryRecords(context, "products", {
+        q: queryText.slice(0, 500),
+        pageSize: 20,
+        fields: ["title", "sku", "description", "unitPrice", "unitPriceCurrency", "billingCycle", "mainImageUrl", "attachments", "active"],
+        keyset: true
+      });
+      for (const product of result.records) {
+        if (product.data.active !== false) {
+          productsById.set(product.id, product);
+        }
+      }
+    }
+
+    return Array.from(productsById.values()).slice(0, 20);
   }
 
   async recordEmailAiGeneration(context: RequestContext, input: EmailAiGenerationAuditInput): Promise<void> {

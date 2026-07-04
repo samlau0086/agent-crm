@@ -1622,7 +1622,13 @@ export class CrmStore {
 
   buildEmailAssistantContext(
     context: RequestContext,
-    input: Pick<EmailAssistantInput, "purpose" | "targetLocale"> & { recordId?: string; objectKey?: string; threadId?: string; sourceMessageId?: string }
+    input: Pick<EmailAssistantInput, "purpose" | "targetLocale" | "productQuery" | "userPrompt" | "sourceText"> & {
+      recordId?: string;
+      objectKey?: string;
+      threadId?: string;
+      sourceMessageId?: string;
+      productIds?: string[];
+    }
   ) {
     requirePermission(context, "ai.use");
     const sourceMessage = input.sourceMessageId ? this.getEmailMessage(context, input.sourceMessageId) : undefined;
@@ -1644,6 +1650,16 @@ export class CrmStore {
     const fields = record ? this.listFieldDefinitions(context, record.objectKey) : [];
     const activities = record ? this.listActivities(context, record.id) : [];
     const messages = thread ? this.listEmailMessages(context, thread.id) : [];
+    const products = this.loadEmailAssistantProducts(context, {
+      productIds: input.productIds,
+      productQuery: input.productQuery,
+      userPrompt: input.userPrompt,
+      sourceText: input.sourceText,
+      record,
+      thread,
+      sourceMessage,
+      messages
+    });
     return buildEmailAssistantContext({
       settings: this.getEmailAiSettings(context),
       purpose: input.purpose,
@@ -1654,8 +1670,67 @@ export class CrmStore {
       messages,
       sourceMessage,
       knowledgeArticles: this.listKnowledgeArticles(context),
+      products,
+      productQuery: input.productQuery,
+      userPrompt: input.userPrompt,
+      sourceText: input.sourceText,
       targetLocale: input.targetLocale
     });
+  }
+
+  private loadEmailAssistantProducts(
+    context: RequestContext,
+    input: {
+      productIds?: string[];
+      productQuery?: string;
+      userPrompt?: string;
+      sourceText?: string;
+      record?: CrmRecord;
+      thread?: EmailThread;
+      sourceMessage?: EmailMessage;
+      messages?: EmailMessage[];
+    }
+  ): CrmRecord[] {
+    const productsById = new Map<string, CrmRecord>();
+    for (const productId of Array.from(new Set(input.productIds ?? [])).slice(0, 10)) {
+      const product = this.data.records.find(
+        (record) => record.id === productId && record.workspaceId === context.workspaceId && record.objectKey === "products" && record.data.active !== false && this.canAccessRecord(context, record)
+      );
+      if (product) {
+        productsById.set(product.id, product);
+      }
+    }
+
+    const queryText = [
+      input.productQuery,
+      input.userPrompt,
+      input.sourceText,
+      input.thread?.subject,
+      input.sourceMessage?.subject,
+      input.sourceMessage?.bodyText,
+      ...(input.messages ?? []).flatMap((message) => [message.subject, message.bodyText]),
+      input.record?.title,
+      input.record ? JSON.stringify(input.record.data).slice(0, 1200) : undefined
+    ]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join("\n")
+      .slice(0, 1500);
+
+    if (queryText.trim().length >= 2) {
+      const result = this.queryRecords(context, "products", {
+        q: queryText.slice(0, 500),
+        pageSize: 20,
+        fields: ["title", "sku", "description", "unitPrice", "unitPriceCurrency", "billingCycle", "mainImageUrl", "attachments", "active"],
+        keyset: true
+      });
+      for (const product of result.records) {
+        if (product.data.active !== false) {
+          productsById.set(product.id, product);
+        }
+      }
+    }
+
+    return Array.from(productsById.values()).slice(0, 20);
   }
 
   recordEmailAiGeneration(context: RequestContext, input: EmailAiGenerationAuditInput): void {
@@ -4591,6 +4666,7 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
       }
       return {
         label,
+        ...(typeof item.objectKey === "string" && item.objectKey.trim() ? { objectKey: item.objectKey.trim() } : {}),
         ...(typeof item.recordId === "string" && item.recordId.trim() ? { recordId: item.recordId.trim() } : {}),
         ...(typeof item.activityId === "string" && item.activityId.trim() ? { activityId: item.activityId.trim() } : {}),
         ...(typeof item.messageId === "string" && item.messageId.trim() ? { messageId: item.messageId.trim() } : {}),
