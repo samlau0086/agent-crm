@@ -2607,9 +2607,11 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "smartReminders" \| "aiAgents" \| "workflows" \| "integrations" \| "operations"/);
   assert.match(source, /const settingsTabs/);
   assert.match(source, /AI Agents/);
-  assert.match(source, /type AiAgentConfigTabKey = "providers" \| "agents"/);
+  assert.match(source, /type AiAgentConfigTabKey = "providers" \| "agents" \| "knowledge"/);
   assert.match(source, /activeAiAgentConfigTab === "providers"[\s\S]*data-testid="ai-provider-profiles"/);
   assert.match(source, /activeAiAgentConfigTab === "agents"[\s\S]*data-testid="ai-agent-harness-config"/);
+  assert.match(source, /activeAiAgentConfigTab === "knowledge"[\s\S]*data-testid="settings-knowledge-base"/);
+  assert.match(source, /<KnowledgeBaseManager/);
   assert.match(source, /Save providers/);
   assert.match(source, /保存 Agent/);
   assert.match(source, /\/api\/ai\/agents/);
@@ -3603,13 +3605,16 @@ await run("email workspace summarizes ai token and automation policy", () => {
 
 await run("email workspace can edit existing knowledge articles for ai context", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
-  assert.match(source, /editingArticleId\?: string/);
+  const knowledgeManager = readFileSync("src/components/knowledge-base-manager.tsx", "utf8");
+  assert.match(knowledgeManager, /editingArticleId\?: string/);
   assert.match(source, /if \(knowledgeDraft\.editingArticleId\)/);
   assert.match(source, /\/api\/knowledge\/articles\/\$\{knowledgeDraft\.editingArticleId\}/);
   assert.match(source, /method: "PATCH"[\s\S]*title: knowledgeDraft\.title[\s\S]*body: knowledgeDraft\.body[\s\S]*tags: splitEmailList\(knowledgeDraft\.tags\)[\s\S]*active: knowledgeDraft\.active/);
-  assert.match(source, /data-testid="knowledge-edit"/);
-  assert.match(source, /onKnowledgeDraftChange\(\{ editingArticleId: article\.id, title: article\.title, body: article\.body, tags: article\.tags\.join\(", "\), active: article\.active \}\)/);
-  assert.match(source, /data-testid="knowledge-edit-cancel"/);
+  assert.match(source, /<KnowledgeBaseManager/);
+  assert.match(knowledgeManager, /data-testid="knowledge-edit"/);
+  assert.match(knowledgeManager, /onKnowledgeDraftChange\(\{ editingArticleId: article\.id, title: article\.title, body: article\.body, tags: article\.tags\.join\(", "\), active: article\.active \}\)/);
+  assert.match(knowledgeManager, /data-testid="knowledge-edit-cancel"/);
+  assert.match(knowledgeManager, /data-testid="knowledge-toggle"/);
 });
 
 await run("talk about this panel can chat and save transcript to rag knowledge", () => {

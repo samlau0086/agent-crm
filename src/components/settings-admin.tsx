@@ -3,12 +3,13 @@
 import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
+import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -28,6 +29,8 @@ interface SettingsAdminProps {
   notificationChannels: NotificationChannel[];
   emailAccounts: EmailAccount[];
   emailAiSettings: EmailAiSettings;
+  knowledgeArticles: KnowledgeArticle[];
+  knowledgeDraft: KnowledgeArticleDraft;
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
   importJobQueueSummary?: ImportJobQueueSummary;
@@ -40,6 +43,9 @@ interface SettingsAdminProps {
   workflowApprovals: WorkflowActionApproval[];
   onRecordsUpdated?: (records: CrmRecord[]) => void;
   onCustomerLevelSettingsUpdated?: (settings: CustomerLevelSettings) => void;
+  onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
+  onCreateKnowledgeArticle: () => void;
+  onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "active">>) => void;
 }
 
 type ObjectDraft = {
@@ -194,7 +200,7 @@ const fieldTypes: FieldDefinition["type"][] = [
 ];
 
 type SettingsTabKey = "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations";
-type AiAgentConfigTabKey = "providers" | "agents";
+type AiAgentConfigTabKey = "providers" | "agents" | "knowledge";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[]; providerProfiles: AiProviderProfile[] };
 type TagSelectOption = { value: string; label: string; description?: string };
@@ -2080,6 +2086,16 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 <strong>Agents</strong>
                 <span>agent.md、Harness、工具权限与测试运行</span>
               </button>
+              <button
+                className={`settings-tab-button ${activeAiAgentConfigTab === "knowledge" ? "active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeAiAgentConfigTab === "knowledge"}
+                onClick={() => setActiveAiAgentConfigTab("knowledge")}
+              >
+                <strong>知识库</strong>
+                <span>RAG 知识、邮件 AI、工作流和 Talk about this 来源</span>
+              </button>
             </div>
             {activeAiAgentConfigTab === "providers" ? (
             <div className="settings-panel harness-config-panel" data-testid="ai-provider-profiles">
@@ -2404,6 +2420,21 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 </div>
               ) : null}
             </div>
+            ) : null}
+            {activeAiAgentConfigTab === "knowledge" ? (
+              <div className="settings-panel harness-config-panel" data-testid="settings-knowledge-base">
+                <KnowledgeBaseManager
+                  knowledgeArticles={props.knowledgeArticles}
+                  knowledgeDraft={props.knowledgeDraft}
+                  activeLimit={props.emailAiSettings.maxKnowledgeArticles}
+                  disabled={isPending || !canManage}
+                  helperText="这里是全局 AI 知识库管理入口。邮件页仍保留快捷入口，但实际读写同一套知识条目。"
+                  onKnowledgeDraftChange={props.onKnowledgeDraftChange}
+                  onCreateKnowledgeArticle={props.onCreateKnowledgeArticle}
+                  onUpdateKnowledgeArticle={props.onUpdateKnowledgeArticle}
+                />
+                {!canManage ? <p className="subtle" style={{ marginTop: 8 }}>需要 crm.admin 权限才能维护知识库。</p> : null}
+              </div>
             ) : null}
           </section>
 

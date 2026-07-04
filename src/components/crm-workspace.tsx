@@ -76,6 +76,7 @@ import {
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
+import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "@/lib/crm/languages";
 import { SettingsAdmin } from "@/components/settings-admin";
@@ -477,13 +478,6 @@ type TaskEditDraft = {
   dueAt: string;
   text: string;
   attachments: ActivityAttachment[];
-};
-type KnowledgeArticleDraft = {
-  editingArticleId?: string;
-  title: string;
-  body: string;
-  tags: string;
-  active: boolean;
 };
 type ViewDraft = {
   name: string;
@@ -6528,6 +6522,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             notificationChannels={props.notificationChannels}
             emailAccounts={props.emailAccounts}
             emailAiSettings={emailAiSettings}
+            knowledgeArticles={knowledgeArticles}
+            knowledgeDraft={knowledgeDraft}
             auditLogs={props.auditLogs}
             backupFiles={props.backupFiles}
             importJobQueueSummary={props.importJobQueueSummary}
@@ -6540,6 +6536,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             workflowApprovals={props.workflowApprovals}
             onRecordsUpdated={mergeLoadedRecords}
             onCustomerLevelSettingsUpdated={setCustomerLevelSettings}
+            onKnowledgeDraftChange={setKnowledgeDraft}
+            onCreateKnowledgeArticle={() => runAction(createKnowledgeArticle)}
+            onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
           />
         )}
 
@@ -10658,53 +10657,16 @@ function EmailWorkspace({
             </div>
           ) : null}
           {canManageEmailSettings ? (
-          <div className="settings-item">
-            <strong>系统知识库</strong>
-            {knowledgeDraft.editingArticleId ? <div className="subtle">正在编辑已有知识条目，保存后会更新 AI 邮件可用的知识库内容。</div> : null}
-            <div className="form-grid" style={{ marginTop: 8 }}>
-              <label>
-                <span className="subtle">标题</span>
-                <input className="input" data-testid="knowledge-title" value={knowledgeDraft.title} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, title: event.target.value })} />
-              </label>
-              <label>
-                <span className="subtle">标签</span>
-                <input className="input" data-testid="knowledge-tags" value={knowledgeDraft.tags} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, tags: event.target.value })} placeholder="pricing, onboarding" />
-              </label>
-              <label className="settings-toggle">
-                <input type="checkbox" checked={knowledgeDraft.active} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, active: event.target.checked })} />
-                启用
-              </label>
-              <label className="wide">
-                <span className="subtle">内容</span>
-                <textarea className="textarea" data-testid="knowledge-body" value={knowledgeDraft.body} onChange={(event) => onKnowledgeDraftChange({ ...knowledgeDraft, body: event.target.value })} />
-              </label>
-            </div>
-            <button className="secondary-button" data-testid="knowledge-create" type="button" style={{ marginTop: 8 }} onClick={onCreateKnowledgeArticle} disabled={disabled || !knowledgeDraft.title.trim() || !knowledgeDraft.body.trim()}>
-              <Save size={16} />
-              {knowledgeDraft.editingArticleId ? "保存知识" : "添加知识"}
-            </button>
-            {knowledgeDraft.editingArticleId ? (
-              <button className="ghost-button" data-testid="knowledge-edit-cancel" type="button" style={{ marginTop: 8, marginLeft: 8 }} onClick={() => onKnowledgeDraftChange({ title: "", body: "", tags: "", active: true })} disabled={disabled}>
-                <XCircle size={16} />
-                取消编辑
-              </button>
-            ) : null}
-            <div className="toolbar" style={{ marginTop: 8 }}>
-              {knowledgeArticles.map((article) => (
-                <button
-                  className={article.active ? "secondary-button" : "danger-button"}
-                  data-testid="knowledge-edit"
-                  key={article.id}
-                  type="button"
-                  onClick={() => onKnowledgeDraftChange({ editingArticleId: article.id, title: article.title, body: article.body, tags: article.tags.join(", "), active: article.active })}
-                  disabled={disabled}
-                >
-                  {article.title} · {article.active ? "on" : "off"}
-                </button>
-              ))}
-              {knowledgeArticles.filter((article) => article.active).length === 0 ? <span className="subtle">暂无启用文章</span> : null}
-            </div>
-          </div>
+            <KnowledgeBaseManager
+              knowledgeArticles={knowledgeArticles}
+              knowledgeDraft={knowledgeDraft}
+              activeLimit={aiSettings.maxKnowledgeArticles}
+              helperText="邮件页保留知识库快捷入口；完整 AI Agent 与知识库配置也可在 设置 -> AI Agents -> 知识库 管理。"
+              disabled={disabled}
+              onKnowledgeDraftChange={onKnowledgeDraftChange}
+              onCreateKnowledgeArticle={onCreateKnowledgeArticle}
+              onUpdateKnowledgeArticle={onUpdateKnowledgeArticle}
+            />
           ) : null}
         </div>
       </section>
