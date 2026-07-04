@@ -920,6 +920,29 @@ button {
   color: var(--muted);
 }
 
+.email-compose-linked-record-field {
+  display: grid;
+  gap: 4px;
+}
+
+.email-compose-linked-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.email-compose-linked-record-link {
+  justify-content: flex-start;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.email-compose-linked-record-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .quote-editor {
   padding: 12px;
   border: 1px solid var(--line);

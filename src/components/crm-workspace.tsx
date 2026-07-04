@@ -7906,6 +7906,7 @@ function EmailWorkspace({
   const [composeAiPrompt, setComposeAiPrompt] = useState("");
   const [composeCcVisible, setComposeCcVisible] = useState(false);
   const [composeBccVisible, setComposeBccVisible] = useState(false);
+  const [composeRecordPickerEditing, setComposeRecordPickerEditing] = useState(false);
   const [aiProviderApiKeyDraft, setAiProviderApiKeyDraft] = useState("");
   const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
@@ -10070,12 +10071,20 @@ function EmailWorkspace({
                       ))}
                     </select>
                   </label>
-                  <EmailRecordSearchDropdown
+                  <EmailLinkedRecordPicker
+                    editing={composeRecordPickerEditing}
                     objects={objects}
                     records={records}
                     testId="email-compose-record"
                     value={linkedRecordId}
-                    onChange={(nextRecordId) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: nextRecordId }))}
+                    onChange={(nextRecordId) => {
+                      onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: nextRecordId }));
+                      if (nextRecordId) {
+                        setComposeRecordPickerEditing(false);
+                      }
+                    }}
+                    onEdit={() => setComposeRecordPickerEditing(true)}
+                    onOpenRecord={(record) => onOpenTalkSourceRecord({ objectKey: record.objectKey, recordId: record.id })}
                     onRecordsLoaded={onRecordsLoaded}
                   />
                   <div className="email-compose-recipient-row">
@@ -10974,6 +10983,60 @@ function EmailContactSearchDropdown({
       onChange={onChange}
       onSearchChange={setSearch}
     />
+  );
+}
+
+function EmailLinkedRecordPicker({
+  editing,
+  objects,
+  records,
+  testId,
+  value,
+  onChange,
+  onEdit,
+  onOpenRecord,
+  onRecordsLoaded
+}: {
+  editing: boolean;
+  objects: ObjectDefinition[];
+  records: CrmRecord[];
+  testId?: string;
+  value: string;
+  onChange: (recordId: string) => void;
+  onEdit: () => void;
+  onOpenRecord: (record: CrmRecord) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+}) {
+  const objectLabelByKey = useMemo(() => new Map(objects.map((object) => [object.key, object.label])), [objects]);
+  const selectedRecord = records.find((record) => record.id === value);
+
+  if (!selectedRecord || editing) {
+    return (
+      <EmailRecordSearchDropdown
+        objects={objects}
+        records={records}
+        testId={testId}
+        value={value}
+        onChange={onChange}
+        onRecordsLoaded={onRecordsLoaded}
+      />
+    );
+  }
+
+  return (
+    <div className="email-compose-linked-record-field" data-testid={testId}>
+      <span className="subtle">关联记录</span>
+      <div className="email-compose-linked-record">
+        <button className="secondary-button email-compose-linked-record-link" type="button" onClick={() => onOpenRecord(selectedRecord)}>
+          <Link size={14} />
+          <span>{selectedRecord.title}</span>
+          <span className="subtle">{objectLabelByKey.get(selectedRecord.objectKey) ?? selectedRecord.objectKey}</span>
+        </button>
+        <button className="icon-button" type="button" aria-label="编辑关联记录" title="编辑关联记录" onClick={onEdit}>
+          <Pencil size={14} />
+        </button>
+      </div>
+    </div>
   );
 }
 

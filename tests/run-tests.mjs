@@ -3693,7 +3693,10 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /aiAssisted:\s*false/);
   assert.match(source, /aiSources:\s*undefined/);
   assert.match(source, /data-testid="email-compose-account"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, accountId: event\.target\.value \}\)/);
-  assert.match(source, /<EmailRecordSearchDropdown[\s\S]*testId="email-compose-record"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, recordId: nextRecordId \}\)/);
+  assert.match(source, /<EmailLinkedRecordPicker[\s\S]*testId="email-compose-record"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, recordId: nextRecordId \}\)/);
+  assert.match(source, /function EmailLinkedRecordPicker\(/);
+  assert.match(source, /onOpenRecord=\{\(record\) => onOpenTalkSourceRecord\(\{ objectKey: record\.objectKey, recordId: record\.id \}\)\}/);
+  assert.match(source, /aria-label="编辑关联记录"/);
   assert.match(source, /testId="email-compose-to"[\s\S]*onChange=\{\(nextValue\) => onEmailDraftChange\(clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, to: nextValue \}\)\)\}/);
   assert.match(source, /testId="email-compose-cc"[\s\S]*onChange=\{\(nextValue\) => onEmailDraftChange\(clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, cc: nextValue \}\)\)\}/);
   assert.match(source, /testId="email-compose-bcc"[\s\S]*onChange=\{\(nextValue\) => onEmailDraftChange\(clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, bcc: nextValue \}\)\)\}/);
