@@ -2764,6 +2764,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       await openTalkSourceRecord({ objectKey: reminder.objectKey, recordId: reminder.recordId });
       return;
     }
+    const sourceRecord = reminder.sources.find((source) => source.objectKey && source.recordId);
+    if (sourceRecord?.objectKey && sourceRecord.recordId) {
+      await openTalkSourceRecord({ objectKey: sourceRecord.objectKey, recordId: sourceRecord.recordId });
+      return;
+    }
     const sourceObjectKey = reminder.sources.find((source) => source.objectKey)?.objectKey;
     const targetObjectKey =
       reminder.objectKey ||
@@ -2785,7 +2790,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (props.objects.some((object) => object.key === targetObjectKey)) {
       setActiveObjectKey(targetObjectKey);
     }
-    router.push(`${crmPathForNav(targetObjectKey)}?${nextParams.toString()}`);
+    router.push(`${crmPathForNav(nextNav, targetObjectKey)}?${nextParams.toString()}`);
     showToast({ intent: "info", message: "已打开相关模块，可按提醒条件继续筛选处理。" });
   }
 
@@ -5084,16 +5089,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             smartReminderGenerating={isGeneratingSmartReminders}
             onOpenObject={openObject}
             onOpenDeal={openRecord}
-            onOpenSmartReminder={(reminder) => runAction(() => openSmartReminderRecord(reminder))}
+            onOpenSmartReminder={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
             onGenerateSmartReminders={() => runAction(generateSmartReminders)}
-            onCompleteSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "done" }))}
-            onDeleteSmartReminder={(reminder) => runAction(() => requestSmartReminderDelete(reminder))}
-            onDismissSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
-            onRestoreSmartReminder={(reminder) => runAction(() => restoreSmartReminder(reminder))}
-            onSnoozeSmartReminder={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
-            onConvertSmartReminderToTask={(reminder) => runAction(() => convertSmartReminderToTask(reminder))}
+            onCompleteSmartReminder={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+            onDeleteSmartReminder={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
+            onDismissSmartReminder={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+            onRestoreSmartReminder={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
+            onSnoozeSmartReminder={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
+            onConvertSmartReminderToTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
             pendingSmartReminderDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
-            onCancelSmartReminderDeleteRequest={(request) => runAction(() => cancelRecordChangeRequest(request))}
+            onCancelSmartReminderDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
             onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
           />
         )}
@@ -5427,16 +5432,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         reminders={selectedRecordSmartReminders}
                         title="AI 跟进提醒"
                         emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
-                        onComplete={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "done" }))}
-                        onDelete={(reminder) => runAction(() => requestSmartReminderDelete(reminder))}
-                        onConvertTask={(reminder) => runAction(() => convertSmartReminderToTask(reminder))}
-                        onDismiss={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+                        onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+                        onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
+                        onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
+                        onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
                         onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
-                        onOpenRecord={(reminder) => runAction(() => openSmartReminderRecord(reminder))}
-                        onRestore={(reminder) => runAction(() => restoreSmartReminder(reminder))}
-                        onSnooze={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
+                        onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
+                        onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
+                        onSnooze={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
                         pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
-                        onCancelDeleteRequest={(request) => runAction(() => cancelRecordChangeRequest(request))}
+                        onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
                       />
                     ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
