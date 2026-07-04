@@ -1718,8 +1718,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     signatureId: "",
     attachments: [],
     scheduledSendAt: "",
-    trackingEnabled: false,
-    groupSendMode: false,
+    trackingEnabled: true,
+    groupSendMode: true,
     autoTranslateEnabled: false,
     preferredTimeSendEnabled: false,
     aiAssisted: false
@@ -2837,18 +2837,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
 
-    await postJson(`/api/records/${activeObject.key}`, {
-      title: createTitle.trim(),
-      stageKey: activeObject.key === "deals" ? activePipeline?.stages[0]?.key : undefined,
-      ownerId: createOwnerId || undefined,
-      data: parseFormValues(objectFields, createValues, activeObject.key, currencyRecords)
+    const created = await fetchJson<CrmRecord>(`/api/records/${activeObject.key}`, {
+      method: "POST",
+      body: {
+        title: createTitle.trim(),
+        stageKey: activeObject.key === "deals" ? activePipeline?.stages[0]?.key : undefined,
+        ownerId: createOwnerId || undefined,
+        data: parseFormValues(objectFields, createValues, activeObject.key, currencyRecords)
+      }
     });
 
-    setMessage(`已创建${activeObject.label}`);
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
     setCreateValues(buildInitialValues(objectFields, activeObject.key));
-    setRecordPanelMode("closed");
+    openRecord(created);
+    setMessage(`已创建${activeObject.label}：${created.title}`);
     router.refresh();
   }
 
@@ -4283,8 +4286,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       replyOriginalSentAt: undefined,
       attachments: [],
       scheduledSendAt: "",
-      trackingEnabled: false,
-      groupSendMode: false,
+      trackingEnabled: true,
+      groupSendMode: true,
       autoTranslateEnabled: false,
       preferredTimeSendEnabled: false,
       aiAssisted: false,

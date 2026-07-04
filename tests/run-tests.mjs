@@ -3036,6 +3036,8 @@ await run("record create and detail panels render full width in the main content
 
   assert.match(source, /recordPanelMode === "closed" && \([\s\S]*<section className="table-shell">/);
   assert.match(source, /recordPanelMode !== "closed" && \([\s\S]*<aside className=\{`detail-panel record-drawer \$\{recordPanelMode === "import" \? "import-drawer-modal" : ""\}`\}>/);
+  assert.match(source, /const created = await fetchJson<CrmRecord>\(`\/api\/records\/\$\{activeObject\.key\}`,[\s\S]*method: "POST"[\s\S]*openRecord\(created\)/);
+  assert.doesNotMatch(source, /async function submitCreateRecord\(\)[\s\S]*setRecordPanelMode\("closed"\)[\s\S]*async function loadRecordForApprovalDecision/);
   assert.match(source, /className="drawer-header record-panel-header"/);
   assert.match(source, /data-testid="record-panel-back"[\s\S]*runAction\(closeRecordPanel\)[\s\S]*recordReturnEmailThreadId \? "返回邮件" : "返回列表"/);
   assert.match(source, /const \[recordActivityComposerType, setRecordActivityComposerType\] = useState<Activity\["type"\] \| "">\(""\)/);
@@ -3734,6 +3736,8 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /data-testid="email-compose-ai-prompt"/);
   assert.match(source, /data-testid="email-compose-ai-prompt-generate"/);
   assert.match(source, /data-testid="email-compose-ai-generate"/);
+  assert.ok((source.match(/trackingEnabled:\s*true/g) ?? []).length >= 2);
+  assert.ok((source.match(/groupSendMode:\s*true/g) ?? []).length >= 2);
   assert.match(source, /function EmailRecipientInput/);
   assert.match(source, /email-recipient-suggestions/);
   assert.match(source, /event\.key === "ArrowDown"/);
