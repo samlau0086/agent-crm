@@ -3748,6 +3748,7 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.doesNotMatch(source, /data-testid="email-open-ai"/);
   assert.match(source, /data-testid="email-compose-signature"/);
   assert.match(source, /data-testid="email-signature-preview"/);
+  assert.match(source, /email-compose-editor-shell[\s\S]*data-testid="email-compose-signature"[\s\S]*data-testid="email-signature-preview"/);
   assert.match(source, /contentEditable[\s\S]*data-testid="email-compose-body"/);
   assert.match(source, /document\.execCommand\([\s\S]*"insertHTML"[\s\S]*data-content-base64/);
   assert.match(source, /data-testid="email-attachment-modal"/);

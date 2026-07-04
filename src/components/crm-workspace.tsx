@@ -10117,14 +10117,6 @@ function EmailWorkspace({
                     <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
                   </label>
                   <label>
-                    <span className="subtle">签名</span>
-                    <select className="select" data-testid="email-compose-signature" value={selectedSignature.id} onChange={(event) => onEmailDraftChange({ ...emailDraft, signatureId: event.target.value })}>
-                      {signatureOptions.map((signature) => (
-                        <option key={signature.id} value={signature.id}>{signature.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
                     <span className="subtle">定时发送</span>
                     <input
                       className="input"
@@ -10241,6 +10233,14 @@ function EmailWorkspace({
                     suppressContentEditableWarning
                   />
                 </div>
+                <label>
+                  <span className="subtle">签名</span>
+                  <select className="select" data-testid="email-compose-signature" value={selectedSignature.id} onChange={(event) => onEmailDraftChange({ ...emailDraft, signatureId: event.target.value })}>
+                    {signatureOptions.map((signature) => (
+                      <option key={signature.id} value={signature.id}>{signature.label}</option>
+                    ))}
+                  </select>
+                </label>
                 {selectedSignature.id !== noEmailSignatureId ? (
                   <div className="email-signature-preview" data-testid="email-signature-preview">
                     <span className="subtle">签名预览，发送时追加</span>
