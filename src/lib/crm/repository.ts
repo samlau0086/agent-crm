@@ -4083,6 +4083,69 @@ export class PrismaCrmRepository {
     return { reminder: updated, task };
   }
 
+  async requestSmartReminderDelete(context: RequestContext, id: string, reason: string): Promise<RecordChangeRequest> {
+    requirePermission(context, "ai.use");
+    const cleanedReason = reason.trim();
+    if (cleanedReason.length < 1) {
+      throw new Error("请填写删除原因");
+    }
+    const reminder = await this.getSmartReminderForAction(context, id);
+    const existingRequest = await this.db.recordChangeRequest.findFirst({
+      where: {
+        workspaceId: context.workspaceId,
+        objectKey: "smart_reminders",
+        recordId: reminder.id,
+        action: "delete",
+        status: "pending"
+      }
+    });
+    if (existingRequest) {
+      return mapRecordChangeRequest(existingRequest);
+    }
+    const request = await this.db.recordChangeRequest.create({
+      data: {
+        workspaceId: context.workspaceId,
+        objectKey: "smart_reminders",
+        recordId: reminder.id,
+        action: "delete",
+        status: "pending",
+        reason: cleanedReason,
+        requestedById: context.user.id,
+        recordTitle: reminder.title,
+        patch: toJsonObject({
+          smartReminder: {
+            kind: reminder.kind,
+            priority: reminder.priority,
+            title: reminder.title,
+            body: reminder.body,
+            actionLabel: reminder.actionLabel,
+            dueAt: reminder.dueAt,
+            status: reminder.status,
+            snoozedUntil: reminder.snoozedUntil,
+            sources: reminder.sources,
+            createdAt: reminder.createdAt
+          }
+        })
+      }
+    });
+    await this.writeAuditLog(context, "record.change_requested", "record_change_request", request.id, {
+      objectKey: "smart_reminders",
+      summary: `Requested delete approval for smart reminder ${reminder.title}`,
+      details: { reminderId: reminder.id, action: "delete", reason: cleanedReason, priority: reminder.priority, kind: reminder.kind }
+    });
+    return mapRecordChangeRequest(request);
+  }
+
+  async deleteSmartReminder(context: RequestContext, id: string): Promise<void> {
+    requirePermission(context, "ai.use");
+    const reminder = await this.getSmartReminderForAction(context, id);
+    await this.db.smartReminder.delete({ where: { id: reminder.id } });
+    await this.writeAuditLog(context, "delete", "smart_reminder", id, {
+      summary: `Deleted smart reminder ${reminder.title}`,
+      details: { reminderId: reminder.id, priority: reminder.priority, kind: reminder.kind }
+    });
+  }
+
   async listObjectDefinitions(context: RequestContext): Promise<ObjectDefinition[]> {
     requirePermission(context, "crm.read");
     const objects = await this.db.objectDefinition.findMany({
@@ -5006,6 +5069,8 @@ export class PrismaCrmRepository {
       await this.updateRecord(context, request.objectKey, request.recordId, await this.buildApprovedRecordPatch(request));
     } else if (request.action === "delete" && request.objectKey === "activities") {
       await this.deleteActivity(context, request.recordId);
+    } else if (request.action === "delete" && request.objectKey === "smart_reminders") {
+      await this.deleteSmartReminder(context, request.recordId);
     } else if (request.action === "delete") {
       await this.deleteRecord(context, request.objectKey, request.recordId);
     } else {

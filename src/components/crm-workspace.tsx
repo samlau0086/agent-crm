@@ -1946,6 +1946,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       ),
     [recordChangeRequests]
   );
+  const pendingSmartReminderDeleteRequestsById = useMemo(
+    () =>
+      new Map(
+        recordChangeRequests
+          .filter((request) => request.objectKey === "smart_reminders" && request.action === "delete" && request.status === "pending")
+          .map((request) => [request.recordId, request])
+      ),
+    [recordChangeRequests]
+  );
   const selectedFields = useMemo(
     () =>
       props.fields
@@ -4653,6 +4662,24 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     showSuccess("已转为任务");
   }
 
+  async function requestSmartReminderDelete(reminder: SmartReminder) {
+    const changeReason = await requestPrompt({
+      title: "提交提醒删除审批",
+      message: `请填写删除“${reminder.title}”的原因。管理员审核通过后才会正式删除。`,
+      placeholder: "例如：建议不再适用，已由其他跟进覆盖"
+    });
+    if (!changeReason?.trim()) {
+      setMessage("已取消删除审批");
+      return;
+    }
+    const result = await fetchJson<RecordChangeRequestResponse>(`/api/smart-reminders/${reminder.id}`, {
+      method: "DELETE",
+      body: { changeReason: changeReason.trim() }
+    });
+    setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [result.request]));
+    showSuccess("删除申请已提交，等待管理员审核");
+  }
+
   function runAction(action: () => Promise<void>) {
     setMessage(null);
     setError(null);
@@ -4959,10 +4986,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onOpenSmartReminder={(reminder) => runAction(() => openSmartReminderRecord(reminder))}
             onGenerateSmartReminders={() => runAction(generateSmartReminders)}
             onCompleteSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "done" }))}
+            onDeleteSmartReminder={(reminder) => runAction(() => requestSmartReminderDelete(reminder))}
             onDismissSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
             onRestoreSmartReminder={(reminder) => runAction(() => restoreSmartReminder(reminder))}
             onSnoozeSmartReminder={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
             onConvertSmartReminderToTask={(reminder) => runAction(() => convertSmartReminderToTask(reminder))}
+            pendingSmartReminderDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+            onCancelSmartReminderDeleteRequest={(request) => runAction(() => cancelRecordChangeRequest(request))}
             onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
           />
         )}
@@ -5297,12 +5327,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         title="AI 跟进提醒"
                         emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
                         onComplete={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "done" }))}
+                        onDelete={(reminder) => runAction(() => requestSmartReminderDelete(reminder))}
                         onConvertTask={(reminder) => runAction(() => convertSmartReminderToTask(reminder))}
                         onDismiss={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
                         onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
                         onOpenRecord={(reminder) => runAction(() => openSmartReminderRecord(reminder))}
                         onRestore={(reminder) => runAction(() => restoreSmartReminder(reminder))}
                         onSnooze={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
+                        pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+                        onCancelDeleteRequest={(request) => runAction(() => cancelRecordChangeRequest(request))}
                       />
                     ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
@@ -7356,15 +7389,18 @@ function Dashboard({
   deals,
   smartReminders,
   smartReminderGenerating,
+  pendingSmartReminderDeleteRequestsById,
   onOpenObject,
   onOpenDeal,
   onOpenSmartReminder,
   onGenerateSmartReminders,
   onCompleteSmartReminder,
+  onDeleteSmartReminder,
   onDismissSmartReminder,
   onRestoreSmartReminder,
   onSnoozeSmartReminder,
   onConvertSmartReminderToTask,
+  onCancelSmartReminderDeleteRequest,
   onMoveDealStage
 }: {
   objects: ObjectDefinition[];
@@ -7376,15 +7412,18 @@ function Dashboard({
   deals: CrmRecord[];
   smartReminders: SmartReminder[];
   smartReminderGenerating: boolean;
+  pendingSmartReminderDeleteRequestsById: Map<string, RecordChangeRequest>;
   onOpenObject: (objectKey: string) => void;
   onOpenDeal: (deal: CrmRecord) => void;
   onOpenSmartReminder: (reminder: SmartReminder) => void;
   onGenerateSmartReminders: () => void;
   onCompleteSmartReminder: (reminder: SmartReminder) => void;
+  onDeleteSmartReminder: (reminder: SmartReminder) => void;
   onDismissSmartReminder: (reminder: SmartReminder) => void;
   onRestoreSmartReminder: (reminder: SmartReminder) => void;
   onSnoozeSmartReminder: (reminder: SmartReminder) => void;
   onConvertSmartReminderToTask: (reminder: SmartReminder) => void;
+  onCancelSmartReminderDeleteRequest: (request: RecordChangeRequest) => void;
   onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
 }) {
   const defaultPipeline = pipelines.find((pipeline) => pipeline.objectKey === "deals" && pipeline.isDefault);
@@ -7434,11 +7473,14 @@ function Dashboard({
         emptyMessage="暂无 AI 智能提醒。可手动刷新生成今日跟进建议。"
         onComplete={onCompleteSmartReminder}
         onConvertTask={onConvertSmartReminderToTask}
+        onDelete={onDeleteSmartReminder}
         onDismiss={onDismissSmartReminder}
         onGenerate={onGenerateSmartReminders}
         onOpenRecord={onOpenSmartReminder}
         onRestore={onRestoreSmartReminder}
         onSnooze={onSnoozeSmartReminder}
+        pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+        onCancelDeleteRequest={onCancelSmartReminderDeleteRequest}
       />
 
       <div className="workspace-grid">
@@ -10555,11 +10597,14 @@ function SmartReminderPanel({
   title,
   onComplete,
   onConvertTask,
+  onDelete,
   onDismiss,
   onGenerate,
   onOpenRecord,
   onRestore,
-  onSnooze
+  onSnooze,
+  pendingDeleteRequestsById,
+  onCancelDeleteRequest
 }: {
   compact: boolean;
   emptyMessage: string;
@@ -10568,11 +10613,14 @@ function SmartReminderPanel({
   title: string;
   onComplete: (reminder: SmartReminder) => void;
   onConvertTask: (reminder: SmartReminder) => void;
+  onDelete: (reminder: SmartReminder) => void;
   onDismiss: (reminder: SmartReminder) => void;
   onGenerate: () => void;
   onOpenRecord: (reminder: SmartReminder) => void;
   onRestore: (reminder: SmartReminder) => void;
   onSnooze: (reminder: SmartReminder) => void;
+  pendingDeleteRequestsById?: Map<string, RecordChangeRequest>;
+  onCancelDeleteRequest?: (request: RecordChangeRequest) => void;
 }) {
   const [activeView, setActiveView] = useState<SmartReminderPanelView>("open");
   const now = Date.now();
@@ -10635,8 +10683,10 @@ function SmartReminderPanel({
       </div>
       {visibleReminders.length ? (
         <div className="smart-reminder-list">
-          {visibleReminders.map((reminder) => (
-            <article className={`smart-reminder-card smart-reminder-${reminder.priority}`} key={reminder.id}>
+          {visibleReminders.map((reminder) => {
+            const pendingDeleteRequest = pendingDeleteRequestsById?.get(reminder.id);
+            return (
+            <article className={`smart-reminder-card smart-reminder-${reminder.priority} ${pendingDeleteRequest ? "delete-pending" : ""}`} key={reminder.id}>
               <div className="smart-reminder-main">
                 <span className="smart-reminder-icon">
                   <Bot size={16} />
@@ -10650,6 +10700,7 @@ function SmartReminderPanel({
                     {reminder.status === "dismissed" ? <span className="subtle-badge">已忽略</span> : null}
                     {reminder.status === "done" ? <span className="subtle-badge">已完成</span> : null}
                     {reminder.status === "open" && isSmartReminderSnoozed(reminder, now) ? <span className="subtle-badge">稍后提醒</span> : null}
+                    {pendingDeleteRequest ? <span className="danger-badge">删除待审核</span> : null}
                   </div>
                   <p>{reminder.body}</p>
                   <div className="smart-reminder-meta">
@@ -10657,6 +10708,7 @@ function SmartReminderPanel({
                     {reminder.dueAt ? <span>建议截止 {formatDateTimeSeconds(reminder.dueAt)}</span> : null}
                     {reminder.snoozedUntil && isSmartReminderSnoozed(reminder, now) ? <span>稍后至 {formatDateTimeSeconds(reminder.snoozedUntil)}</span> : null}
                     {reminder.sources.length ? <span>{reminder.sources.slice(0, 2).map((source) => source.label).join("、")}</span> : null}
+                    {pendingDeleteRequest ? <span>删除原因：{pendingDeleteRequest.reason}</span> : null}
                   </div>
                 </div>
               </div>
@@ -10665,7 +10717,14 @@ function SmartReminderPanel({
                   <Eye size={14} />
                   打开记录
                 </button>
-                {reminder.status === "open" && !isSmartReminderSnoozed(reminder, now) ? (
+                {pendingDeleteRequest ? (
+                  onCancelDeleteRequest ? (
+                    <button type="button" className="danger-button" onClick={() => onCancelDeleteRequest(pendingDeleteRequest)}>
+                      <RotateCcw size={14} />
+                      取消申请
+                    </button>
+                  ) : null
+                ) : reminder.status === "open" && !isSmartReminderSnoozed(reminder, now) ? (
                   <>
                     <button type="button" className="secondary-button" onClick={() => onComplete(reminder)}>
                       <CheckCircle2 size={14} />
@@ -10682,16 +10741,27 @@ function SmartReminderPanel({
                     <button type="button" className="ghost-button" onClick={() => onDismiss(reminder)}>
                       忽略
                     </button>
+                    <button type="button" className="danger-button" onClick={() => onDelete(reminder)}>
+                      <Trash2 size={14} />
+                      删除
+                    </button>
                   </>
                 ) : (
-                  <button type="button" className="secondary-button" onClick={() => onRestore(reminder)}>
-                    <RotateCcw size={14} />
-                    恢复
-                  </button>
+                  <>
+                    <button type="button" className="secondary-button" onClick={() => onRestore(reminder)}>
+                      <RotateCcw size={14} />
+                      恢复
+                    </button>
+                    <button type="button" className="danger-button" onClick={() => onDelete(reminder)}>
+                      <Trash2 size={14} />
+                      删除
+                    </button>
+                  </>
                 )}
               </div>
             </article>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="empty-state compact">{viewEmptyMessage}</div>

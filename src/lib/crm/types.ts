@@ -480,6 +480,9 @@ export interface RecordChangeRequest {
   patch?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">> & {
     previous?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>;
     activity?: Partial<Pick<Activity, "recordId" | "type" | "title" | "body" | "dueAt" | "completedAt" | "archivedAt" | "createdAt">>;
+    smartReminder?: Partial<
+      Pick<SmartReminder, "kind" | "priority" | "title" | "body" | "actionLabel" | "dueAt" | "status" | "snoozedUntil" | "sources" | "createdAt">
+    >;
   };
   recordTitle: string;
   createdAt: string;

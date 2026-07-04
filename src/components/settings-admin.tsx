@@ -4585,13 +4585,14 @@ function RecordChangeRequestAdminPanel({
             const requestFields = fields.filter((field) => field.objectKey === request.objectKey);
             const reviewRows = buildRecordReviewRows(request, record, requestFields, users, records, activities);
             const requestedBy = users.find((user) => user.id === request.requestedById);
+            const objectLabel = request.objectKey === "smart_reminders" ? "AI 智能提醒" : object?.label ?? request.objectKey;
             return (
               <article className={`record-review-card ${request.action === "delete" ? "delete-review" : "update-review"}`} data-testid={`record-change-request-${request.id}`} key={request.id}>
                 <div className="record-review-header">
                   <div>
                     <strong>{request.recordTitle}</strong>
                     <div className="subtle">
-                      {object?.label ?? request.objectKey} · {requestedBy?.name ?? request.requestedById} · {formatAuditTime(request.createdAt)}
+                      {objectLabel} · {requestedBy?.name ?? request.requestedById} · {formatAuditTime(request.createdAt)}
                     </div>
                   </div>
                   <span className={request.action === "delete" ? "danger-badge" : "badge"}>{request.action === "delete" ? "删除申请" : "修改申请"}</span>
@@ -4661,6 +4662,29 @@ function buildRecordReviewRows(
   const fieldByKey = new Map(fields.map((field) => [field.key, field]));
 
   if (request.action === "delete") {
+    if (request.objectKey === "smart_reminders") {
+      const reminder = request.patch?.smartReminder;
+      if (!reminder) {
+        return rows;
+      }
+      rows.push({ key: "title", label: "提醒标题", oldValue: String(reminder.title ?? request.recordTitle), newValue: String(reminder.title ?? request.recordTitle) });
+      if (reminder.body) {
+        rows.push({ key: "body", label: "建议内容", oldValue: String(reminder.body), newValue: String(reminder.body) });
+      }
+      if (reminder.actionLabel) {
+        rows.push({ key: "actionLabel", label: "建议动作", oldValue: String(reminder.actionLabel), newValue: String(reminder.actionLabel) });
+      }
+      rows.push({ key: "priority", label: "优先级", oldValue: String(reminder.priority ?? ""), newValue: String(reminder.priority ?? "") });
+      rows.push({ key: "kind", label: "提醒类型", oldValue: String(reminder.kind ?? ""), newValue: String(reminder.kind ?? "") });
+      if (reminder.dueAt) {
+        rows.push({ key: "dueAt", label: "建议截止", oldValue: formatAuditTime(String(reminder.dueAt)), newValue: formatAuditTime(String(reminder.dueAt)) });
+      }
+      if (Array.isArray(reminder.sources) && reminder.sources.length > 0) {
+        const sources = reminder.sources.map((source) => source.label).join("、");
+        rows.push({ key: "sources", label: "来源", oldValue: sources, newValue: sources });
+      }
+      return rows;
+    }
     if (request.objectKey === "activities") {
       const activity = activities.find((candidate) => candidate.id === request.recordId) ?? request.patch?.activity;
       if (!activity) {

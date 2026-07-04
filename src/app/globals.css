@@ -478,6 +478,11 @@ button {
   background: var(--surface);
 }
 
+.smart-reminder-card.delete-pending {
+  border-left-color: #dc2626;
+  background: color-mix(in srgb, #fef2f2 35%, var(--surface));
+}
+
 .smart-reminder-high,
 .smart-reminder-urgent {
   border-left-color: #d97706;
