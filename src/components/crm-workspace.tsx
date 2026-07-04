@@ -6354,6 +6354,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             routeLabel={routeEmailLabel}
             routeSearch={routeEmailSearch}
             view={emailWorkspaceView}
+            objects={props.objects}
             selectedRecord={selectedRecord}
             records={records}
             aiSettings={emailAiSettings}
@@ -6376,6 +6377,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onAccountDraftChange={setEmailAccountDraft}
             onSignatureDraftChange={setEmailSignatureDraft}
             onEmailDraftChange={setEmailDraft}
+            onRecordsLoaded={mergeLoadedRecords}
             onComposeClosed={closeEmailComposeRequest}
             onKnowledgeDraftChange={setKnowledgeDraft}
             onUploadMediaAssets={uploadMediaAssets}
@@ -7666,6 +7668,7 @@ function EmailWorkspace({
   routeLabel,
   routeSearch,
   view,
+  objects,
   selectedRecord,
   records,
   aiSettings,
@@ -7688,6 +7691,7 @@ function EmailWorkspace({
   onAccountDraftChange,
   onSignatureDraftChange,
   onEmailDraftChange,
+  onRecordsLoaded,
   onComposeClosed,
   onKnowledgeDraftChange,
   onUploadMediaAssets,
@@ -7758,6 +7762,7 @@ function EmailWorkspace({
   routeLabel: string;
   routeSearch: string;
   view: EmailWorkspaceView;
+  objects: ObjectDefinition[];
   selectedRecord?: CrmRecord;
   records: CrmRecord[];
   aiSettings: EmailAiSettings;
@@ -7780,6 +7785,7 @@ function EmailWorkspace({
   onAccountDraftChange: (draft: EmailAccountDraft) => void;
   onSignatureDraftChange: (draft: EmailSignatureDraft) => void;
   onEmailDraftChange: (draft: EmailComposeDraft) => void;
+  onRecordsLoaded: (records: CrmRecord[]) => void;
   onComposeClosed: () => void;
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
   onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
@@ -10064,15 +10070,14 @@ function EmailWorkspace({
                       ))}
                     </select>
                   </label>
-                  <label>
-                    <span className="subtle">关联记录</span>
-                    <select className="select" value={linkedRecordId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: event.target.value }))}>
-                      <option value="">不关联</option>
-                      {records.slice(0, 100).map((record) => (
-                        <option key={record.id} value={record.id}>{record.title}</option>
-                      ))}
-                    </select>
-                  </label>
+                  <EmailRecordSearchDropdown
+                    objects={objects}
+                    records={records}
+                    testId="email-compose-record"
+                    value={linkedRecordId}
+                    onChange={(nextRecordId) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: nextRecordId }))}
+                    onRecordsLoaded={onRecordsLoaded}
+                  />
                   <div className="email-compose-recipient-row">
                     <EmailRecipientInput
                       label="收件人"
@@ -10965,6 +10970,125 @@ function EmailContactSearchDropdown({
       search={search}
       selectedLabel={selectedContact ? formatEmailContactLabel(selectedContact, getPrimaryRecordEmail(selectedContact)) : ""}
       testId="email-thread-existing-contact"
+      value={value}
+      onChange={onChange}
+      onSearchChange={setSearch}
+    />
+  );
+}
+
+function EmailRecordSearchDropdown({
+  objects,
+  records,
+  testId,
+  value,
+  onChange,
+  onRecordsLoaded
+}: {
+  objects: ObjectDefinition[];
+  records: CrmRecord[];
+  testId?: string;
+  value: string;
+  onChange: (recordId: string) => void;
+  onRecordsLoaded?: (records: CrmRecord[]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [remoteCandidates, setRemoteCandidates] = useState<CrmRecord[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const normalizedSearch = search.trim().toLowerCase();
+
+  const objectLabelByKey = useMemo(() => new Map(objects.map((object) => [object.key, object.label])), [objects]);
+  const searchableObjects = useMemo(() => {
+    const preferredKeys = ["contacts", "companies", "deals", "products", "quotes"];
+    const excludedKeys = new Set(["currencies", "payment_terms"]);
+    const byKey = new Map(objects.map((object) => [object.key, object]));
+    const preferredObjects = preferredKeys.flatMap((key) => {
+      const object = byKey.get(key);
+      return object ? [object] : [];
+    });
+    const remainingObjects = objects.filter((object) => !preferredKeys.includes(object.key) && !excludedKeys.has(object.key));
+    return [...preferredObjects, ...remainingObjects];
+  }, [objects]);
+  const candidates = useMemo(() => mergeRecords(records, remoteCandidates), [records, remoteCandidates]);
+  const selectedRecord = candidates.find((record) => record.id === value);
+  const optionRecords = useMemo(() => {
+    return candidates
+      .filter((record) => {
+        if (!normalizedSearch) {
+          return true;
+        }
+        return `${record.title} ${objectLabelByKey.get(record.objectKey) ?? record.objectKey}`.toLowerCase().includes(normalizedSearch);
+      })
+      .slice(0, 100);
+  }, [candidates, normalizedSearch, objectLabelByKey]);
+
+  useEffect(() => {
+    const trimmedSearch = search.trim();
+    if (trimmedSearch.length < 2) {
+      setRemoteCandidates([]);
+      setIsSearching(false);
+      setSearchError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      setIsSearching(true);
+      setSearchError(null);
+      const requests = searchableObjects.map((object) =>
+        fetchJson<RecordListResult>(
+          buildRecordListUrl(object.key, emptySavedView(object.key), trimmedSearch, 1, `/api/records/${object.key}`, 8, {
+            fields: ["title"],
+            keyset: true
+          }),
+          {
+            method: "GET",
+            signal: controller.signal
+          }
+        ).then((result) => result.records)
+      );
+
+      Promise.allSettled(requests)
+        .then((results) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          const nextRecords = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+          setRemoteCandidates(nextRecords);
+          if (nextRecords.length) {
+            onRecordsLoaded?.(nextRecords);
+          }
+          const allRejected = results.length > 0 && results.every((result) => result.status === "rejected");
+          setSearchError(allRejected ? "关联记录搜索失败" : null);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setIsSearching(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [onRecordsLoaded, search, searchableObjects]);
+
+  return (
+    <SearchDropdown
+      error={searchError}
+      label="关联记录"
+      loading={isSearching}
+      options={optionRecords.map((record) => ({
+        label: record.title,
+        value: record.id,
+        meta: objectLabelByKey.get(record.objectKey) ?? record.objectKey
+      }))}
+      placeholder="搜索联系人、公司、交易或其他记录"
+      search={search}
+      selectedLabel={selectedRecord ? `${selectedRecord.title} · ${objectLabelByKey.get(selectedRecord.objectKey) ?? selectedRecord.objectKey}` : ""}
+      testId={testId}
       value={value}
       onChange={onChange}
       onSearchChange={setSearch}
