@@ -437,6 +437,11 @@ button {
   gap: 8px;
 }
 
+.smart-reminder-tabs.compact-tabs {
+  margin-top: -4px;
+  gap: 6px;
+}
+
 .smart-reminder-tabs button {
   display: inline-flex;
   align-items: center;
@@ -448,6 +453,12 @@ button {
   background: var(--surface);
   color: var(--muted);
   cursor: pointer;
+}
+
+.smart-reminder-tabs.compact-tabs button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .smart-reminder-tabs button.active {

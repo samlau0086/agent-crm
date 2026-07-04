@@ -748,7 +748,17 @@ export interface DashboardSummary {
   smartReminders: SmartReminder[];
 }
 
-export type SmartReminderKind = "today_best_action" | "follow_up" | "overdue" | "email_reply" | "deal_close" | "risk";
+export type SmartReminderKind =
+  | "today_best_action"
+  | "follow_up"
+  | "overdue"
+  | "email_reply"
+  | "deal_close"
+  | "risk"
+  | "portfolio_health"
+  | "data_quality"
+  | "customer_level"
+  | "pipeline_optimization";
 export type SmartReminderPriority = "low" | "medium" | "high" | "urgent";
 export type SmartReminderStatus = "open" | "done" | "dismissed";
 

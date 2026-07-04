@@ -14,6 +14,7 @@ async function getApiMetricsHandler(request: NextRequest) {
       await getCrmRepository().listSmartReminders(context, {
         status: status ?? undefined,
         snoozed: snoozed === "false" ? false : undefined,
+        kind: (request.nextUrl.searchParams.get("kind") as SmartReminder["kind"] | null) ?? undefined,
         objectKey: request.nextUrl.searchParams.get("objectKey") ?? undefined,
         recordId: request.nextUrl.searchParams.get("recordId") ?? undefined
       })

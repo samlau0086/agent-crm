@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
-import { listAiAgentDefinitions, normalizeGlobalAiAgentSettings, recordSummaryAgentKey, talkAboutThisAgentKey, workflowAiAgentNodeKey } from "../src/lib/ai/agents.ts";
+import { listAiAgentDefinitions, normalizeGlobalAiAgentSettings, recordSummaryAgentKey, smartReminderPlannerAgentKey, talkAboutThisAgentKey, workflowAiAgentNodeKey } from "../src/lib/ai/agents.ts";
 import { runAiAgent } from "../src/lib/ai/harness.ts";
 import { createAiProvider } from "../src/lib/ai/provider.ts";
 import { buildAiQueryPlan, validateAiQueryPlan } from "../src/lib/ai/query-planner.ts";
@@ -272,6 +272,22 @@ await run("record validation rejects missing required value", () => {
   };
 
   assert.throws(() => validateRecordPayload([emailField], {}, []), /Email/);
+});
+
+await run("smart reminders support portfolio operating actions", () => {
+  const smartReminderDefinition = listAiAgentDefinitions().find((definition) => definition.key === smartReminderPlannerAgentKey);
+  assert(smartReminderDefinition);
+  assert.match(smartReminderDefinition.defaultAgentMarkdown, /portfolioMetrics/);
+  assert.match(smartReminderDefinition.defaultAgentMarkdown, /portfolio_health/);
+  assert.match(smartReminderDefinition.defaultAgentMarkdown, /data_quality/);
+  const typesSource = readFileSync("src/lib/crm/types.ts", "utf8");
+  assert.match(typesSource, /portfolio_health/);
+  assert.match(typesSource, /pipeline_optimization/);
+  const repositorySource = readFileSync("src/lib/crm/repository.ts", "utf8");
+  assert.match(repositorySource, /buildSmartReminderPortfolioMetrics/);
+  assert.match(repositorySource, /lowCompletenessContacts/);
+  assert.match(repositorySource, /stalePrivateRecords/);
+  assert.match(repositorySource, /kind: query.kind/);
 });
 
 await run("workflow permissions and designer agent are registered", () => {

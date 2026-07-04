@@ -2760,11 +2760,33 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function openSmartReminderRecord(reminder: SmartReminder) {
-    if (!reminder.objectKey || !reminder.recordId) {
-      showToast({ intent: "info", message: "这条提醒没有绑定具体记录" });
+    if (reminder.objectKey && reminder.recordId) {
+      await openTalkSourceRecord({ objectKey: reminder.objectKey, recordId: reminder.recordId });
       return;
     }
-    await openTalkSourceRecord({ objectKey: reminder.objectKey, recordId: reminder.recordId });
+    const sourceObjectKey = reminder.sources.find((source) => source.objectKey)?.objectKey;
+    const targetObjectKey =
+      reminder.objectKey ||
+      sourceObjectKey ||
+      (reminder.kind === "pipeline_optimization" || reminder.kind === "deal_close" ? "deals" : reminder.kind === "data_quality" ? "contacts" : "contacts");
+    const nextParams = new URLSearchParams();
+    nextParams.set("smartReminderKind", reminder.kind);
+    if (reminder.kind === "customer_level") {
+      nextParams.set("customerLevel", "unrated");
+    }
+    if (reminder.kind === "data_quality") {
+      nextParams.set("dataCompleteness", "low");
+    }
+    if (reminder.kind === "portfolio_health") {
+      nextParams.set("pool", "private");
+    }
+    const nextNav = coreObjects.has(targetObjectKey) ? (targetObjectKey as NavKey) : "records";
+    setActiveNav(nextNav);
+    if (props.objects.some((object) => object.key === targetObjectKey)) {
+      setActiveObjectKey(targetObjectKey);
+    }
+    router.push(`${crmPathForNav(targetObjectKey)}?${nextParams.toString()}`);
+    showToast({ intent: "info", message: "已打开相关模块，可按提醒条件继续筛选处理。" });
   }
 
   function startCreateContactForCompany(company: CrmRecord) {
@@ -10677,6 +10699,7 @@ function ObjectDirectory({
 }
 
 type SmartReminderPanelView = "open" | "snoozed" | "done" | "dismissed";
+type SmartReminderKindFilter = "all" | "follow_up" | "data_quality" | "customer_level" | "portfolio_health" | "pipeline_optimization";
 
 function SmartReminderPanel({
   compact,
@@ -10712,6 +10735,7 @@ function SmartReminderPanel({
   onCancelDeleteRequest?: (request: RecordChangeRequest) => void;
 }) {
   const [activeView, setActiveView] = useState<SmartReminderPanelView>("open");
+  const [activeKindFilter, setActiveKindFilter] = useState<SmartReminderKindFilter>("all");
   const now = Date.now();
   const reminderCounts = useMemo(
     () => ({
@@ -10730,9 +10754,10 @@ function SmartReminderPanel({
           if (activeView === "open") return reminder.status === "open" && !isSmartReminderSnoozed(reminder, now);
           return reminder.status === activeView;
         })
+        .filter((reminder) => smartReminderMatchesKindFilter(reminder, activeKindFilter))
         .sort(compareSmartReminderForUi)
         .slice(0, compact ? 8 : 20),
-    [activeView, compact, now, reminders]
+    [activeKindFilter, activeView, compact, now, reminders]
   );
   const viewEmptyMessage =
     activeView === "dismissed"
@@ -10748,7 +10773,7 @@ function SmartReminderPanel({
       <div className="stage-header">
         <div>
           <h2 className="page-title">{title}</h2>
-          <div className="subtle">AI 只生成跟进建议，不会自动修改 CRM 数据。</div>
+          <div className="subtle">AI 只生成经营与跟进建议，不会自动修改 CRM 数据。</div>
         </div>
         <button className="secondary-button" type="button" disabled={generating} onClick={onGenerate}>
           <RefreshCw className={generating ? "spin-icon" : undefined} size={16} />
@@ -10770,15 +10795,36 @@ function SmartReminderPanel({
           </button>
         ))}
       </div>
+      <div className="smart-reminder-tabs compact-tabs" role="tablist" aria-label={`${title} 类型筛选`}>
+        {(
+          [
+            ["all", "全部"],
+            ["follow_up", "跟进"],
+            ["data_quality", "数据质量"],
+            ["customer_level", "客户等级"],
+            ["portfolio_health", "经营健康"],
+            ["pipeline_optimization", "交易推进"]
+          ] as Array<[SmartReminderKindFilter, string]>
+        ).map(([filter, label]) => {
+          const count = reminders.filter((reminder) => smartReminderMatchesKindFilter(reminder, filter)).length;
+          return (
+            <button className={activeKindFilter === filter ? "active" : ""} key={filter} onClick={() => setActiveKindFilter(filter)} type="button" role="tab" aria-selected={activeKindFilter === filter}>
+              {label}
+              <span>{count}</span>
+            </button>
+          );
+        })}
+      </div>
       {visibleReminders.length ? (
         <div className="smart-reminder-list">
           {visibleReminders.map((reminder) => {
             const pendingDeleteRequest = pendingDeleteRequestsById?.get(reminder.id);
+            const ReminderIcon = smartReminderKindIcon(reminder.kind);
             return (
             <article className={`smart-reminder-card smart-reminder-${reminder.priority} ${pendingDeleteRequest ? "delete-pending" : ""}`} key={reminder.id}>
               <div className="smart-reminder-main">
                 <span className="smart-reminder-icon">
-                  <Bot size={16} />
+                  <ReminderIcon size={16} />
                 </span>
                 <div>
                   <div className="smart-reminder-title-row">
@@ -10804,7 +10850,7 @@ function SmartReminderPanel({
               <div className="smart-reminder-actions">
                 <button type="button" className="secondary-button" onClick={() => onOpenRecord(reminder)}>
                   <Eye size={14} />
-                  打开记录
+                  {reminder.recordId ? "打开记录" : "查看列表"}
                 </button>
                 {pendingDeleteRequest ? (
                   onCancelDeleteRequest ? (
@@ -12033,9 +12079,9 @@ function buildHeaderNotifications({
       items.push({
         id: `smart-reminder:${reminder.id}`,
         title: `AI 提醒：${reminder.title}`,
-        description: [smartReminderPriorityLabel(reminder.priority), linkedRecord?.title, reminder.actionLabel].filter(Boolean).join(" · "),
+        description: [smartReminderKindLabel(reminder.kind), smartReminderPriorityLabel(reminder.priority), linkedRecord?.title, reminder.actionLabel].filter(Boolean).join(" · "),
         time: reminder.dueAt ?? reminder.createdAt,
-        icon: Bot,
+        icon: smartReminderKindIcon(reminder.kind),
         intent: reminder.priority === "urgent" ? "danger" : reminder.priority === "high" ? "warning" : "info",
         event,
         syncedChannels
@@ -18201,7 +18247,41 @@ function smartReminderKindLabel(kind: SmartReminder["kind"]): string {
   if (kind === "risk") {
     return "风险";
   }
+  if (kind === "portfolio_health") {
+    return "经营健康";
+  }
+  if (kind === "data_quality") {
+    return "数据质量";
+  }
+  if (kind === "customer_level") {
+    return "客户等级";
+  }
+  if (kind === "pipeline_optimization") {
+    return "交易推进";
+  }
   return "跟进";
+}
+
+function smartReminderMatchesKindFilter(reminder: SmartReminder, filter: SmartReminderKindFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "follow_up") {
+    return ["today_best_action", "follow_up", "overdue", "email_reply"].includes(reminder.kind);
+  }
+  if (filter === "pipeline_optimization") {
+    return ["pipeline_optimization", "deal_close", "risk"].includes(reminder.kind);
+  }
+  return reminder.kind === filter;
+}
+
+function smartReminderKindIcon(kind: SmartReminder["kind"]): LucideIcon {
+  if (kind === "portfolio_health") return LayoutDashboard;
+  if (kind === "data_quality") return List;
+  if (kind === "customer_level") return Trophy;
+  if (kind === "pipeline_optimization" || kind === "deal_close") return BadgeDollarSign;
+  if (kind === "email_reply") return Mail;
+  if (kind === "overdue") return Clock3;
+  if (kind === "risk") return Bell;
+  return Bot;
 }
 
 function mergeRecordChangeRequests(...groups: Array<Array<RecordChangeRequest | null | undefined> | null | undefined>): RecordChangeRequest[] {

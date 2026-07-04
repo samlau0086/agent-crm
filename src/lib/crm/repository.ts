@@ -152,6 +152,19 @@ type SmartReminderGenerationContext = {
   recentActivities: Activity[];
   emailThreads: EmailThread[];
   knowledge: KnowledgeArticle[];
+  portfolioMetrics: SmartReminderPortfolioMetrics;
+};
+type SmartReminderPortfolioMetrics = {
+  totals: { contacts: number; companies: number; deals: number; publicPool: number; privatePool: number; unowned: number };
+  customerLevels: Record<"A" | "B" | "C" | "D" | "unrated", number>;
+  dataQuality: {
+    lowCompletenessContacts: number;
+    lowCompletenessCompanies: number;
+    averageContactCompleteness: number;
+    averageCompanyCompleteness: number;
+  };
+  stale: { noActivity7Days: number; noActivity14Days: number; noActivity30Days: number; stalePrivateRecords: number };
+  deals: { highValueStalled: number; closingSoon: number; totalOpenAmount: number };
 };
 
 function asRecord(value: Prisma.JsonValue): Record<string, unknown> {
@@ -4261,7 +4274,7 @@ export class PrismaCrmRepository {
 
   async listSmartReminders(
     context: RequestContext,
-    query: { status?: SmartReminder["status"]; snoozed?: boolean; objectKey?: string; recordId?: string; limit?: number } = {}
+    query: { status?: SmartReminder["status"]; snoozed?: boolean; objectKey?: string; recordId?: string; kind?: SmartReminderKind; limit?: number } = {}
   ): Promise<SmartReminder[]> {
     requirePermission(context, "ai.use");
     const now = new Date();
@@ -4269,6 +4282,7 @@ export class PrismaCrmRepository {
       workspaceId: context.workspaceId,
       ...(canManageAllRecords(context) ? {} : { userId: context.user.id }),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.kind ? { kind: query.kind } : {}),
       ...(query.objectKey ? { objectKey: query.objectKey } : {}),
       ...(query.recordId ? { recordId: query.recordId } : {}),
       ...(query.snoozed === false ? { OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }] } : {})
@@ -7665,14 +7679,24 @@ export class PrismaCrmRepository {
         : Promise.resolve([]),
       this.db.knowledgeArticle.findMany({ where: { workspaceId: context.workspaceId, active: true }, orderBy: { updatedAt: "desc" }, take: 6 })
     ]);
-    const visibleRecordIds = new Set(records.map((record) => record.id));
+    const mappedRecords = records.map(mapRecord);
+    const visibleRecordIds = new Set(mappedRecords.map((record) => record.id));
+    const mappedTasks = tasks.map(mapActivity).filter((activity) => !activity.recordId || visibleRecordIds.has(activity.recordId));
+    const mappedRecentActivities = recentActivities.map(mapActivity).filter((activity) => !activity.recordId || visibleRecordIds.has(activity.recordId)).slice(0, 80);
+    const mappedEmailThreads = emailThreads.map((thread) => mapEmailThread(thread)).filter((thread) => !thread.recordId || visibleRecordIds.has(thread.recordId)).slice(0, 30);
     return {
       user: { id: context.user.id, name: context.user.name, email: context.user.email },
-      records: records.map(mapRecord),
-      tasks: tasks.map(mapActivity).filter((activity) => !activity.recordId || visibleRecordIds.has(activity.recordId)),
-      recentActivities: recentActivities.map(mapActivity).filter((activity) => !activity.recordId || visibleRecordIds.has(activity.recordId)).slice(0, 80),
-      emailThreads: emailThreads.map((thread) => mapEmailThread(thread)).filter((thread) => !thread.recordId || visibleRecordIds.has(thread.recordId)).slice(0, 30),
-      knowledge: knowledge.map(mapKnowledgeArticle)
+      records: mappedRecords,
+      tasks: mappedTasks,
+      recentActivities: mappedRecentActivities,
+      emailThreads: mappedEmailThreads,
+      knowledge: knowledge.map(mapKnowledgeArticle),
+      portfolioMetrics: buildSmartReminderPortfolioMetrics({
+        records: mappedRecords,
+        tasks: mappedTasks,
+        recentActivities: mappedRecentActivities,
+        emailThreads: mappedEmailThreads
+      })
     };
   }
 
@@ -7689,9 +7713,10 @@ export class PrismaCrmRepository {
     const result = await runAiAgent(
       {
         agentKey: smartReminderPlannerAgentKey,
-        task: "Generate today's best sales actions and follow-up reminders. Return JSON only.",
+        task: "Generate today's best portfolio, data-quality, customer-level, pipeline, and follow-up actions. Optimize overall sales output. Return JSON only.",
         context: {
           user: payload.user,
+          portfolioMetrics: payload.portfolioMetrics,
           records: payload.records.slice(0, 60).map((record) => ({
             id: record.id,
             objectKey: record.objectKey,
@@ -8270,7 +8295,20 @@ function buildNotificationBody(event: NotificationEvent, data: Record<string, un
 }
 
 function normalizeSmartReminderKind(value: string): SmartReminderKind {
-  return ["today_best_action", "follow_up", "overdue", "email_reply", "deal_close", "risk"].includes(value) ? (value as SmartReminderKind) : "follow_up";
+  return [
+    "today_best_action",
+    "follow_up",
+    "overdue",
+    "email_reply",
+    "deal_close",
+    "risk",
+    "portfolio_health",
+    "data_quality",
+    "customer_level",
+    "pipeline_optimization"
+  ].includes(value)
+    ? (value as SmartReminderKind)
+    : "follow_up";
 }
 
 function normalizeSmartReminderPriority(value: string): SmartReminderPriority {
@@ -8298,6 +8336,134 @@ function compareSmartReminders(a: SmartReminder, b: SmartReminder): number {
 
 function smartReminderPriorityWeight(priority: SmartReminderPriority): number {
   return { low: 1, medium: 2, high: 3, urgent: 4 }[priority];
+}
+
+function buildSmartReminderPortfolioMetrics(payload: Pick<SmartReminderGenerationContext, "records" | "tasks" | "recentActivities" | "emailThreads">): SmartReminderPortfolioMetrics {
+  const now = Date.now();
+  const metrics: SmartReminderPortfolioMetrics = {
+    totals: { contacts: 0, companies: 0, deals: 0, publicPool: 0, privatePool: 0, unowned: 0 },
+    customerLevels: { A: 0, B: 0, C: 0, D: 0, unrated: 0 },
+    dataQuality: { lowCompletenessContacts: 0, lowCompletenessCompanies: 0, averageContactCompleteness: 0, averageCompanyCompleteness: 0 },
+    stale: { noActivity7Days: 0, noActivity14Days: 0, noActivity30Days: 0, stalePrivateRecords: 0 },
+    deals: { highValueStalled: 0, closingSoon: 0, totalOpenAmount: 0 }
+  };
+  const contactScores: number[] = [];
+  const companyScores: number[] = [];
+  for (const record of payload.records) {
+    if (record.objectKey === "contacts") metrics.totals.contacts += 1;
+    if (record.objectKey === "companies") metrics.totals.companies += 1;
+    if (record.objectKey === "deals") metrics.totals.deals += 1;
+    if (["contacts", "companies"].includes(record.objectKey)) {
+      if (record.ownerId) metrics.totals.privatePool += 1;
+      else metrics.totals.publicPool += 1;
+      if (!record.ownerId) metrics.totals.unowned += 1;
+      const level = getRecordCustomerLevel(record);
+      metrics.customerLevels[level ?? "unrated"] += 1;
+      const completeness = calculateRecordCompleteness(record);
+      if (record.objectKey === "contacts") {
+        contactScores.push(completeness.score);
+        if (completeness.score < 70) metrics.dataQuality.lowCompletenessContacts += 1;
+      }
+      if (record.objectKey === "companies") {
+        companyScores.push(completeness.score);
+        if (completeness.score < 70) metrics.dataQuality.lowCompletenessCompanies += 1;
+      }
+      const lastTouchedAt = getRecordLastTouchedAt(record, payload);
+      const ageDays = (now - lastTouchedAt.getTime()) / (24 * 60 * 60 * 1000);
+      if (ageDays >= 7) metrics.stale.noActivity7Days += 1;
+      if (ageDays >= 14) metrics.stale.noActivity14Days += 1;
+      if (ageDays >= 30) metrics.stale.noActivity30Days += 1;
+      if (record.ownerId && ageDays >= 14) metrics.stale.stalePrivateRecords += 1;
+    }
+    if (record.objectKey === "deals") {
+      const amount = getRecordAmount(record);
+      metrics.deals.totalOpenAmount += amount;
+      const lastTouchedAt = getRecordLastTouchedAt(record, payload);
+      if (amount >= 50000 && now - lastTouchedAt.getTime() >= 7 * 24 * 60 * 60 * 1000) {
+        metrics.deals.highValueStalled += 1;
+      }
+      const expectedCloseRaw = getStringField(record.data, "expectedCloseDate") || getStringField(record.data, "closeDate");
+      const expectedCloseAt = expectedCloseRaw ? new Date(expectedCloseRaw) : undefined;
+      if (expectedCloseAt && expectedCloseAt.getTime() >= now && expectedCloseAt.getTime() <= now + 7 * 24 * 60 * 60 * 1000) {
+        metrics.deals.closingSoon += 1;
+      }
+    }
+  }
+  metrics.dataQuality.averageContactCompleteness = averageRounded(contactScores);
+  metrics.dataQuality.averageCompanyCompleteness = averageRounded(companyScores);
+  return metrics;
+}
+
+function averageRounded(values: number[]): number {
+  return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0;
+}
+
+function getStringField(data: Record<string, unknown> | undefined, key: string): string {
+  const value = data?.[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getRecordCustomerLevel(record: Pick<CrmRecord, "data">): "A" | "B" | "C" | "D" | undefined {
+  const level = getStringField(record.data, "customerLevel").toUpperCase();
+  return ["A", "B", "C", "D"].includes(level) ? (level as "A" | "B" | "C" | "D") : undefined;
+}
+
+function isHighCustomerLevel(record: Pick<CrmRecord, "data">): boolean {
+  return ["A", "B"].includes(getRecordCustomerLevel(record) ?? "");
+}
+
+function calculateRecordCompleteness(record: Pick<CrmRecord, "objectKey" | "title" | "data">): { score: number; missing: string[] } {
+  const data = record.data ?? {};
+  const contactMethods = Array.isArray(data.contactMethods) ? data.contactMethods : [];
+  const companyAddresses = Array.isArray(data.addresses) ? data.addresses : [];
+  const checks =
+    record.objectKey === "companies"
+      ? [
+          ["名称", Boolean(record.title)],
+          ["域名/行业", Boolean(getStringField(data, "domain") || getStringField(data, "industry"))],
+          ["地址", Boolean(getStringField(data, "address") || companyAddresses.length)],
+          ["主联系人", Boolean(getStringField(data, "primaryContactId") || getStringField(data, "primaryContactEmail"))],
+          ["客户等级", Boolean(getRecordCustomerLevel(record))]
+        ]
+      : [
+          ["名称", Boolean(record.title)],
+          ["公司", Boolean(getStringField(data, "companyId") || getStringField(data, "company"))],
+          ["主联系方式", Boolean(getStringField(data, "email") || getStringField(data, "phone") || contactMethods.length)],
+          ["国家/地区", Boolean(getStringField(data, "country"))],
+          ["偏好语言", Boolean(getStringField(data, "preferredLanguage"))],
+          ["客户等级", Boolean(getRecordCustomerLevel(record))]
+        ];
+  const passed = checks.filter(([, ok]) => ok).length;
+  return { score: Math.round((passed / checks.length) * 100), missing: checks.filter(([, ok]) => !ok).map(([label]) => String(label)) };
+}
+
+function getRecordLastTouchedAt(
+  record: Pick<CrmRecord, "id" | "updatedAt">,
+  payload: Pick<SmartReminderGenerationContext, "recentActivities" | "emailThreads">
+): Date {
+  const candidates = [new Date(record.updatedAt)];
+  for (const activity of payload.recentActivities) {
+    if (activity.recordId === record.id) {
+      candidates.push(new Date(activity.createdAt));
+    }
+  }
+  for (const thread of payload.emailThreads) {
+    if (thread.recordId === record.id && thread.lastMessageAt) {
+      candidates.push(new Date(thread.lastMessageAt));
+    }
+  }
+  return candidates.sort((left, right) => right.getTime() - left.getTime())[0] ?? new Date(record.updatedAt);
+}
+
+function getRecordAmount(record: Pick<CrmRecord, "data">): number {
+  const data = record.data ?? {};
+  const value = data.amount ?? data.totalAmount ?? data.value;
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.max(0, amount) : 0;
+}
+
+function smartReminderSourcesFor(records: Array<Pick<CrmRecord, "id" | "objectKey" | "title">>, limit = 5): SmartReminder["sources"] {
+  return records.slice(0, limit).map((record) => ({ label: record.title, objectKey: record.objectKey, recordId: record.id }));
 }
 
 function buildFallbackSmartReminderCandidates(context: RequestContext, payload: SmartReminderGenerationContext): SmartReminderCandidate[] {
@@ -8374,17 +8540,18 @@ function buildFallbackSmartReminderCandidates(context: RequestContext, payload: 
         });
       }
     } else if (["contacts", "companies"].includes(record.objectKey) && lastTouchedAt < sevenDaysAgo) {
+      const highLevel = isHighCustomerLevel(record);
       candidates.push({
-        kind: "follow_up",
-        priority: record.ownerId === context.user.id ? "medium" : "low",
-        title: `客户久未跟进：${record.title}`,
-        body: "该客户最近缺少活动记录，建议查看邮件历史并安排一次低打扰跟进。",
-        actionLabel: "安排客户跟进",
+        kind: highLevel ? "customer_level" : "follow_up",
+        priority: highLevel ? "high" : record.ownerId === context.user.id ? "medium" : "low",
+        title: highLevel ? `高等级客户久未跟进：${record.title}` : `客户久未跟进：${record.title}`,
+        body: highLevel ? "该 A/B 级客户最近缺少活动记录，建议今天优先确认需求、预算或下一步。" : "该客户最近缺少活动记录，建议查看邮件历史并安排一次低打扰跟进。",
+        actionLabel: highLevel ? "优先跟进高等级客户" : "安排客户跟进",
         objectKey: record.objectKey,
         recordId: record.id,
         dueAt: todayEnd.toISOString(),
         sources: [{ label: record.title, objectKey: record.objectKey, recordId: record.id }],
-        score: 64
+        score: highLevel ? 86 : 64
       });
     }
   }
@@ -8407,6 +8574,84 @@ function buildFallbackSmartReminderCandidates(context: RequestContext, payload: 
         score: 78
       });
     }
+  }
+
+  const contactRecords = payload.records.filter((record) => record.objectKey === "contacts");
+  const companyRecords = payload.records.filter((record) => record.objectKey === "companies");
+  const unratedContacts = contactRecords.filter((record) => !getRecordCustomerLevel(record));
+  const unratedCompanies = companyRecords.filter((record) => !getRecordCustomerLevel(record));
+  const lowCompletenessContacts = contactRecords
+    .map((record) => ({ record, completeness: calculateRecordCompleteness(record) }))
+    .filter((item) => item.completeness.score < 70);
+  const lowCompletenessCompanies = companyRecords
+    .map((record) => ({ record, completeness: calculateRecordCompleteness(record) }))
+    .filter((item) => item.completeness.score < 70);
+  const stalePrivateRecords = [...contactRecords, ...companyRecords].filter((record) => {
+    if (!record.ownerId) return false;
+    return getRecordLastTouchedAt(record, payload) < new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  });
+  const highValueStalledDeals = payload.records.filter((record) => {
+    if (record.objectKey !== "deals") return false;
+    return getRecordAmount(record) >= 50000 && getRecordLastTouchedAt(record, payload) < sevenDaysAgo;
+  });
+
+  if (unratedContacts.length + unratedCompanies.length >= 3) {
+    candidates.push({
+      kind: "customer_level",
+      priority: "medium",
+      title: `处理 ${unratedContacts.length + unratedCompanies.length} 个未评级客户`,
+      body: `当前可见客户中有 ${unratedContacts.length} 个联系人、${unratedCompanies.length} 个公司未评级。建议批量刷新建议等级，再优先确认近期有邮件互动或交易关联的客户。`,
+      actionLabel: "处理未评级客户",
+      objectKey: unratedContacts.length >= unratedCompanies.length ? "contacts" : "companies",
+      dueAt: todayEnd.toISOString(),
+      sources: smartReminderSourcesFor([...unratedContacts, ...unratedCompanies]),
+      score: 80
+    });
+  }
+
+  if (lowCompletenessContacts.length + lowCompletenessCompanies.length >= 3) {
+    const examples = [...lowCompletenessContacts, ...lowCompletenessCompanies].slice(0, 3);
+    candidates.push({
+      kind: "data_quality",
+      priority: "medium",
+      title: `补齐 ${lowCompletenessContacts.length + lowCompletenessCompanies.length} 个低完整度客户资料`,
+      body: `资料完整度偏低会影响 AI 推荐、自动化筛选和销售分层。优先补齐：${examples
+        .map((item) => `${item.record.title} 缺 ${item.completeness.missing.slice(0, 2).join("/")}`)
+        .join("；")}`,
+      actionLabel: "补齐关键字段",
+      objectKey: lowCompletenessContacts.length >= lowCompletenessCompanies.length ? "contacts" : "companies",
+      dueAt: todayEnd.toISOString(),
+      sources: smartReminderSourcesFor(examples.map((item) => item.record)),
+      score: 77
+    });
+  }
+
+  if (stalePrivateRecords.length >= 5) {
+    candidates.push({
+      kind: "portfolio_health",
+      priority: "medium",
+      title: `梳理 ${stalePrivateRecords.length} 个长期未跟进私海客户`,
+      body: "私海客户长期无活动会占用跟进容量。建议分组处理：A/B 级优先跟进，低价值且长期无响应的客户考虑释放或进入低频培育。",
+      actionLabel: "优化私海客户结构",
+      objectKey: "contacts",
+      dueAt: todayEnd.toISOString(),
+      sources: smartReminderSourcesFor(stalePrivateRecords),
+      score: 75
+    });
+  }
+
+  if (highValueStalledDeals.length > 0) {
+    candidates.push({
+      kind: "pipeline_optimization",
+      priority: "high",
+      title: `推进 ${highValueStalledDeals.length} 个高金额停滞交易`,
+      body: `这些交易金额较高但 7 天内缺少推进动作，合计约 ${Math.round(highValueStalledDeals.reduce((sum, record) => sum + getRecordAmount(record), 0)).toLocaleString()}。建议确认阻塞点、决策人和下一步时间。`,
+      actionLabel: "推进高价值交易",
+      objectKey: "deals",
+      dueAt: todayEnd.toISOString(),
+      sources: smartReminderSourcesFor(highValueStalledDeals),
+      score: 90
+    });
   }
 
   return candidates;
