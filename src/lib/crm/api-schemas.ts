@@ -146,6 +146,53 @@ export const recordDeleteRequestSchema = z
   })
   .strict();
 
+export const customerLevelSchema = z.enum(["A", "B", "C", "D"]);
+
+export const customerLevelDefinitionSchema = z
+  .object({
+    value: customerLevelSchema,
+    label: labelSchema,
+    color: z.string().trim().min(1).max(40),
+    position: z.number().int().min(0).max(100),
+    enabled: z.boolean(),
+    minScore: z.number().min(0).max(100),
+    maxScore: z.number().min(0).max(100)
+  })
+  .strict();
+
+export const customerLevelRulesSchema = z
+  .object({
+    dealAmount: z.number().min(0).max(100),
+    dealStage: z.number().min(0).max(100),
+    recentActivity: z.number().min(0).max(100),
+    emailEngagement: z.number().min(0).max(100),
+    inactivity: z.number().min(0).max(100),
+    overdueTasks: z.number().min(0).max(100)
+  })
+  .strict();
+
+export const customerLevelSettingsUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    levels: z.array(customerLevelDefinitionSchema).min(1).max(4).optional(),
+    rules: customerLevelRulesSchema.optional()
+  })
+  .strict();
+
+export const customerLevelChangeRequestSchema = z
+  .object({
+    level: z.union([customerLevelSchema, z.literal("")]),
+    changeReason: changeReasonSchema
+  })
+  .strict();
+
+export const customerLevelSuggestionGenerateSchema = z
+  .object({
+    objectKey: z.enum(["contacts", "companies"]).optional(),
+    recordId: z.string().trim().min(1).optional()
+  })
+  .strict();
+
 export const recordChangeRequestReviewSchema = z
   .object({
     decision: z.enum(["approve", "reject"]),

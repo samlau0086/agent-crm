@@ -90,6 +90,9 @@ import type {
   AuditLog,
   CrmPoolSettings,
   CrmRecord,
+  CustomerLevel,
+  CustomerLevelSettings,
+  CustomerLevelSuggestion,
   CsvImportMapping,
   CsvImportPreview,
   CsvImportJob,
@@ -172,6 +175,7 @@ interface CrmWorkspaceProps {
   emailSyncSettings?: EmailSyncSettings;
   poolSettings: CrmPoolSettings;
   smartReminderSettings: SmartReminderSettings;
+  customerLevelSettings: CustomerLevelSettings;
   recordChangeRequests: RecordChangeRequest[];
   knowledgeArticles: KnowledgeArticle[];
   mediaAssets: MediaAsset[];
@@ -189,6 +193,13 @@ const recordListRequestTimeoutMs = 15_000;
 const routeRefreshTimeoutMs = 10_000;
 const editApprovalObjectKeys = new Set(["contacts", "companies", "deals"]);
 const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "products", "quotes"]);
+const customerLevelFieldKeys = new Set([
+  "customerLevel",
+  "customerLevelSuggested",
+  "customerLevelScore",
+  "customerLevelReasons",
+  "customerLevelSuggestedAt"
+]);
 
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "automation" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
@@ -1689,6 +1700,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailWorkspaceView, setEmailWorkspaceView] = useState<EmailWorkspaceView>("mail");
   const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
   const [emailSyncSettings, setEmailSyncSettings] = useState<EmailSyncSettings>(props.emailSyncSettings ?? defaultEmailSyncSettings);
+  const [customerLevelSettings, setCustomerLevelSettings] = useState<CustomerLevelSettings>(props.customerLevelSettings);
+  const [customerLevelActionKey, setCustomerLevelActionKey] = useState("");
   const [emailComposeOpenRequestKey, setEmailComposeOpenRequestKey] = useState("");
   const [emailAccountDraft, setEmailAccountDraft] = useState<EmailAccountDraft>(() => createEmptyEmailAccountDraft());
   const [emailSignatureDraft, setEmailSignatureDraft] = useState<EmailSignatureDraft>(() => createEmptyEmailSignatureDraft());
@@ -2974,6 +2987,72 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }));
     setEditOwnerId(result.record.ownerId ?? "");
     showSuccess(result.record.ownerId ? "负责人已转移" : "已释放到公海");
+  }
+
+  async function refreshCustomerLevelSuggestion(record: CrmRecord) {
+    if (record.objectKey !== "contacts" && record.objectKey !== "companies") {
+      return;
+    }
+    const actionKey = `suggest:${record.id}`;
+    setCustomerLevelActionKey(actionKey);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await fetchJson<{ record: CrmRecord; suggestion: CustomerLevelSuggestion }>(
+        `/api/records/${record.objectKey}/${record.id}/customer-level/suggest`,
+        { method: "POST" }
+      );
+      mergeLoadedRecords([result.record]);
+      if (selectedRecord?.id === result.record.id) {
+        setEditValues(buildRecordValues(selectedFields, result.record));
+      }
+      showSuccess(`已生成建议等级 ${result.suggestion.level}，评分 ${result.suggestion.score}`);
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "刷新客户等级建议失败");
+    } finally {
+      setCustomerLevelActionKey("");
+    }
+  }
+
+  async function requestCustomerLevelChange(record: CrmRecord, nextLevel: CustomerLevel | "") {
+    if (record.objectKey !== "contacts" && record.objectKey !== "companies") {
+      return;
+    }
+    const currentLevel = typeof record.data.customerLevel === "string" ? record.data.customerLevel : "";
+    if (currentLevel === nextLevel) {
+      showToast({ intent: "info", message: "客户等级没有变化" });
+      return;
+    }
+    const reason = await requestPrompt({
+      title: "提交客户等级修改审批",
+      message: `将 ${record.title} 的正式客户等级修改为 ${customerLevelLabel(customerLevelSettings, nextLevel)}。请填写修改原因。`,
+      placeholder: "例如：近期交易金额提升、客户回复积极，建议升级为 A 级客户。",
+      confirmLabel: "提交审批"
+    });
+    if (!reason?.trim()) {
+      showToast({ intent: "info", message: "已取消客户等级修改" });
+      return;
+    }
+    const actionKey = `change:${record.id}`;
+    setCustomerLevelActionKey(actionKey);
+    setMessage(null);
+    setError(null);
+    try {
+      const request = await fetchJson<RecordChangeRequest>(`/api/records/${record.objectKey}/${record.id}/customer-level`, {
+        method: "PATCH",
+        body: {
+          level: nextLevel,
+          changeReason: reason.trim()
+        }
+      });
+      setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [request]));
+      showSuccess("客户等级修改申请已提交，等待管理员审核");
+      router.refresh();
+    } catch (actionError) {
+      showError(actionError instanceof Error ? actionError.message : "提交客户等级修改审批失败");
+    } finally {
+      setCustomerLevelActionKey("");
+    }
   }
 
   function startContactMethodEditor(record: CrmRecord, methodId: string, methods?: ContactMethodDraft[]) {
@@ -5344,6 +5423,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           allRecords={records}
                           canManageOwners={canManageViews}
                           contactMethodValue={editValues[contactMethodsValueKey] ?? ""}
+                          customerLevelActionKey={customerLevelActionKey}
+                          customerLevelSettings={customerLevelSettings}
                           fields={selectedFormFields}
                           isPending={isPending || isRecordSavePending}
                           mediaAssets={mediaAssets}
@@ -5360,6 +5441,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
                           onOwnerChange={setEditOwnerId}
                           onRecordsLoaded={mergeLoadedRecords}
+                          onRefreshCustomerLevelSuggestion={() => { void runImmediateAction(() => refreshCustomerLevelSuggestion(selectedRecord)); }}
+                          onRequestCustomerLevelChange={(level) => { void runImmediateAction(() => requestCustomerLevelChange(selectedRecord, level)); }}
                           onSave={() => runRecordSaveAction(submitUpdateRecord)}
                           onSaveField={submitSingleRecordField}
                           onSaveOwner={submitSingleRecordOwner}
@@ -5388,6 +5471,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           billingAddressValue={editValues[companyBillingAddressesValueKey] ?? ""}
                           canManageOwners={canManageViews}
                           contacts={selectedCompanyContacts}
+                          customerLevelActionKey={customerLevelActionKey}
+                          customerLevelSettings={customerLevelSettings}
                           fields={selectedFormFields}
                           isPending={isPending || isRecordSavePending}
                           mediaAssets={mediaAssets}
@@ -5426,6 +5511,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onOwnerChange={setEditOwnerId}
                           onPrimaryContactChange={(contactId) => setEditValues((current) => ({ ...current, [companyPrimaryContactValueKey]: contactId }))}
                           onRecordsLoaded={mergeLoadedRecords}
+                          onRefreshCustomerLevelSuggestion={() => { void runImmediateAction(() => refreshCustomerLevelSuggestion(selectedRecord)); }}
+                          onRequestCustomerLevelChange={(level) => { void runImmediateAction(() => requestCustomerLevelChange(selectedRecord, level)); }}
                           onSave={() => runRecordSaveAction(submitUpdateRecord)}
                           onSaveField={submitSingleRecordField}
                           onSaveOwner={submitSingleRecordOwner}
@@ -6388,11 +6475,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             importJobQueueSummary={props.importJobQueueSummary}
             poolSettings={props.poolSettings}
             smartReminderSettings={props.smartReminderSettings}
+            customerLevelSettings={customerLevelSettings}
             recordChangeRequests={recordChangeRequests}
             workflows={props.workflows}
             workflowRuns={props.workflowRuns}
             workflowApprovals={props.workflowApprovals}
             onRecordsUpdated={mergeLoadedRecords}
+            onCustomerLevelSettingsUpdated={setCustomerLevelSettings}
           />
         )}
 
@@ -15189,10 +15278,149 @@ function ProductThumbnail({ imageUrl, title }: { imageUrl: unknown; title: strin
   );
 }
 
+function customerLevelDefinition(settings: CustomerLevelSettings, level: CustomerLevel | "") {
+  if (!level) {
+    return undefined;
+  }
+  return settings.levels.find((candidate) => candidate.value === level);
+}
+
+function customerLevelLabel(settings: CustomerLevelSettings, level: CustomerLevel | ""): string {
+  if (!level) {
+    return "未评级";
+  }
+  return customerLevelDefinition(settings, level)?.label ?? `${level} 级客户`;
+}
+
+function customerLevelColor(settings: CustomerLevelSettings, level: CustomerLevel | ""): string {
+  return customerLevelDefinition(settings, level)?.color ?? "#64748b";
+}
+
+function normalizeCustomerLevelValue(value: unknown): CustomerLevel | "" {
+  return value === "A" || value === "B" || value === "C" || value === "D" ? value : "";
+}
+
+function customerLevelReasons(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function CustomerLevelBadge({
+  level,
+  settings,
+  subtle = false
+}: {
+  level: CustomerLevel | "";
+  settings: CustomerLevelSettings;
+  subtle?: boolean;
+}) {
+  const color = customerLevelColor(settings, level);
+  return (
+    <span
+      className={`customer-level-badge ${subtle ? "subtle" : ""}`}
+      style={{
+        "--customer-level-color": color
+      } as CSSProperties}
+    >
+      {customerLevelLabel(settings, level)}
+    </span>
+  );
+}
+
+function CustomerLevelPanel({
+  actionKey,
+  disabled,
+  record,
+  settings,
+  onRefreshSuggestion,
+  onRequestChange
+}: {
+  actionKey: string;
+  disabled: boolean;
+  record: CrmRecord;
+  settings: CustomerLevelSettings;
+  onRefreshSuggestion: () => void;
+  onRequestChange: (level: CustomerLevel | "") => void;
+}) {
+  const currentLevel = normalizeCustomerLevelValue(record.data.customerLevel);
+  const suggestedLevel = normalizeCustomerLevelValue(record.data.customerLevelSuggested);
+  const score = typeof record.data.customerLevelScore === "number" ? record.data.customerLevelScore : undefined;
+  const reasons = customerLevelReasons(record.data.customerLevelReasons);
+  const suggestedAt = typeof record.data.customerLevelSuggestedAt === "string" ? record.data.customerLevelSuggestedAt : "";
+  const enabledLevels = settings.levels.filter((level) => level.enabled).sort((left, right) => left.position - right.position);
+  const isSuggesting = actionKey === `suggest:${record.id}`;
+  const isChanging = actionKey === `change:${record.id}`;
+  const suggestionDiffers = Boolean(suggestedLevel && suggestedLevel !== currentLevel);
+
+  return (
+    <section className="contact-profile-card customer-level-panel" data-testid="customer-level-panel">
+      <div className="stage-header">
+        <div>
+          <strong>客户等级</strong>
+          <div className="subtle">正式等级需审批；系统建议仅作为参考。</div>
+        </div>
+        <button className="secondary-button" type="button" onClick={onRefreshSuggestion} disabled={disabled || isSuggesting || !settings.enabled}>
+          <RefreshCw size={15} className={isSuggesting ? "spin" : ""} />
+          刷新建议
+        </button>
+      </div>
+      <div className="customer-level-grid">
+        <div className="customer-level-current">
+          <span className="editable-field-label">正式等级</span>
+          <CustomerLevelBadge level={currentLevel} settings={settings} />
+        </div>
+        <label className="customer-level-select">
+          <span className="editable-field-label">提交修改审批</span>
+          <select
+            className="select"
+            value={currentLevel}
+            onChange={(event) => onRequestChange(event.target.value as CustomerLevel | "")}
+            disabled={disabled || isChanging}
+          >
+            <option value="">未评级</option>
+            {enabledLevels.map((level) => (
+              <option key={level.value} value={level.value}>
+                {level.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {suggestedLevel ? (
+        <div className={`customer-level-suggestion ${suggestionDiffers ? "actionable" : ""}`}>
+          <div>
+            <span className="editable-field-label">建议等级</span>
+            <div className="customer-level-suggestion-title">
+              <CustomerLevelBadge level={suggestedLevel} settings={settings} subtle />
+              {typeof score === "number" ? <span>{score} 分</span> : null}
+              {suggestedAt ? <span>{formatDateTimeSeconds(suggestedAt)}</span> : null}
+            </div>
+          </div>
+          {suggestionDiffers ? (
+            <button className="secondary-button" type="button" onClick={() => onRequestChange(suggestedLevel)} disabled={disabled || isChanging}>
+              采用建议
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="customer-level-empty">暂无建议等级，可点击刷新建议生成评分。</div>
+      )}
+      {reasons.length > 0 ? (
+        <ul className="customer-level-reasons">
+          {reasons.slice(0, 5).map((reason, index) => (
+            <li key={`${reason}-${index}`}>{reason}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
 function ContactProfileEditor({
   allRecords,
   canManageOwners,
   contactMethodValue,
+  customerLevelActionKey,
+  customerLevelSettings,
   fields,
   isPending,
   mediaAssets,
@@ -15211,6 +15439,8 @@ function ContactProfileEditor({
   onDeleteMediaAsset,
   onOwnerChange,
   onRecordsLoaded,
+  onRefreshCustomerLevelSuggestion,
+  onRequestCustomerLevelChange,
   onSave,
   onSaveField,
   onSaveOwner,
@@ -15222,6 +15452,8 @@ function ContactProfileEditor({
   allRecords: CrmRecord[];
   canManageOwners: boolean;
   contactMethodValue: string;
+  customerLevelActionKey: string;
+  customerLevelSettings: CustomerLevelSettings;
   fields: FieldDefinition[];
   isPending: boolean;
   mediaAssets: MediaAsset[];
@@ -15240,6 +15472,8 @@ function ContactProfileEditor({
   onDeleteMediaAsset: (asset: MediaAsset) => void;
   onOwnerChange: (ownerId: string) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
+  onRefreshCustomerLevelSuggestion: () => void;
+  onRequestCustomerLevelChange: (level: CustomerLevel | "") => void;
   onSave: () => void;
   onSaveField: (field: FieldDefinition, value: string) => Promise<void>;
   onSaveOwner: (ownerId: string) => Promise<void>;
@@ -15250,7 +15484,7 @@ function ContactProfileEditor({
 }) {
   const avatarField = fields.find((field) => field.key === "avatarUrl");
   const companyField = fields.find((field) => field.key === "companyId");
-  const detailFields = fields.filter((field) => field.key !== "avatarUrl" && field.key !== "companyId");
+  const detailFields = fields.filter((field) => field.key !== "avatarUrl" && field.key !== "companyId" && !customerLevelFieldKeys.has(field.key));
   const primaryEmail = getPrimaryRecordEmail({ ...record, title, data: { ...record.data, ...values } });
   const company = typeof values.companyId === "string" ? allRecords.find((candidate) => candidate.id === values.companyId) : undefined;
   const contactMethods = normalizeContactMethods(contactMethodValue);
@@ -15282,6 +15516,7 @@ function ContactProfileEditor({
             <div className="contact-profile-summary">
               {company ? <span>{company.title}</span> : null}
               {primaryEmail ? <span>{primaryEmail}</span> : null}
+              <span>{customerLevelLabel(customerLevelSettings, normalizeCustomerLevelValue(record.data.customerLevel))}</span>
               <span>{users.find((user) => user.id === ownerId)?.name ?? "未分配负责人"}</span>
             </div>
           </div>
@@ -15312,6 +15547,15 @@ function ContactProfileEditor({
           reviewStatus={reviewStatus}
         />
       </section>
+
+      <CustomerLevelPanel
+        actionKey={customerLevelActionKey}
+        disabled={isPending}
+        record={record}
+        settings={customerLevelSettings}
+        onRefreshSuggestion={onRefreshCustomerLevelSuggestion}
+        onRequestChange={onRequestCustomerLevelChange}
+      />
 
       <div className="contact-profile-grid">
         <section className="contact-profile-card">
@@ -15544,6 +15788,8 @@ function CompanyProfileEditor({
   billingAddressValue,
   canManageOwners,
   contacts,
+  customerLevelActionKey,
+  customerLevelSettings,
   fields,
   isPending,
   mediaAssets,
@@ -15570,6 +15816,8 @@ function CompanyProfileEditor({
   onOwnerChange,
   onPrimaryContactChange,
   onRecordsLoaded,
+  onRefreshCustomerLevelSuggestion,
+  onRequestCustomerLevelChange,
   onSave,
   onSaveField,
   onSaveOwner,
@@ -15584,6 +15832,8 @@ function CompanyProfileEditor({
   billingAddressValue: string;
   canManageOwners: boolean;
   contacts: CrmRecord[];
+  customerLevelActionKey: string;
+  customerLevelSettings: CustomerLevelSettings;
   fields: FieldDefinition[];
   isPending: boolean;
   mediaAssets: MediaAsset[];
@@ -15610,6 +15860,8 @@ function CompanyProfileEditor({
   onOwnerChange: (ownerId: string) => void;
   onPrimaryContactChange: (contactId: string) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
+  onRefreshCustomerLevelSuggestion: () => void;
+  onRequestCustomerLevelChange: (level: CustomerLevel | "") => void;
   onSave: () => void;
   onSaveField: (field: FieldDefinition, value: string) => Promise<void>;
   onSaveOwner: (ownerId: string) => Promise<void>;
@@ -15628,6 +15880,7 @@ function CompanyProfileEditor({
         companyBillingAddressesValueKey,
         companyShippingAddressesValueKey
       ].includes(field.key)
+      && !customerLevelFieldKeys.has(field.key)
   );
   const primaryContact = contacts.find((contact) => contact.id === primaryContactId) ?? contacts[0];
   const domain = typeof values.domain === "string" ? values.domain.trim() : "";
@@ -15661,6 +15914,7 @@ function CompanyProfileEditor({
               {domain ? <span>{domain}</span> : null}
               {industry ? <span>{industry}</span> : null}
               {primaryContact ? <span>主联系人 {formatEmailContactLabel(primaryContact, getPrimaryRecordEmail(primaryContact))}</span> : null}
+              <span>{customerLevelLabel(customerLevelSettings, normalizeCustomerLevelValue(record.data.customerLevel))}</span>
               <span>{users.find((user) => user.id === ownerId)?.name ?? "未分配负责人"}</span>
             </div>
           </div>
@@ -15692,6 +15946,15 @@ function CompanyProfileEditor({
           reviewStatus={reviewStatus}
         />
       </section>
+
+      <CustomerLevelPanel
+        actionKey={customerLevelActionKey}
+        disabled={isPending}
+        record={record}
+        settings={customerLevelSettings}
+        onRefreshSuggestion={onRefreshCustomerLevelSuggestion}
+        onRequestChange={onRequestCustomerLevelChange}
+      />
 
       <div className="contact-profile-grid company-profile-grid">
         <section className="contact-profile-card">

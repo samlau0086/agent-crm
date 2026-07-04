@@ -41,6 +41,7 @@ model Workspace {
   emailAiSettings     EmailAiSettings?
   emailSyncSettings   EmailSyncSettings?
   smartReminderSettings SmartReminderSettings?
+  customerLevelSettings CustomerLevelSettings?
   smartReminders      SmartReminder[]
   smartReminderRuns   SmartReminderRun[]
   poolSettings        CrmPoolSettings?
@@ -273,6 +274,15 @@ model SmartReminderSettings {
   notifyDailyDigest Boolean   @default(false)
   updatedAt         DateTime  @updatedAt
   workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model CustomerLevelSettings {
+  workspaceId String    @id
+  enabled     Boolean   @default(true)
+  levels      Json
+  rules       Json
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model SmartReminder {

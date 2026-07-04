@@ -151,6 +151,11 @@ export const seedData: CrmSnapshot = {
     { id: "field-contact-avatar", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "avatarUrl", label: "头像 URL", type: "text", required: false, unique: false, isSystem: true, position: 8 },
     { id: "field-contact-preferred-language", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "preferredLanguage", label: "偏好语言", type: "text", required: false, unique: false, isSystem: true, position: 9 },
     { id: "field-contact-preferred-contact-window", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "preferredContactWindow", label: "偏好沟通时段", type: "textarea", required: false, unique: false, isSystem: true, position: 10 },
+    { id: "field-contact-customer-level", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "customerLevel", label: "\u5ba2\u6237\u7b49\u7ea7", type: "select", required: false, unique: false, options: [{ label: "A \u7ea7\u5ba2\u6237", value: "A" }, { label: "B \u7ea7\u5ba2\u6237", value: "B" }, { label: "C \u7ea7\u5ba2\u6237", value: "C" }, { label: "D \u7ea7\u5ba2\u6237", value: "D" }], isSystem: true, position: 11 },
+    { id: "field-contact-customer-level-suggested", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "customerLevelSuggested", label: "\u5efa\u8bae\u5ba2\u6237\u7b49\u7ea7", type: "select", required: false, unique: false, options: [{ label: "A \u7ea7\u5ba2\u6237", value: "A" }, { label: "B \u7ea7\u5ba2\u6237", value: "B" }, { label: "C \u7ea7\u5ba2\u6237", value: "C" }, { label: "D \u7ea7\u5ba2\u6237", value: "D" }], isSystem: true, position: 12 },
+    { id: "field-contact-customer-level-score", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "customerLevelScore", label: "\u5ba2\u6237\u7b49\u7ea7\u8bc4\u5206", type: "number", required: false, unique: false, isSystem: true, position: 13 },
+    { id: "field-contact-customer-level-reasons", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "customerLevelReasons", label: "\u5ba2\u6237\u7b49\u7ea7\u5efa\u8bae\u539f\u56e0", type: "textarea", required: false, unique: false, isSystem: true, position: 14 },
+    { id: "field-contact-customer-level-suggested-at", workspaceId: defaultWorkspaceId, objectKey: "contacts", key: "customerLevelSuggestedAt", label: "\u5ba2\u6237\u7b49\u7ea7\u5efa\u8bae\u65f6\u95f4", type: "date", required: false, unique: false, isSystem: true, position: 15 },
     { id: "field-company-domain", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "domain", label: "域名", type: "text", required: true, unique: true, isSystem: true, position: 1 },
     { id: "field-company-industry", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "industry", label: "行业", type: "select", required: false, unique: false, options: [{ label: "软件", value: "software" }, { label: "制造", value: "manufacturing" }, { label: "金融", value: "finance" }], isSystem: true, position: 2 },
     { id: "field-company-country", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "country", label: "国家/地区", type: "text", required: false, unique: false, isSystem: true, position: 3 },
@@ -159,6 +164,11 @@ export const seedData: CrmSnapshot = {
     { id: "field-company-logo", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "logoUrl", label: "Logo URL", type: "text", required: false, unique: false, isSystem: true, position: 6 },
     { id: "field-company-preferred-language", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "preferredLanguage", label: "偏好语言", type: "text", required: false, unique: false, isSystem: true, position: 7 },
     { id: "field-company-preferred-contact-window", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "preferredContactWindow", label: "偏好沟通时段", type: "textarea", required: false, unique: false, isSystem: true, position: 8 },
+    { id: "field-company-customer-level", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "customerLevel", label: "\u5ba2\u6237\u7b49\u7ea7", type: "select", required: false, unique: false, options: [{ label: "A \u7ea7\u5ba2\u6237", value: "A" }, { label: "B \u7ea7\u5ba2\u6237", value: "B" }, { label: "C \u7ea7\u5ba2\u6237", value: "C" }, { label: "D \u7ea7\u5ba2\u6237", value: "D" }], isSystem: true, position: 9 },
+    { id: "field-company-customer-level-suggested", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "customerLevelSuggested", label: "\u5efa\u8bae\u5ba2\u6237\u7b49\u7ea7", type: "select", required: false, unique: false, options: [{ label: "A \u7ea7\u5ba2\u6237", value: "A" }, { label: "B \u7ea7\u5ba2\u6237", value: "B" }, { label: "C \u7ea7\u5ba2\u6237", value: "C" }, { label: "D \u7ea7\u5ba2\u6237", value: "D" }], isSystem: true, position: 10 },
+    { id: "field-company-customer-level-score", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "customerLevelScore", label: "\u5ba2\u6237\u7b49\u7ea7\u8bc4\u5206", type: "number", required: false, unique: false, isSystem: true, position: 11 },
+    { id: "field-company-customer-level-reasons", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "customerLevelReasons", label: "\u5ba2\u6237\u7b49\u7ea7\u5efa\u8bae\u539f\u56e0", type: "textarea", required: false, unique: false, isSystem: true, position: 12 },
+    { id: "field-company-customer-level-suggested-at", workspaceId: defaultWorkspaceId, objectKey: "companies", key: "customerLevelSuggestedAt", label: "\u5ba2\u6237\u7b49\u7ea7\u5efa\u8bae\u65f6\u95f4", type: "date", required: false, unique: false, isSystem: true, position: 13 },
     { id: "field-deal-amount", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "amount", label: "金额", type: "currency", required: true, unique: false, isSystem: true, position: 1 },
     { id: "field-deal-close-date", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "closeDate", label: "预计成交日", type: "date", required: false, unique: false, isSystem: true, position: 2 },
     { id: "field-deal-company", workspaceId: defaultWorkspaceId, objectKey: "deals", key: "companyId", label: "关联公司", type: "reference", required: false, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 3 },
@@ -484,12 +494,33 @@ export const seedData: CrmSnapshot = {
       updatedAt: now
     }
   ],
+  customerLevelSettings: [
+    {
+      workspaceId: defaultWorkspaceId,
+      enabled: true,
+      levels: [
+        { value: "A", label: "A \u7ea7\u5ba2\u6237", color: "#dc2626", position: 1, enabled: true, minScore: 85, maxScore: 100 },
+        { value: "B", label: "B \u7ea7\u5ba2\u6237", color: "#ea580c", position: 2, enabled: true, minScore: 65, maxScore: 84 },
+        { value: "C", label: "C \u7ea7\u5ba2\u6237", color: "#2563eb", position: 3, enabled: true, minScore: 40, maxScore: 64 },
+        { value: "D", label: "D \u7ea7\u5ba2\u6237", color: "#64748b", position: 4, enabled: true, minScore: 0, maxScore: 39 }
+      ],
+      rules: {
+        dealAmount: 24,
+        dealStage: 18,
+        recentActivity: 18,
+        emailEngagement: 16,
+        inactivity: 14,
+        overdueTasks: 10
+      },
+      updatedAt: now
+    }
+  ],
   workflowDefinitions: [],
   workflowRuns: [],
   workflowActionApprovals: [],
   savedViews: [
-    { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "email", "phone", "companyId", "country", "birthday", "gender"], isDefault: true },
-    { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "domain", "industry", "country", "billingAddresses", "shippingAddresses"], isDefault: true },
+    { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "customerLevel", "email", "phone", "companyId", "country", "birthday", "gender"], isDefault: true },
+    { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "customerLevel", "domain", "industry", "country", "billingAddresses", "shippingAddresses"], isDefault: true },
     { id: "view-deals-default", workspaceId: defaultWorkspaceId, objectKey: "deals", name: "销售管道", columns: ["title", "amount", "closeDate", "companyId"], sort: { field: "amount", direction: "desc" }, isDefault: true },
     { id: "view-products-default", workspaceId: defaultWorkspaceId, objectKey: "products", name: "全部产品", columns: ["title", "mainImageUrl", "sku", "unitPrice", "unitPriceCurrency", "billingCycle", "active"], sort: { field: "title", direction: "asc" }, isDefault: true },
     { id: "view-quotes-default", workspaceId: defaultWorkspaceId, objectKey: "quotes", name: "全部报价", columns: ["title", "quoteNumber", "companyId", "contactId", "quoteCurrency", "paymentTerm", "totalAmount", "status"], sort: { field: "updatedAt", direction: "desc" }, isDefault: true },

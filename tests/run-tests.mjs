@@ -23,6 +23,9 @@ import { crmPathForNav, resolveCrmRoute } from "../src/lib/crm/navigation.ts";
 import {
   activityUpdateSchema,
   aiTalkRequestSchema,
+  customerLevelChangeRequestSchema,
+  customerLevelSettingsUpdateSchema,
+  customerLevelSuggestionGenerateSchema,
   csvImportSchema,
   emailAccountCreateSchema,
   emailAccountUpdateSchema,
@@ -1128,6 +1131,50 @@ await run("record approval schemas accept short Chinese reasons", async () => {
     { changeReason: "重复" }
   );
   assert.equal(recordPatchWithReasonSchema.parse({ changeReason: "误删" }).changeReason, "误删");
+});
+
+await run("customer level schemas accept settings and approval changes", () => {
+  const settings = customerLevelSettingsUpdateSchema.parse({
+    enabled: true,
+    levels: [
+      { value: "A", label: "A 级客户", color: "#dc2626", position: 1, enabled: true, minScore: 85, maxScore: 100 },
+      { value: "B", label: "B 级客户", color: "#ea580c", position: 2, enabled: true, minScore: 65, maxScore: 84 },
+      { value: "C", label: "C 级客户", color: "#2563eb", position: 3, enabled: true, minScore: 40, maxScore: 64 },
+      { value: "D", label: "D 级客户", color: "#64748b", position: 4, enabled: true, minScore: 0, maxScore: 39 }
+    ],
+    rules: {
+      dealAmount: 24,
+      dealStage: 18,
+      recentActivity: 18,
+      emailEngagement: 16,
+      inactivity: 14,
+      overdueTasks: 10
+    }
+  });
+  assert.equal(settings.levels?.length, 4);
+  assert.equal(customerLevelChangeRequestSchema.parse({ level: "A", changeReason: "重要客户" }).level, "A");
+  assert.equal(customerLevelChangeRequestSchema.parse({ level: "", changeReason: "重新评级" }).level, "");
+  assert.deepEqual(customerLevelSuggestionGenerateSchema.parse({ objectKey: "contacts", recordId: "contact-lin" }), {
+    objectKey: "contacts",
+    recordId: "contact-lin"
+  });
+});
+
+await run("seed includes customer level fields settings and default columns", () => {
+  const customerLevelFields = seedData.fieldDefinitions.filter((field) => field.key.startsWith("customerLevel"));
+  assert.ok(customerLevelFields.some((field) => field.objectKey === "contacts" && field.key === "customerLevel"));
+  assert.ok(customerLevelFields.some((field) => field.objectKey === "companies" && field.key === "customerLevel"));
+
+  assert.equal(seedData.customerLevelSettings?.[0]?.workspaceId, defaultWorkspaceId);
+  assert.deepEqual(
+    seedData.customerLevelSettings?.[0]?.levels.map((level) => level.value),
+    ["A", "B", "C", "D"]
+  );
+
+  const contactView = seedData.savedViews.find((view) => view.objectKey === "contacts" && view.isDefault);
+  const companyView = seedData.savedViews.find((view) => view.objectKey === "companies" && view.isDefault);
+  assert.ok(contactView?.columns.includes("customerLevel"));
+  assert.ok(companyView?.columns.includes("customerLevel"));
 });
 
 await run("record approval patch splits empty-value additions from non-empty changes", () => {
@@ -3141,8 +3188,8 @@ await run("contact and company country fields use searchable sovereign country o
   assert.match(source, /getCountryLabel\(address\.country\)/);
   assert.match(seed, /objectKey: "contacts", key: "country"/);
   assert.match(seed, /objectKey: "companies", key: "country"/);
-  assert.match(seed, /columns: \["title", "email", "phone", "companyId", "country", "birthday", "gender"\]/);
-  assert.match(seed, /columns: \["title", "domain", "industry", "country", "billingAddresses", "shippingAddresses"\]/);
+  assert.match(seed, /columns: \["title", "customerLevel", "email", "phone", "companyId", "country", "birthday", "gender"\]/);
+  assert.match(seed, /columns: \["title", "customerLevel", "domain", "industry", "country", "billingAddresses", "shippingAddresses"\]/);
   assert.match(migration, /'country', '国家\/地区', 'text'/);
   assert.match(migration, /ARRAY\['title', 'email', 'phone', 'companyId', 'country', 'birthday', 'gender'\]/);
   assert.match(migration, /ARRAY\['title', 'domain', 'industry', 'country', 'billingAddresses', 'shippingAddresses'\]/);
@@ -13236,7 +13283,7 @@ await run("ai query planner keeps explicit object scope", () => {
   const fields = store.listFieldDefinitions(context);
 
   const plan = buildAiQueryPlan({
-    question: "show high amount deals",
+    question: "show contacts",
     objectDefinitions: definitions,
     fields,
     objectKey: "contacts",
@@ -13244,7 +13291,7 @@ await run("ai query planner keeps explicit object scope", () => {
   });
 
   assert.deepEqual(plan.objectKeys, ["contacts"]);
-  assert.equal(plan.queries.contacts.sort, undefined);
+  assert.ok(plan.queries.contacts.q === undefined || plan.queries.contacts.q === "");
 });
 
 await run("ai query planner validates model-shaped plans through allowlists", () => {

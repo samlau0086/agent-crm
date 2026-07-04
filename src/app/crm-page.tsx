@@ -40,6 +40,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
   const emailSyncSettings = context.role.permissions.includes("crm.admin") ? await repository.getEmailSyncSettings(context) : undefined;
   const poolSettings = await repository.getPoolSettings(context);
   const smartReminderSettings = await repository.getSmartReminderSettings(context);
+  const customerLevelSettings = await repository.getCustomerLevelSettings(context);
   const recordChangeRequests = await repository.listRecordChangeRequests(context, "pending");
   const knowledgeArticles = await repository.listKnowledgeArticles(context);
   const mediaAssets = await repository.listMediaAssets(context);
@@ -107,6 +108,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
       emailSyncSettings={emailSyncSettings}
       poolSettings={poolSettings}
       smartReminderSettings={smartReminderSettings}
+      customerLevelSettings={customerLevelSettings}
       recordChangeRequests={recordChangeRequests}
       knowledgeArticles={knowledgeArticles}
       mediaAssets={mediaAssets}

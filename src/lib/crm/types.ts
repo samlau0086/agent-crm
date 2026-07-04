@@ -666,6 +666,44 @@ export interface CrmRecord {
   updatedAt: string;
 }
 
+export type CustomerLevel = "A" | "B" | "C" | "D";
+
+export interface CustomerLevelDefinition {
+  value: CustomerLevel;
+  label: string;
+  color: string;
+  position: number;
+  enabled: boolean;
+  minScore: number;
+  maxScore: number;
+}
+
+export interface CustomerLevelRuleWeights {
+  dealAmount: number;
+  dealStage: number;
+  recentActivity: number;
+  emailEngagement: number;
+  inactivity: number;
+  overdueTasks: number;
+}
+
+export interface CustomerLevelSettings {
+  workspaceId: string;
+  enabled: boolean;
+  levels: CustomerLevelDefinition[];
+  rules: CustomerLevelRuleWeights;
+  updatedAt: string;
+}
+
+export interface CustomerLevelSuggestion {
+  objectKey: string;
+  recordId: string;
+  level: CustomerLevel;
+  score: number;
+  reasons: string[];
+  suggestedAt: string;
+}
+
 export interface RecordFilter {
   field: string;
   operator: "contains" | "equals";
@@ -807,6 +845,9 @@ export type AuditAction =
   | "record.change_approved"
   | "record.change_rejected"
   | "record.change_cancelled"
+  | "customer_level.suggested"
+  | "customer_level.change_requested"
+  | "customer_level.changed"
   | "workflow.created"
   | "workflow.updated"
   | "workflow.deleted"
@@ -1146,6 +1187,7 @@ export interface CrmSnapshot {
   emailAiSettings: EmailAiSettings[];
   emailSyncSettings?: EmailSyncSettings[];
   poolSettings?: CrmPoolSettings[];
+  customerLevelSettings?: CustomerLevelSettings[];
   recordChangeRequests?: RecordChangeRequest[];
   mediaAssets?: MediaAsset[];
   workflowDefinitions?: WorkflowDefinition[];

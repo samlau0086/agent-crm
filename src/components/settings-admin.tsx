@@ -8,7 +8,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -33,11 +33,13 @@ interface SettingsAdminProps {
   importJobQueueSummary?: ImportJobQueueSummary;
   poolSettings: CrmPoolSettings;
   smartReminderSettings: SmartReminderSettings;
+  customerLevelSettings: CustomerLevelSettings;
   recordChangeRequests: RecordChangeRequest[];
   workflows: WorkflowDefinition[];
   workflowRuns: WorkflowRun[];
   workflowApprovals: WorkflowActionApproval[];
   onRecordsUpdated?: (records: CrmRecord[]) => void;
+  onCustomerLevelSettingsUpdated?: (settings: CustomerLevelSettings) => void;
 }
 
 type ObjectDraft = {
@@ -150,6 +152,11 @@ type SmartReminderSettingsDraft = {
   objectKeys: string[];
   notifyCreated: boolean;
   notifyDailyDigest: boolean;
+};
+type CustomerLevelSettingsDraft = {
+  enabled: boolean;
+  levels: CustomerLevelSettings["levels"];
+  rules: Record<keyof CustomerLevelSettings["rules"], string>;
 };
 type ToastState = { intent: "success" | "error" | "info"; message: string };
 type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
@@ -273,6 +280,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     notifyCreated: props.smartReminderSettings.notifyCreated,
     notifyDailyDigest: props.smartReminderSettings.notifyDailyDigest
   }));
+  const [customerLevelSettingsDraft, setCustomerLevelSettingsDraft] = useState<CustomerLevelSettingsDraft>(() =>
+    customerLevelSettingsToDraft(props.customerLevelSettings)
+  );
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>(props.workflows);
   const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>(props.workflowRuns);
   const [workflowApprovals, setWorkflowApprovals] = useState<WorkflowActionApproval[]>(props.workflowApprovals);
@@ -381,6 +391,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       notifyDailyDigest: props.smartReminderSettings.notifyDailyDigest
     });
   }, [props.smartReminderSettings]);
+  useEffect(() => {
+    setCustomerLevelSettingsDraft(customerLevelSettingsToDraft(props.customerLevelSettings));
+  }, [props.customerLevelSettings]);
   const fieldObject = props.objects.find((object) => object.key === fieldDraft.objectKey);
   const quotePaymentTermField = props.fields.find((field) => field.objectKey === "quotes" && field.key === "paymentTerm");
 
@@ -1494,6 +1507,47 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setMessage("智能提醒设置已保存");
   }
 
+  async function saveCustomerLevelSettings() {
+    const levels = customerLevelSettingsDraft.levels.map((level) => ({
+      ...level,
+      label: level.label.trim() || level.value,
+      color: level.color.trim() || "#64748b",
+      minScore: Number(level.minScore),
+      maxScore: Number(level.maxScore),
+      position: Number(level.position)
+    }));
+    const seenLevels = new Set<string>();
+    for (const level of levels) {
+      if (seenLevels.has(level.value)) {
+        throw new Error("客户等级不能重复");
+      }
+      seenLevels.add(level.value);
+      if (!Number.isFinite(level.minScore) || !Number.isFinite(level.maxScore) || level.minScore < 0 || level.maxScore > 100 || level.minScore > level.maxScore) {
+        throw new Error(`${level.value} 级评分区间必须在 0-100 内，且最小值不能大于最大值`);
+      }
+    }
+    const rules = Object.fromEntries(
+      Object.entries(customerLevelSettingsDraft.rules).map(([key, value]) => {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+          throw new Error("客户等级规则权重必须是 0-100 的整数");
+        }
+        return [key, parsed];
+      })
+    ) as unknown as CustomerLevelSettings["rules"];
+    const updated = await fetchJson<CustomerLevelSettings>("/api/customer-level-settings", {
+      method: "PATCH",
+      body: {
+        enabled: customerLevelSettingsDraft.enabled,
+        levels,
+        rules
+      }
+    });
+    setCustomerLevelSettingsDraft(customerLevelSettingsToDraft(updated));
+    props.onCustomerLevelSettingsUpdated?.(updated);
+    setMessage("客户等级配置已保存");
+  }
+
   function toggleSmartReminderObjectKey(objectKey: string, enabled: boolean) {
     setSmartReminderSettingsDraft((current) => {
       const next = enabled
@@ -1689,6 +1743,143 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onChange={setPaymentTermOptionsText}
             onSave={() => runAction(savePaymentTermOptions)}
           />
+          <section className="settings-panel">
+            <div className="settings-panel-header">
+              <div>
+                <h2 className="page-title">客户等级</h2>
+                <div className="subtle">联系人和公司使用 A/B/C/D 正式等级；系统建议等级只写入建议字段，不会自动覆盖正式等级。</div>
+              </div>
+              <span className="badge">contacts / companies</span>
+            </div>
+            <div className="form-grid">
+              <label>
+                <span className="subtle">启用客户等级</span>
+                <select
+                  className="select"
+                  value={customerLevelSettingsDraft.enabled ? "1" : "0"}
+                  onChange={(event) => setCustomerLevelSettingsDraft((current) => ({ ...current, enabled: event.target.value === "1" }))}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">停用</option>
+                </select>
+              </label>
+            </div>
+            <div className="settings-subsection">
+              <h3>等级定义</h3>
+              <div className="record-review-diff-table customer-level-settings-table">
+                <div className="record-review-diff-head">
+                  <span>等级</span>
+                  <span>名称 / 颜色</span>
+                  <span>评分区间</span>
+                </div>
+                {customerLevelSettingsDraft.levels.map((level, index) => (
+                  <div className="record-review-diff-row" key={level.value}>
+                    <strong>
+                      <label className="toolbar compact-toolbar">
+                        <input
+                          type="checkbox"
+                          checked={level.enabled}
+                          onChange={(event) =>
+                            setCustomerLevelSettingsDraft((current) => ({
+                              ...current,
+                              levels: current.levels.map((candidate, candidateIndex) =>
+                                candidateIndex === index ? { ...candidate, enabled: event.target.checked } : candidate
+                              )
+                            }))
+                          }
+                        />
+                        {level.value}
+                      </label>
+                    </strong>
+                    <span className="record-review-value">
+                      <input
+                        className="input"
+                        value={level.label}
+                        onChange={(event) =>
+                          setCustomerLevelSettingsDraft((current) => ({
+                            ...current,
+                            levels: current.levels.map((candidate, candidateIndex) =>
+                              candidateIndex === index ? { ...candidate, label: event.target.value } : candidate
+                            )
+                          }))
+                        }
+                      />
+                      <input
+                        aria-label={`${level.value} level color`}
+                        className="input"
+                        type="color"
+                        value={level.color}
+                        onChange={(event) =>
+                          setCustomerLevelSettingsDraft((current) => ({
+                            ...current,
+                            levels: current.levels.map((candidate, candidateIndex) =>
+                              candidateIndex === index ? { ...candidate, color: event.target.value } : candidate
+                            )
+                          }))
+                        }
+                      />
+                    </span>
+                    <span className="record-review-value">
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={String(level.minScore)}
+                        onChange={(event) =>
+                          setCustomerLevelSettingsDraft((current) => ({
+                            ...current,
+                            levels: current.levels.map((candidate, candidateIndex) =>
+                              candidateIndex === index ? { ...candidate, minScore: Number(event.target.value) } : candidate
+                            )
+                          }))
+                        }
+                      />
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={String(level.maxScore)}
+                        onChange={(event) =>
+                          setCustomerLevelSettingsDraft((current) => ({
+                            ...current,
+                            levels: current.levels.map((candidate, candidateIndex) =>
+                              candidateIndex === index ? { ...candidate, maxScore: Number(event.target.value) } : candidate
+                            )
+                          }))
+                        }
+                      />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="settings-subsection">
+              <h3>评分权重</h3>
+              <div className="form-grid">
+                {Object.entries(customerLevelSettingsDraft.rules).map(([key, value]) => (
+                  <label key={key}>
+                    <span className="subtle">{customerLevelRuleLabel(key)}</span>
+                    <input
+                      className="input"
+                      inputMode="numeric"
+                      value={value}
+                      onChange={(event) =>
+                        setCustomerLevelSettingsDraft((current) => ({
+                          ...current,
+                          rules: { ...current.rules, [key]: event.target.value }
+                        }))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              <button className="primary-button" type="button" onClick={() => runAction(saveCustomerLevelSettings)} disabled={isPending}>
+                <Save size={16} />
+                保存客户等级
+              </button>
+              <span className="subtle">正式等级修改仍会进入记录变更审批；建议等级由规则评分生成。</span>
+            </div>
+          </section>
         </div>
       ) : null}
 
@@ -5536,6 +5727,28 @@ function notificationChannelDraftFromChannel(channel: NotificationChannel): Noti
       : "",
     accountId: typeof config.accountId === "string" ? config.accountId : ""
   };
+}
+
+function customerLevelSettingsToDraft(settings: CustomerLevelSettings): CustomerLevelSettingsDraft {
+  return {
+    enabled: settings.enabled,
+    levels: settings.levels
+      .map((level) => ({ ...level }))
+      .sort((left, right) => left.position - right.position),
+    rules: Object.fromEntries(Object.entries(settings.rules).map(([key, value]) => [key, String(value)])) as CustomerLevelSettingsDraft["rules"]
+  };
+}
+
+function customerLevelRuleLabel(key: string): string {
+  const labels: Record<string, string> = {
+    dealAmount: "交易金额",
+    dealStage: "交易阶段",
+    recentActivity: "最近活动",
+    emailEngagement: "邮件互动",
+    inactivity: "未跟进天数",
+    overdueTasks: "逾期任务"
+  };
+  return labels[key] ?? fieldLabelFromKey(key);
 }
 
 function notificationChannelPayload(draft: NotificationChannelDraft) {

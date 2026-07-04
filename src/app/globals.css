@@ -1320,6 +1320,84 @@ button {
   background: var(--surface-strong);
 }
 
+.customer-level-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.customer-level-grid,
+.customer-level-suggestion {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.65fr) minmax(220px, 1fr);
+  align-items: end;
+  gap: 12px;
+}
+
+.customer-level-current,
+.customer-level-select {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.customer-level-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--customer-level-color, #64748b) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--customer-level-color, #64748b) 13%, transparent);
+  color: var(--customer-level-color, #64748b);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.customer-level-badge.subtle {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.customer-level-suggestion {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.customer-level-suggestion.actionable {
+  border-color: rgba(20, 184, 166, 0.35);
+  background: rgba(20, 184, 166, 0.06);
+}
+
+.customer-level-suggestion-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.customer-level-empty {
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.customer-level-reasons {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .contact-profile-form {
   margin-top: 12px;
 }
@@ -1607,6 +1685,11 @@ button {
 
   .contact-profile-info-strip {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .customer-level-grid,
+  .customer-level-suggestion {
+    grid-template-columns: 1fr;
   }
 
   .deal-profile-stage-bar {

@@ -40,6 +40,9 @@ import type {
   AuditLog,
   AuditLogQuery,
   CreatedApiKey,
+  CustomerLevel,
+  CustomerLevelSettings,
+  CustomerLevelSuggestion,
   CsvImportConflict,
   CsvImportMapping,
   CsvImportResult,
@@ -908,6 +911,108 @@ function mapCrmPoolSettings(settings: {
     lastAutoReclaimCount: settings.lastAutoReclaimCount,
     updatedAt: settings.updatedAt.toISOString()
   };
+}
+
+const defaultCustomerLevelDefinitions: CustomerLevelSettings["levels"] = [
+  { value: "A", label: "A 级客户", color: "#16a34a", position: 1, enabled: true, minScore: 85, maxScore: 100 },
+  { value: "B", label: "B 级客户", color: "#2563eb", position: 2, enabled: true, minScore: 70, maxScore: 84 },
+  { value: "C", label: "C 级客户", color: "#f59e0b", position: 3, enabled: true, minScore: 45, maxScore: 69 },
+  { value: "D", label: "D 级客户", color: "#ef4444", position: 4, enabled: true, minScore: 0, maxScore: 44 }
+];
+
+const defaultCustomerLevelRules: CustomerLevelSettings["rules"] = {
+  dealAmount: 30,
+  dealStage: 20,
+  recentActivity: 15,
+  emailEngagement: 15,
+  inactivity: 10,
+  overdueTasks: 10
+};
+
+function mapCustomerLevelSettings(settings: {
+  workspaceId: string;
+  enabled: boolean;
+  levels: Prisma.JsonValue;
+  rules: Prisma.JsonValue;
+  updatedAt: Date;
+}): CustomerLevelSettings {
+  return {
+    workspaceId: settings.workspaceId,
+    enabled: settings.enabled,
+    levels: normalizeCustomerLevelDefinitions(settings.levels),
+    rules: normalizeCustomerLevelRules(settings.rules),
+    updatedAt: settings.updatedAt.toISOString()
+  };
+}
+
+function normalizeCustomerLevelDefinitions(value: Prisma.JsonValue | unknown): CustomerLevelSettings["levels"] {
+  const raw = Array.isArray(value) ? value : [];
+  const byValue = new Map(defaultCustomerLevelDefinitions.map((level) => [level.value, level]));
+  for (const item of raw) {
+    if (!isJsonRecord(item)) {
+      continue;
+    }
+    const levelValue = typeof item.value === "string" && ["A", "B", "C", "D"].includes(item.value) ? (item.value as CustomerLevel) : undefined;
+    if (!levelValue) {
+      continue;
+    }
+    const fallback = byValue.get(levelValue) ?? defaultCustomerLevelDefinitions[0];
+    byValue.set(levelValue, {
+      value: levelValue,
+      label: typeof item.label === "string" && item.label.trim() ? item.label.trim().slice(0, 80) : fallback.label,
+      color: typeof item.color === "string" && item.color.trim() ? item.color.trim().slice(0, 40) : fallback.color,
+      position: normalizeIntegerLimit(Number(item.position), 0, 100),
+      enabled: typeof item.enabled === "boolean" ? item.enabled : fallback.enabled,
+      minScore: normalizeScoreNumber(item.minScore, fallback.minScore),
+      maxScore: normalizeScoreNumber(item.maxScore, fallback.maxScore)
+    });
+  }
+  return [...byValue.values()].sort((a, b) => a.position - b.position);
+}
+
+function normalizeCustomerLevelRules(value: Prisma.JsonValue | unknown): CustomerLevelSettings["rules"] {
+  const raw = isJsonRecord(value) ? value : {};
+  return {
+    dealAmount: normalizeScoreNumber(raw.dealAmount, defaultCustomerLevelRules.dealAmount),
+    dealStage: normalizeScoreNumber(raw.dealStage, defaultCustomerLevelRules.dealStage),
+    recentActivity: normalizeScoreNumber(raw.recentActivity, defaultCustomerLevelRules.recentActivity),
+    emailEngagement: normalizeScoreNumber(raw.emailEngagement, defaultCustomerLevelRules.emailEngagement),
+    inactivity: normalizeScoreNumber(raw.inactivity, defaultCustomerLevelRules.inactivity),
+    overdueTasks: normalizeScoreNumber(raw.overdueTasks, defaultCustomerLevelRules.overdueTasks)
+  };
+}
+
+function normalizeScoreNumber(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function customerLevelForScore(settings: CustomerLevelSettings, score: number): CustomerLevel {
+  const enabled = settings.levels.filter((level) => level.enabled).sort((a, b) => a.position - b.position);
+  const match = enabled.find((level) => score >= level.minScore && score <= level.maxScore);
+  return match?.value ?? enabled[enabled.length - 1]?.value ?? "D";
+}
+
+function isCustomerLevelObjectKey(objectKey: string): objectKey is "contacts" | "companies" {
+  return objectKey === "contacts" || objectKey === "companies";
+}
+
+function extractCustomerLevelPatch(patch: Prisma.JsonValue | null): { previousLevel?: string; nextLevel?: string } | undefined {
+  if (!isJsonRecord(patch)) {
+    return undefined;
+  }
+  const nextData = isJsonRecord(patch.data) ? patch.data : {};
+  const previousPatch = previousRecordApprovalPatch(patch as RecordChangeRequest["patch"]);
+  const previousData = isJsonRecord(previousPatch.data) ? previousPatch.data : {};
+  if (!Object.prototype.hasOwnProperty.call(nextData, "customerLevel")) {
+    return undefined;
+  }
+  const nextLevel = typeof nextData.customerLevel === "string" ? nextData.customerLevel : undefined;
+  const previousLevel = typeof previousData.customerLevel === "string" ? previousData.customerLevel : undefined;
+  return { previousLevel, nextLevel };
 }
 
 function mapRecordChangeRequest(request: {
@@ -3926,6 +4031,234 @@ export class PrismaCrmRepository {
     return mapSmartReminderSettings(updated);
   }
 
+  async getCustomerLevelSettings(context: RequestContext): Promise<CustomerLevelSettings> {
+    requirePermission(context, "crm.read");
+    return this.ensureCustomerLevelSettings(context.workspaceId);
+  }
+
+  async updateCustomerLevelSettings(
+    context: RequestContext,
+    patch: Partial<Pick<CustomerLevelSettings, "enabled" | "levels" | "rules">>
+  ): Promise<CustomerLevelSettings> {
+    requirePermission(context, "crm.admin");
+    const current = await this.ensureCustomerLevelSettings(context.workspaceId);
+    const updated = await this.db.customerLevelSettings.update({
+      where: { workspaceId: context.workspaceId },
+      data: {
+        enabled: patch.enabled ?? current.enabled,
+        levels: normalizeCustomerLevelDefinitions(patch.levels ?? current.levels) as unknown as Prisma.InputJsonValue,
+        rules: normalizeCustomerLevelRules(patch.rules ?? current.rules) as unknown as Prisma.InputJsonValue
+      }
+    });
+    await this.writeAuditLog(context, "update", "customer_level_settings", context.workspaceId, {
+      summary: "Updated customer level settings",
+      details: { patch }
+    });
+    return mapCustomerLevelSettings(updated);
+  }
+
+  async suggestCustomerLevel(context: RequestContext, objectKey: string, recordId: string): Promise<{ record: CrmRecord; suggestion: CustomerLevelSuggestion }> {
+    requirePermission(context, "crm.write");
+    if (!isCustomerLevelObjectKey(objectKey)) {
+      throw new Error("客户等级仅支持联系人和公司");
+    }
+    const record = await this.getRecord(context, objectKey, recordId);
+    const settings = await this.ensureCustomerLevelSettings(context.workspaceId);
+    const suggestion = await this.calculateCustomerLevelSuggestion(context, record, settings);
+    const updated = await this.db.crmRecord.update({
+      where: { id: record.id },
+      data: {
+        data: {
+          ...record.data,
+          customerLevelSuggested: suggestion.level,
+          customerLevelScore: suggestion.score,
+          customerLevelReasons: suggestion.reasons,
+          customerLevelSuggestedAt: suggestion.suggestedAt
+        } as Prisma.InputJsonValue
+      }
+    });
+    await this.writeAuditLog(context, "customer_level.suggested", "record", record.id, {
+      objectKey,
+      summary: `Suggested customer level ${suggestion.level} for ${record.title}`,
+      details: suggestion as unknown as Record<string, unknown>
+    });
+    return { record: mapRecord(updated), suggestion };
+  }
+
+  async generateCustomerLevelSuggestions(
+    context: RequestContext,
+    input: { objectKey?: "contacts" | "companies"; recordId?: string } = {}
+  ): Promise<{ records: CrmRecord[]; suggestions: CustomerLevelSuggestion[] }> {
+    requirePermission(context, "crm.write");
+    const objectKeys = input.objectKey ? [input.objectKey] : (["contacts", "companies"] as const);
+    const updatedRecords: CrmRecord[] = [];
+    const suggestions: CustomerLevelSuggestion[] = [];
+    for (const objectKey of objectKeys) {
+      const records = input.recordId
+        ? [await this.getRecord(context, objectKey, input.recordId)]
+        : await this.findCustomerLevelCandidateRecords(context, objectKey);
+      for (const record of records) {
+        const result = await this.suggestCustomerLevel(context, objectKey, record.id);
+        updatedRecords.push(result.record);
+        suggestions.push(result.suggestion);
+      }
+    }
+    return { records: updatedRecords, suggestions };
+  }
+
+  async requestCustomerLevelChange(
+    context: RequestContext,
+    objectKey: string,
+    recordId: string,
+    input: { level: CustomerLevel | ""; changeReason: string }
+  ): Promise<RecordChangeRequest> {
+    requirePermission(context, "crm.write");
+    if (!isCustomerLevelObjectKey(objectKey)) {
+      throw new Error("客户等级仅支持联系人和公司");
+    }
+    const record = await this.getRecord(context, objectKey, recordId);
+    const nextLevel = input.level || null;
+    const currentLevel = typeof record.data.customerLevel === "string" ? record.data.customerLevel : null;
+    if (currentLevel === nextLevel) {
+      throw new Error("客户等级没有变化");
+    }
+    const request = await this.requestRecordUpdate(
+      context,
+      objectKey,
+      recordId,
+      {
+        data: {
+          customerLevel: nextLevel
+        },
+        __previous: {
+          data: {
+            customerLevel: currentLevel
+          }
+        }
+      } as RecordChangeRequest["patch"],
+      input.changeReason
+    );
+    if ("status" in request) {
+      await this.writeAuditLog(context, "customer_level.change_requested", "record_change_request", request.id, {
+        objectKey,
+        summary: `Requested customer level change for ${record.title}`,
+        details: { recordId, previousLevel: currentLevel, nextLevel, reason: input.changeReason }
+      });
+      return request;
+    }
+    throw new Error("客户等级修改必须进入审批");
+  }
+
+  private async ensureCustomerLevelSettings(workspaceId: string): Promise<CustomerLevelSettings> {
+    const existing = await this.db.customerLevelSettings.findUnique({ where: { workspaceId } });
+    if (existing) {
+      return mapCustomerLevelSettings(existing);
+    }
+    const created = await this.db.customerLevelSettings.create({
+      data: {
+        workspaceId,
+        enabled: true,
+        levels: defaultCustomerLevelDefinitions as unknown as Prisma.InputJsonValue,
+        rules: defaultCustomerLevelRules as unknown as Prisma.InputJsonValue
+      }
+    });
+    return mapCustomerLevelSettings(created);
+  }
+
+  private async findCustomerLevelCandidateRecords(context: RequestContext, objectKey: "contacts" | "companies"): Promise<CrmRecord[]> {
+    const records = await this.db.crmRecord.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        objectKey,
+        ...(await this.recordAccessWhere(context, objectKey))
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 200
+    });
+    return records.map(mapRecord);
+  }
+
+  private async calculateCustomerLevelSuggestion(
+    context: RequestContext,
+    record: CrmRecord,
+    settings: CustomerLevelSettings
+  ): Promise<CustomerLevelSuggestion> {
+    const relatedCompanyId = record.objectKey === "companies" ? record.id : typeof record.data.companyId === "string" ? record.data.companyId : undefined;
+    const relatedDeals = relatedCompanyId
+      ? await this.db.crmRecord.findMany({
+          where: {
+            workspaceId: context.workspaceId,
+            objectKey: "deals",
+            data: { path: ["companyId"], equals: relatedCompanyId },
+            ...(await this.recordAccessWhere(context, "deals"))
+          },
+          take: 100
+        })
+      : [];
+    const relatedActivities = await this.db.activity.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        OR: [
+          { recordId: record.id },
+          ...(relatedCompanyId && relatedCompanyId !== record.id ? [{ recordId: relatedCompanyId }] : [])
+        ]
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    });
+    const relatedThreads = await this.db.emailThread.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        recordId: { in: [record.id, ...(relatedCompanyId && relatedCompanyId !== record.id ? [relatedCompanyId] : [])] }
+      },
+      orderBy: { lastMessageAt: "desc" },
+      take: 50
+    });
+    const maxDealAmount = Math.max(0, ...relatedDeals.map((deal) => Number(asRecord(deal.data).amount ?? asRecord(deal.data).totalAmount ?? 0)).filter(Number.isFinite));
+    const pipeline = await this.db.pipeline.findFirst({
+      where: { workspaceId: context.workspaceId, objectKey: "deals", isDefault: true }
+    });
+    const stageProbabilities = new Map(asStages(pipeline?.stages ?? []).map((stage) => [stage.key, stage.probability]));
+    const maxStageProbability = Math.max(0, ...relatedDeals.map((deal) => stageProbabilities.get(deal.stageKey ?? "") ?? 0));
+    const latestActivityAt = relatedActivities[0]?.createdAt;
+    const latestEmailAt = relatedThreads[0]?.lastMessageAt ?? relatedThreads[0]?.updatedAt;
+    const latestTouchAt = [record.updatedAt ? new Date(record.updatedAt) : undefined, latestActivityAt, latestEmailAt].filter(Boolean).sort((a, b) => b!.getTime() - a!.getTime())[0];
+    const daysSinceTouch = latestTouchAt ? Math.floor((Date.now() - latestTouchAt.getTime()) / 86_400_000) : 999;
+    const overdueTasks = relatedActivities.filter((activity) => activity.type === "task" && !activity.completedAt && activity.dueAt && activity.dueAt.getTime() < Date.now()).length;
+
+    const dealAmountScore = maxDealAmount >= 100000 ? 100 : maxDealAmount >= 20000 ? 75 : maxDealAmount > 0 ? 45 : 15;
+    const dealStageScore = Math.round(maxStageProbability * 100);
+    const recentActivityScore = daysSinceTouch <= 7 ? 100 : daysSinceTouch <= 30 ? 70 : daysSinceTouch <= 90 ? 35 : 10;
+    const emailEngagementScore = relatedThreads.length > 0 ? Math.min(100, 55 + relatedThreads.length * 10) : 20;
+    const inactivityScore = daysSinceTouch <= 7 ? 100 : daysSinceTouch <= 30 ? 75 : daysSinceTouch <= 90 ? 35 : 0;
+    const overdueTasksScore = overdueTasks === 0 ? 100 : overdueTasks === 1 ? 55 : 20;
+    const weightedScore =
+      dealAmountScore * settings.rules.dealAmount +
+      dealStageScore * settings.rules.dealStage +
+      recentActivityScore * settings.rules.recentActivity +
+      emailEngagementScore * settings.rules.emailEngagement +
+      inactivityScore * settings.rules.inactivity +
+      overdueTasksScore * settings.rules.overdueTasks;
+    const totalWeight = Object.values(settings.rules).reduce((sum, value) => sum + value, 0) || 1;
+    const score = Math.round(weightedScore / totalWeight);
+    const level = customerLevelForScore(settings, score);
+    const reasons = [
+      relatedDeals.length > 0 ? `关联交易 ${relatedDeals.length} 笔，最高金额 ${Math.round(maxDealAmount).toLocaleString()}` : "暂无关联交易",
+      maxStageProbability > 0 ? `最高交易阶段概率 ${Math.round(maxStageProbability * 100)}%` : "暂无有效交易阶段",
+      daysSinceTouch < 999 ? `最近 ${daysSinceTouch} 天内有跟进或邮件触达` : "暂无可识别的跟进记录",
+      relatedThreads.length > 0 ? `关联邮件线程 ${relatedThreads.length} 条` : "暂无关联邮件互动",
+      overdueTasks > 0 ? `存在 ${overdueTasks} 个逾期任务，建议优先处理` : "暂无逾期任务"
+    ];
+    return {
+      objectKey: record.objectKey,
+      recordId: record.id,
+      level,
+      score,
+      reasons,
+      suggestedAt: new Date().toISOString()
+    };
+  }
+
   async listSmartReminders(
     context: RequestContext,
     query: { status?: SmartReminder["status"]; snoozed?: boolean; objectKey?: string; recordId?: string; limit?: number } = {}
@@ -5067,6 +5400,14 @@ export class PrismaCrmRepository {
 
     if (request.action === "update") {
       await this.updateRecord(context, request.objectKey, request.recordId, await this.buildApprovedRecordPatch(request));
+      const customerLevelPatch = extractCustomerLevelPatch(request.patch);
+      if (customerLevelPatch) {
+        await this.writeAuditLog(context, "customer_level.changed", "record", request.recordId, {
+          objectKey: request.objectKey,
+          summary: `Changed customer level for ${request.recordTitle}`,
+          details: customerLevelPatch
+        });
+      }
     } else if (request.action === "delete" && request.objectKey === "activities") {
       await this.deleteActivity(context, request.recordId);
     } else if (request.action === "delete" && request.objectKey === "smart_reminders") {
