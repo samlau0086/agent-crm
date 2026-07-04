@@ -4292,7 +4292,8 @@ export class PrismaCrmRepository {
       orderBy: [{ priority: "desc" }, { dueAt: "asc" }, { score: "desc" }, { createdAt: "desc" }],
       take: Math.max(1, Math.min(100, query.limit ?? 50))
     });
-    return reminders.map(mapSmartReminder).sort(compareSmartReminders);
+    const visibleReminders = await this.pruneStaleSmartReminderRecordSources(context, reminders.map(mapSmartReminder));
+    return visibleReminders.sort(compareSmartReminders);
   }
 
   async generateSmartReminders(
@@ -5198,6 +5199,15 @@ export class PrismaCrmRepository {
         where: { workspaceId: context.workspaceId, targetType: "record", objectKey, recordId }
       });
       await tx.activity.deleteMany({ where: { workspaceId: context.workspaceId, recordId } });
+      await tx.smartReminder.deleteMany({
+        where: {
+          workspaceId: context.workspaceId,
+          OR: [
+            { recordId },
+            { sources: { array_contains: [{ objectKey, recordId }] } }
+          ]
+        }
+      });
       await tx.crmRecord.delete({ where: { id: recordId, workspaceId: context.workspaceId, objectKey } });
     });
     await this.writeAuditLog(context, "delete", "record", recordId, {
@@ -7815,6 +7825,78 @@ export class PrismaCrmRepository {
       throw new Error("Smart reminder not found");
     }
     return mapSmartReminder(reminder);
+  }
+
+  private async pruneStaleSmartReminderRecordSources(context: RequestContext, reminders: SmartReminder[]): Promise<SmartReminder[]> {
+    const referencedRecords = new Map<string, { objectKey: string; recordId: string }>();
+    for (const reminder of reminders) {
+      if (reminder.objectKey && reminder.recordId) {
+        referencedRecords.set(`${reminder.objectKey}:${reminder.recordId}`, { objectKey: reminder.objectKey, recordId: reminder.recordId });
+      }
+      for (const source of reminder.sources) {
+        if (source.objectKey && source.recordId) {
+          referencedRecords.set(`${source.objectKey}:${source.recordId}`, { objectKey: source.objectKey, recordId: source.recordId });
+        }
+      }
+    }
+    if (referencedRecords.size === 0) {
+      return reminders;
+    }
+
+    const existingRecords = await this.db.crmRecord.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        OR: Array.from(referencedRecords.values()).map((reference) => ({ id: reference.recordId, objectKey: reference.objectKey }))
+      },
+      select: { id: true, objectKey: true }
+    });
+    const existingRecordKeys = new Set(existingRecords.map((record) => `${record.objectKey}:${record.id}`));
+    const staleReminderIds: string[] = [];
+    const sourceUpdates: Array<{ id: string; sources: SmartReminder["sources"] }> = [];
+    const visibleReminders: SmartReminder[] = [];
+
+    for (const reminder of reminders) {
+      if (reminder.objectKey && reminder.recordId && !existingRecordKeys.has(`${reminder.objectKey}:${reminder.recordId}`)) {
+        staleReminderIds.push(reminder.id);
+        continue;
+      }
+
+      let hadRecordSources = false;
+      let changedSources = false;
+      const sources = reminder.sources.filter((source) => {
+        if (!source.objectKey || !source.recordId) {
+          return true;
+        }
+        hadRecordSources = true;
+        const exists = existingRecordKeys.has(`${source.objectKey}:${source.recordId}`);
+        if (!exists) {
+          changedSources = true;
+        }
+        return exists;
+      });
+
+      if (!reminder.recordId && hadRecordSources && sources.length === 0) {
+        staleReminderIds.push(reminder.id);
+        continue;
+      }
+      if (changedSources) {
+        sourceUpdates.push({ id: reminder.id, sources });
+      }
+      visibleReminders.push(changedSources ? { ...reminder, sources } : reminder);
+    }
+
+    if (staleReminderIds.length > 0) {
+      await this.db.smartReminder.deleteMany({
+        where: { workspaceId: context.workspaceId, id: { in: staleReminderIds } }
+      });
+    }
+    await Promise.all(sourceUpdates.map((update) =>
+      this.db.smartReminder.update({
+        where: { id: update.id },
+        data: { sources: toJsonArray(update.sources) }
+      })
+    ));
+    return visibleReminders;
   }
 
   private async getEmailAiProviderConfigForWorkspace(workspaceId: string): Promise<AiProviderConfig> {

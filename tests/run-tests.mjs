@@ -288,6 +288,8 @@ await run("smart reminders support portfolio operating actions", () => {
   assert.match(repositorySource, /lowCompletenessContacts/);
   assert.match(repositorySource, /stalePrivateRecords/);
   assert.match(repositorySource, /kind: query.kind/);
+  assert.match(repositorySource, /pruneStaleSmartReminderRecordSources\(context, reminders\.map\(mapSmartReminder\)\)/);
+  assert.match(repositorySource, /tx\.smartReminder\.deleteMany\(\{[\s\S]*\{ recordId \}[\s\S]*array_contains: \[\{ objectKey, recordId \}\]/);
 });
 
 await run("workflow permissions and designer agent are registered", () => {
