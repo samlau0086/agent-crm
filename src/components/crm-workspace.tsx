@@ -1865,9 +1865,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () =>
       selectedRecord
         ? smartReminders
-            .filter((reminder) => reminder.status === "open")
             .filter((reminder) => reminder.objectKey === selectedRecord.objectKey && reminder.recordId === selectedRecord.id)
-            .filter((reminder) => !reminder.snoozedUntil || new Date(reminder.snoozedUntil).getTime() <= Date.now())
             .sort(compareSmartReminderForUi)
         : [],
     [selectedRecord, smartReminders]
@@ -2205,6 +2203,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecordList(props.initialRecordList);
     setRecordListObjectKey(props.initialObjectKey);
   }, [props.activities, props.dashboardSummary.deals, props.dashboardSummary.openTasks, props.dashboardSummary.recentActivities, props.dashboardSummary.smartReminders, props.initialObjectKey, props.initialRecordList, props.records]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchJson<SmartReminder[]>("/api/smart-reminders", { method: "GET", signal: controller.signal })
+      .then((reminders) => setSmartReminders((current) => mergeSmartReminders(current, reminders)))
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+      });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     setSelectedRecordId((current) => {
@@ -4484,6 +4494,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setSmartReminders((current) => mergeSmartReminders(current, [updated]));
   }
 
+  async function restoreSmartReminder(reminder: SmartReminder) {
+    await updateSmartReminder(reminder, { status: "open", snoozedUntil: null });
+  }
+
   async function snoozeSmartReminder(reminder: SmartReminder) {
     const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     await updateSmartReminder(reminder, { status: "open", snoozedUntil });
@@ -4806,6 +4820,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onGenerateSmartReminders={() => runAction(generateSmartReminders)}
             onCompleteSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "done" }))}
             onDismissSmartReminder={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+            onRestoreSmartReminder={(reminder) => runAction(() => restoreSmartReminder(reminder))}
             onSnoozeSmartReminder={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
             onConvertSmartReminderToTask={(reminder) => runAction(() => convertSmartReminderToTask(reminder))}
             onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
@@ -5146,6 +5161,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onDismiss={(reminder) => runAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
                         onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
                         onOpenRecord={(reminder) => runAction(() => openSmartReminderRecord(reminder))}
+                        onRestore={(reminder) => runAction(() => restoreSmartReminder(reminder))}
                         onSnooze={(reminder) => runAction(() => snoozeSmartReminder(reminder))}
                       />
                     ) : null}
@@ -7206,6 +7222,7 @@ function Dashboard({
   onGenerateSmartReminders,
   onCompleteSmartReminder,
   onDismissSmartReminder,
+  onRestoreSmartReminder,
   onSnoozeSmartReminder,
   onConvertSmartReminderToTask,
   onMoveDealStage
@@ -7225,6 +7242,7 @@ function Dashboard({
   onGenerateSmartReminders: () => void;
   onCompleteSmartReminder: (reminder: SmartReminder) => void;
   onDismissSmartReminder: (reminder: SmartReminder) => void;
+  onRestoreSmartReminder: (reminder: SmartReminder) => void;
   onSnoozeSmartReminder: (reminder: SmartReminder) => void;
   onConvertSmartReminderToTask: (reminder: SmartReminder) => void;
   onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
@@ -7232,12 +7250,7 @@ function Dashboard({
   const defaultPipeline = pipelines.find((pipeline) => pipeline.objectKey === "deals" && pipeline.isDefault);
   const [draggedDealId, setDraggedDealId] = useState("");
   const visibleSmartReminders = useMemo(
-    () =>
-      smartReminders
-        .filter((reminder) => reminder.status === "open")
-        .filter((reminder) => !reminder.snoozedUntil || new Date(reminder.snoozedUntil).getTime() <= Date.now())
-        .sort(compareSmartReminderForUi)
-        .slice(0, 10),
+    () => [...smartReminders].sort(compareSmartReminderForUi),
     [smartReminders]
   );
 
@@ -7284,6 +7297,7 @@ function Dashboard({
         onDismiss={onDismissSmartReminder}
         onGenerate={onGenerateSmartReminders}
         onOpenRecord={onOpenSmartReminder}
+        onRestore={onRestoreSmartReminder}
         onSnooze={onSnoozeSmartReminder}
       />
 
@@ -10344,6 +10358,8 @@ function ObjectDirectory({
   );
 }
 
+type SmartReminderPanelView = "open" | "snoozed" | "done" | "dismissed";
+
 function SmartReminderPanel({
   compact,
   emptyMessage,
@@ -10355,6 +10371,7 @@ function SmartReminderPanel({
   onDismiss,
   onGenerate,
   onOpenRecord,
+  onRestore,
   onSnooze
 }: {
   compact: boolean;
@@ -10367,8 +10384,41 @@ function SmartReminderPanel({
   onDismiss: (reminder: SmartReminder) => void;
   onGenerate: () => void;
   onOpenRecord: (reminder: SmartReminder) => void;
+  onRestore: (reminder: SmartReminder) => void;
   onSnooze: (reminder: SmartReminder) => void;
 }) {
+  const [activeView, setActiveView] = useState<SmartReminderPanelView>("open");
+  const now = Date.now();
+  const reminderCounts = useMemo(
+    () => ({
+      open: reminders.filter((reminder) => reminder.status === "open" && !isSmartReminderSnoozed(reminder, now)).length,
+      snoozed: reminders.filter((reminder) => reminder.status === "open" && isSmartReminderSnoozed(reminder, now)).length,
+      done: reminders.filter((reminder) => reminder.status === "done").length,
+      dismissed: reminders.filter((reminder) => reminder.status === "dismissed").length
+    }),
+    [now, reminders]
+  );
+  const visibleReminders = useMemo(
+    () =>
+      reminders
+        .filter((reminder) => {
+          if (activeView === "snoozed") return reminder.status === "open" && isSmartReminderSnoozed(reminder, now);
+          if (activeView === "open") return reminder.status === "open" && !isSmartReminderSnoozed(reminder, now);
+          return reminder.status === activeView;
+        })
+        .sort(compareSmartReminderForUi)
+        .slice(0, compact ? 8 : 20),
+    [activeView, compact, now, reminders]
+  );
+  const viewEmptyMessage =
+    activeView === "dismissed"
+      ? "暂无已忽略提醒。"
+      : activeView === "done"
+        ? "暂无已完成提醒。"
+        : activeView === "snoozed"
+          ? "暂无稍后提醒。"
+          : emptyMessage;
+
   return (
     <section className={`section smart-reminder-panel ${compact ? "compact" : ""}`}>
       <div className="stage-header">
@@ -10381,9 +10431,24 @@ function SmartReminderPanel({
           {generating ? "生成中" : "刷新提醒"}
         </button>
       </div>
-      {reminders.length ? (
+      <div className="smart-reminder-tabs" role="tablist" aria-label={`${title} 状态筛选`}>
+        {(
+          [
+            ["open", "进行中"],
+            ["snoozed", "稍后"],
+            ["done", "已完成"],
+            ["dismissed", "已忽略"]
+          ] as Array<[SmartReminderPanelView, string]>
+        ).map(([view, label]) => (
+          <button className={activeView === view ? "active" : ""} key={view} onClick={() => setActiveView(view)} type="button" role="tab" aria-selected={activeView === view}>
+            {label}
+            <span>{reminderCounts[view]}</span>
+          </button>
+        ))}
+      </div>
+      {visibleReminders.length ? (
         <div className="smart-reminder-list">
-          {reminders.map((reminder) => (
+          {visibleReminders.map((reminder) => (
             <article className={`smart-reminder-card smart-reminder-${reminder.priority}`} key={reminder.id}>
               <div className="smart-reminder-main">
                 <span className="smart-reminder-icon">
@@ -10395,11 +10460,15 @@ function SmartReminderPanel({
                     <span className="badge">AI</span>
                     <span className="subtle-badge">{smartReminderPriorityLabel(reminder.priority)}</span>
                     <span className="subtle-badge">{smartReminderKindLabel(reminder.kind)}</span>
+                    {reminder.status === "dismissed" ? <span className="subtle-badge">已忽略</span> : null}
+                    {reminder.status === "done" ? <span className="subtle-badge">已完成</span> : null}
+                    {reminder.status === "open" && isSmartReminderSnoozed(reminder, now) ? <span className="subtle-badge">稍后提醒</span> : null}
                   </div>
                   <p>{reminder.body}</p>
                   <div className="smart-reminder-meta">
                     {reminder.actionLabel ? <span>{reminder.actionLabel}</span> : null}
                     {reminder.dueAt ? <span>建议截止 {formatDateTimeSeconds(reminder.dueAt)}</span> : null}
+                    {reminder.snoozedUntil && isSmartReminderSnoozed(reminder, now) ? <span>稍后至 {formatDateTimeSeconds(reminder.snoozedUntil)}</span> : null}
                     {reminder.sources.length ? <span>{reminder.sources.slice(0, 2).map((source) => source.label).join("、")}</span> : null}
                   </div>
                 </div>
@@ -10409,27 +10478,36 @@ function SmartReminderPanel({
                   <Eye size={14} />
                   打开记录
                 </button>
-                <button type="button" className="secondary-button" onClick={() => onComplete(reminder)}>
-                  <CheckCircle2 size={14} />
-                  完成
-                </button>
-                <button type="button" className="secondary-button" onClick={() => onSnooze(reminder)}>
-                  <Clock3 size={14} />
-                  稍后
-                </button>
-                <button type="button" className="secondary-button" onClick={() => onConvertTask(reminder)}>
-                  <CalendarClock size={14} />
-                  转任务
-                </button>
-                <button type="button" className="ghost-button" onClick={() => onDismiss(reminder)}>
-                  忽略
-                </button>
+                {reminder.status === "open" && !isSmartReminderSnoozed(reminder, now) ? (
+                  <>
+                    <button type="button" className="secondary-button" onClick={() => onComplete(reminder)}>
+                      <CheckCircle2 size={14} />
+                      完成
+                    </button>
+                    <button type="button" className="secondary-button" onClick={() => onSnooze(reminder)}>
+                      <Clock3 size={14} />
+                      稍后
+                    </button>
+                    <button type="button" className="secondary-button" onClick={() => onConvertTask(reminder)}>
+                      <CalendarClock size={14} />
+                      转任务
+                    </button>
+                    <button type="button" className="ghost-button" onClick={() => onDismiss(reminder)}>
+                      忽略
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="secondary-button" onClick={() => onRestore(reminder)}>
+                    <RotateCcw size={14} />
+                    恢复
+                  </button>
+                )}
               </div>
             </article>
           ))}
         </div>
       ) : (
-        <div className="empty-state compact">{emptyMessage}</div>
+        <div className="empty-state compact">{viewEmptyMessage}</div>
       )}
     </section>
   );
@@ -17305,6 +17383,10 @@ function compareSmartReminderForUi(left: SmartReminder, right: SmartReminder): n
     return leftDue - rightDue;
   }
   return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+}
+
+function isSmartReminderSnoozed(reminder: SmartReminder, now = Date.now()): boolean {
+  return reminder.status === "open" && Boolean(reminder.snoozedUntil && new Date(reminder.snoozedUntil).getTime() > now);
 }
 
 function smartReminderPriorityWeightForUi(priority: SmartReminder["priority"]): number {
