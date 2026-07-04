@@ -10878,7 +10878,8 @@ function SmartReminderPanel({
                       <CalendarClock size={14} />
                       转任务
                     </button>
-                    <button type="button" className="ghost-button" onClick={() => onDismiss(reminder)}>
+                    <button type="button" className="secondary-button" onClick={() => onDismiss(reminder)}>
+                      <XCircle size={14} />
                       忽略
                     </button>
                     <button type="button" className="danger-button" onClick={() => onDelete(reminder)}>
