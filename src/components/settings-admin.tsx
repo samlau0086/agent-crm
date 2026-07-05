@@ -156,6 +156,12 @@ type PoolSettingsDraft = {
   privateLimit: string;
   autoReclaimEnabled: boolean;
   autoReclaimDays: string;
+  levelRules: Array<{
+    level: CrmPoolSettings["levelRules"][number]["level"];
+    enabled: boolean;
+    privateLimit: string;
+    autoReclaimDays: string;
+  }>;
 };
 type SmartReminderSettingsDraft = {
   enabled: boolean;
@@ -282,7 +288,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     enabled: props.poolSettings.enabled,
     privateLimit: String(props.poolSettings.privateLimit),
     autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
-    autoReclaimDays: String(props.poolSettings.autoReclaimDays)
+    autoReclaimDays: String(props.poolSettings.autoReclaimDays),
+    levelRules: poolLevelRulesToDraft(props.poolSettings)
   }));
   const [smartReminderSettingsDraft, setSmartReminderSettingsDraft] = useState<SmartReminderSettingsDraft>(() => ({
     enabled: props.smartReminderSettings.enabled,
@@ -390,7 +397,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       enabled: props.poolSettings.enabled,
       privateLimit: String(props.poolSettings.privateLimit),
       autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
-      autoReclaimDays: String(props.poolSettings.autoReclaimDays)
+      autoReclaimDays: String(props.poolSettings.autoReclaimDays),
+      levelRules: poolLevelRulesToDraft(props.poolSettings)
     });
   }, [props.poolSettings]);
   useEffect(() => {
@@ -1477,13 +1485,32 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     if (!Number.isFinite(autoReclaimDays) || autoReclaimDays < 1) {
       throw new Error("自动回收天数必须大于 0");
     }
+    const levelRules = poolSettingsDraft.levelRules.map((rule) => {
+      const privateLimitValue = rule.privateLimit.trim();
+      const autoReclaimDaysValue = rule.autoReclaimDays.trim();
+      const rulePrivateLimit = privateLimitValue ? Number.parseInt(privateLimitValue, 10) : undefined;
+      const ruleAutoReclaimDays = autoReclaimDaysValue ? Number.parseInt(autoReclaimDaysValue, 10) : undefined;
+      if (rulePrivateLimit !== undefined && (!Number.isFinite(rulePrivateLimit) || rulePrivateLimit < 1)) {
+        throw new Error("Level private limit must be blank or greater than 0");
+      }
+      if (ruleAutoReclaimDays !== undefined && (!Number.isFinite(ruleAutoReclaimDays) || ruleAutoReclaimDays < 1)) {
+        throw new Error("Level auto reclaim days must be blank or greater than 0");
+      }
+      return {
+        level: rule.level,
+        enabled: rule.enabled,
+        privateLimit: rulePrivateLimit,
+        autoReclaimDays: ruleAutoReclaimDays
+      };
+    });
     await fetchJson<CrmPoolSettings>("/api/pool-settings", {
       method: "PATCH",
       body: {
         enabled: poolSettingsDraft.enabled,
         privateLimit,
         autoReclaimEnabled: poolSettingsDraft.autoReclaimEnabled,
-        autoReclaimDays
+        autoReclaimDays,
+        levelRules
       }
     });
     setMessage("公海规则已保存");
@@ -1946,6 +1973,79 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                   onChange={(event) => setPoolSettingsDraft((current) => ({ ...current, autoReclaimDays: event.target.value }))}
                 />
               </label>
+            </div>
+            <div className="settings-subsection">
+              <h3>按客户等级规则</h3>
+              <p className="subtle">等级规则是每人每等级上限，并且仍受上方全局私海总上限约束。留空则回退全局值。</p>
+              <div className="settings-table">
+                <div className="settings-table-row settings-table-head">
+                  <span>客户等级</span>
+                  <span>启用</span>
+                  <span>等级私海上限</span>
+                  <span>自动回收天数</span>
+                </div>
+                {poolSettingsDraft.levelRules.map((rule, index) => (
+                  <div className="settings-table-row" key={rule.level}>
+                    <span>
+                      <span
+                        className="badge"
+                        style={{ background: poolLevelColor(rule.level, customerLevelSettingsDraft), color: "#0f172a" }}
+                      >
+                        {poolLevelLabel(rule.level, customerLevelSettingsDraft)}
+                      </span>
+                    </span>
+                    <span>
+                      <label className="settings-toggle inline-toggle">
+                        <input
+                          type="checkbox"
+                          checked={rule.enabled}
+                          onChange={(event) =>
+                            setPoolSettingsDraft((current) => ({
+                              ...current,
+                              levelRules: current.levelRules.map((candidate, candidateIndex) =>
+                                candidateIndex === index ? { ...candidate, enabled: event.target.checked } : candidate
+                              )
+                            }))
+                          }
+                        />
+                        <span>{rule.enabled ? "启用" : "停用"}</span>
+                      </label>
+                    </span>
+                    <span>
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        placeholder={poolSettingsDraft.privateLimit}
+                        value={rule.privateLimit}
+                        onChange={(event) =>
+                          setPoolSettingsDraft((current) => ({
+                            ...current,
+                            levelRules: current.levelRules.map((candidate, candidateIndex) =>
+                              candidateIndex === index ? { ...candidate, privateLimit: event.target.value } : candidate
+                            )
+                          }))
+                        }
+                      />
+                    </span>
+                    <span>
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        placeholder={poolSettingsDraft.autoReclaimDays}
+                        value={rule.autoReclaimDays}
+                        onChange={(event) =>
+                          setPoolSettingsDraft((current) => ({
+                            ...current,
+                            levelRules: current.levelRules.map((candidate, candidateIndex) =>
+                              candidateIndex === index ? { ...candidate, autoReclaimDays: event.target.value } : candidate
+                            )
+                          }))
+                        }
+                      />
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="toolbar" style={{ marginTop: 12 }}>
               <button className="primary-button" type="button" onClick={() => runAction(savePoolSettings)} disabled={isPending}>
@@ -5789,6 +5889,39 @@ function customerLevelSettingsToDraft(settings: CustomerLevelSettings): Customer
       .sort((left, right) => left.position - right.position),
     rules: Object.fromEntries(Object.entries(settings.rules).map(([key, value]) => [key, String(value)])) as CustomerLevelSettingsDraft["rules"]
   };
+}
+
+const poolLevelOrder: CrmPoolSettings["levelRules"][number]["level"][] = ["unrated", "A", "B", "C", "D"];
+
+function poolLevelRulesToDraft(settings: CrmPoolSettings): PoolSettingsDraft["levelRules"] {
+  const existingRules = new Map(settings.levelRules.map((rule) => [rule.level, rule]));
+
+  return poolLevelOrder.map((level) => {
+    const rule = existingRules.get(level);
+
+    return {
+      level,
+      enabled: rule?.enabled ?? true,
+      privateLimit: rule?.privateLimit === undefined ? "" : String(rule.privateLimit),
+      autoReclaimDays: rule?.autoReclaimDays === undefined ? "" : String(rule.autoReclaimDays)
+    };
+  });
+}
+
+function poolLevelLabel(level: CrmPoolSettings["levelRules"][number]["level"], settings: CustomerLevelSettingsDraft): string {
+  if (level === "unrated") {
+    return "未评级";
+  }
+
+  return settings.levels.find((candidate) => candidate.value === level)?.label ?? level;
+}
+
+function poolLevelColor(level: CrmPoolSettings["levelRules"][number]["level"], settings: CustomerLevelSettingsDraft): string {
+  if (level === "unrated") {
+    return "#e5e7eb";
+  }
+
+  return settings.levels.find((candidate) => candidate.value === level)?.color ?? "#d1fae5";
 }
 
 function customerLevelRuleLabel(key: string): string {

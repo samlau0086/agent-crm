@@ -31,6 +31,8 @@ import type {
   AuditLogQuery,
   CreatedApiKey,
   CreatedWebhookEndpoint,
+  CrmPoolLevelKey,
+  CrmPoolLevelRule,
   CsvImportConflict,
   CsvImportMapping,
   CsvImportResult,
@@ -116,6 +118,14 @@ type StoredApiKey = ApiKey & { tokenHash: string };
 type StoredWebhookEndpoint = WebhookEndpoint & { secret: string };
 type EmailAssistantInput = Parameters<typeof buildEmailAssistantContext>[0];
 const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
+const crmPoolLevelKeys: CrmPoolLevelKey[] = ["A", "B", "C", "D", "unrated"];
+const defaultCrmPoolLevelRules: CrmPoolLevelRule[] = [
+  { level: "A", enabled: true, privateLimit: 20, autoReclaimDays: 60 },
+  { level: "B", enabled: true, privateLimit: 40, autoReclaimDays: 45 },
+  { level: "C", enabled: true, privateLimit: 80, autoReclaimDays: 30 },
+  { level: "D", enabled: true, privateLimit: 100, autoReclaimDays: 14 },
+  { level: "unrated", enabled: true, privateLimit: 100, autoReclaimDays: 21 }
+];
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -149,6 +159,50 @@ function createId(prefix: string): string {
 
 function isPoolObjectKey(objectKey: string): boolean {
   return POOL_OBJECT_KEYS.includes(objectKey as (typeof POOL_OBJECT_KEYS)[number]);
+}
+
+function normalizeCrmPoolLevelRules(value: unknown, globalPrivateLimit = 100, globalAutoReclaimDays = 30): CrmPoolLevelRule[] {
+  const inputRules = Array.isArray(value) ? value : [];
+  return crmPoolLevelKeys.map((level) => {
+    const defaultRule = defaultCrmPoolLevelRules.find((candidate) => candidate.level === level);
+    const inputRule = inputRules.find(
+      (candidate): candidate is Partial<CrmPoolLevelRule> & { level: CrmPoolLevelKey } =>
+        isJsonRecord(candidate) && candidate.level === level
+    );
+    if (!inputRule) {
+      return {
+        level,
+        enabled: defaultRule?.enabled ?? true,
+        privateLimit: defaultRule?.privateLimit ?? globalPrivateLimit,
+        autoReclaimDays: defaultRule?.autoReclaimDays ?? globalAutoReclaimDays
+      };
+    }
+    const privateLimit = typeof inputRule.privateLimit === "number" ? normalizeIntegerLimit(inputRule.privateLimit, 1, 100000) : undefined;
+    const autoReclaimDays = typeof inputRule.autoReclaimDays === "number" ? normalizeIntegerLimit(inputRule.autoReclaimDays, 1, 3650) : undefined;
+    return {
+      level,
+      enabled: inputRule?.enabled ?? defaultRule?.enabled ?? true,
+      privateLimit,
+      autoReclaimDays
+    };
+  });
+}
+
+function getCrmPoolLevelRule(settings: CrmPoolSettings, level: CrmPoolLevelKey): CrmPoolLevelRule | undefined {
+  return settings.levelRules.find((rule) => rule.level === level && rule.enabled);
+}
+
+function getEffectivePoolLevelPrivateLimit(settings: CrmPoolSettings, level: CrmPoolLevelKey): number {
+  return getCrmPoolLevelRule(settings, level)?.privateLimit ?? settings.privateLimit;
+}
+
+function getEffectivePoolLevelReclaimDays(settings: CrmPoolSettings, level: CrmPoolLevelKey): number {
+  return getCrmPoolLevelRule(settings, level)?.autoReclaimDays ?? settings.autoReclaimDays;
+}
+
+function getCrmPoolLevelFromRecord(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {
+  const value = record.data.customerLevel;
+  return value === "A" || value === "B" || value === "C" || value === "D" ? value : "unrated";
 }
 
 function normalizeRoleInput(input: Pick<Role, "name" | "permissions">): Pick<Role, "name" | "permissions"> {
@@ -1746,10 +1800,21 @@ export class CrmStore {
     if (patch.privateLimit !== undefined) settings.privateLimit = normalizeIntegerLimit(patch.privateLimit, 1, 100000);
     if (patch.autoReclaimEnabled !== undefined) settings.autoReclaimEnabled = patch.autoReclaimEnabled;
     if (patch.autoReclaimDays !== undefined) settings.autoReclaimDays = normalizeIntegerLimit(patch.autoReclaimDays, 1, 3650);
+    settings.levelRules = normalizeCrmPoolLevelRules(
+      patch.levelRules ?? settings.levelRules,
+      settings.privateLimit,
+      settings.autoReclaimDays
+    );
     settings.updatedAt = stamp();
     this.writeAuditLog(context, "update", "crm_pool_settings", context.workspaceId, {
       summary: "Updated CRM pool settings",
-      details: { enabled: settings.enabled, privateLimit: settings.privateLimit, autoReclaimEnabled: settings.autoReclaimEnabled, autoReclaimDays: settings.autoReclaimDays }
+      details: {
+        enabled: settings.enabled,
+        privateLimit: settings.privateLimit,
+        autoReclaimEnabled: settings.autoReclaimEnabled,
+        autoReclaimDays: settings.autoReclaimDays,
+        levelRules: settings.levelRules
+      }
     });
     return clone(settings);
   }
@@ -3019,11 +3084,24 @@ export class CrmStore {
       throw new Error("该记录已在私海中，不能重复领取");
     }
     const settings = this.ensureCrmPoolSettings(context.workspaceId);
+    const customerLevel = getCrmPoolLevelFromRecord(record);
+    const levelPrivateLimit = getEffectivePoolLevelPrivateLimit(settings, customerLevel);
     const privateCount = this.data.records.filter(
       (candidate) => candidate.workspaceId === context.workspaceId && settings.objectKeys.includes(candidate.objectKey) && candidate.ownerId === context.user.id
     ).length;
     if (privateCount >= settings.privateLimit) {
       throw new Error(`你的私海已达到上限 ${settings.privateLimit} 条，请先释放或转移记录`);
+    }
+    const levelPrivateCount = this.data.records.filter(
+      (candidate) =>
+        candidate.workspaceId === context.workspaceId &&
+        settings.objectKeys.includes(candidate.objectKey) &&
+        candidate.ownerId === context.user.id &&
+        getCrmPoolLevelFromRecord(candidate) === customerLevel
+    ).length;
+    if (levelPrivateCount >= levelPrivateLimit) {
+      const label = customerLevel === "unrated" ? "unrated" : customerLevel;
+      throw new Error(`Private pool limit reached for customer level ${label}: ${levelPrivateLimit}`);
     }
     const previousOwnerId = record.ownerId;
     record.ownerId = context.user.id;
@@ -3031,7 +3109,7 @@ export class CrmStore {
     this.writeAuditLog(context, "record.claimed", "record", record.id, {
       objectKey,
       summary: `Claimed ${objectKey} record ${record.title}`,
-      details: { previousOwnerId, ownerId: record.ownerId }
+      details: { previousOwnerId, ownerId: record.ownerId, customerLevel, privateLimit: settings.privateLimit, levelPrivateLimit }
     });
     this.deliverWebhookEvent(context, "record.updated", {
       recordId: record.id,
@@ -3109,7 +3187,6 @@ export class CrmStore {
     if (!settings.enabled || !settings.autoReclaimEnabled) {
       return { scanned: 0, reclaimed: 0, reclaimedRecordIds: [], ranAt: ranAt.toISOString() };
     }
-    const cutoff = ranAt.getTime() - settings.autoReclaimDays * 24 * 60 * 60 * 1000;
     const candidates = this.data.records.filter(
       (record) => record.workspaceId === context.workspaceId && settings.objectKeys.includes(record.objectKey) && Boolean(record.ownerId)
     );
@@ -3124,6 +3201,9 @@ export class CrmStore {
         .map((thread) => new Date(thread.lastMessageAt ?? thread.updatedAt).getTime())
         .reduce((max, value) => Math.max(max, value), 0);
       const latestFollowUpAt = Math.max(new Date(record.updatedAt).getTime(), latestActivityAt, latestThreadAt);
+      const customerLevel = getCrmPoolLevelFromRecord(record);
+      const effectiveAutoReclaimDays = getEffectivePoolLevelReclaimDays(settings, customerLevel);
+      const cutoff = ranAt.getTime() - effectiveAutoReclaimDays * 24 * 60 * 60 * 1000;
       if (latestFollowUpAt >= cutoff) {
         continue;
       }
@@ -3134,7 +3214,14 @@ export class CrmStore {
       this.writeAuditLog(context, "record.auto_reclaimed", "record", record.id, {
         objectKey: record.objectKey,
         summary: `Auto reclaimed ${record.objectKey} record ${record.title}`,
-        details: { previousOwnerId, ownerId: null, latestFollowUpAt: new Date(latestFollowUpAt).toISOString(), autoReclaimDays: settings.autoReclaimDays }
+        details: {
+          previousOwnerId,
+          ownerId: null,
+          customerLevel,
+          latestFollowUpAt: new Date(latestFollowUpAt).toISOString(),
+          autoReclaimDays: effectiveAutoReclaimDays,
+          globalAutoReclaimDays: settings.autoReclaimDays
+        }
       });
       this.deliverWebhookEvent(context, "record.updated", {
         recordId: record.id,
@@ -4280,6 +4367,7 @@ export class CrmStore {
       if (settings.objectKeys.length === 0) settings.objectKeys = [...POOL_OBJECT_KEYS];
       settings.privateLimit = normalizeIntegerLimit(settings.privateLimit, 1, 100000);
       settings.autoReclaimDays = normalizeIntegerLimit(settings.autoReclaimDays, 1, 3650);
+      settings.levelRules = normalizeCrmPoolLevelRules(settings.levelRules, settings.privateLimit, settings.autoReclaimDays);
       return settings;
     }
     const created: CrmPoolSettings = {
@@ -4289,6 +4377,7 @@ export class CrmStore {
       privateLimit: 100,
       autoReclaimEnabled: true,
       autoReclaimDays: 30,
+      levelRules: defaultCrmPoolLevelRules.map((rule) => ({ ...rule })),
       lastAutoReclaimCount: 0,
       updatedAt: stamp()
     };

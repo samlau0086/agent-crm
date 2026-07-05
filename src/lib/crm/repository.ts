@@ -54,6 +54,8 @@ import type {
   CustomerLevel,
   CustomerLevelSettings,
   CustomerLevelSuggestion,
+  CrmPoolLevelKey,
+  CrmPoolLevelRule,
   CsvImportConflict,
   CsvImportMapping,
   CsvImportResult,
@@ -959,6 +961,68 @@ function mapEmailSyncSettings(settings: {
   };
 }
 
+const crmPoolLevelKeys: CrmPoolLevelKey[] = ["A", "B", "C", "D", "unrated"];
+
+const defaultCrmPoolLevelRules: CrmPoolLevelRule[] = [
+  { level: "A", enabled: true, privateLimit: 20, autoReclaimDays: 60 },
+  { level: "B", enabled: true, privateLimit: 40, autoReclaimDays: 45 },
+  { level: "C", enabled: true, privateLimit: 80, autoReclaimDays: 30 },
+  { level: "D", enabled: true, privateLimit: 100, autoReclaimDays: 14 },
+  { level: "unrated", enabled: true, privateLimit: 100, autoReclaimDays: 21 }
+];
+
+function normalizeCrmPoolLevelRules(value: Prisma.JsonValue | unknown): CrmPoolLevelRule[] {
+  const raw = Array.isArray(value) ? value : [];
+  return crmPoolLevelKeys.map((level) => {
+    const fallback = defaultCrmPoolLevelRules.find((rule) => rule.level === level) ?? { level, enabled: true };
+    const candidate = raw.find((item) => isJsonRecord(item) && item.level === level);
+    if (!isJsonRecord(candidate)) {
+      return { ...fallback };
+    }
+    const privateLimit = typeof candidate.privateLimit === "number" ? normalizeIntegerLimit(candidate.privateLimit, 1, 100000) : undefined;
+    const autoReclaimDays = typeof candidate.autoReclaimDays === "number" ? normalizeIntegerLimit(candidate.autoReclaimDays, 1, 3650) : undefined;
+    return {
+      level,
+      enabled: typeof candidate.enabled === "boolean" ? candidate.enabled : fallback.enabled,
+      privateLimit,
+      autoReclaimDays
+    };
+  });
+}
+
+function crmPoolLevelRulesToJson(rules: CrmPoolLevelRule[]): Prisma.InputJsonValue {
+  return rules.map((rule) => {
+    const output: Record<string, string | boolean | number> = {
+      level: rule.level,
+      enabled: rule.enabled
+    };
+    if (rule.privateLimit !== undefined) {
+      output.privateLimit = rule.privateLimit;
+    }
+    if (rule.autoReclaimDays !== undefined) {
+      output.autoReclaimDays = rule.autoReclaimDays;
+    }
+    return output;
+  });
+}
+
+function getCrmPoolLevelRule(settings: CrmPoolSettings, level: CrmPoolLevelKey): CrmPoolLevelRule | undefined {
+  const rule = settings.levelRules.find((candidate) => candidate.level === level);
+  return rule?.enabled ? rule : undefined;
+}
+
+function getEffectivePoolLevelPrivateLimit(settings: CrmPoolSettings, level: CrmPoolLevelKey): number {
+  return normalizeIntegerLimit(getCrmPoolLevelRule(settings, level)?.privateLimit ?? settings.privateLimit, 1, 100000);
+}
+
+function getEffectivePoolLevelReclaimDays(settings: CrmPoolSettings, level: CrmPoolLevelKey): number {
+  return normalizeIntegerLimit(getCrmPoolLevelRule(settings, level)?.autoReclaimDays ?? settings.autoReclaimDays, 1, 3650);
+}
+
+function getCrmPoolLevelFromRecord(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {
+  return getRecordCustomerLevel(record) ?? "unrated";
+}
+
 function mapCrmPoolSettings(settings: {
   workspaceId: string;
   enabled: boolean;
@@ -966,17 +1030,21 @@ function mapCrmPoolSettings(settings: {
   privateLimit: number;
   autoReclaimEnabled: boolean;
   autoReclaimDays: number;
+  levelRules: Prisma.JsonValue;
   lastAutoReclaimAt: Date | null;
   lastAutoReclaimCount: number;
   updatedAt: Date;
 }): CrmPoolSettings {
+  const privateLimit = normalizeIntegerLimit(settings.privateLimit, 1, 100000);
+  const autoReclaimDays = normalizeIntegerLimit(settings.autoReclaimDays, 1, 3650);
   return {
     workspaceId: settings.workspaceId,
     enabled: settings.enabled,
     objectKeys: settings.objectKeys.filter(isPoolObjectKey),
-    privateLimit: normalizeIntegerLimit(settings.privateLimit, 1, 100000),
+    privateLimit,
     autoReclaimEnabled: settings.autoReclaimEnabled,
-    autoReclaimDays: normalizeIntegerLimit(settings.autoReclaimDays, 1, 3650),
+    autoReclaimDays,
+    levelRules: normalizeCrmPoolLevelRules(settings.levelRules),
     lastAutoReclaimAt: settings.lastAutoReclaimAt?.toISOString(),
     lastAutoReclaimCount: settings.lastAutoReclaimCount,
     updatedAt: settings.updatedAt.toISOString()
@@ -3760,12 +3828,19 @@ export class PrismaCrmRepository {
         enabled: patch.enabled ?? current.enabled,
         privateLimit: normalizeIntegerLimit(patch.privateLimit ?? current.privateLimit, 1, 100000),
         autoReclaimEnabled: patch.autoReclaimEnabled ?? current.autoReclaimEnabled,
-        autoReclaimDays: normalizeIntegerLimit(patch.autoReclaimDays ?? current.autoReclaimDays, 1, 3650)
+        autoReclaimDays: normalizeIntegerLimit(patch.autoReclaimDays ?? current.autoReclaimDays, 1, 3650),
+        levelRules: crmPoolLevelRulesToJson(normalizeCrmPoolLevelRules(patch.levelRules ?? current.levelRules))
       }
     });
     await this.writeAuditLog(context, "update", "crm_pool_settings", context.workspaceId, {
       summary: "Updated CRM pool settings",
-      details: { enabled: updated.enabled, privateLimit: updated.privateLimit, autoReclaimEnabled: updated.autoReclaimEnabled, autoReclaimDays: updated.autoReclaimDays }
+      details: {
+        enabled: updated.enabled,
+        privateLimit: updated.privateLimit,
+        autoReclaimEnabled: updated.autoReclaimEnabled,
+        autoReclaimDays: updated.autoReclaimDays,
+        levelRules: updated.levelRules
+      }
     });
     return mapCrmPoolSettings(updated);
   }
@@ -5350,6 +5425,8 @@ export class PrismaCrmRepository {
       throw new Error("该记录已在私海中，不能重复领取");
     }
     const settings = await this.ensureCrmPoolSettings(context.workspaceId);
+    const customerLevel = getCrmPoolLevelFromRecord(current);
+    const levelPrivateLimit = getEffectivePoolLevelPrivateLimit(settings, customerLevel);
     const privateCount = await this.db.crmRecord.count({
       where: {
         workspaceId: context.workspaceId,
@@ -5360,6 +5437,21 @@ export class PrismaCrmRepository {
     if (privateCount >= settings.privateLimit) {
       throw new Error(`你的私海已达到上限 ${settings.privateLimit} 条，请先释放或转移记录`);
     }
+    const privateRecordsForLevelCheck = await this.db.crmRecord.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        objectKey: { in: settings.objectKeys },
+        ownerId: context.user.id
+      },
+      select: { data: true }
+    });
+    const levelPrivateCount = privateRecordsForLevelCheck.filter((record) =>
+      getCrmPoolLevelFromRecord({ data: isJsonRecord(record.data) ? record.data : {} }) === customerLevel
+    ).length;
+    if (levelPrivateCount >= levelPrivateLimit) {
+      const label = customerLevel === "unrated" ? "未评级" : `${customerLevel} 级`;
+      throw new Error(`你的${label}客户私海已达到上限 ${levelPrivateLimit} 条，请先释放或转移该等级记录`);
+    }
     const updated = await this.db.crmRecord.update({
       where: { id: recordId },
       data: { ownerId: context.user.id }
@@ -5367,7 +5459,7 @@ export class PrismaCrmRepository {
     await this.writeAuditLog(context, "record.claimed", "record", recordId, {
       objectKey,
       summary: `Claimed ${objectKey} record ${updated.title}`,
-      details: { previousOwnerId: current.ownerId, ownerId: updated.ownerId }
+      details: { previousOwnerId: current.ownerId, ownerId: updated.ownerId, customerLevel, privateLimit: settings.privateLimit, levelPrivateLimit }
     });
     const mapped = mapRecord(updated);
     this.emitWebhookEvent(context, "record.updated", {
@@ -5450,14 +5542,13 @@ export class PrismaCrmRepository {
     if (!settings.enabled || !settings.autoReclaimEnabled) {
       return { scanned: 0, reclaimed: 0, reclaimedRecordIds: [], ranAt: ranAt.toISOString() };
     }
-    const cutoff = new Date(ranAt.getTime() - settings.autoReclaimDays * 24 * 60 * 60 * 1000);
     const records = await this.db.crmRecord.findMany({
       where: {
         workspaceId: context.workspaceId,
         objectKey: { in: settings.objectKeys },
         ownerId: { not: null }
       },
-      select: { id: true, objectKey: true, title: true, ownerId: true, updatedAt: true }
+      select: { id: true, objectKey: true, title: true, ownerId: true, data: true, updatedAt: true }
     });
     const reclaimedRecordIds: string[] = [];
     for (const record of records) {
@@ -5478,6 +5569,9 @@ export class PrismaCrmRepository {
           (latestThread?.lastMessageAt ?? latestThread?.updatedAt)?.getTime() ?? 0
         )
       );
+      const customerLevel = getCrmPoolLevelFromRecord({ data: isJsonRecord(record.data) ? record.data : {} });
+      const effectiveAutoReclaimDays = getEffectivePoolLevelReclaimDays(settings, customerLevel);
+      const cutoff = new Date(ranAt.getTime() - effectiveAutoReclaimDays * 24 * 60 * 60 * 1000);
       if (latestFollowUpAt >= cutoff) {
         continue;
       }
@@ -5486,7 +5580,14 @@ export class PrismaCrmRepository {
       await this.writeAuditLog(context, "record.auto_reclaimed", "record", record.id, {
         objectKey: record.objectKey,
         summary: `Auto reclaimed ${record.objectKey} record ${record.title}`,
-        details: { previousOwnerId: record.ownerId, ownerId: null, latestFollowUpAt: latestFollowUpAt.toISOString(), autoReclaimDays: settings.autoReclaimDays }
+        details: {
+          previousOwnerId: record.ownerId,
+          ownerId: null,
+          customerLevel,
+          latestFollowUpAt: latestFollowUpAt.toISOString(),
+          autoReclaimDays: effectiveAutoReclaimDays,
+          globalAutoReclaimDays: settings.autoReclaimDays
+        }
       });
       this.emitWebhookEvent(context, "record.updated", {
         recordId: record.id,
@@ -8382,7 +8483,8 @@ export class PrismaCrmRepository {
         objectKeys: [...POOL_OBJECT_KEYS],
         privateLimit: 100,
         autoReclaimEnabled: true,
-        autoReclaimDays: 30
+        autoReclaimDays: 30,
+        levelRules: defaultCrmPoolLevelRules as unknown as Prisma.InputJsonValue
       }
     });
     return mapCrmPoolSettings(created);

@@ -47,6 +47,7 @@ import {
   MAX_IMPORT_MAPPING_FIELDS,
   MAX_SAVED_VIEW_COLUMNS,
   MAX_SAVED_VIEW_FILTERS,
+  poolSettingsUpdateSchema,
   recordDeleteRequestSchema,
   recordPatchWithReasonSchema,
   savedViewCreateSchema,
@@ -1176,6 +1177,23 @@ await run("customer level schemas accept settings and approval changes", () => {
     objectKey: "contacts",
     recordId: "contact-lin"
   });
+});
+
+await run("pool settings schema accepts level rules and rejects invalid level rules", () => {
+  const settings = poolSettingsUpdateSchema.parse({
+    privateLimit: 100,
+    autoReclaimDays: 30,
+    levelRules: [
+      { level: "A", enabled: true, privateLimit: 20, autoReclaimDays: 60 },
+      { level: "unrated", enabled: true, privateLimit: 100, autoReclaimDays: 21 }
+    ]
+  });
+
+  assert.equal(settings.levelRules?.[0]?.level, "A");
+  assert.equal(settings.levelRules?.[1]?.level, "unrated");
+  assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "VIP", enabled: true }] }), /Invalid enum value|validation/i);
+  assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "A", privateLimit: 0 }] }), /too_small|greater than|validation/i);
+  assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "B", autoReclaimDays: -1 }] }), /too_small|greater than|validation/i);
 });
 
 await run("seed includes customer level fields settings and default columns", () => {
@@ -5624,6 +5642,106 @@ await run("public pool claim respects private pool limit", () => {
   const salesContext = store.getContext("user-sales");
   store.updatePoolSettings(adminContext, { privateLimit: 1 });
   assert.throws(() => store.claimRecord(salesContext, "contacts", "contact-public-limit"), /私海已达到上限|limit/i);
+});
+
+await run("public pool claim respects customer level private limits", () => {
+  const snapshot = structuredClone(seedData);
+  snapshot.records.push(
+    {
+      id: "contact-private-a-limit",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "Private A Contact",
+      ownerId: "user-sales",
+      data: { email: "private-a@example.com", customerLevel: "A" },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    },
+    {
+      id: "contact-public-a-limit",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "Public A Contact",
+      data: { email: "public-a@example.com", customerLevel: "A" },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    },
+    {
+      id: "contact-public-b-limit",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "Public B Contact",
+      data: { email: "public-b@example.com", customerLevel: "B" },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    }
+  );
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+
+  store.updatePoolSettings(adminContext, {
+    privateLimit: 100,
+    levelRules: [
+      { level: "A", enabled: true, privateLimit: 1, autoReclaimDays: 60 },
+      { level: "B", enabled: true, privateLimit: 10, autoReclaimDays: 45 },
+      { level: "C", enabled: true, privateLimit: 10, autoReclaimDays: 30 },
+      { level: "D", enabled: true, privateLimit: 10, autoReclaimDays: 14 },
+      { level: "unrated", enabled: true, privateLimit: 10, autoReclaimDays: 21 }
+    ]
+  });
+
+  assert.throws(() => store.claimRecord(salesContext, "contacts", "contact-public-a-limit"), /customer level A|level/i);
+  const claimed = store.claimRecord(salesContext, "contacts", "contact-public-b-limit");
+  assert.equal(claimed.record.ownerId, "user-sales");
+  assert.equal(claimed.record.data.customerLevel, "B");
+});
+
+await run("public pool auto reclaim uses customer level reclaim days", () => {
+  const fortyDaysAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+  const snapshot = structuredClone(seedData);
+  snapshot.records.push(
+    {
+      id: "contact-private-a-fresh-by-level",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "Private A Level Reclaim",
+      ownerId: "user-sales",
+      data: { email: "private-a-reclaim@example.com", customerLevel: "A" },
+      createdAt: fortyDaysAgo,
+      updatedAt: fortyDaysAgo
+    },
+    {
+      id: "contact-private-d-stale-by-level",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "Private D Level Reclaim",
+      ownerId: "user-sales",
+      data: { email: "private-d-reclaim@example.com", customerLevel: "D" },
+      createdAt: fortyDaysAgo,
+      updatedAt: fortyDaysAgo
+    }
+  );
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+
+  store.updatePoolSettings(adminContext, {
+    autoReclaimEnabled: true,
+    autoReclaimDays: 30,
+    levelRules: [
+      { level: "A", enabled: true, privateLimit: 20, autoReclaimDays: 60 },
+      { level: "B", enabled: true, privateLimit: 40, autoReclaimDays: 45 },
+      { level: "C", enabled: true, privateLimit: 80, autoReclaimDays: 30 },
+      { level: "D", enabled: true, privateLimit: 100, autoReclaimDays: 14 },
+      { level: "unrated", enabled: true, privateLimit: 100, autoReclaimDays: 21 }
+    ]
+  });
+
+  const result = store.runPoolAutoReclaim(adminContext);
+  assert.equal(result.reclaimedRecordIds.includes("contact-private-a-fresh-by-level"), false);
+  assert.equal(result.reclaimedRecordIds.includes("contact-private-d-stale-by-level"), true);
+  assert.equal(store.getRecord(adminContext, "contacts", "contact-private-a-fresh-by-level").ownerId, "user-sales");
+  assert.equal(store.getRecord(adminContext, "contacts", "contact-private-d-stale-by-level").ownerId, undefined);
 });
 
 await run("non-admin record writes keep owner scoped to the current user", () => {

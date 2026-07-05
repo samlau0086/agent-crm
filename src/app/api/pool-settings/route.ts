@@ -20,7 +20,17 @@ async function patchApiMetricsHandler(request: NextRequest) {
   try {
     const context = await getRequestContext(request);
     const body = await parseJson(request, poolSettingsUpdateSchema);
-    return ok(await getCrmRepository().updatePoolSettings(context, body));
+    return ok(
+      await getCrmRepository().updatePoolSettings(context, {
+        ...body,
+        levelRules: body.levelRules?.map((rule) => ({
+          level: rule.level,
+          enabled: rule.enabled ?? true,
+          privateLimit: rule.privateLimit ?? undefined,
+          autoReclaimDays: rule.autoReclaimDays ?? undefined
+        }))
+      })
+    );
   } catch (error) {
     return handleApiError(error, request);
   }

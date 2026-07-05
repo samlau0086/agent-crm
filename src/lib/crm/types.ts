@@ -491,6 +491,15 @@ export interface EmailSyncSettings {
 
 export type RecordPool = "public" | "private" | "all";
 
+export type CrmPoolLevelKey = "A" | "B" | "C" | "D" | "unrated";
+
+export interface CrmPoolLevelRule {
+  level: CrmPoolLevelKey;
+  enabled: boolean;
+  privateLimit?: number;
+  autoReclaimDays?: number;
+}
+
 export interface CrmPoolSettings {
   workspaceId: string;
   enabled: boolean;
@@ -498,6 +507,7 @@ export interface CrmPoolSettings {
   privateLimit: number;
   autoReclaimEnabled: boolean;
   autoReclaimDays: number;
+  levelRules: CrmPoolLevelRule[];
   lastAutoReclaimAt?: string;
   lastAutoReclaimCount: number;
   updatedAt: string;

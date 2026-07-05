@@ -304,12 +304,24 @@ export const roleCreateSchema = z
 
 export const roleUpdateSchema = roleCreateSchema.partial().strict();
 
+const crmPoolLevelKeySchema = z.enum(["A", "B", "C", "D", "unrated"]);
+
+const crmPoolLevelRuleSchema = z
+  .object({
+    level: crmPoolLevelKeySchema,
+    enabled: z.boolean().optional(),
+    privateLimit: z.number().int().min(1).max(100000).nullable().optional(),
+    autoReclaimDays: z.number().int().min(1).max(3650).nullable().optional()
+  })
+  .strict();
+
 export const poolSettingsUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
     privateLimit: z.number().int().min(1).max(100000).optional(),
     autoReclaimEnabled: z.boolean().optional(),
-    autoReclaimDays: z.number().int().min(1).max(3650).optional()
+    autoReclaimDays: z.number().int().min(1).max(3650).optional(),
+    levelRules: z.array(crmPoolLevelRuleSchema).max(5).optional()
   })
   .strict();
 

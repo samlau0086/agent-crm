@@ -260,6 +260,7 @@ model CrmPoolSettings {
   privateLimit            Int       @default(100)
   autoReclaimEnabled      Boolean   @default(true)
   autoReclaimDays         Int       @default(30)
+  levelRules              Json      @default("[{\"level\":\"A\",\"enabled\":true,\"privateLimit\":20,\"autoReclaimDays\":60},{\"level\":\"B\",\"enabled\":true,\"privateLimit\":40,\"autoReclaimDays\":45},{\"level\":\"C\",\"enabled\":true,\"privateLimit\":80,\"autoReclaimDays\":30},{\"level\":\"D\",\"enabled\":true,\"privateLimit\":100,\"autoReclaimDays\":14},{\"level\":\"unrated\",\"enabled\":true,\"privateLimit\":100,\"autoReclaimDays\":21}]")
   lastAutoReclaimAt       DateTime?
   lastAutoReclaimCount    Int       @default(0)
   updatedAt               DateTime  @updatedAt
