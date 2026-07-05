@@ -661,6 +661,58 @@ function buildEmailHtmlPreview(bodyHtml: string, allowExternalImages = false): s
   ].join("");
 }
 
+function normalizeEmailContentId(value: string | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withoutCid = trimmed.replace(/^cid:/i, "").replace(/^<|>$/g, "");
+  try {
+    return decodeURIComponent(withoutCid).replace(/^<|>$/g, "").trim().toLowerCase();
+  } catch {
+    return withoutCid.replace(/^<|>$/g, "").trim().toLowerCase();
+  }
+}
+
+function emailAttachmentDataUrl(attachment: EmailAttachment): string | undefined {
+  if (!attachment.contentBase64) {
+    return undefined;
+  }
+  const contentType = attachment.contentType && /^[\w.+-]+\/[\w.+-]+$/i.test(attachment.contentType) ? attachment.contentType : "application/octet-stream";
+  const compactBase64 = attachment.contentBase64.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  const base64 = `${compactBase64}${"=".repeat((4 - (compactBase64.length % 4)) % 4)}`;
+  return `data:${contentType};base64,${base64}`;
+}
+
+function resolveEmailInlineImageHtml(message: EmailMessage): string {
+  const bodyHtml = message.bodyHtml ?? "";
+  if (!bodyHtml.trim() || !message.attachments?.length || typeof document === "undefined") {
+    return bodyHtml;
+  }
+  const attachmentByContentId = new Map<string, EmailAttachment>();
+  message.attachments.forEach((attachment) => {
+    const contentId = normalizeEmailContentId(attachment.contentId);
+    if (contentId) {
+      attachmentByContentId.set(contentId, attachment);
+    }
+  });
+  if (!attachmentByContentId.size) {
+    return bodyHtml;
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = bodyHtml;
+  template.content.querySelectorAll<HTMLImageElement>("img[src]").forEach((image) => {
+    const contentId = normalizeEmailContentId(image.getAttribute("src") ?? "");
+    const attachment = attachmentByContentId.get(contentId);
+    const src = attachment ? emailAttachmentDataUrl(attachment) : undefined;
+    if (src) {
+      image.setAttribute("src", src);
+    }
+  });
+  return template.innerHTML;
+}
+
 function hasEmailHtmlPreview(message: EmailMessage): boolean {
   return Boolean(message.bodyHtml?.trim());
 }
@@ -10084,7 +10136,7 @@ function EmailWorkspace({
                                 </button>
                               </div>
                             ) : null}
-                            <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(message.bodyHtml ?? "", selectedThreadAllowsExternalImages)} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
+                            <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(resolveEmailInlineImageHtml(message), selectedThreadAllowsExternalImages)} data-testid={`email-message-html-${message.id}`} className="email-html-preview-frame" title={`HTML preview ${message.id}`} />
                             <details className="email-text-fallback">
                               <summary>显示文本邮件</summary>
                               <div className="email-message-body">{repairEmailMojibake(message.bodyText)}</div>

@@ -3989,7 +3989,10 @@ await run("email workspace previews html bodies in a sandboxed iframe", () => {
   assert.match(source, /data-testid="email-thread-analysis"/);
   assert.match(source, /data-testid=\{`email-message-external-images-blocked-\$\{message\.id\}`\}/);
   assert.match(source, /data-testid=\{`email-message-load-external-images-\$\{message\.id\}`\}/);
-  assert.match(source, /buildEmailHtmlPreview\(message\.bodyHtml \?\? "", selectedThreadAllowsExternalImages\)/);
+  assert.match(source, /function resolveEmailInlineImageHtml\(message: EmailMessage\): string/);
+  assert.match(source, /const attachmentByContentId = new Map<string, EmailAttachment>\(\)/);
+  assert.match(source, /image\.setAttribute\("src", src\)/);
+  assert.match(source, /buildEmailHtmlPreview\(resolveEmailInlineImageHtml\(message\), selectedThreadAllowsExternalImages\)/);
   assert.match(source, /\{repairEmailMojibake\(message\.bodyText\)\}/);
   assert.doesNotMatch(source, /<div className="email-message-body">\{message\.bodyText\}<\/div>\s*\{hasEmailHtmlPreview\(message\)/);
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
