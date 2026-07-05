@@ -365,6 +365,7 @@ type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress
 };
 type EmailComposeDraft = EmailComposeReplyDraft & {
   clientRequestId: string;
+  linkedRecordIds?: string[];
   productIds?: string[];
   scheduledSendAt?: string;
   trackingEnabled?: boolean;
@@ -606,6 +607,33 @@ function clearEmailDraftAiProvenance(draft: EmailComposeDraft): EmailComposeDraf
     aiSources: undefined,
     aiGeneratedAt: undefined
   };
+}
+
+const emailComposeLinkableObjectKeys = new Set(["contacts", "companies"]);
+
+function isEmailComposeLinkableRecord(record: CrmRecord): boolean {
+  return emailComposeLinkableObjectKeys.has(record.objectKey);
+}
+
+function uniqueEmailLinkedRecordIds(recordIds: Array<string | null | undefined>, records: CrmRecord[]): string[] {
+  const linkableRecordIds = new Set(records.filter(isEmailComposeLinkableRecord).map((record) => record.id));
+  const nextIds: string[] = [];
+  for (const recordId of recordIds) {
+    if (!recordId || !linkableRecordIds.has(recordId) || nextIds.includes(recordId)) {
+      continue;
+    }
+    nextIds.push(recordId);
+  }
+  return nextIds;
+}
+
+function updateEmailDraftLinkedRecords(draft: EmailComposeDraft, records: CrmRecord[], nextRecordIds: string[]): EmailComposeDraft {
+  const linkedRecordIds = uniqueEmailLinkedRecordIds(nextRecordIds, records);
+  return clearEmailDraftAiProvenance({
+    ...draft,
+    linkedRecordIds,
+    recordId: linkedRecordIds[0] ?? ""
+  });
 }
 
 function upsertEmailMessage(messages: EmailMessage[], message: EmailMessage): EmailMessage[] {
@@ -1705,6 +1733,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     clientRequestId: createEmailClientRequestId(),
     accountId: props.emailAccounts[0]?.id ?? "",
     recordId: "",
+    linkedRecordIds: [],
     to: "",
     cc: "",
     bcc: "",
@@ -2395,6 +2424,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         ...current,
         accountId: current.accountId || props.emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
         recordId: routeEmailComposeRecordId || current.recordId,
+        linkedRecordIds: uniqueEmailLinkedRecordIds([routeEmailComposeRecordId, ...(current.linkedRecordIds ?? []), current.recordId], records),
         to: routeEmailComposeTo || current.to,
         cc: "",
         bcc: "",
@@ -2406,7 +2436,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       })
     );
     setEmailComposeOpenRequestKey(composeRouteKey);
-  }, [activeNav, props.emailAccounts, routeEmailCompose, routeEmailComposeKey, routeEmailComposeRecordId, routeEmailComposeTo]);
+  }, [activeNav, props.emailAccounts, records, routeEmailCompose, routeEmailComposeKey, routeEmailComposeRecordId, routeEmailComposeTo]);
 
   useEffect(() => {
     setSelectedImportPresetId((current) => (activeImportPresets.some((preset) => preset.id === current) ? current : ""));
@@ -3868,6 +3898,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         ...current,
         accountId: current.accountId || emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
         recordId: record.id,
+        linkedRecordIds: uniqueEmailLinkedRecordIds([record.id, ...(current.linkedRecordIds ?? [])], [record, ...records]),
         to: emailAddress,
         cc: "",
         bcc: "",
@@ -3997,7 +4028,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: { recordId: recordId || null }
     });
     setEmailThreads((current) => [thread, ...current.filter((candidate) => candidate.id !== thread.id)]);
-    setEmailDraft((current) => (current.recordId || selectedEmailThreadId !== thread.id ? current : clearEmailDraftAiProvenance({ ...current, recordId: thread.recordId || "" })));
+    setEmailDraft((current) => {
+      if (current.recordId || selectedEmailThreadId !== thread.id) {
+        return current;
+      }
+      const linkedRecordIds = uniqueEmailLinkedRecordIds([thread.recordId, ...(current.linkedRecordIds ?? [])], records);
+      return clearEmailDraftAiProvenance({ ...current, recordId: linkedRecordIds[0] ?? "", linkedRecordIds });
+    });
     setMessage(thread.recordId ? "邮件线程已关联到客户记录" : "邮件线程已取消关联记录");
   }
 
@@ -4290,6 +4327,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       bcc: "",
       subject: "",
       threadId: undefined,
+      recordId: "",
+      linkedRecordIds: [],
       bodyText: "",
       bodyHtml: "",
       signatureId: "",
@@ -4343,14 +4382,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   function replyToEmailMessage(message: EmailMessage) {
     const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
     const account = emailAccounts.find((candidate) => candidate.id === message.accountId);
+    const replyRecordId = thread?.recordId || emailDraft.recordId || selectedRecord?.id || "";
+    const replyLinkedRecordIds = uniqueEmailLinkedRecordIds([replyRecordId, ...(emailDraft.linkedRecordIds ?? [])], records);
     selectEmailThread(message.threadId);
     setEmailDraft((current) => ({
       ...current,
       ...buildEmailReplyDraft({
         message,
         accountEmail: account?.emailAddress,
-        recordId: thread?.recordId || current.recordId || selectedRecord?.id || ""
+        recordId: replyLinkedRecordIds[0] ?? ""
       }),
+      linkedRecordIds: replyLinkedRecordIds,
       aiAssisted: false,
       productIds: current.productIds ?? [],
       aiPurpose: undefined,
@@ -7844,7 +7886,10 @@ function EmailWorkspace({
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedMessages = selectedThread ? messagesByThread[selectedThread.id] ?? [] : [];
   const activeAccounts = accounts.filter(canSelectEmailAccountForSending);
-  const linkedRecordId = emailDraft.recordId ?? "";
+  const linkedRecordIds = useMemo(
+    () => uniqueEmailLinkedRecordIds([...(emailDraft.linkedRecordIds ?? []), emailDraft.recordId], records),
+    [emailDraft.linkedRecordIds, emailDraft.recordId, records]
+  );
   const selectedThreadRecordId = selectedThread?.recordId || "";
   const contactRecords = useMemo(() => records.filter((record) => record.objectKey === "contacts"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
@@ -10072,14 +10117,12 @@ function EmailWorkspace({
                     objects={objects}
                     records={records}
                     testId="email-compose-record"
-                    value={linkedRecordId}
-                    onChange={(nextRecordId) => {
-                      onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, recordId: nextRecordId }));
-                      if (nextRecordId) {
-                        setComposeRecordPickerEditing(false);
-                      }
+                    values={linkedRecordIds}
+                    onChange={(nextRecordIds) => {
+                      onEmailDraftChange(updateEmailDraftLinkedRecords(emailDraft, records, nextRecordIds));
                     }}
                     onEdit={() => setComposeRecordPickerEditing(true)}
+                    onDone={() => setComposeRecordPickerEditing(false)}
                     onOpenRecord={(record) => onOpenTalkSourceRecord({ objectKey: record.objectKey, recordId: record.id })}
                     onRecordsLoaded={onRecordsLoaded}
                   />
@@ -10958,9 +11001,10 @@ function EmailLinkedRecordPicker({
   objects,
   records,
   testId,
-  value,
+  values,
   onChange,
   onEdit,
+  onDone,
   onOpenRecord,
   onRecordsLoaded
 }: {
@@ -10968,41 +11012,70 @@ function EmailLinkedRecordPicker({
   objects: ObjectDefinition[];
   records: CrmRecord[];
   testId?: string;
-  value: string;
-  onChange: (recordId: string) => void;
+  values: string[];
+  onChange: (recordIds: string[]) => void;
   onEdit: () => void;
+  onDone: () => void;
   onOpenRecord: (record: CrmRecord) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
 }) {
   const objectLabelByKey = useMemo(() => new Map(objects.map((object) => [object.key, object.label])), [objects]);
-  const selectedRecord = records.find((record) => record.id === value);
+  const selectedRecords = values
+    .map((recordId) => records.find((record) => record.id === recordId && isEmailComposeLinkableRecord(record)))
+    .filter((record): record is CrmRecord => Boolean(record));
 
-  if (!selectedRecord || editing) {
-    return (
-      <EmailRecordSearchDropdown
-        objects={objects}
-        records={records}
-        testId={testId}
-        value={value}
-        onChange={onChange}
-        onRecordsLoaded={onRecordsLoaded}
-      />
-    );
+  function addRecord(record: CrmRecord) {
+    if (!isEmailComposeLinkableRecord(record) || values.includes(record.id)) {
+      return;
+    }
+    onChange([...values, record.id]);
+  }
+
+  function removeRecord(recordId: string) {
+    onChange(values.filter((id) => id !== recordId));
   }
 
   return (
     <div className="email-compose-linked-record-field" data-testid={testId}>
-      <span className="subtle">关联记录</span>
-      <div className="email-compose-linked-record">
-        <button className="secondary-button email-compose-linked-record-link" type="button" onClick={() => onOpenRecord(selectedRecord)}>
-          <Link size={14} />
-          <span>{selectedRecord.title}</span>
-          <span className="subtle">{objectLabelByKey.get(selectedRecord.objectKey) ?? selectedRecord.objectKey}</span>
-        </button>
-        <button className="icon-button" type="button" aria-label="编辑关联记录" title="编辑关联记录" onClick={onEdit}>
-          <Pencil size={14} />
-        </button>
+      <div className="email-compose-linked-record-heading">
+        <span className="subtle">关联记录</span>
+        {editing ? (
+          <button className="text-button" type="button" onClick={onDone}>
+            完成
+          </button>
+        ) : (
+          <button className="icon-button" type="button" aria-label="编辑关联记录" title="编辑关联记录" onClick={onEdit}>
+            <Pencil size={14} />
+          </button>
+        )}
       </div>
+      {selectedRecords.length ? (
+        <div className="email-compose-product-tags">
+          {selectedRecords.map((record) => (
+            <div className="email-compose-linked-record" key={record.id}>
+              <button className="secondary-button email-compose-linked-record-link" type="button" onClick={() => onOpenRecord(record)}>
+                <Link size={14} />
+                <span>{record.title}</span>
+                <span className="subtle">{objectLabelByKey.get(record.objectKey) ?? record.objectKey}</span>
+              </button>
+              <button className="icon-button" type="button" aria-label={`移除关联记录 ${record.title}`} title="移除关联记录" onClick={() => removeRecord(record.id)}>
+                <XCircle size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="subtle">未关联联系人或公司。</span>
+      )}
+      {editing ? (
+        <EmailRecordSearchDropdown
+          objects={objects}
+          records={records}
+          selectedIds={values}
+          onSelect={addRecord}
+          onRecordsLoaded={onRecordsLoaded}
+        />
+      ) : null}
     </div>
   );
 }
@@ -11075,16 +11148,14 @@ function EmailProductContextPicker({
 function EmailRecordSearchDropdown({
   objects,
   records,
-  testId,
-  value,
-  onChange,
+  selectedIds,
+  onSelect,
   onRecordsLoaded
 }: {
   objects: ObjectDefinition[];
   records: CrmRecord[];
-  testId?: string;
-  value: string;
-  onChange: (recordId: string) => void;
+  selectedIds: string[];
+  onSelect: (record: CrmRecord) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
 }) {
   const [search, setSearch] = useState("");
@@ -11094,29 +11165,22 @@ function EmailRecordSearchDropdown({
   const normalizedSearch = search.trim().toLowerCase();
 
   const objectLabelByKey = useMemo(() => new Map(objects.map((object) => [object.key, object.label])), [objects]);
-  const searchableObjects = useMemo(() => {
-    const preferredKeys = ["contacts", "companies", "deals", "products", "quotes"];
-    const excludedKeys = new Set(["currencies", "payment_terms"]);
-    const byKey = new Map(objects.map((object) => [object.key, object]));
-    const preferredObjects = preferredKeys.flatMap((key) => {
-      const object = byKey.get(key);
-      return object ? [object] : [];
-    });
-    const remainingObjects = objects.filter((object) => !preferredKeys.includes(object.key) && !excludedKeys.has(object.key));
-    return [...preferredObjects, ...remainingObjects];
-  }, [objects]);
-  const candidates = useMemo(() => mergeRecords(records, remoteCandidates), [records, remoteCandidates]);
-  const selectedRecord = candidates.find((record) => record.id === value);
+  const searchableObjects = useMemo(() => objects.filter((object) => emailComposeLinkableObjectKeys.has(object.key)), [objects]);
+  const candidates = useMemo(() => mergeRecords(records, remoteCandidates).filter(isEmailComposeLinkableRecord), [records, remoteCandidates]);
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const optionRecords = useMemo(() => {
     return candidates
       .filter((record) => {
+        if (selectedIdSet.has(record.id)) {
+          return false;
+        }
         if (!normalizedSearch) {
           return true;
         }
         return `${record.title} ${objectLabelByKey.get(record.objectKey) ?? record.objectKey}`.toLowerCase().includes(normalizedSearch);
       })
       .slice(0, 100);
-  }, [candidates, normalizedSearch, objectLabelByKey]);
+  }, [candidates, normalizedSearch, objectLabelByKey, selectedIdSet]);
 
   useEffect(() => {
     const trimmedSearch = search.trim();
@@ -11141,7 +11205,7 @@ function EmailRecordSearchDropdown({
             method: "GET",
             signal: controller.signal
           }
-        ).then((result) => result.records)
+        ).then((result) => result.records.filter(isEmailComposeLinkableRecord))
       );
 
       Promise.allSettled(requests)
@@ -11155,7 +11219,7 @@ function EmailRecordSearchDropdown({
             onRecordsLoaded?.(nextRecords);
           }
           const allRejected = results.length > 0 && results.every((result) => result.status === "rejected");
-          setSearchError(allRejected ? "关联记录搜索失败" : null);
+          setSearchError(allRejected ? "联系人/公司搜索失败" : null);
         })
         .finally(() => {
           if (!controller.signal.aborted) {
@@ -11173,19 +11237,25 @@ function EmailRecordSearchDropdown({
   return (
     <SearchDropdown
       error={searchError}
-      label="关联记录"
+      label="添加联系人/公司"
       loading={isSearching}
       options={optionRecords.map((record) => ({
         label: record.title,
         value: record.id,
         meta: objectLabelByKey.get(record.objectKey) ?? record.objectKey
       }))}
-      placeholder="搜索联系人、公司、交易或其他记录"
+      placeholder="搜索联系人或公司"
       search={search}
-      selectedLabel={selectedRecord ? `${selectedRecord.title} · ${objectLabelByKey.get(selectedRecord.objectKey) ?? selectedRecord.objectKey}` : ""}
-      testId={testId}
-      value={value}
-      onChange={onChange}
+      selectedLabel=""
+      testId="email-compose-record-search"
+      value=""
+      onChange={(recordId) => {
+        const record = candidates.find((candidate) => candidate.id === recordId);
+        if (record) {
+          onSelect(record);
+          setSearch("");
+        }
+      }}
       onSearchChange={setSearch}
     />
   );

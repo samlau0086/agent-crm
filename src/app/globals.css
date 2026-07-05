@@ -925,6 +925,13 @@ button {
   gap: 4px;
 }
 
+.email-compose-linked-record-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .email-compose-linked-record {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -944,8 +951,13 @@ button {
 }
 
 .email-compose-product-tags {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+.email-compose-product-tags .email-compose-linked-record {
+  min-width: min(100%, 220px);
 }
 
 .quote-editor {

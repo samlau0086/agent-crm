@@ -3707,8 +3707,15 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /aiAssisted:\s*false/);
   assert.match(source, /aiSources:\s*undefined/);
   assert.match(source, /data-testid="email-compose-account"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, accountId: event\.target\.value \}\)/);
-  assert.match(source, /<EmailLinkedRecordPicker[\s\S]*testId="email-compose-record"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, recordId: nextRecordId \}\)/);
+  assert.match(source, /linkedRecordIds:\s*\[\]/);
+  assert.match(source, /const emailComposeLinkableObjectKeys = new Set\(\["contacts", "companies"\]\)/);
+  assert.match(source, /function updateEmailDraftLinkedRecords\(draft: EmailComposeDraft, records: CrmRecord\[\], nextRecordIds: string\[\]\): EmailComposeDraft/);
+  assert.match(source, /<EmailLinkedRecordPicker[\s\S]*testId="email-compose-record"[\s\S]*values=\{linkedRecordIds\}[\s\S]*updateEmailDraftLinkedRecords\(emailDraft, records, nextRecordIds\)/);
   assert.match(source, /function EmailLinkedRecordPicker\(/);
+  assert.match(source, /selectedRecords = values[\s\S]*isEmailComposeLinkableRecord/);
+  assert.match(source, /label="添加联系人\/公司"/);
+  assert.match(source, /placeholder="搜索联系人或公司"/);
+  assert.doesNotMatch(source, /placeholder="搜索联系人、公司、交易或其他记录"/);
   assert.match(source, /<EmailProductContextPicker[\s\S]*selectedProductIds=\{emailDraft\.productIds \?\? \[\]\}/);
   assert.match(source, /function EmailProductContextPicker\(/);
   assert.match(source, /testId="email-compose-product"/);
@@ -3724,7 +3731,7 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId;\s*const nextSelectedThreadId = props\.emailThreads\.some\(\(thread\) => thread\.id === preferredThreadId\) \? preferredThreadId : props\.emailThreads\[0\]\?\.id \?\? "";\s*if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
   assert.match(source, /setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId: account\.id \}\)\)/);
   assert.match(source, /function selectEmailThread\(threadId: string\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(threadId\);[\s\S]*\}/);
-  assert.match(source, /clearEmailDraftAiProvenance\(\{ \.\.\.current, recordId: thread\.recordId \|\| "" \}\)/);
+  assert.match(source, /const linkedRecordIds = uniqueEmailLinkedRecordIds\(\[thread\.recordId, \.\.\.\(current\.linkedRecordIds \?\? \[\]\)\], records\);[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.current, recordId: linkedRecordIds\[0\] \?\? "", linkedRecordIds \}\)/);
   assert.match(source, /onSelectThread=\{\(threadId\) => \{[\s\S]*selectEmailThread\(threadId\);/);
   assert.match(source, /setEmailDraft\(\(current\) => \(\{[\s\S]*aiAssisted:\s*true[\s\S]*aiSources:\s*result\.sources/);
 });
@@ -3739,7 +3746,7 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /data-testid="email-signature-save"/);
   assert.match(source, /function canSelectEmailAccountForSending\(account: EmailAccount\): boolean/);
   assert.match(source, /account\.status !== "disabled" && account\.sendEnabled && account\.connectionConfigured/);
-  assert.match(source, /const linkedRecordId = emailDraft\.recordId \?\? ""/);
+  assert.match(source, /const linkedRecordIds = useMemo\(/);
   assert.match(source, /recordId: emailDraft\.recordId \|\| undefined/);
   assert.match(source, /threadId: emailDraft\.threadId \|\| undefined/);
   assert.match(source, /skipAutoLink: !emailDraft\.threadId/);
