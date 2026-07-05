@@ -5123,7 +5123,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             smartReminders={smartReminders}
             smartReminderGenerating={isGeneratingSmartReminders}
             onOpenObject={openObject}
-            onOpenDeal={openRecord}
             onOpenSmartReminder={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
             onGenerateSmartReminders={() => runAction(generateSmartReminders)}
             onCompleteSmartReminder={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
@@ -5134,7 +5133,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onConvertSmartReminderToTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
             pendingSmartReminderDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
             onCancelSmartReminderDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
-            onMoveDealStage={(deal, stageKey) => runAction(() => moveDealStage(deal, stageKey))}
           />
         )}
 
@@ -7549,7 +7547,6 @@ function Dashboard({
   smartReminderGenerating,
   pendingSmartReminderDeleteRequestsById,
   onOpenObject,
-  onOpenDeal,
   onOpenSmartReminder,
   onGenerateSmartReminders,
   onCompleteSmartReminder,
@@ -7558,8 +7555,7 @@ function Dashboard({
   onRestoreSmartReminder,
   onSnoozeSmartReminder,
   onConvertSmartReminderToTask,
-  onCancelSmartReminderDeleteRequest,
-  onMoveDealStage
+  onCancelSmartReminderDeleteRequest
 }: {
   objects: ObjectDefinition[];
   recordCounts: Record<string, number>;
@@ -7572,7 +7568,6 @@ function Dashboard({
   smartReminderGenerating: boolean;
   pendingSmartReminderDeleteRequestsById: Map<string, RecordChangeRequest>;
   onOpenObject: (objectKey: string) => void;
-  onOpenDeal: (deal: CrmRecord) => void;
   onOpenSmartReminder: (reminder: SmartReminder) => void;
   onGenerateSmartReminders: () => void;
   onCompleteSmartReminder: (reminder: SmartReminder) => void;
@@ -7582,37 +7577,12 @@ function Dashboard({
   onSnoozeSmartReminder: (reminder: SmartReminder) => void;
   onConvertSmartReminderToTask: (reminder: SmartReminder) => void;
   onCancelSmartReminderDeleteRequest: (request: RecordChangeRequest) => void;
-  onMoveDealStage: (deal: CrmRecord, stageKey: string) => void;
 }) {
   const defaultPipeline = pipelines.find((pipeline) => pipeline.objectKey === "deals" && pipeline.isDefault);
-  const [draggedDealId, setDraggedDealId] = useState("");
   const visibleSmartReminders = useMemo(
     () => [...smartReminders].sort(compareSmartReminderForUi),
     [smartReminders]
   );
-
-  function handleDealDragStart(event: DragEvent<HTMLButtonElement>, deal: CrmRecord) {
-    setDraggedDealId(deal.id);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", deal.id);
-    event.dataTransfer.setData("application/x-crm-deal-id", deal.id);
-  }
-
-  function handleStageDragOver(event: DragEvent<HTMLElement>) {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-  }
-
-  function handleStageDrop(event: DragEvent<HTMLElement>, stageKey: string) {
-    event.preventDefault();
-    const dealId = event.dataTransfer.getData("application/x-crm-deal-id") || event.dataTransfer.getData("text/plain");
-    const deal = deals.find((candidate) => candidate.id === dealId);
-    setDraggedDealId("");
-    if (!deal || deal.stageKey === stageKey) {
-      return;
-    }
-    onMoveDealStage(deal, stageKey);
-  }
 
   return (
     <>
@@ -7646,39 +7616,26 @@ function Dashboard({
           <div className="topbar">
             <div>
               <h2 className="page-title">销售管道</h2>
-              <div className="subtle">交易阶段和金额来自真实记录，不是前端 mock。</div>
+              <div className="subtle">按阶段汇总当前交易数量，完整看板请进入交易模块。</div>
             </div>
           </div>
-          <div className="pipeline-board">
+          <div className="dashboard-pipeline-summary" data-testid="dashboard-pipeline-summary">
             {withClosedStages(defaultPipeline?.stages ?? []).map((stage) => {
               const stageDeals = deals.filter((deal) => deal.stageKey === stage.key);
+              const stageAmount = stageDeals.reduce((sum, deal) => sum + Number(deal.data.amount ?? 0), 0);
               return (
                 <section
-                  className={`pipeline-stage ${draggedDealId ? "drag-active" : ""}`}
-                  data-testid={`pipeline-stage-${stage.key}`}
+                  className="dashboard-pipeline-stage"
+                  data-testid={`dashboard-pipeline-stage-${stage.key}`}
                   key={stage.key}
-                  onDragOver={handleStageDragOver}
-                  onDrop={(event) => handleStageDrop(event, stage.key)}
                 >
-                  <div className="stage-header">
-                    <span>{stage.label}</span>
+                  <div className="dashboard-pipeline-stage-header">
+                    <span className="dashboard-pipeline-stage-name">{stage.label}</span>
                     <span className="badge">{Math.round(stage.probability * 100)}%</span>
                   </div>
-                  {stageDeals.map((deal) => (
-                    <button
-                      className={`deal-pill ${draggedDealId === deal.id ? "dragging" : ""}`}
-                      data-testid={`pipeline-deal-${deal.id}`}
-                      draggable
-                      key={deal.id}
-                      type="button"
-                      onClick={() => onOpenDeal(deal)}
-                      onDragEnd={() => setDraggedDealId("")}
-                      onDragStart={(event) => handleDealDragStart(event, deal)}
-                    >
-                      <strong>{deal.title}</strong>
-                      <div className="subtle">{formatCurrency(deal.data.amount)}</div>
-                    </button>
-                  ))}
+                  <div className="dashboard-pipeline-stage-count">{stageDeals.length}</div>
+                  <div className="subtle">交易数量</div>
+                  <div className="dashboard-pipeline-stage-amount">{formatCurrency(stageAmount)}</div>
                 </section>
               );
             })}

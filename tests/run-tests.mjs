@@ -2774,7 +2774,7 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /activeNav !== "email" \?/);
   assert.match(source, /view !== "mail" \?/);
   assert.match(source, /className=\{`email-workspace \$\{view === "mail" \? "mail-view" : ""\}`\}/);
-  assert.match(source, /function handleDealDragStart/);
+  assert.doesNotMatch(source, /function handleDealDragStart/);
   assert.match(source, /type DealWorkspaceView = "pipeline" \| "list"/);
   assert.match(source, /const routeDealView = normalizeDealWorkspaceView\(searchParams\.get\("view"\)\)/);
   assert.match(source, /const \[dealWorkspaceView, setDealWorkspaceView\] = useState<DealWorkspaceView>\(routeDealView\)/);
@@ -2791,7 +2791,7 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /data-testid=\{`deal-pipeline-deal-\$\{deal\.id\}`\}/);
   assert.match(source, /data-testid="deal-pipeline-drag-overlay"/);
   assert.match(source, /data-testid="deal-pipeline-drop-placeholder"/);
-  assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
+  assert.match(source, /data-testid=\{`deal-pipeline-deal-\$\{deal\.id\}`\}[\s\S]{0,900}onClick=\{\(\) => \{[\s\S]{0,360}onOpenDeal\(deal\);/);
   assert.match(source, /const dealPipelineCardColorStorageKey = "ai-agent-crm:deal-pipeline-card-colors"/);
   assert.match(source, /const dealCardColorOptions = \[/);
   assert.match(source, /setDealCardColor\(floatingColorDeal\.id, option\.key\)/);
@@ -2823,10 +2823,12 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(source, /data-testid="deal-pipeline-activity-dialog"/);
   assert.match(source, /submitPipelineDealActivity/);
   assert.match(source, /\/api\/records\/\$\{record\.objectKey\}\/\$\{record\.id\}\/stage/);
-  assert.match(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);
-  assert.match(source, /data-testid=\{`pipeline-stage-\$\{stage\.key\}`\}/);
-  assert.match(source, /onDrop=\{\(event\) => handleStageDrop\(event, stage\.key\)\}/);
-  assert.match(source, /onClick=\{\(\) => onOpenDeal\(deal\)\}/);
+  assert.match(source, /data-testid="dashboard-pipeline-summary"/);
+  assert.match(source, /data-testid=\{`dashboard-pipeline-stage-\$\{stage\.key\}`\}/);
+  assert.match(source, /className="dashboard-pipeline-stage-count"/);
+  assert.doesNotMatch(source, /data-testid=\{`pipeline-deal-\$\{deal\.id\}`\}/);
+  assert.doesNotMatch(source, /data-testid=\{`pipeline-stage-\$\{stage\.key\}`\}/);
+  assert.doesNotMatch(source, /function handleStageDrop/);
   assert.match(styles, /\.app-shell\.sidebar-collapsed \{\s*grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(styles, /\.main \{[\s\S]*padding: 22px;/);
   assert.doesNotMatch(styles, /\.main\.email-main \{[\s\S]{0,80}padding: 0;/);
@@ -2849,6 +2851,8 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.match(styles, /\.deal-pipeline-drop-placeholder/);
   assert.match(styles, /\.deal-pipeline-drag-overlay/);
   assert.match(styles, /body\.deal-pipeline-dragging/);
+  assert.match(styles, /\.dashboard-pipeline-summary/);
+  assert.match(styles, /\.dashboard-pipeline-stage-count/);
   assert.match(schemas, /export const recordStageUpdateSchema/);
   assert.match(schemas, /pipelineOrder: z\.number\(\)\.finite\(\)\.optional\(\)/);
   assert.match(stageRoute, /recordStageUpdateSchema/);
