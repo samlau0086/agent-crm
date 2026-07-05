@@ -3309,10 +3309,12 @@ body.deal-pipeline-dragging {
 }
 
 .gmail-compose-popup.full-size {
-  left: 236px;
-  right: 24px;
+  inset: 0;
   width: auto;
-  max-height: calc(100vh - 48px);
+  height: 100vh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
 }
 
 .gmail-compose-popup-header {
@@ -3367,7 +3369,8 @@ body.deal-pipeline-dragging {
 }
 
 .gmail-compose-popup.full-size .gmail-compose-popup-body {
-  max-height: calc(100vh - 88px);
+  height: calc(100vh - 40px);
+  max-height: none;
 }
 
 .email-client {
@@ -6313,8 +6316,7 @@ body.deal-pipeline-dragging {
   }
 
   .gmail-compose-popup.full-size {
-    left: 8px;
-    right: 8px;
+    inset: 0;
     width: auto;
   }
 
