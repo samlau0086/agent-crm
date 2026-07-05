@@ -3490,6 +3490,15 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /aria-label="返回列表"[\s\S]*onClick=\{\(\) => applyEmailRoute\(\{ mailMode: "list", threadId: "" \}\)\}/);
 });
 
+await run("email category tabs only apply to inbox", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+
+  assert.match(source, /if \(patch\.category && patch\.mailbox === "inbox"\) \{[\s\S]*params\.set\("category", patch\.category\)/);
+  assert.match(source, /const matchesCategory = mailbox === "inbox" \? threadCategory === category : true/);
+  assert.match(source, /\{mailbox === "inbox" \? \([\s\S]*<div className="gmail-category-tabs">/);
+  assert.doesNotMatch(source, /mailbox === "inbox" \|\| mailbox === "all" \? threadCategory === category : true/);
+});
+
 await run("email account settings separate inbound credentials from outbound services", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const schema = readFileSync("src/lib/crm/api-schemas.ts", "utf8");

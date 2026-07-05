@@ -559,7 +559,7 @@ function routeEmailThreadIdToMode(threadId: string, mode: EmailMailMode): EmailM
 function buildEmailRoutePath(patch: EmailRoutePatch): string {
   const params = new URLSearchParams();
   params.set("mailbox", patch.mailbox ?? "inbox");
-  if (patch.category && (patch.mailbox === "inbox" || patch.mailbox === "all")) {
+  if (patch.category && patch.mailbox === "inbox") {
     params.set("category", patch.category);
   }
   if (patch.accountId && patch.accountId !== allEmailAccountsKey) {
@@ -8304,7 +8304,7 @@ function EmailWorkspace({
                       : mailbox === "all"
                         ? !isDeleted
                         : !isDeleted && !isArchived && !isSnoozed && hasInboxMessage;
-      const matchesCategory = mailbox === "inbox" || mailbox === "all" ? threadCategory === category : true;
+      const matchesCategory = mailbox === "inbox" ? threadCategory === category : true;
       const matchesLabel = labelFilter ? displayLabels.includes(labelFilter.toLowerCase()) : true;
       return matchesMailbox && matchesCategory && matchesLabel && emailThreadMatchesSearch(thread, messages, searchQuery);
     });
@@ -9796,18 +9796,20 @@ function EmailWorkspace({
                 </button>
               </div>
 
-              <div className="gmail-category-tabs">
-                {emailCategoryMeta.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <button className={`gmail-category-tab ${category === item.key ? "active" : ""}`} key={item.key} type="button" onClick={() => applyEmailRoute({ category: item.key, mailMode: "list", threadId: "" })}>
-                      <Icon size={16} />
-                      <span>{item.label}</span>
-                      <small>{categoryCounts[item.key]}</small>
-                    </button>
-                  );
-                })}
-              </div>
+              {mailbox === "inbox" ? (
+                <div className="gmail-category-tabs">
+                  {emailCategoryMeta.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button className={`gmail-category-tab ${category === item.key ? "active" : ""}`} key={item.key} type="button" onClick={() => applyEmailRoute({ category: item.key, mailMode: "list", threadId: "" })}>
+                        <Icon size={16} />
+                        <span>{item.label}</span>
+                        <small>{categoryCounts[item.key]}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
 
               <div className="gmail-thread-list">
                 {visibleThreads.map((thread) => {
