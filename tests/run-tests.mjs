@@ -3433,7 +3433,7 @@ await run("email workspace refreshes threads and selected messages after sync", 
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /async function refreshEmailThreads\(options: \{ reloadSelectedMessages\?: boolean \} = \{\}\)/);
   assert.match(source, /fetchJson<EmailThread\[]>\("\/api\/email\/threads", \{ method: "GET" \}\)/);
-  assert.match(source, /setEmailThreads\(threads\)/);
+  assert.match(source, /setEmailThreads\(visibleThreads\)/);
   assert.match(source, /await loadEmailMessages\(threadId\)/);
   assert.match(source, /async function syncEmailAccount[\s\S]*await refreshEmailThreads\(\{ reloadSelectedMessages: true \}\)[\s\S]*router\.refresh\(\)/);
   assert.match(source, /async function syncAllEmailAccounts[\s\S]*await refreshEmailThreads\(\{ reloadSelectedMessages: true \}\)[\s\S]*router\.refresh\(\)/);
@@ -3732,7 +3732,7 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /data-testid="email-compose-body"[\s\S]*onInput=\{updateComposeBodyFromEditor\}/);
   assert.match(source, /function updateComposeBodyFromEditor\(\)[\s\S]*clearEmailDraftAiProvenance\(\{[\s\S]*bodyHtml,[\s\S]*bodyText: stripHtmlToText\(bodyHtml\)/);
   assert.match(source, /const accountId = current\.accountId \|\| props\.emailAccounts\[0\]\?\.id \|\| "";\s*return accountId === current\.accountId \? current : clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId \}\);/);
-  assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId;\s*const nextSelectedThreadId = props\.emailThreads\.some\(\(thread\) => thread\.id === preferredThreadId\) \? preferredThreadId : props\.emailThreads\[0\]\?\.id \?\? "";\s*if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
+  assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId;\s*const nextSelectedThreadId = visibleEmailThreads\.some\(\(thread\) => thread\.id === preferredThreadId\) \? preferredThreadId : visibleEmailThreads\[0\]\?\.id \?\? "";\s*if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
   assert.match(source, /setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId: account\.id \}\)\)/);
   assert.match(source, /function selectEmailThread\(threadId: string\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(threadId\);[\s\S]*\}/);
   assert.match(source, /const linkedRecordIds = uniqueEmailLinkedRecordIds\(\[thread\.recordId, \.\.\.\(current\.linkedRecordIds \?\? \[\]\)\], records\);[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.current, recordId: linkedRecordIds\[0\] \?\? "", linkedRecordIds \}\)/);
@@ -4029,6 +4029,10 @@ await run("email trash permanent delete buttons use immediate confirm flow", () 
   assert.match(source, /async function permanentlyDeleteThreads\(threadIds: string\[\]\)/);
   assert.match(source, /async function deleteEmailThreads\(threadIds: string\[\]\): Promise<boolean>/);
   assert.match(source, /return false;[\s\S]*requestConfirm/);
+  assert.match(source, /const locallyDeletedEmailThreadIdsRef = useRef<Set<string>>\(new Set\(\)\)/);
+  assert.match(source, /const visibleEmailThreads = props\.emailThreads\.filter\(\(thread\) => !locallyDeletedEmailThreadIdsRef\.current\.has\(thread\.id\)\)/);
+  assert.match(source, /const visibleThreads = threads\.filter\(\(thread\) => !locallyDeletedEmailThreadIdsRef\.current\.has\(thread\.id\)\)/);
+  assert.match(source, /ids\.forEach\(\(threadId\) => locallyDeletedEmailThreadIdsRef\.current\.add\(threadId\)\)/);
   assert.match(source, /const deleted = await onDeleteThreads\(ids\);[\s\S]*if \(!deleted\) \{[\s\S]*return;[\s\S]*\}/);
   assert.match(source, /data-testid="email-thread-bulk-permanent-delete"[\s\S]*permanentlyDeleteThreads\(selectedThreadIdsArray\)/);
   assert.match(source, /data-testid=\{`email-thread-row-permanent-delete-\$\{thread\.id\}`\}[\s\S]*permanentlyDeleteThreads\(\[thread\.id\]\)/);

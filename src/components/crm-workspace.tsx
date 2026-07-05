@@ -1888,6 +1888,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const pendingRecordOpenRef = useRef<{ objectKey: string; recordId: string; returnEmailThreadId: string } | null>(null);
   const pendingRecordCreateRef = useRef<{ objectKey: string; values: Record<string, string> } | null>(null);
   const handledRouteEmailComposeRef = useRef("");
+  const locallyDeletedEmailThreadIdsRef = useRef<Set<string>>(new Set());
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const promptResolverRef = useRef<((value: string | null) => void) | null>(null);
 
@@ -2465,7 +2466,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setEmailAccounts(props.emailAccounts);
     setEmailSignatures(props.emailSignatures);
-    setEmailThreads(props.emailThreads);
+    const visibleEmailThreads = props.emailThreads.filter((thread) => !locallyDeletedEmailThreadIdsRef.current.has(thread.id));
+    setEmailThreads(visibleEmailThreads);
     setEmailAiSettings(props.emailAiSettings);
     setEmailSyncSettings(props.emailSyncSettings ?? defaultEmailSyncSettings);
     setKnowledgeArticles(props.knowledgeArticles);
@@ -2477,7 +2479,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     const preserveComposeDraft = Boolean(emailComposeOpenRequestKey && !routeEmailThreadId);
     const preferredThreadId = routeEmailThreadId || selectedEmailThreadId;
-    const nextSelectedThreadId = props.emailThreads.some((thread) => thread.id === preferredThreadId) ? preferredThreadId : props.emailThreads[0]?.id ?? "";
+    const nextSelectedThreadId = visibleEmailThreads.some((thread) => thread.id === preferredThreadId) ? preferredThreadId : visibleEmailThreads[0]?.id ?? "";
     if (!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId) {
       setEmailDraft((current) => clearEmailDraftAiProvenance(current));
       setSelectedEmailThreadId(nextSelectedThreadId);
@@ -4122,8 +4124,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   async function refreshEmailThreads(options: { reloadSelectedMessages?: boolean } = {}) {
     const threads = await fetchJson<EmailThread[]>("/api/email/threads", { method: "GET" });
-    const threadId = selectedEmailThreadId && threads.some((thread) => thread.id === selectedEmailThreadId) ? selectedEmailThreadId : threads[0]?.id ?? "";
-    setEmailThreads(threads);
+    const visibleThreads = threads.filter((thread) => !locallyDeletedEmailThreadIdsRef.current.has(thread.id));
+    const threadId = selectedEmailThreadId && visibleThreads.some((thread) => thread.id === selectedEmailThreadId) ? selectedEmailThreadId : visibleThreads[0]?.id ?? "";
+    setEmailThreads(visibleThreads);
     selectEmailThread(threadId);
     if (options.reloadSelectedMessages && threadId) {
       await loadEmailMessages(threadId);
@@ -4272,6 +4275,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return false;
     }
     await Promise.all(ids.map((threadId) => fetchJson(`/api/email/threads/${threadId}`, { method: "DELETE" })));
+    ids.forEach((threadId) => locallyDeletedEmailThreadIdsRef.current.add(threadId));
     setEmailThreads((current) => current.filter((candidate) => !ids.includes(candidate.id)));
     setEmailMessagesByThread((current) => {
       const next = { ...current };
