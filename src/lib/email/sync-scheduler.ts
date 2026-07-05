@@ -9,6 +9,8 @@ export interface ScheduledEmailSyncAccount {
   emailAddress: string;
   status: string;
   importedCount: number;
+  skipped?: boolean;
+  skipReason?: string;
   error?: string;
 }
 
@@ -27,10 +29,22 @@ export async function scheduleEmailSyncForActiveAccounts(
   const repository = options.repository ?? getCrmRepository();
   const executor = options.executor ?? getBackgroundJobExecutor(repository);
   const accounts = await repository.listEmailAccounts(context);
-  const eligible = accounts.filter(isEligibleForBackgroundSync);
   const results: ScheduledEmailSyncAccount[] = [];
 
-  for (const account of eligible) {
+  for (const account of accounts) {
+    const skipReason = getEmailSyncSkipReason(account);
+    if (skipReason) {
+      results.push({
+        accountId: account.id,
+        emailAddress: account.emailAddress,
+        status: "skipped",
+        importedCount: 0,
+        skipped: true,
+        skipReason
+      });
+      continue;
+    }
+
     try {
       const result = await executor.runEmailSyncJob(context, { accountId: account.id, limit: options.limit });
       results.push({
@@ -51,8 +65,8 @@ export async function scheduleEmailSyncForActiveAccounts(
   }
 
   const summary: ScheduledEmailSyncSummary = {
-    scheduledCount: results.filter((result) => result.status !== "failed").length,
-    skippedCount: accounts.length - eligible.length,
+    scheduledCount: results.filter((result) => result.status !== "failed" && result.status !== "skipped").length,
+    skippedCount: results.filter((result) => result.status === "skipped").length,
     accounts: results
   };
   if (options.limit !== undefined) {
@@ -61,6 +75,19 @@ export async function scheduleEmailSyncForActiveAccounts(
   return summary;
 }
 
-function isEligibleForBackgroundSync(account: EmailAccount): boolean {
-  return account.status === "active" && account.syncEnabled && account.connectionConfigured && getEmailProviderCapability(account.provider).supportsSync;
+function getEmailSyncSkipReason(account: EmailAccount): string | undefined {
+  const capability = getEmailProviderCapability(account.provider);
+  if (account.status !== "active") {
+    return `账号状态为 ${account.status}`;
+  }
+  if (!account.syncEnabled) {
+    return "未开启收件同步";
+  }
+  if (!account.connectionConfigured) {
+    return "未配置收件连接";
+  }
+  if (!capability.supportsSync) {
+    return `${capability.label} 不支持收件同步`;
+  }
+  return undefined;
 }

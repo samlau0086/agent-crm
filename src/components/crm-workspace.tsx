@@ -310,6 +310,8 @@ type EmailSyncAllRun = {
     emailAddress: string;
     status: string;
     importedCount: number;
+    skipped?: boolean;
+    skipReason?: string;
     error?: string;
   }>;
 };
@@ -3882,11 +3884,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   async function syncAllEmailAccounts() {
     const result = await fetchJson<EmailSyncAllRun>("/api/email/sync-all", { method: "POST" });
     const failed = result.accounts.filter((account) => account.status === "failed");
+    const skipped = result.accounts.filter((account) => account.status === "skipped" || account.skipped);
     if (failed.length) {
       setError(`邮箱批量同步完成，但 ${failed.length} 个账号失败：${failed.map((account) => account.emailAddress).join(", ")}`);
     }
+    if (!result.scheduledCount && skipped.length && !failed.length) {
+      setError(`没有可同步邮箱：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`);
+    }
     await refreshEmailThreads({ reloadSelectedMessages: true });
-    setMessage(`邮箱批量同步完成：已调度 ${result.scheduledCount} 个，跳过 ${result.skippedCount} 个，失败 ${failed.length} 个`);
+    const skippedDetail = skipped.length
+      ? `，跳过 ${skipped.length} 个：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`
+      : `，跳过 ${result.skippedCount} 个`;
+    setMessage(`邮箱批量同步完成：已调度 ${result.scheduledCount} 个${skippedDetail}，失败 ${failed.length} 个`);
     router.refresh();
   }
 

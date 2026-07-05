@@ -2949,7 +2949,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /aria-label="回复"[\s\S]*onReplyToMessage\(message\);[\s\S]*openComposePopup\(\)/);
   assert.match(source, /aria-label=\{selectedThreadIsRead \? "标记未读" : "标记已读"\}/);
   assert.match(source, /selectedThreadIsRead \? <Mail size=\{16\} \/> : <MailOpen size=\{16\} \/>/);
-  assert.match(source, /<Star className=\{selectedThreadState\.important \? "active-icon" : undefined\} size=\{16\} \/>/);
+  assert.match(source, /<Flag className=\{selectedThreadState\.important \? "active-icon" : undefined\} size=\{16\} \/>/);
   assert.match(source, /className="toolbar-menu-panel"/);
   assert.match(source, /aria-label=\{`移除标签 \$\{label\}`\} title=\{`移除标签 \$\{label\}`\}/);
   assert.match(source, /performMailboxAction\(action: "archive" \| "unarchive" \| "delete" \| "restore"/);
@@ -7455,10 +7455,22 @@ await run("email sync scheduler queues only active sync-enabled accounts and kee
   assert.equal(summary.scheduledCount, 1);
   assert.equal(summary.skippedCount, 4);
   assert.equal(summary.limit, 20);
-  assert.deepEqual(summary.accounts.map((account) => account.accountId), ["email-active-a", "email-active-b"]);
+  assert.deepEqual(summary.accounts.map((account) => account.accountId), [
+    "email-active-a",
+    "email-active-b",
+    "email-disabled",
+    "email-send-only",
+    "email-unconfigured",
+    "email-custom"
+  ]);
   assert.equal(summary.accounts[0].status, "queued");
   assert.equal(summary.accounts[1].status, "failed");
   assert.match(summary.accounts[1].error, /temporarily unavailable/);
+  assert.equal(summary.accounts[2].status, "skipped");
+  assert.match(summary.accounts[2].skipReason, /disabled/);
+  assert.match(summary.accounts[3].skipReason, /未开启收件同步/);
+  assert.match(summary.accounts[4].skipReason, /未配置收件连接/);
+  assert.match(summary.accounts[5].skipReason, /不支持收件同步/);
 });
 
 await run("email sync scheduler requires admin permission", async () => {
