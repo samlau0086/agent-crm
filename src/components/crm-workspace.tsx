@@ -17,6 +17,7 @@ import {
   Download,
   Eye,
   Filter,
+  Flag,
   Inbox,
   Image as ImageIcon,
   Italic,
@@ -49,6 +50,7 @@ import {
   Star,
   Sun,
   Tag,
+  Tags,
   Trash2,
   Trophy,
   Underline,
@@ -524,7 +526,7 @@ const emailMailboxMeta: Array<{ key: EmailMailboxKey; label: string; icon: Lucid
   { key: "inbox", label: "收件箱", icon: Inbox },
   { key: "starred", label: "星标", icon: Star },
   { key: "snoozed", label: "稍后提醒", icon: Clock3 },
-  { key: "important", label: "重要", icon: Tag },
+  { key: "important", label: "重要", icon: Flag },
   { key: "sent", label: "已发送", icon: Send },
   { key: "scheduled", label: "待发送", icon: CalendarClock },
   { key: "drafts", label: "草稿", icon: Mail },
@@ -9789,7 +9791,7 @@ function EmailWorkspace({
                   <Mail size={16} />
                 </button>
                 <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => void promptAddEmailLabel(selectedThreadIdsArray)} disabled={!selectedThreadIds.size}>
-                  <Tag size={16} />
+                  <Tags size={16} />
                 </button>
                 <button className="icon-button" aria-label="更多" type="button">
                   <MoreVertical size={16} />
@@ -9853,7 +9855,7 @@ function EmailWorkspace({
                           persistThreadState(thread.id, { important });
                         }}
                       >
-                        <Tag size={15} />
+                        <Flag size={15} />
                       </button>
                       <button className="gmail-thread-open" data-testid={`email-thread-row-${thread.id}`} type="button" onClick={() => openThreadDetail(thread.id)}>
                         <span className="gmail-thread-sender">{emailMessageParticipantLabel(displayMessage, thread, activeAccounts)}</span>
@@ -9963,10 +9965,10 @@ function EmailWorkspace({
                   {selectedThreadIsRead ? <Mail size={16} /> : <MailOpen size={16} />}
                 </button>
                 <button className="icon-button" aria-label="重要" title="重要" type="button" onClick={() => selectedThread && performMailboxAction("important", [selectedThread.id])} disabled={!selectedThread}>
-                  <Star className={selectedThreadState.important ? "active-icon" : undefined} size={16} />
+                  <Flag className={selectedThreadState.important ? "active-icon" : undefined} size={16} />
                 </button>
                 <button className="icon-button" aria-label="添加标签" title="添加标签" type="button" onClick={() => { if (selectedThread) void promptAddEmailLabel([selectedThread.id]); }} disabled={!selectedThread}>
-                  <Tag size={16} />
+                  <Tags size={16} />
                 </button>
                 <div className="toolbar-menu">
                   <button className="icon-button" aria-label="更多" title="更多" type="button" onClick={() => setDetailMoreOpen((current) => !current)} disabled={!selectedThread}>
