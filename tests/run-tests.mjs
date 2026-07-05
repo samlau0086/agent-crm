@@ -3675,7 +3675,7 @@ await run("talk about this api is guarded by ai permission and uses crm context"
   assert.match(route, /parseJson\(request, aiTalkRequestSchema\)/);
   assert.match(route, /buildRecordTalkContext/);
   assert.match(route, /buildEmailThreadTalkContext/);
-  assert.match(route, /repository\.listKnowledgeArticles\(context, true\)/);
+  assert.match(route, /repository\.listRelevantKnowledgeArticles\(context/);
   assert.match(route, /getGlobalAiAgentSetting\(await repository\.getEmailAiSettings\(context\), talkAboutThisAgentKey\)/);
   assert.match(route, /runAiAgent/);
   assert.match(route, /body\.mode === "suggestion"/);

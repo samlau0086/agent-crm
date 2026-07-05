@@ -9,7 +9,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -30,6 +30,8 @@ interface SettingsAdminProps {
   emailAccounts: EmailAccount[];
   emailAiSettings: EmailAiSettings;
   knowledgeArticles: KnowledgeArticle[];
+  knowledgeVectorSettings: KnowledgeVectorSettings;
+  knowledgeVectorActionKey?: string | null;
   knowledgeDraft: KnowledgeArticleDraft;
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
@@ -46,6 +48,10 @@ interface SettingsAdminProps {
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "active">>) => void;
+  onDeleteKnowledgeArticle: (articleId: string) => void;
+  onSaveKnowledgeVectorSettings: (patch: Partial<Omit<KnowledgeVectorSettings, "workspaceId" | "updatedAt">>) => void;
+  onVectorizeKnowledgeArticle: (articleId: string) => void;
+  onVectorizeKnowledge: () => void;
 }
 
 type ObjectDraft = {
@@ -2433,6 +2439,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               <div className="settings-panel harness-config-panel" data-testid="settings-knowledge-base">
                 <KnowledgeBaseManager
                   knowledgeArticles={props.knowledgeArticles}
+                  knowledgeVectorSettings={props.knowledgeVectorSettings}
+                  providerProfiles={aiProviderProfiles}
+                  vectorActionKey={props.knowledgeVectorActionKey}
                   knowledgeDraft={props.knowledgeDraft}
                   activeLimit={props.emailAiSettings.maxKnowledgeArticles}
                   disabled={isPending || !canManage}
@@ -2440,6 +2449,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                   onKnowledgeDraftChange={props.onKnowledgeDraftChange}
                   onCreateKnowledgeArticle={props.onCreateKnowledgeArticle}
                   onUpdateKnowledgeArticle={props.onUpdateKnowledgeArticle}
+                  onDeleteKnowledgeArticle={props.onDeleteKnowledgeArticle}
+                  onSaveKnowledgeVectorSettings={props.onSaveKnowledgeVectorSettings}
+                  onVectorizeKnowledgeArticle={props.onVectorizeKnowledgeArticle}
+                  onVectorizeKnowledge={props.onVectorizeKnowledge}
                 />
                 {!canManage ? <p className="subtle" style={{ marginTop: 8 }}>需要 crm.admin 权限才能维护知识库。</p> : null}
               </div>

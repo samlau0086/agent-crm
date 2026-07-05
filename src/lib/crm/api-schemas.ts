@@ -1091,6 +1091,26 @@ export const knowledgeArticleCreateSchema = z
 
 export const knowledgeArticleUpdateSchema = knowledgeArticleCreateSchema.partial().strict();
 
+export const knowledgeVectorSettingsUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    providerProfileKey: z.string().trim().min(1).max(80).optional(),
+    embeddingModel: z.string().trim().min(1).max(160).optional(),
+    dimensions: z.number().int().min(128).max(8192).optional(),
+    chunkSizeChars: z.number().int().min(200).max(8000).optional(),
+    chunkOverlapChars: z.number().int().min(0).max(2000).optional(),
+    topK: z.number().int().min(1).max(20).optional(),
+    similarityThreshold: z.number().min(0).max(1).optional()
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one vector setting is required"
+  })
+  .refine((value) => value.chunkOverlapChars === undefined || value.chunkSizeChars === undefined || value.chunkOverlapChars < value.chunkSizeChars, {
+    path: ["chunkOverlapChars"],
+    message: "chunkOverlapChars must be smaller than chunkSizeChars"
+  });
+
 const mediaAssetPayloadSchema = z.object({
   name: labelSchema.max(200),
   contentType: mediaAssetContentTypeSchema,

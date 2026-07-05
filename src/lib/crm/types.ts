@@ -390,6 +390,46 @@ export interface KnowledgeArticle {
   createdById: string;
   createdAt: string;
   updatedAt: string;
+  vectorStatus?: KnowledgeVectorStatus;
+}
+
+export type KnowledgeVectorStatusState = "not_indexed" | "indexed" | "stale" | "failed";
+
+export interface KnowledgeVectorStatus {
+  state: KnowledgeVectorStatusState;
+  chunkCount: number;
+  indexedAt?: string;
+  embeddingModel?: string;
+  dimensions?: number;
+  errorMessage?: string;
+}
+
+export interface KnowledgeVectorSettings {
+  workspaceId: string;
+  enabled: boolean;
+  providerProfileKey: string;
+  embeddingModel: string;
+  dimensions: number;
+  chunkSizeChars: number;
+  chunkOverlapChars: number;
+  topK: number;
+  similarityThreshold: number;
+  updatedAt: string;
+}
+
+export interface KnowledgeEmbeddingChunk {
+  id: string;
+  workspaceId: string;
+  articleId: string;
+  chunkIndex: number;
+  chunkText: string;
+  embeddingModel: string;
+  dimensions: number;
+  status: KnowledgeVectorStatusState;
+  errorMessage?: string;
+  indexedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type TalkTargetRef =
@@ -1194,6 +1234,8 @@ export interface CrmSnapshot {
   emailThreadStates: EmailThreadState[];
   emailMessages: EmailMessage[];
   knowledgeArticles: KnowledgeArticle[];
+  knowledgeVectorSettings?: KnowledgeVectorSettings[];
+  knowledgeEmbeddingChunks?: KnowledgeEmbeddingChunk[];
   talkMessages?: TalkMessage[];
   emailAiSettings: EmailAiSettings[];
   emailSyncSettings?: EmailSyncSettings[];

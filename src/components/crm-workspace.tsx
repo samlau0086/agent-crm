@@ -113,6 +113,7 @@ import type {
   ImportJobQueueSummary,
   ImportPreset,
   KnowledgeArticle,
+  KnowledgeVectorSettings,
   MediaAsset,
   NotificationChannel,
   NotificationEvent,
@@ -179,6 +180,7 @@ interface CrmWorkspaceProps {
   customerLevelSettings: CustomerLevelSettings;
   recordChangeRequests: RecordChangeRequest[];
   knowledgeArticles: KnowledgeArticle[];
+  knowledgeVectorSettings: KnowledgeVectorSettings;
   mediaAssets: MediaAsset[];
   auditLogs: AuditLog[];
   backupFiles: BackupFile[];
@@ -1756,6 +1758,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailDiagnostics, setEmailDiagnostics] = useState<EmailSubsystemDiagnostics | null>(null);
   const [emailConnectionTestRun, setEmailConnectionTestRun] = useState<EmailConnectionTestRun | null>(null);
   const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>(props.knowledgeArticles);
+  const [knowledgeVectorSettings, setKnowledgeVectorSettings] = useState<KnowledgeVectorSettings>(props.knowledgeVectorSettings);
+  const [knowledgeVectorActionKey, setKnowledgeVectorActionKey] = useState<string | null>(null);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>(props.mediaAssets);
   const [smartReminders, setSmartReminders] = useState<SmartReminder[]>(props.dashboardSummary.smartReminders);
   const [isGeneratingSmartReminders, setIsGeneratingSmartReminders] = useState(false);
@@ -2362,6 +2366,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailAiSettings(props.emailAiSettings);
     setEmailSyncSettings(props.emailSyncSettings ?? defaultEmailSyncSettings);
     setKnowledgeArticles(props.knowledgeArticles);
+    setKnowledgeVectorSettings(props.knowledgeVectorSettings);
     setMediaAssets(props.mediaAssets);
     setEmailDraft((current) => {
       const accountId = current.accountId || props.emailAccounts[0]?.id || "";
@@ -2374,7 +2379,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEmailDraft((current) => clearEmailDraftAiProvenance(current));
       setSelectedEmailThreadId(nextSelectedThreadId);
     }
-  }, [emailComposeOpenRequestKey, props.emailAccounts, props.emailAiSettings, props.emailSignatures, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
+  }, [emailComposeOpenRequestKey, props.emailAccounts, props.emailAiSettings, props.emailSignatures, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.knowledgeVectorSettings, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
 
   useEffect(() => {
     if (!routeEmailThreadId) {
@@ -4749,6 +4754,75 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  async function deleteKnowledgeArticle(articleId: string) {
+    const article = knowledgeArticles.find((candidate) => candidate.id === articleId);
+    const confirmed = await requestConfirm({
+      title: "删除知识条目",
+      message: `确定永久删除“${article?.title ?? "该知识条目"}”？删除后会同步移除向量索引，不能撤销。`,
+      confirmLabel: "永久删除",
+      danger: true
+    });
+    if (!confirmed) {
+      return;
+    }
+    setKnowledgeVectorActionKey(`delete:${articleId}`);
+    try {
+      await fetchJson<void>(`/api/knowledge/articles/${articleId}`, { method: "DELETE" });
+      setKnowledgeArticles((current) => current.filter((candidate) => candidate.id !== articleId));
+      setKnowledgeDraft((current) => (current.editingArticleId === articleId ? { title: "", body: "", tags: "", active: true } : current));
+      showSuccess(`知识条目已删除：${article?.title ?? articleId}`);
+      router.refresh();
+    } finally {
+      setKnowledgeVectorActionKey(null);
+    }
+  }
+
+  async function saveKnowledgeVectorSettings(patch: Partial<Omit<KnowledgeVectorSettings, "workspaceId" | "updatedAt">>) {
+    setKnowledgeVectorActionKey("settings");
+    try {
+      const settings = await fetchJson<KnowledgeVectorSettings>("/api/knowledge/vector-settings", {
+        method: "PATCH",
+        body: patch
+      });
+      setKnowledgeVectorSettings(settings);
+      showSuccess("知识库向量化配置已保存");
+      router.refresh();
+    } finally {
+      setKnowledgeVectorActionKey(null);
+    }
+  }
+
+  async function vectorizeKnowledgeArticle(articleId: string) {
+    setKnowledgeVectorActionKey(`article:${articleId}`);
+    try {
+      const article = await fetchJson<KnowledgeArticle>(`/api/knowledge/articles/${articleId}/vectorize`, { method: "POST" });
+      setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)]);
+      const status = article.vectorStatus;
+      showSuccess(status?.state === "failed" ? `索引失败：${status.errorMessage ?? article.title}` : `知识条目已重建索引：${article.title}`);
+      router.refresh();
+    } finally {
+      setKnowledgeVectorActionKey(null);
+    }
+  }
+
+  async function vectorizeKnowledge() {
+    setKnowledgeVectorActionKey("bulk");
+    try {
+      const articles = await fetchJson<KnowledgeArticle[]>("/api/knowledge/vectorize", { method: "POST" });
+      setKnowledgeArticles((current) => {
+        const byId = new Map(current.map((article) => [article.id, article]));
+        for (const article of articles) {
+          byId.set(article.id, article);
+        }
+        return [...byId.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      });
+      showSuccess(`已重建 ${articles.length} 篇知识条目的向量索引`);
+      router.refresh();
+    } finally {
+      setKnowledgeVectorActionKey(null);
+    }
+  }
+
   async function uploadMediaAssets(files: FileList | File[] | null): Promise<MediaAsset[]> {
     const uploadFiles = Array.from(files ?? []);
     if (!uploadFiles.length) {
@@ -6441,6 +6515,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             diagnostics={emailDiagnostics}
             connectionTestRun={emailConnectionTestRun}
             knowledgeArticles={knowledgeArticles}
+            knowledgeVectorSettings={knowledgeVectorSettings}
+            knowledgeVectorActionKey={knowledgeVectorActionKey}
+            providerProfiles={emailAiSettings.providerProfiles}
             knowledgeDraft={knowledgeDraft}
             mediaAssets={mediaAssets}
             disabled={isPending}
@@ -6506,6 +6583,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onTestAllConnections={() => runAction(testAllEmailConnections)}
             onCreateKnowledgeArticle={() => runAction(createKnowledgeArticle)}
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
+            onDeleteKnowledgeArticle={(articleId) => { void runImmediateAction(() => deleteKnowledgeArticle(articleId)); }}
+            onSaveKnowledgeVectorSettings={(patch) => runAction(() => saveKnowledgeVectorSettings(patch))}
+            onVectorizeKnowledgeArticle={(articleId) => runAction(() => vectorizeKnowledgeArticle(articleId))}
+            onVectorizeKnowledge={() => runAction(vectorizeKnowledge)}
             onKnowledgeArticleCreated={(article) => setKnowledgeArticles((current) => [article, ...current.filter((candidate) => candidate.id !== article.id)])}
             onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
             onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
@@ -6575,6 +6656,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             emailAccounts={props.emailAccounts}
             emailAiSettings={emailAiSettings}
             knowledgeArticles={knowledgeArticles}
+            knowledgeVectorSettings={knowledgeVectorSettings}
+            knowledgeVectorActionKey={knowledgeVectorActionKey}
             knowledgeDraft={knowledgeDraft}
             auditLogs={props.auditLogs}
             backupFiles={props.backupFiles}
@@ -6591,6 +6674,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onKnowledgeDraftChange={setKnowledgeDraft}
             onCreateKnowledgeArticle={() => runAction(createKnowledgeArticle)}
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}
+            onDeleteKnowledgeArticle={(articleId) => { void runImmediateAction(() => deleteKnowledgeArticle(articleId)); }}
+            onSaveKnowledgeVectorSettings={(patch) => runAction(() => saveKnowledgeVectorSettings(patch))}
+            onVectorizeKnowledgeArticle={(articleId) => runAction(() => vectorizeKnowledgeArticle(articleId))}
+            onVectorizeKnowledge={() => runAction(vectorizeKnowledge)}
           />
         )}
 
@@ -7719,6 +7806,9 @@ function EmailWorkspace({
   diagnostics,
   connectionTestRun,
   knowledgeArticles,
+  knowledgeVectorSettings,
+  knowledgeVectorActionKey,
+  providerProfiles,
   knowledgeDraft,
   mediaAssets,
   disabled,
@@ -7772,6 +7862,10 @@ function EmailWorkspace({
   onTestAllConnections,
   onCreateKnowledgeArticle,
   onUpdateKnowledgeArticle,
+  onDeleteKnowledgeArticle,
+  onSaveKnowledgeVectorSettings,
+  onVectorizeKnowledgeArticle,
+  onVectorizeKnowledge,
   onKnowledgeArticleCreated,
   onUpdateMediaAsset,
   onDeleteMediaAsset,
@@ -7813,6 +7907,9 @@ function EmailWorkspace({
   diagnostics: EmailSubsystemDiagnostics | null;
   connectionTestRun: EmailConnectionTestRun | null;
   knowledgeArticles: KnowledgeArticle[];
+  knowledgeVectorSettings: KnowledgeVectorSettings;
+  knowledgeVectorActionKey: string | null;
+  providerProfiles: EmailAiSettings["providerProfiles"];
   knowledgeDraft: KnowledgeArticleDraft;
   mediaAssets: MediaAsset[];
   disabled: boolean;
@@ -7866,6 +7963,10 @@ function EmailWorkspace({
   onTestAllConnections: () => void;
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>) => void;
+  onDeleteKnowledgeArticle: (articleId: string) => void;
+  onSaveKnowledgeVectorSettings: (patch: Partial<Omit<KnowledgeVectorSettings, "workspaceId" | "updatedAt">>) => void;
+  onVectorizeKnowledgeArticle: (articleId: string) => void;
+  onVectorizeKnowledge: () => void;
   onKnowledgeArticleCreated: (article: KnowledgeArticle) => void;
   onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
   onDeleteMediaAsset: (asset: MediaAsset) => void;
@@ -10681,6 +10782,9 @@ function EmailWorkspace({
           {canManageEmailSettings ? (
             <KnowledgeBaseManager
               knowledgeArticles={knowledgeArticles}
+              knowledgeVectorSettings={knowledgeVectorSettings}
+              providerProfiles={providerProfiles}
+              vectorActionKey={knowledgeVectorActionKey}
               knowledgeDraft={knowledgeDraft}
               activeLimit={aiSettings.maxKnowledgeArticles}
               helperText="邮件页保留知识库快捷入口；完整 AI Agent 与知识库配置也可在 设置 -> AI Agents -> 知识库 管理。"
@@ -10688,6 +10792,10 @@ function EmailWorkspace({
               onKnowledgeDraftChange={onKnowledgeDraftChange}
               onCreateKnowledgeArticle={onCreateKnowledgeArticle}
               onUpdateKnowledgeArticle={onUpdateKnowledgeArticle}
+              onDeleteKnowledgeArticle={onDeleteKnowledgeArticle}
+              onSaveKnowledgeVectorSettings={onSaveKnowledgeVectorSettings}
+              onVectorizeKnowledgeArticle={onVectorizeKnowledgeArticle}
+              onVectorizeKnowledge={onVectorizeKnowledge}
             />
           ) : null}
         </div>

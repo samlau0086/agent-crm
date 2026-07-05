@@ -43,6 +43,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
   const customerLevelSettings = await repository.getCustomerLevelSettings(context);
   const recordChangeRequests = await repository.listRecordChangeRequests(context, "pending");
   const knowledgeArticles = await repository.listKnowledgeArticles(context);
+  const knowledgeVectorSettings = await repository.getKnowledgeVectorSettings(context);
   const mediaAssets = await repository.listMediaAssets(context);
   const dashboardSummary = await repository.getDashboardSummary(context);
   const auditLogs = context.role.permissions.includes("crm.admin") ? await repository.listAuditLogs(context) : [];
@@ -111,6 +112,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
       customerLevelSettings={customerLevelSettings}
       recordChangeRequests={recordChangeRequests}
       knowledgeArticles={knowledgeArticles}
+      knowledgeVectorSettings={knowledgeVectorSettings}
       mediaAssets={mediaAssets}
       auditLogs={auditLogs}
       backupFiles={backupFiles}

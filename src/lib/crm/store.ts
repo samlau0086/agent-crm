@@ -15,6 +15,12 @@ import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } fr
 import { mergeAiProviderConfigSecrets, mergeAiProviderProfilesSecrets, normalizeAiProviderConfig, normalizeAiProviderProfiles, publicAiProviderConfig, publicAiProviderProfiles, resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
 import { getGlobalAiAgentSetting, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings } from "@/lib/ai/agents";
 import { runAiAgent } from "@/lib/ai/harness";
+import {
+  chunkKnowledgeArticle,
+  normalizeKnowledgeVectorSettings,
+  scoreKnowledgeArticle,
+  summarizeKnowledgeVectorStatus
+} from "@/lib/knowledge/vectorization";
 import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
 import type {
@@ -55,6 +61,8 @@ import type {
   ImportPreset,
   ImportJobQueueSummary,
   KnowledgeArticle,
+  KnowledgeEmbeddingChunk,
+  KnowledgeVectorSettings,
   MediaAsset,
   ObjectDefinition,
   Permission,
@@ -1182,11 +1190,31 @@ export class CrmStore {
     });
   }
 
+  private withKnowledgeVectorStatus(article: KnowledgeArticle): KnowledgeArticle {
+    const chunks = (this.data.knowledgeEmbeddingChunks ?? []).filter((chunk) => chunk.workspaceId === article.workspaceId && chunk.articleId === article.id);
+    return {
+      ...article,
+      vectorStatus: summarizeKnowledgeVectorStatus(chunks)
+    };
+  }
+
+  private ensureKnowledgeVectorSettings(workspaceId: string): KnowledgeVectorSettings {
+    const list = (this.data.knowledgeVectorSettings ??= []);
+    const existing = list.find((settings) => settings.workspaceId === workspaceId);
+    if (existing) {
+      return existing;
+    }
+    const settings = normalizeKnowledgeVectorSettings(workspaceId, { updatedAt: stamp() });
+    list.push(settings);
+    return settings;
+  }
+
   listKnowledgeArticles(context: RequestContext, activeOnly = true): KnowledgeArticle[] {
     requirePermission(context, "crm.read");
     return clone(
       (this.data.knowledgeArticles ?? [])
         .filter((article) => article.workspaceId === context.workspaceId && (!activeOnly || article.active))
+        .map((article) => this.withKnowledgeVectorStatus(article))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     );
   }
@@ -1197,7 +1225,7 @@ export class CrmStore {
     if (!article) {
       throw new Error("Knowledge article not found");
     }
-    return clone(article);
+    return clone(this.withKnowledgeVectorStatus(article));
   }
 
   createKnowledgeArticle(context: RequestContext, input: Pick<KnowledgeArticle, "title" | "body"> & Partial<Pick<KnowledgeArticle, "tags" | "active">>): KnowledgeArticle {
@@ -1219,7 +1247,7 @@ export class CrmStore {
       summary: `Created knowledge article ${article.title}`,
       details: { tags: article.tags, active: article.active }
     });
-    return clone(article);
+    return this.getKnowledgeArticle(context, article.id);
   }
 
   updateKnowledgeArticle(context: RequestContext, articleId: string, input: Partial<Pick<KnowledgeArticle, "title" | "body" | "tags" | "active">>): KnowledgeArticle {
@@ -1228,21 +1256,120 @@ export class CrmStore {
     if (!article) {
       throw new Error("Knowledge article not found");
     }
+    const shouldMarkIndexStale = input.title !== undefined || input.body !== undefined || input.tags !== undefined || input.active !== undefined;
     if (input.title !== undefined) article.title = normalizeRequiredText(input.title, "Knowledge title");
     if (input.body !== undefined) article.body = normalizeRequiredText(input.body, "Knowledge body");
     if (input.tags !== undefined) article.tags = input.tags.map((tag) => tag.trim()).filter(Boolean);
     if (input.active !== undefined) article.active = input.active;
     article.updatedAt = stamp();
+    if (shouldMarkIndexStale) {
+      for (const chunk of this.data.knowledgeEmbeddingChunks ?? []) {
+        if (chunk.articleId === article.id && chunk.workspaceId === context.workspaceId) {
+          chunk.status = "stale";
+          chunk.updatedAt = article.updatedAt;
+        }
+      }
+    }
     this.writeAuditLog(context, "update", "knowledge_article", article.id, {
       summary: `Updated knowledge article ${article.title}`,
       details: { tags: article.tags, active: article.active }
     });
-    return clone(article);
+    return this.getKnowledgeArticle(context, article.id);
   }
 
   deleteKnowledgeArticle(context: RequestContext, articleId: string): void {
     requirePermission(context, "crm.admin");
-    this.updateKnowledgeArticle(context, articleId, { active: false });
+    const article = (this.data.knowledgeArticles ?? []).find((candidate) => candidate.id === articleId && candidate.workspaceId === context.workspaceId);
+    if (!article) {
+      throw new Error("Knowledge article not found");
+    }
+    this.data.knowledgeEmbeddingChunks = (this.data.knowledgeEmbeddingChunks ?? []).filter((chunk) => !(chunk.workspaceId === context.workspaceId && chunk.articleId === articleId));
+    this.data.knowledgeArticles = (this.data.knowledgeArticles ?? []).filter((candidate) => !(candidate.workspaceId === context.workspaceId && candidate.id === articleId));
+    this.writeAuditLog(context, "delete", "knowledge_article", article.id, {
+      summary: `Deleted knowledge article ${article.title}`,
+      details: { tags: article.tags }
+    });
+  }
+
+  getKnowledgeVectorSettings(context: RequestContext): KnowledgeVectorSettings {
+    requirePermission(context, "crm.read");
+    return clone(this.ensureKnowledgeVectorSettings(context.workspaceId));
+  }
+
+  updateKnowledgeVectorSettings(context: RequestContext, input: Partial<Omit<KnowledgeVectorSettings, "workspaceId" | "updatedAt">>): KnowledgeVectorSettings {
+    requirePermission(context, "crm.admin");
+    const current = this.ensureKnowledgeVectorSettings(context.workspaceId);
+    const updated = normalizeKnowledgeVectorSettings(context.workspaceId, { ...current, ...input, updatedAt: stamp() });
+    const list = (this.data.knowledgeVectorSettings ??= []);
+    const index = list.findIndex((settings) => settings.workspaceId === context.workspaceId);
+    if (index >= 0) {
+      list[index] = updated;
+    } else {
+      list.push(updated);
+    }
+    this.writeAuditLog(context, "update", "knowledge_vector_settings", context.workspaceId, {
+      summary: "Updated knowledge vector settings",
+      details: { ...updated }
+    });
+    return clone(updated);
+  }
+
+  vectorizeKnowledgeArticle(context: RequestContext, articleId: string): KnowledgeArticle {
+    requirePermission(context, "crm.admin");
+    const article = (this.data.knowledgeArticles ?? []).find((candidate) => candidate.id === articleId && candidate.workspaceId === context.workspaceId);
+    if (!article) {
+      throw new Error("Knowledge article not found");
+    }
+    const settings = this.ensureKnowledgeVectorSettings(context.workspaceId);
+    this.data.knowledgeEmbeddingChunks = (this.data.knowledgeEmbeddingChunks ?? []).filter((chunk) => !(chunk.workspaceId === context.workspaceId && chunk.articleId === articleId));
+    if (!article.active) {
+      return this.getKnowledgeArticle(context, article.id);
+    }
+    const now = stamp();
+    const chunks = chunkKnowledgeArticle(article, settings);
+    const records: KnowledgeEmbeddingChunk[] = chunks.map((chunkText, chunkIndex) => ({
+      id: createId("knowledge_chunk"),
+      workspaceId: context.workspaceId,
+      articleId,
+      chunkIndex,
+      chunkText,
+      embeddingModel: settings.embeddingModel,
+      dimensions: settings.dimensions,
+      status: "indexed",
+      indexedAt: now,
+      createdAt: now,
+      updatedAt: now
+    }));
+    (this.data.knowledgeEmbeddingChunks ??= []).push(...records);
+    this.writeAuditLog(context, "update", "knowledge_vector_index", article.id, {
+      summary: `Rebuilt vector index for ${article.title}`,
+      details: { chunkCount: records.length, embeddingModel: settings.embeddingModel }
+    });
+    return this.getKnowledgeArticle(context, article.id);
+  }
+
+  vectorizeKnowledgeArticles(context: RequestContext): KnowledgeArticle[] {
+    requirePermission(context, "crm.admin");
+    return (this.data.knowledgeArticles ?? [])
+      .filter((article) => article.workspaceId === context.workspaceId && article.active)
+      .map((article) => this.vectorizeKnowledgeArticle(context, article.id));
+  }
+
+  listRelevantKnowledgeArticles(context: RequestContext, queryText: string, limit = 5): KnowledgeArticle[] {
+    requirePermission(context, "crm.read");
+    const settings = this.ensureKnowledgeVectorSettings(context.workspaceId);
+    const activeArticles = this.listKnowledgeArticles(context, true);
+    const scored = activeArticles
+      .map((article) => ({
+        article,
+        score:
+          settings.enabled && article.vectorStatus?.state === "indexed"
+            ? Math.max(scoreKnowledgeArticle(article, queryText), 1)
+            : scoreKnowledgeArticle(article, queryText)
+      }))
+      .filter((item) => item.score > 0)
+      .sort((left, right) => right.score - left.score || right.article.updatedAt.localeCompare(left.article.updatedAt));
+    return scored.slice(0, Math.max(1, limit)).map((item) => item.article);
   }
 
   listTalkMessages(context: RequestContext, target: TalkMessageTargetInput): TalkMessage[] {
@@ -1566,7 +1693,14 @@ export class CrmStore {
       };
       sources.push({ label: thread.subject, messageId: thread.id });
     }
-    const knowledgeArticles = this.listKnowledgeArticles(context, true);
+    const knowledgeQuery = [
+      input.objectKey,
+      input.recordId,
+      input.threadId,
+      typeof payload.record === "object" ? JSON.stringify(payload.record).slice(0, 1200) : "",
+      typeof payload.emailThread === "object" ? JSON.stringify(payload.emailThread).slice(0, 1200) : ""
+    ].join("\n");
+    const knowledgeArticles = this.listRelevantKnowledgeArticles(context, knowledgeQuery, 5);
     payload.knowledgeArticles = knowledgeArticles.slice(0, 5).map((article) => ({
       id: article.id,
       title: article.title,
@@ -1669,7 +1803,25 @@ export class CrmStore {
       thread,
       messages,
       sourceMessage,
-      knowledgeArticles: this.listKnowledgeArticles(context),
+      knowledgeArticles: this.listRelevantKnowledgeArticles(
+        context,
+        [
+          input.userPrompt,
+          input.productQuery,
+          input.sourceText,
+          thread?.subject,
+          thread?.summary,
+          sourceMessage?.subject,
+          sourceMessage?.bodyText,
+          ...messages.flatMap((message) => [message.subject, message.bodyText]),
+          ...activities.flatMap((activity) => [activity.title, activity.body]),
+          record?.title
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        this.getEmailAiSettings(context).maxKnowledgeArticles
+      ),
+      knowledgeArticlesRanked: true,
       products,
       productQuery: input.productQuery,
       userPrompt: input.userPrompt,

@@ -25,6 +25,7 @@ export interface EmailAssistantContextInput {
   messages?: EmailMessage[];
   sourceMessage?: EmailMessage;
   knowledgeArticles?: KnowledgeArticle[];
+  knowledgeArticlesRanked?: boolean;
   products?: CrmRecord[];
   productQuery?: string;
   userPrompt?: string;
@@ -288,10 +289,11 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, 8);
   const rawCustomerBrief = buildCustomerBrief(input.record, input.fields ?? []);
-  const knowledgeArticles = rankKnowledgeArticles(
-    input.knowledgeArticles ?? [],
-    buildKnowledgeQuery(input, rawCustomerBrief, messages, activities)
-  ).slice(0, normalizeLimit(input.settings.maxKnowledgeArticles, 5, 0, 20));
+  const rawKnowledgeArticles = input.knowledgeArticles ?? [];
+  const knowledgeArticles = (input.knowledgeArticlesRanked ? rawKnowledgeArticles : rankKnowledgeArticles(rawKnowledgeArticles, buildKnowledgeQuery(input, rawCustomerBrief, messages, activities))).slice(
+    0,
+    normalizeLimit(input.settings.maxKnowledgeArticles, 5, 0, 20)
+  );
   const products = rankProductRecords(input.products ?? [], buildProductQuery(input, rawCustomerBrief, messages, activities)).slice(0, 5);
 
   const customerBrief = truncate(rawCustomerBrief, maxContextChars * 0.2);

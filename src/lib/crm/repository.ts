@@ -1,4 +1,5 @@
-﻿import { Prisma } from "@prisma/client";
+﻿import { randomUUID } from "crypto";
+import { Prisma } from "@prisma/client";
 import { createApiKeyToken, getApiKeyTokenPrefix, hashApiKeyToken } from "@/lib/auth/api-key";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
@@ -19,6 +20,7 @@ import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { isContactMethodsAdditionOnly, previousRecordApprovalPatch, stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
 import { decryptAiProviderConfig, decryptAiProviderSettingsBundle, encryptAiProviderSettingsBundle, mergeAiProviderConfigSecrets, mergeAiProviderProfilesSecrets, normalizeAiProviderConfig, publicAiProviderConfig, publicAiProviderProfiles, resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
+import { createEmbedding } from "@/lib/ai/embeddings";
 import { getGlobalAiAgentSetting, listAiAgentDefinitions, normalizeGlobalAiAgentSetting, normalizeGlobalAiAgentSettings, smartReminderPlannerAgentKey } from "@/lib/ai/agents";
 import { runAiAgent } from "@/lib/ai/harness";
 import {
@@ -33,6 +35,15 @@ import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
 import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, normalizeEmailConnectionConfig } from "@/lib/email/connection-config";
 import { getEmailProviderCapability } from "@/lib/email/providers";
 import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } from "@/lib/email/tracking";
+import {
+  chunkKnowledgeArticle,
+  defaultKnowledgeVectorSettings,
+  normalizeKnowledgeVectorSettings,
+  normalizeVectorError,
+  scoreKnowledgeArticle,
+  summarizeKnowledgeVectorStatus,
+  toPgVectorLiteral
+} from "@/lib/knowledge/vectorization";
 import type {
   Activity,
   ApiKey,
@@ -72,6 +83,7 @@ import type {
   ImportPreset,
   ImportJobQueueSummary,
   KnowledgeArticle,
+  KnowledgeVectorSettings,
   MediaAsset,
   NotificationChannel,
   NotificationChannelType,
@@ -786,6 +798,14 @@ function mapKnowledgeArticle(article: {
   createdById: string;
   createdAt: Date;
   updatedAt: Date;
+  embeddingChunks?: Array<{
+    status: string;
+    errorMessage: string | null;
+    embeddingModel: string;
+    dimensions: number;
+    indexedAt: Date | null;
+    updatedAt: Date;
+  }>;
 }): KnowledgeArticle {
   return {
     id: article.id,
@@ -796,8 +816,45 @@ function mapKnowledgeArticle(article: {
     active: article.active,
     createdById: article.createdById,
     createdAt: article.createdAt.toISOString(),
-    updatedAt: article.updatedAt.toISOString()
+    updatedAt: article.updatedAt.toISOString(),
+    vectorStatus: article.embeddingChunks
+      ? summarizeKnowledgeVectorStatus(
+          article.embeddingChunks.map((chunk) => ({
+            status: chunk.status === "failed" ? "failed" : chunk.status === "stale" ? "stale" : "indexed",
+            errorMessage: chunk.errorMessage ?? undefined,
+            embeddingModel: chunk.embeddingModel,
+            dimensions: chunk.dimensions,
+            indexedAt: chunk.indexedAt?.toISOString(),
+            updatedAt: chunk.updatedAt.toISOString()
+          }))
+        )
+      : undefined
   };
+}
+
+function mapKnowledgeVectorSettings(settings: {
+  workspaceId: string;
+  enabled: boolean;
+  providerProfileKey: string;
+  embeddingModel: string;
+  dimensions: number;
+  chunkSizeChars: number;
+  chunkOverlapChars: number;
+  topK: number;
+  similarityThreshold: number;
+  updatedAt: Date;
+}): KnowledgeVectorSettings {
+  return normalizeKnowledgeVectorSettings(settings.workspaceId, {
+    enabled: settings.enabled,
+    providerProfileKey: settings.providerProfileKey,
+    embeddingModel: settings.embeddingModel,
+    dimensions: settings.dimensions,
+    chunkSizeChars: settings.chunkSizeChars,
+    chunkOverlapChars: settings.chunkOverlapChars,
+    topK: settings.topK,
+    similarityThreshold: settings.similarityThreshold,
+    updatedAt: settings.updatedAt.toISOString()
+  });
 }
 
 function mapTalkMessage(message: {
@@ -3066,6 +3123,12 @@ export class PrismaCrmRepository {
     requirePermission(context, "crm.read");
     const articles = await this.db.knowledgeArticle.findMany({
       where: { workspaceId: context.workspaceId, ...(activeOnly ? { active: true } : {}) },
+      include: {
+        embeddingChunks: {
+          select: { status: true, errorMessage: true, embeddingModel: true, dimensions: true, indexedAt: true, updatedAt: true },
+          orderBy: { chunkIndex: "asc" }
+        }
+      },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }]
     });
     return articles.map(mapKnowledgeArticle);
@@ -3074,7 +3137,13 @@ export class PrismaCrmRepository {
   async getKnowledgeArticle(context: RequestContext, articleId: string): Promise<KnowledgeArticle> {
     requirePermission(context, "crm.read");
     const article = await this.db.knowledgeArticle.findFirst({
-      where: { id: articleId, workspaceId: context.workspaceId }
+      where: { id: articleId, workspaceId: context.workspaceId },
+      include: {
+        embeddingChunks: {
+          select: { status: true, errorMessage: true, embeddingModel: true, dimensions: true, indexedAt: true, updatedAt: true },
+          orderBy: { chunkIndex: "asc" }
+        }
+      }
     });
     if (!article) {
       throw new Error("Knowledge article not found");
@@ -3101,7 +3170,7 @@ export class PrismaCrmRepository {
       summary: `Created knowledge article ${article.title}`,
       details: { tags: article.tags, active: article.active }
     });
-    return mapKnowledgeArticle(article);
+    return this.getKnowledgeArticle(context, article.id);
   }
 
   async updateKnowledgeArticle(
@@ -3116,6 +3185,7 @@ export class PrismaCrmRepository {
     if (!existing) {
       throw new Error("Knowledge article not found");
     }
+    const contentChanged = input.title !== undefined || input.body !== undefined || input.tags !== undefined || input.active !== undefined;
     const article = await this.db.knowledgeArticle.update({
       where: { id: existing.id },
       data: {
@@ -3125,11 +3195,17 @@ export class PrismaCrmRepository {
         active: input.active
       }
     });
+    if (contentChanged) {
+      await this.db.knowledgeEmbeddingChunk.updateMany({
+        where: { workspaceId: context.workspaceId, articleId: article.id },
+        data: { status: "stale", errorMessage: null }
+      });
+    }
     await this.writeAuditLog(context, "update", "knowledge_article", article.id, {
       summary: `Updated knowledge article ${article.title}`,
       details: { tags: article.tags, active: article.active }
     });
-    return mapKnowledgeArticle(article);
+    return this.getKnowledgeArticle(context, article.id);
   }
 
   async deleteKnowledgeArticle(context: RequestContext, articleId: string): Promise<void> {
@@ -3140,14 +3216,145 @@ export class PrismaCrmRepository {
     if (!existing) {
       throw new Error("Knowledge article not found");
     }
-    const article = await this.db.knowledgeArticle.update({
-      where: { id: existing.id },
-      data: { active: false }
+    await this.db.$transaction([
+      this.db.knowledgeEmbeddingChunk.deleteMany({ where: { workspaceId: context.workspaceId, articleId: existing.id } }),
+      this.db.knowledgeArticle.delete({ where: { id: existing.id } })
+    ]);
+    await this.writeAuditLog(context, "delete", "knowledge_article", existing.id, {
+      summary: `Deleted knowledge article ${existing.title}`,
+      details: { tags: existing.tags, active: existing.active }
     });
-    await this.writeAuditLog(context, "update", "knowledge_article", article.id, {
-      summary: `Disabled knowledge article ${article.title}`,
-      details: { active: false }
+  }
+
+  async getKnowledgeVectorSettings(context: RequestContext): Promise<KnowledgeVectorSettings> {
+    requirePermission(context, "crm.read");
+    return this.ensureKnowledgeVectorSettings(context.workspaceId);
+  }
+
+  async updateKnowledgeVectorSettings(context: RequestContext, patch: Partial<Omit<KnowledgeVectorSettings, "workspaceId" | "updatedAt">>): Promise<KnowledgeVectorSettings> {
+    requirePermission(context, "crm.admin");
+    const current = await this.ensureKnowledgeVectorSettings(context.workspaceId);
+    const normalized = normalizeKnowledgeVectorSettings(context.workspaceId, { ...current, ...patch });
+    const updated = await this.db.knowledgeVectorSettings.update({
+      where: { workspaceId: context.workspaceId },
+      data: {
+        enabled: normalized.enabled,
+        providerProfileKey: normalized.providerProfileKey,
+        embeddingModel: normalized.embeddingModel,
+        dimensions: normalized.dimensions,
+        chunkSizeChars: normalized.chunkSizeChars,
+        chunkOverlapChars: normalized.chunkOverlapChars,
+        topK: normalized.topK,
+        similarityThreshold: normalized.similarityThreshold
+      }
     });
+    await this.writeAuditLog(context, "update", "knowledge_vector_settings", context.workspaceId, {
+      summary: "Updated knowledge vector settings",
+      details: {
+        enabled: updated.enabled,
+        providerProfileKey: updated.providerProfileKey,
+        embeddingModel: updated.embeddingModel,
+        dimensions: updated.dimensions,
+        topK: updated.topK
+      }
+    });
+    return mapKnowledgeVectorSettings(updated);
+  }
+
+  async vectorizeKnowledgeArticle(context: RequestContext, articleId: string): Promise<KnowledgeArticle> {
+    requirePermission(context, "crm.admin");
+    const settings = await this.ensureKnowledgeVectorSettings(context.workspaceId);
+    const article = await this.db.knowledgeArticle.findFirst({
+      where: { id: articleId, workspaceId: context.workspaceId }
+    });
+    if (!article) {
+      throw new Error("Knowledge article not found");
+    }
+    await this.db.knowledgeEmbeddingChunk.deleteMany({ where: { workspaceId: context.workspaceId, articleId: article.id } });
+    if (!article.active) {
+      return this.getKnowledgeArticle(context, article.id);
+    }
+
+    const chunks = chunkKnowledgeArticle(mapKnowledgeArticle(article), settings);
+    if (chunks.length === 0) {
+      return this.getKnowledgeArticle(context, article.id);
+    }
+
+    try {
+      const providerConfig = await this.resolveKnowledgeEmbeddingProviderConfig(context.workspaceId, settings);
+      for (const [chunkIndex, chunkText] of chunks.entries()) {
+        const embedding = await createEmbedding({
+          config: providerConfig,
+          text: chunkText,
+          model: settings.embeddingModel,
+          dimensions: settings.dimensions
+        });
+        await this.db.$executeRaw`
+          INSERT INTO "KnowledgeEmbeddingChunk" (
+            "id", "workspaceId", "articleId", "chunkIndex", "chunkText", "embedding", "embeddingModel", "dimensions", "status", "indexedAt", "createdAt", "updatedAt"
+          )
+          VALUES (
+            ${randomUUID()}, ${context.workspaceId}, ${article.id}, ${chunkIndex}, ${chunkText}, ${toPgVectorLiteral(embedding)}::vector, ${settings.embeddingModel}, ${embedding.length}, 'indexed', now(), now(), now()
+          )
+        `;
+      }
+      await this.writeAuditLog(context, "update", "knowledge_vector_index", article.id, {
+        summary: `Vectorized knowledge article ${article.title}`,
+        details: { chunkCount: chunks.length, embeddingModel: settings.embeddingModel, dimensions: settings.dimensions }
+      });
+    } catch (error) {
+      const message = normalizeVectorError(error);
+      await this.db.knowledgeEmbeddingChunk.create({
+        data: {
+          workspaceId: context.workspaceId,
+          articleId: article.id,
+          chunkIndex: 0,
+          chunkText: chunks[0]?.slice(0, settings.chunkSizeChars) ?? article.title,
+          embeddingModel: settings.embeddingModel,
+          dimensions: settings.dimensions,
+          status: "failed",
+          errorMessage: message,
+          indexedAt: new Date()
+        }
+      });
+      await this.writeAuditLog(context, "update", "knowledge_vector_index", article.id, {
+        summary: `Knowledge vectorization failed for ${article.title}`,
+        details: { error: message }
+      });
+    }
+    return this.getKnowledgeArticle(context, article.id);
+  }
+
+  async vectorizeKnowledgeArticles(context: RequestContext): Promise<{ articles: KnowledgeArticle[]; indexed: number; failed: number }> {
+    requirePermission(context, "crm.admin");
+    const articles = await this.db.knowledgeArticle.findMany({
+      where: { workspaceId: context.workspaceId, active: true },
+      select: { id: true }
+    });
+    const updated: KnowledgeArticle[] = [];
+    for (const article of articles) {
+      updated.push(await this.vectorizeKnowledgeArticle(context, article.id));
+    }
+    return {
+      articles: updated,
+      indexed: updated.filter((article) => article.vectorStatus?.state === "indexed").length,
+      failed: updated.filter((article) => article.vectorStatus?.state === "failed").length
+    };
+  }
+
+  async listRelevantKnowledgeArticles(context: RequestContext, queryText: string, limit = 5): Promise<KnowledgeArticle[]> {
+    requirePermission(context, "crm.read");
+    const normalizedLimit = normalizeIntegerLimit(limit, 1, 20);
+    const vectorMatches = await this.searchKnowledgeArticlesByVector(context, queryText, normalizedLimit);
+    if (vectorMatches.length > 0) {
+      return vectorMatches;
+    }
+    const articles = await this.listKnowledgeArticles(context, true);
+    return articles
+      .map((article, index) => ({ article, index, score: scoreKnowledgeArticle(article, queryText) }))
+      .sort((left, right) => right.score - left.score || right.article.updatedAt.localeCompare(left.article.updatedAt) || left.index - right.index)
+      .slice(0, normalizedLimit)
+      .map((item) => item.article);
   }
 
   async listTalkMessages(context: RequestContext, target: TalkMessageTargetInput): Promise<TalkMessage[]> {
@@ -3492,7 +3699,16 @@ export class PrismaCrmRepository {
       };
       sources.push({ label: thread.subject, messageId: thread.id });
     }
-    const knowledgeArticles = await this.listKnowledgeArticles(context, true);
+    const knowledgeQuery = [
+      input.objectKey,
+      input.recordId,
+      input.threadId,
+      typeof payload.record === "object" ? JSON.stringify(payload.record).slice(0, 1200) : "",
+      typeof payload.emailThread === "object" ? JSON.stringify(payload.emailThread).slice(0, 1200) : ""
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const knowledgeArticles = await this.listRelevantKnowledgeArticles(context, knowledgeQuery, 5);
     payload.knowledgeArticles = knowledgeArticles.slice(0, 5).map((article) => ({
       id: article.id,
       title: article.title,
@@ -3558,6 +3774,7 @@ export class PrismaCrmRepository {
     context: RequestContext,
     input: {
       purpose: EmailAssistantPurpose;
+      objectKey?: string;
       recordId?: string;
       threadId?: string;
       sourceMessageId?: string;
@@ -3585,7 +3802,27 @@ export class PrismaCrmRepository {
     const fields = record ? await this.listFieldDefinitions(context, record.objectKey) : [];
     const activities = record ? await this.listActivities(context, record.id) : [];
     const messages = thread ? await this.listEmailMessages(context, thread.id) : [];
-    const knowledgeArticles = await this.listKnowledgeArticles(context, true);
+    const knowledgeQuery = [
+      input.userPrompt,
+      input.productQuery,
+      input.sourceText,
+      input.targetLocale,
+      record?.title,
+      record ? JSON.stringify(record.data).slice(0, 1200) : "",
+      thread?.subject,
+      thread?.summary,
+      sourceMessage?.subject,
+      sourceMessage?.bodyText,
+      ...messages.flatMap((message) => [message.subject, message.bodyText.slice(0, 1200)]),
+      ...activities.flatMap((activity) => [activity.title, activity.body])
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const knowledgeArticles = await this.listRelevantKnowledgeArticles(
+      context,
+      knowledgeQuery,
+      settings.maxKnowledgeArticles
+    );
     const products = await this.loadEmailAssistantProducts(context, {
       productIds: input.productIds,
       productQuery: input.productQuery,
@@ -3607,6 +3844,7 @@ export class PrismaCrmRepository {
       messages,
       sourceMessage,
       knowledgeArticles,
+      knowledgeArticlesRanked: true,
       products,
       productQuery: input.productQuery,
       userPrompt: input.userPrompt,
@@ -7985,6 +8223,134 @@ export class PrismaCrmRepository {
   private async getEmailAiProviderProfilesForWorkspace(workspaceId: string): Promise<AiProviderProfile[]> {
     const settings = await this.db.emailAiSettings.findUnique({ where: { workspaceId } });
     return readAiProviderSettingsBundleFromEncrypted(settings?.encryptedProviderConfig).providerProfiles;
+  }
+
+  private async ensureKnowledgeVectorSettings(workspaceId: string): Promise<KnowledgeVectorSettings> {
+    const settings = await this.db.knowledgeVectorSettings.findUnique({ where: { workspaceId } });
+    if (settings) {
+      return mapKnowledgeVectorSettings(settings);
+    }
+    const defaults = normalizeKnowledgeVectorSettings(workspaceId, defaultKnowledgeVectorSettings);
+    const created = await this.db.knowledgeVectorSettings.create({
+      data: {
+        workspaceId,
+        enabled: defaults.enabled,
+        providerProfileKey: defaults.providerProfileKey,
+        embeddingModel: defaults.embeddingModel,
+        dimensions: defaults.dimensions,
+        chunkSizeChars: defaults.chunkSizeChars,
+        chunkOverlapChars: defaults.chunkOverlapChars,
+        topK: defaults.topK,
+        similarityThreshold: defaults.similarityThreshold
+      }
+    });
+    return mapKnowledgeVectorSettings(created);
+  }
+
+  private async resolveKnowledgeEmbeddingProviderConfig(workspaceId: string, settings: KnowledgeVectorSettings): Promise<AiProviderConfig> {
+    const providerConfig = await this.getEmailAiProviderConfigForWorkspace(workspaceId);
+    const providerProfiles = await this.getEmailAiProviderProfilesForWorkspace(workspaceId);
+    return resolveAiProviderConfigForAgent(providerConfig, providerProfiles, {
+      providerProfileKey: settings.providerProfileKey,
+      model: settings.embeddingModel
+    });
+  }
+
+  private async searchKnowledgeArticlesByVector(context: RequestContext, queryText: string, limit: number): Promise<KnowledgeArticle[]> {
+    const settings = await this.ensureKnowledgeVectorSettings(context.workspaceId);
+    if (!settings.enabled || !queryText.trim()) {
+      return [];
+    }
+    try {
+      const providerConfig = await this.resolveKnowledgeEmbeddingProviderConfig(context.workspaceId, settings);
+      const embedding = await createEmbedding({
+        config: providerConfig,
+        text: queryText,
+        model: settings.embeddingModel,
+        dimensions: settings.dimensions
+      });
+      const rows = await this.db.$queryRaw<
+        Array<{
+          id: string;
+          workspaceId: string;
+          title: string;
+          body: string;
+          tags: string[];
+          active: boolean;
+          createdById: string;
+          createdAt: Date;
+          updatedAt: Date;
+          chunkText: string;
+          similarity: number;
+          status: string;
+          errorMessage: string | null;
+          embeddingModel: string;
+          dimensions: number;
+          indexedAt: Date | null;
+          chunkUpdatedAt: Date;
+        }>
+      >`
+        SELECT
+          article."id",
+          article."workspaceId",
+          article."title",
+          article."body",
+          article."tags",
+          article."active",
+          article."createdById",
+          article."createdAt",
+          article."updatedAt",
+          chunk."chunkText",
+          1 - (chunk."embedding" <=> ${toPgVectorLiteral(embedding)}::vector) AS "similarity",
+          chunk."status",
+          chunk."errorMessage",
+          chunk."embeddingModel",
+          chunk."dimensions",
+          chunk."indexedAt",
+          chunk."updatedAt" AS "chunkUpdatedAt"
+        FROM "KnowledgeEmbeddingChunk" chunk
+        INNER JOIN "KnowledgeArticle" article ON article."id" = chunk."articleId"
+        WHERE chunk."workspaceId" = ${context.workspaceId}
+          AND article."active" = true
+          AND chunk."status" = 'indexed'
+          AND chunk."embedding" IS NOT NULL
+        ORDER BY chunk."embedding" <=> ${toPgVectorLiteral(embedding)}::vector
+        LIMIT ${limit}
+      `;
+      const byArticleId = new Map<string, KnowledgeArticle>();
+      for (const row of rows) {
+        if (row.similarity < settings.similarityThreshold || byArticleId.has(row.id)) {
+          continue;
+        }
+        byArticleId.set(
+          row.id,
+          mapKnowledgeArticle({
+            id: row.id,
+            workspaceId: row.workspaceId,
+            title: row.title,
+            body: row.chunkText,
+            tags: row.tags,
+            active: row.active,
+            createdById: row.createdById,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            embeddingChunks: [
+              {
+                status: row.status,
+                errorMessage: row.errorMessage,
+                embeddingModel: row.embeddingModel,
+                dimensions: row.dimensions,
+                indexedAt: row.indexedAt,
+                updatedAt: row.chunkUpdatedAt
+              }
+            ]
+          })
+        );
+      }
+      return Array.from(byArticleId.values()).slice(0, limit);
+    } catch {
+      return [];
+    }
   }
 
   private async ensureEmailSyncSettings(workspaceId: string): Promise<EmailSyncSettings> {

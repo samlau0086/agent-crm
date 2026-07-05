@@ -17,11 +17,10 @@ async function postApiMetricsHandler(request: NextRequest) {
     requirePermission(context, "ai.use");
     const body = await parseJson(request, aiTalkRequestSchema);
     const repository = getCrmRepository();
-    const knowledgeArticles = await repository.listKnowledgeArticles(context, true);
     const talkContext =
       body.target.type === "record"
-        ? await buildRecordTalkContext(repository, context, body.target.objectKey, body.target.recordId, knowledgeArticles)
-        : await buildEmailThreadTalkContext(repository, context, body.target.threadId, knowledgeArticles);
+        ? await buildRecordTalkContext(repository, context, body.target.objectKey, body.target.recordId)
+        : await buildEmailThreadTalkContext(repository, context, body.target.threadId);
 
     const input = {
       question: body.question,
@@ -63,8 +62,7 @@ async function buildRecordTalkContext(
   repository: ReturnType<typeof getCrmRepository>,
   context: Awaited<ReturnType<typeof getRequestContext>>,
   objectKey: string,
-  recordId: string,
-  knowledgeArticles: KnowledgeArticle[]
+  recordId: string
 ) {
   const record = await repository.getRecord(context, objectKey, recordId);
   const fields = await repository.listFieldDefinitions(context, objectKey);
@@ -81,11 +79,12 @@ async function buildRecordTalkContext(
     { label: record.title, objectKey: record.objectKey, recordId: record.id },
     ...recordEmails.slice(0, 5).map((thread) => ({ label: thread.subject, messageId: thread.id }))
   ];
+  const knowledgeArticles = await repository.listRelevantKnowledgeArticles(context, `${record.title} ${record.objectKey} ${JSON.stringify(record.data)}\n${contextText}`, 5);
   return {
     targetLabel: record.title,
     targetType: record.objectKey,
     contextText,
-    knowledgeText: formatKnowledgeContext(knowledgeArticles, `${record.title} ${record.objectKey} ${JSON.stringify(record.data)}`),
+    knowledgeText: formatKnowledgeContext(knowledgeArticles),
     sources
   };
 }
@@ -93,8 +92,7 @@ async function buildRecordTalkContext(
 async function buildEmailThreadTalkContext(
   repository: ReturnType<typeof getCrmRepository>,
   context: Awaited<ReturnType<typeof getRequestContext>>,
-  threadId: string,
-  knowledgeArticles: KnowledgeArticle[]
+  threadId: string
 ) {
   const thread = await repository.getEmailThread(context, threadId);
   const messages = await repository.listEmailMessages(context, thread.id);
@@ -110,11 +108,16 @@ async function buildEmailThreadTalkContext(
     { label: thread.subject, messageId: thread.id },
     ...(linkedRecord ? [{ label: linkedRecord.record.title, objectKey: linkedRecord.record.objectKey, recordId: linkedRecord.record.id }] : [])
   ];
+  const knowledgeArticles = await repository.listRelevantKnowledgeArticles(
+    context,
+    `${thread.subject} ${thread.participantEmails.join(" ")} ${messages.map((message) => message.bodyText).join(" ")}\n${contextText}`,
+    5
+  );
   return {
     targetLabel: thread.subject,
     targetType: "email_thread",
     contextText,
-    knowledgeText: formatKnowledgeContext(knowledgeArticles, `${thread.subject} ${thread.participantEmails.join(" ")} ${messages.map((message) => message.bodyText).join(" ")}`),
+    knowledgeText: formatKnowledgeContext(knowledgeArticles),
     sources
   };
 }
@@ -162,16 +165,10 @@ function formatEmailMessageContext(message: EmailMessage): string {
   return `- ${message.direction}/${message.status}: ${message.subject}; from=${message.from}; to=${message.to.join(", ")}; body=${message.bodyText.slice(0, 1200)}`;
 }
 
-function formatKnowledgeContext(articles: KnowledgeArticle[], query: string): string {
-  const terms = query.toLowerCase().split(/[^a-z0-9\u4e00-\u9fff@._-]+/).filter((term) => term.length > 1).slice(0, 40);
+function formatKnowledgeContext(articles: KnowledgeArticle[]): string {
   return articles
-    .map((article) => ({
-      article,
-      score: terms.reduce((total, term) => total + (article.title.toLowerCase().includes(term) ? 3 : 0) + (article.tags.join(" ").toLowerCase().includes(term) ? 2 : 0) + (article.body.toLowerCase().includes(term) ? 1 : 0), 0)
-    }))
-    .sort((left, right) => right.score - left.score)
     .slice(0, 5)
-    .map(({ article }) => `${article.title} [${article.tags.join(", ")}]\n${article.body.slice(0, 1200)}`)
+    .map((article) => `${article.title} [${article.tags.join(", ")}]\n${article.body.slice(0, 1200)}`)
     .join("\n\n");
 }
 
