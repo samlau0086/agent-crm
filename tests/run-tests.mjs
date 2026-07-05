@@ -3990,6 +3990,11 @@ await run("email workspace previews html bodies in a sandboxed iframe", () => {
   assert.match(source, /data-testid=\{`email-message-external-images-blocked-\$\{message\.id\}`\}/);
   assert.match(source, /data-testid=\{`email-message-load-external-images-\$\{message\.id\}`\}/);
   assert.match(source, /function resolveEmailInlineImageHtml\(message: EmailMessage\): string/);
+  assert.match(source, /function stripInternalEmailTrackingHtml\(bodyHtml: string\): string/);
+  assert.match(source, /image\.remove\(\)/);
+  assert.match(source, /anchor\.setAttribute\("href", target\)/);
+  assert.match(source, /pathname\.startsWith\("\/api\/email\/track\/open\/"\)/);
+  assert.match(source, /pathname\.startsWith\("\/api\/email\/track\/click\/"\)/);
   assert.match(source, /const attachmentByContentId = new Map<string, EmailAttachment>\(\)/);
   assert.match(source, /image\.setAttribute\("src", src\)/);
   assert.match(source, /buildEmailHtmlPreview\(resolveEmailInlineImageHtml\(message\), selectedThreadAllowsExternalImages\)/);
@@ -4334,6 +4339,12 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(worker, /listDueQueuedEmailMessagesForWorker\(1\)/);
   assert.match(tracking, /function appendEmailTrackingHtml/);
   assert.match(tracking, /\/api\/email\/track\/open\/\$\{encodeURIComponent\(trackingId\)\}/);
+  const openTrackRoute = readFileSync("src/app/api/email/track/open/[trackingId]/route.ts", "utf8");
+  const clickTrackRoute = readFileSync("src/app/api/email/track/click/[trackingId]/route.ts", "utf8");
+  assert.match(openTrackRoute, /SESSION_COOKIE_NAME/);
+  assert.match(openTrackRoute, /request\.cookies\.get\(SESSION_COOKIE_NAME\)\?\.value[\s\S]*buildTransparentPixelResponse\(\)/);
+  assert.match(clickTrackRoute, /SESSION_COOKIE_NAME/);
+  assert.match(clickTrackRoute, /request\.cookies\.get\(SESSION_COOKIE_NAME\)\?\.value[\s\S]*Response\.redirect\(targetUrl, 302\)/);
 });
 
 await run("email send failure helper returns persisted failed messages for immediate UI feedback", async () => {

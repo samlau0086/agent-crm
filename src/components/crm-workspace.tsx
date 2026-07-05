@@ -684,8 +684,59 @@ function emailAttachmentDataUrl(attachment: EmailAttachment): string | undefined
   return `data:${contentType};base64,${base64}`;
 }
 
+function isInternalEmailTrackingUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    const url = new URL(trimmed, base);
+    return url.pathname.startsWith("/api/email/track/open/") || url.pathname.startsWith("/api/email/track/click/");
+  } catch {
+    return /\/api\/email\/track\/(?:open|click)\//i.test(trimmed);
+  }
+}
+
+function getTrackedEmailClickTarget(value: string): string | undefined {
+  try {
+    const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+    const url = new URL(value, base);
+    const target = url.searchParams.get("u")?.trim();
+    return target && /^https?:\/\//i.test(target) ? target : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stripInternalEmailTrackingHtml(bodyHtml: string): string {
+  if (!bodyHtml.trim() || typeof document === "undefined") {
+    return bodyHtml;
+  }
+  const template = document.createElement("template");
+  template.innerHTML = bodyHtml;
+  template.content.querySelectorAll<HTMLImageElement>("img[src]").forEach((image) => {
+    if (isInternalEmailTrackingUrl(image.getAttribute("src") ?? "")) {
+      image.remove();
+    }
+  });
+  template.content.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((anchor) => {
+    const href = anchor.getAttribute("href") ?? "";
+    if (!isInternalEmailTrackingUrl(href)) {
+      return;
+    }
+    const target = getTrackedEmailClickTarget(href);
+    if (target) {
+      anchor.setAttribute("href", target);
+    } else {
+      anchor.removeAttribute("href");
+    }
+  });
+  return template.innerHTML;
+}
+
 function resolveEmailInlineImageHtml(message: EmailMessage): string {
-  const bodyHtml = message.bodyHtml ?? "";
+  const bodyHtml = stripInternalEmailTrackingHtml(message.bodyHtml ?? "");
   if (!bodyHtml.trim() || !message.attachments?.length || typeof document === "undefined") {
     return bodyHtml;
   }
@@ -4233,7 +4284,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       selectEmailThread(emailThreads.find((candidate) => !ids.includes(candidate.id))?.id ?? "");
     }
     showSuccess(ids.length > 1 ? `已彻底删除 ${ids.length} 个邮件线程` : "邮件线程已彻底删除");
-    router.refresh();
     return true;
   }
 
