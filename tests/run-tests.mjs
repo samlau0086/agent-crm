@@ -2830,6 +2830,10 @@ await run("workspace supports deal pipeline drag and email sidebar collapse", ()
   assert.doesNotMatch(source, /data-testid=\{`pipeline-stage-\$\{stage\.key\}`\}/);
   assert.doesNotMatch(source, /function handleStageDrop/);
   assert.match(styles, /\.app-shell\.sidebar-collapsed \{\s*grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(styles, /@media \(max-width: 980px\) \{[\s\S]*\.app-shell:not\(\.sidebar-collapsed\)::before \{[\s\S]*position: fixed;[\s\S]*z-index: 899;/);
+  assert.match(styles, /@media \(max-width: 980px\) \{[\s\S]*\.sidebar \{[\s\S]*position: fixed;/);
+  assert.match(styles, /@media \(max-width: 980px\) \{[\s\S]*\.sidebar \{[\s\S]*z-index: 900;/);
+  assert.match(styles, /@media \(max-width: 980px\) \{[\s\S]*\.sidebar \{[\s\S]*height: 100dvh;/);
   assert.match(styles, /\.main \{[\s\S]*padding: 22px;/);
   assert.doesNotMatch(styles, /\.main\.email-main \{[\s\S]{0,80}padding: 0;/);
   assert.match(styles, /\.gmail-client \{[\s\S]*grid-template-rows: max-content minmax\(0, 1fr\);/);
