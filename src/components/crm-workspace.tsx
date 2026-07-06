@@ -3880,6 +3880,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
     await refreshEmailThreads({ reloadSelectedMessages: true });
+    if (result.status === "queued") {
+      scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true });
+      setMessage(`邮箱同步已提交后台：${result.account.emailAddress}。正在拉取邮件，完成后列表会自动刷新。`);
+      router.refresh();
+      return;
+    }
     setMessage(`邮箱同步完成：扫描 ${result.scannedCount ?? result.importedCount} 封，新增 ${result.importedCount} 封，跳过重复 ${result.skippedDuplicateCount ?? 0} 封${result.hasMore ? "，仍有更多历史邮件" : ""}`);
     router.refresh();
   }
@@ -3887,6 +3893,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   async function syncAllEmailAccounts() {
     const result = await fetchJson<EmailSyncAllRun>("/api/email/sync-all", { method: "POST" });
     const failed = result.accounts.filter((account) => account.status === "failed");
+    const queued = result.accounts.filter((account) => account.status === "queued");
     const skipped = result.accounts.filter((account) => account.status === "skipped" || account.skipped);
     if (failed.length) {
       setError(
@@ -3899,13 +3906,21 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setError(`没有可同步邮箱：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`);
     }
     await refreshEmailThreads({ reloadSelectedMessages: true });
-    const completed = result.accounts.filter((account) => account.status !== "failed" && account.status !== "skipped" && !account.skipped);
+    const completed = result.accounts.filter((account) => account.status === "synced");
     const scannedTotal = completed.reduce((sum, account) => sum + (account.scannedCount ?? account.importedCount ?? 0), 0);
     const importedTotal = completed.reduce((sum, account) => sum + (account.importedCount ?? 0), 0);
     const duplicateTotal = completed.reduce((sum, account) => sum + (account.skippedDuplicateCount ?? 0), 0);
     const skippedDetail = skipped.length
       ? `，跳过 ${skipped.length} 个：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`
       : `，跳过 ${result.skippedCount} 个`;
+    if (queued.length) {
+      scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true });
+      const queuedAccounts = queued.map((account) => account.emailAddress).join("、");
+      const completedDetail = completed.length ? `；已即时完成 ${completed.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封` : "";
+      setMessage(`邮箱后台同步已提交：${queued.length} 个账号（${queuedAccounts}）。正在拉取邮件，完成后列表会自动刷新${completedDetail}${skippedDetail}，失败 ${failed.length} 个`);
+      router.refresh();
+      return;
+    }
     setMessage(`邮箱批量同步完成：同步 ${completed.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封${skippedDetail}，失败 ${failed.length} 个`);
     router.refresh();
   }
@@ -4153,6 +4168,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (options.reloadSelectedMessages && threadId) {
       await loadEmailMessages(threadId);
     }
+  }
+
+  function scheduleEmailThreadsRefreshPolling(options: { reloadSelectedMessages?: boolean } = {}) {
+    const delays = [1500, 3500, 6500, 10000, 15000, 22000, 30000];
+    delays.forEach((delay) => {
+      window.setTimeout(() => {
+        void refreshEmailThreads(options).catch((error) => {
+          setError(error instanceof Error ? error.message : "刷新邮件列表失败");
+        });
+      }, delay);
+    });
   }
 
   async function updateEmailThread(threadId: string, recordId: string) {

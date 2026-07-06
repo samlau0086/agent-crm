@@ -14,7 +14,8 @@ async function postApiMetricsHandler(request: NextRequest) {
     const repository = getCrmRepository();
     const executor = getBackgroundJobExecutor(repository);
     try {
-      return ok(await executor.runEmailSyncJob(context, { accountId: body.accountId, limit: body.limit }));
+      const result = await executor.runEmailSyncJob(context, { accountId: body.accountId, limit: body.limit });
+      return ok(result, { status: result.status === "queued" ? 202 : 200 });
     } catch (syncError) {
       return ok(await getFailedEmailSyncResultOrThrow(context, repository, body.accountId, syncError), { status: 202 });
     }

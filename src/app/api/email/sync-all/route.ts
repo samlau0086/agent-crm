@@ -11,7 +11,8 @@ async function postApiMetricsHandler(request: NextRequest) {
     const context = await getRequestContext(request);
     const body = await parseOptionalJson(request, emailSyncAllSchema, {});
     const repository = getCrmRepository();
-    return ok(await scheduleEmailSyncForActiveAccounts(context, { repository, limit: body.limit }));
+    const result = await scheduleEmailSyncForActiveAccounts(context, { repository, limit: body.limit });
+    return ok(result, { status: result.accounts.some((account) => account.status === "queued") ? 202 : 200 });
   } catch (error) {
     return handleApiError(error, request);
   }

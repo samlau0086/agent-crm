@@ -2417,6 +2417,7 @@ await run("email sync route uses configured background executor and forwards bou
   assert.match(source, /getBackgroundJobExecutor\(repository\)/);
   assert.doesNotMatch(source, /new InlineBackgroundJobExecutor/);
   assert.match(source, /runEmailSyncJob\(context,\s*\{\s*accountId:\s*body\.accountId,\s*limit:\s*body\.limit\s*\}\)/);
+  assert.match(source, /result\.status === "queued" \? 202 : 200/);
 });
 
 await run("email sync-all route keeps empty body support and uses configured background executor", () => {
@@ -2424,6 +2425,7 @@ await run("email sync-all route keeps empty body support and uses configured bac
   assert.match(source, /parseOptionalJson\(request,\s*emailSyncAllSchema,\s*\{\s*\}\)/);
   assert.doesNotMatch(source, /new InlineBackgroundJobExecutor/);
   assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*repository,\s*limit:\s*body\.limit\s*\}\)/);
+  assert.match(source, /account\.status === "queued"\) \? 202 : 200/);
 });
 
 await run("email send route rejects live unconfigured accounts before queueing", () => {
@@ -2450,6 +2452,16 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
   assert.match(source, /account\.status !== "disabled" && account\.sendEnabled && account\.connectionConfigured/);
   assert.match(providerSource, /fetchRecentMailboxEmails\(config, syncLimit\)/);
   assert.doesNotMatch(providerSource, /fetchRecentImapEmails\(config, syncLimit\)/);
+});
+
+await run("email workspace treats queued sync as background work and polls for imported mail", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /result\.status === "queued"/);
+  assert.match(source, /const queued = result\.accounts\.filter\(\(account\) => account\.status === "queued"\)/);
+  assert.match(source, /scheduleEmailThreadsRefreshPolling\(\{ reloadSelectedMessages: true \}\)/);
+  assert.match(source, /邮箱同步已提交后台/);
+  assert.match(source, /邮箱后台同步已提交/);
+  assert.match(source, /account\.status === "synced"/);
 });
 
 await run("crm workspace routes modules through stable paths", () => {
