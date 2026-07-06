@@ -3,7 +3,6 @@ import { getRequestContext, handleApiError, ok, parseOptionalJson, withApiMetric
 import { emailSyncAllSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { scheduleEmailSyncForActiveAccounts } from "@/lib/email/sync-scheduler";
-import { InlineBackgroundJobExecutor } from "@/lib/jobs/executor";
 
 
 export const dynamic = "force-dynamic";
@@ -12,7 +11,7 @@ async function postApiMetricsHandler(request: NextRequest) {
     const context = await getRequestContext(request);
     const body = await parseOptionalJson(request, emailSyncAllSchema, {});
     const repository = getCrmRepository();
-    return ok(await scheduleEmailSyncForActiveAccounts(context, { repository, executor: new InlineBackgroundJobExecutor(repository), limit: body.limit }));
+    return ok(await scheduleEmailSyncForActiveAccounts(context, { repository, limit: body.limit }));
   } catch (error) {
     return handleApiError(error, request);
   }

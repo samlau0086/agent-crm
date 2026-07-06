@@ -2412,17 +2412,18 @@ await run("public api docs describe email and ai mail endpoints", () => {
   assert.match(docs, /stale `sending` message/);
 });
 
-await run("email sync route runs manual sync inline and forwards bounded sync limit", () => {
+await run("email sync route uses configured background executor and forwards bounded sync limit", () => {
   const source = readFileSync("src/app/api/email/sync/route.ts", "utf8");
-  assert.match(source, /new InlineBackgroundJobExecutor\(repository\)/);
+  assert.match(source, /getBackgroundJobExecutor\(repository\)/);
+  assert.doesNotMatch(source, /new InlineBackgroundJobExecutor/);
   assert.match(source, /runEmailSyncJob\(context,\s*\{\s*accountId:\s*body\.accountId,\s*limit:\s*body\.limit\s*\}\)/);
 });
 
-await run("email sync-all route keeps empty body support and runs manual sync inline", () => {
+await run("email sync-all route keeps empty body support and uses configured background executor", () => {
   const source = readFileSync("src/app/api/email/sync-all/route.ts", "utf8");
   assert.match(source, /parseOptionalJson\(request,\s*emailSyncAllSchema,\s*\{\s*\}\)/);
-  assert.match(source, /new InlineBackgroundJobExecutor\(repository\)/);
-  assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*repository,\s*executor:\s*new InlineBackgroundJobExecutor\(repository\),\s*limit:\s*body\.limit\s*\}\)/);
+  assert.doesNotMatch(source, /new InlineBackgroundJobExecutor/);
+  assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*repository,\s*limit:\s*body\.limit\s*\}\)/);
 });
 
 await run("email send route rejects live unconfigured accounts before queueing", () => {
