@@ -15,17 +15,15 @@ export async function getFailedEmailSyncResultOrThrow(
 ): Promise<FailedEmailSyncResult> {
   try {
     const account = await repository.getEmailAccount(context, accountId);
-    if (account.status === "error" || account.lastConnectionError) {
-      return {
-        account,
-        importedCount: 0,
-        scannedCount: 0,
-        skippedDuplicateCount: 0,
-        hasMore: false,
-        status: "failed",
-        error: account.lastConnectionError || (error instanceof Error ? error.message : "Email sync failed")
-      };
-    }
+    return {
+      account,
+      importedCount: 0,
+      scannedCount: 0,
+      skippedDuplicateCount: 0,
+      hasMore: false,
+      status: "failed",
+      error: account.lastConnectionError || (error instanceof Error ? error.message : "Email sync failed")
+    };
   } catch {
     // Preserve the original sync failure if the follow-up lookup also fails.
   }

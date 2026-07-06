@@ -4432,8 +4432,17 @@ await run("email sync failure helper returns updated error accounts for immediat
   assert.equal(result.importedCount, 0);
   assert.equal(result.scannedCount, 0);
 
-  store.markEmailAccountConnectionError(context, failedAccount.id, null);
-  await assert.rejects(() => getFailedEmailSyncResultOrThrow(context, store, account.id, originalError), /IMAP authentication failed/);
+  const activeAccount = store.createEmailAccount(context, {
+    name: "Active Sync Lookup",
+    emailAddress: "active-sync-error@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true
+  });
+  const activeResult = await getFailedEmailSyncResultOrThrow(context, store, activeAccount.id, originalError);
+  assert.equal(activeResult.status, "failed");
+  assert.equal(activeResult.error, "IMAP authentication failed");
+  assert.equal(activeResult.account.status, "active");
 });
 
 await run("secret generator emits deployable email secrets", () => {
@@ -12477,7 +12486,7 @@ await run("imap provider fetches a bounded recent sequence range without scannin
           socket.write(`* FLAGS (\\Seen)\r\n* 4 EXISTS\r\n${tag} OK [READ-WRITE] SELECT completed\r\n`);
           continue;
         }
-        const fetchMatch = command.match(/^FETCH\s+(\d+)\s+\(UID BODY\.PEEK\[\]\)$/i);
+        const fetchMatch = command.match(/^FETCH\s+(\d+)\s+\(UID BODY\.PEEK\[\]<0\.(\d+)>\)$/i);
         if (fetchMatch) {
           const sequenceNumber = Number(fetchMatch[1]);
           const raw = messageForSequence(sequenceNumber);

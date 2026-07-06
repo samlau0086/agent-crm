@@ -43,6 +43,8 @@ const DEFAULT_MAIL_CONNECT_TIMEOUT_MS = 15000;
 const DEFAULT_MAIL_RESPONSE_TIMEOUT_MS = 30000;
 const DEFAULT_MAIL_FETCH_RESPONSE_TIMEOUT_MS = 60000;
 const MAX_MAIL_TIMEOUT_MS = 300000;
+const DEFAULT_MAIL_IMAP_FETCH_BYTES = 262144;
+const MAX_MAIL_IMAP_FETCH_BYTES = 5000000;
 
 export function resolveSmtpTransport(config: EmailConnectionConfig | EmailOutboundServiceConfig): SmtpTransportOptions {
   const startTls = config.smtpStartTls === true;
@@ -157,9 +159,10 @@ export async function fetchRecentImapEmails(config: EmailConnectionConfig, limit
     const messageCount = parseMailboxExists(selectResponse);
     const safeLimit = normalizeMailboxFetchLimit(limit);
     const startSequenceNumber = Math.max(1, messageCount - safeLimit + 1);
+    const fetchBytes = getMailImapFetchBytes();
     const messages: InboundEmail[] = [];
     for (let sequenceNumber = startSequenceNumber; sequenceNumber <= messageCount; sequenceNumber += 1) {
-      const raw = await client.command(`FETCH ${sequenceNumber} (UID BODY.PEEK[])`, getMailFetchResponseTimeoutMs());
+      const raw = await client.command(`FETCH ${sequenceNumber} (UID BODY.PEEK[]<0.${fetchBytes}>)`, getMailFetchResponseTimeoutMs());
       const parsed = parseFetchedMessage(raw);
       const uid = parseFetchUid(raw) ?? `seq-${sequenceNumber}`;
       if (parsed) {
@@ -582,12 +585,20 @@ function getMailFetchResponseTimeoutMs(): number {
   return resolvePositiveEnvInt("MAIL_FETCH_RESPONSE_TIMEOUT_MS", DEFAULT_MAIL_FETCH_RESPONSE_TIMEOUT_MS);
 }
 
+function getMailImapFetchBytes(): number {
+  return resolvePositiveEnvIntWithMax("MAIL_IMAP_FETCH_BYTES", DEFAULT_MAIL_IMAP_FETCH_BYTES, MAX_MAIL_IMAP_FETCH_BYTES);
+}
+
 function resolvePositiveEnvInt(name: string, fallback: number): number {
+  return resolvePositiveEnvIntWithMax(name, fallback, MAX_MAIL_TIMEOUT_MS);
+}
+
+function resolvePositiveEnvIntWithMax(name: string, fallback: number, max: number): number {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
   }
-  return Math.min(parsed, MAX_MAIL_TIMEOUT_MS);
+  return Math.min(parsed, max);
 }
 
 export function parseRawEmailMessage(messageText: string): InboundEmail | undefined {

@@ -3889,7 +3889,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const failed = result.accounts.filter((account) => account.status === "failed");
     const skipped = result.accounts.filter((account) => account.status === "skipped" || account.skipped);
     if (failed.length) {
-      setError(`邮箱批量同步完成，但 ${failed.length} 个账号失败：${failed.map((account) => account.emailAddress).join(", ")}`);
+      setError(
+        `邮箱批量同步完成，但 ${failed.length} 个账号失败：${failed
+          .map((account) => `${account.emailAddress}${account.error ? `（${account.error}）` : ""}`)
+          .join("；")}`
+      );
     }
     if (!result.scheduledCount && skipped.length && !failed.length) {
       setError(`没有可同步邮箱：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`);
