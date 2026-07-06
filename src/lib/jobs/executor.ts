@@ -210,8 +210,9 @@ export class RedisBackgroundJobExecutor implements BackgroundJobExecutor {
   async runEmailSyncJob(context: RequestContext, payload: EmailSyncJobPayload): Promise<EmailSyncResult> {
     requirePermission(context, "crm.admin");
     await enqueueJob(getJobQueueName(), buildEmailSyncJobEnvelope(context, payload));
+    const account = await this.repository.markEmailAccountSyncQueued(context, payload.accountId);
     return {
-      account: await this.repository.getEmailAccount(context, payload.accountId),
+      account,
       importedCount: 0,
       scannedCount: 0,
       skippedDuplicateCount: 0,

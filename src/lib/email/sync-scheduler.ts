@@ -1,12 +1,13 @@
+import { requirePermission } from "@/lib/auth/rbac";
 import { getCrmRepository, type PrismaCrmRepository } from "@/lib/crm/repository";
 import type { EmailAccount, RequestContext } from "@/lib/crm/types";
-import { requirePermission } from "@/lib/auth/rbac";
-import { getBackgroundJobExecutor, type BackgroundJobExecutor } from "@/lib/jobs/executor";
 import { getEmailProviderCapability } from "@/lib/email/providers";
+import { getBackgroundJobExecutor, type BackgroundJobExecutor } from "@/lib/jobs/executor";
 
 export interface ScheduledEmailSyncAccount {
   accountId: string;
   emailAddress: string;
+  account?: EmailAccount;
   status: string;
   importedCount: number;
   scannedCount?: number;
@@ -40,6 +41,7 @@ export async function scheduleEmailSyncForActiveAccounts(
       results.push({
         accountId: account.id,
         emailAddress: account.emailAddress,
+        account,
         status: "skipped",
         importedCount: 0,
         skipped: true,
@@ -53,6 +55,7 @@ export async function scheduleEmailSyncForActiveAccounts(
       results.push({
         accountId: account.id,
         emailAddress: account.emailAddress,
+        account: result.account,
         status: result.status,
         importedCount: result.importedCount,
         scannedCount: result.scannedCount,
@@ -63,6 +66,7 @@ export async function scheduleEmailSyncForActiveAccounts(
       results.push({
         accountId: account.id,
         emailAddress: account.emailAddress,
+        account,
         status: "failed",
         importedCount: 0,
         error: error instanceof Error ? error.message : "Email sync scheduling failed"

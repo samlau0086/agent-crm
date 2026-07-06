@@ -2765,6 +2765,62 @@ body.deal-pipeline-dragging {
   color: var(--danger);
 }
 
+.email-sync-status-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-strong);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.sync-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.email-sync-status-line.queued .sync-status-dot,
+.email-sync-status-line.running .sync-status-dot {
+  background: var(--blue);
+  animation: syncStatusPulse 1.2s ease-in-out infinite;
+}
+
+.email-sync-status-line.synced .sync-status-dot {
+  background: var(--green);
+}
+
+.email-sync-status-line.failed {
+  border-color: rgba(220, 38, 38, 0.24);
+  color: var(--danger);
+  background: #fef2f2;
+}
+
+.email-sync-status-line.failed .sync-status-dot {
+  background: #dc2626;
+}
+
+@keyframes syncStatusPulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
 .gmail-client {
   display: grid;
   grid-template-rows: max-content minmax(0, 1fr);
@@ -2916,6 +2972,28 @@ body.deal-pipeline-dragging {
   font-size: 12px;
   font-style: normal;
   font-weight: 500;
+}
+
+.gmail-account-folder .email-sync-inline-status {
+  margin-top: 2px;
+  color: #5f6368;
+  font-size: 11px;
+  line-height: 1.2;
+  font-style: normal;
+  font-weight: 550;
+}
+
+.gmail-account-folder .email-sync-inline-status.queued,
+.gmail-account-folder .email-sync-inline-status.running {
+  color: var(--blue);
+}
+
+.gmail-account-folder .email-sync-inline-status.synced {
+  color: var(--green);
+}
+
+.gmail-account-folder .email-sync-inline-status.failed {
+  color: var(--danger);
 }
 
 .gmail-label-title {

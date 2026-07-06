@@ -575,6 +575,13 @@ function mapEmailAccount(account: {
   lastConnectionError?: string | null;
   createdById: string;
   lastSyncedAt: Date | null;
+  lastSyncStatus?: string | null;
+  lastSyncStartedAt?: Date | null;
+  lastSyncFinishedAt?: Date | null;
+  lastSyncScannedCount?: number | null;
+  lastSyncImportedCount?: number | null;
+  lastSyncSkippedDuplicateCount?: number | null;
+  lastSyncError?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): EmailAccount {
@@ -591,6 +598,13 @@ function mapEmailAccount(account: {
     lastConnectionError: account.lastConnectionError ?? undefined,
     createdById: account.createdById,
     lastSyncedAt: account.lastSyncedAt?.toISOString(),
+    lastSyncStatus: (account.lastSyncStatus as EmailAccount["lastSyncStatus"]) ?? undefined,
+    lastSyncStartedAt: account.lastSyncStartedAt?.toISOString(),
+    lastSyncFinishedAt: account.lastSyncFinishedAt?.toISOString(),
+    lastSyncScannedCount: account.lastSyncScannedCount ?? undefined,
+    lastSyncImportedCount: account.lastSyncImportedCount ?? undefined,
+    lastSyncSkippedDuplicateCount: account.lastSyncSkippedDuplicateCount ?? undefined,
+    lastSyncError: account.lastSyncError ?? undefined,
     createdAt: account.createdAt.toISOString(),
     updatedAt: account.updatedAt.toISOString()
   };
@@ -3105,21 +3119,107 @@ export class PrismaCrmRepository {
   }
 
   async syncEmailAccount(context: RequestContext, accountId: string): Promise<{ account: EmailAccount; importedCount: number; status: string }> {
+    const account = await this.markEmailAccountSyncCompleted(context, accountId, {
+      importedCount: 0,
+      scannedCount: 0,
+      skippedDuplicateCount: 0
+    });
+    return { account, importedCount: 0, status: "synced" };
+  }
+
+  async markEmailAccountSyncQueued(context: RequestContext, accountId: string): Promise<EmailAccount> {
     requirePermission(context, "crm.admin");
     const account = await this.assertEmailAccount(context, accountId);
     if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
       throw new Error("Email account is not enabled for sync");
     }
-
     const updated = await this.db.emailAccount.update({
       where: { id: account.id },
-      data: { lastSyncedAt: new Date() }
+      data: {
+        lastSyncStatus: "queued",
+        lastSyncStartedAt: null,
+        lastSyncFinishedAt: null,
+        lastSyncScannedCount: 0,
+        lastSyncImportedCount: 0,
+        lastSyncSkippedDuplicateCount: 0,
+        lastSyncError: null
+      }
+    });
+    return mapEmailAccount(updated);
+  }
+
+  async markEmailAccountSyncRunning(context: RequestContext, accountId: string): Promise<EmailAccount> {
+    requirePermission(context, "crm.admin");
+    const account = await this.assertEmailAccount(context, accountId);
+    if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
+      throw new Error("Email account is not enabled for sync");
+    }
+    const updated = await this.db.emailAccount.update({
+      where: { id: account.id },
+      data: {
+        lastSyncStatus: "running",
+        lastSyncStartedAt: new Date(),
+        lastSyncFinishedAt: null,
+        lastSyncScannedCount: 0,
+        lastSyncImportedCount: 0,
+        lastSyncSkippedDuplicateCount: 0,
+        lastSyncError: null
+      }
+    });
+    return mapEmailAccount(updated);
+  }
+
+  async markEmailAccountSyncCompleted(
+    context: RequestContext,
+    accountId: string,
+    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number }
+  ): Promise<EmailAccount> {
+    requirePermission(context, "crm.admin");
+    const account = await this.assertEmailAccount(context, accountId);
+    if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
+      throw new Error("Email account is not enabled for sync");
+    }
+    const updated = await this.db.emailAccount.update({
+      where: { id: account.id },
+      data: {
+        lastSyncedAt: new Date(),
+        lastSyncStatus: "synced",
+        lastSyncFinishedAt: new Date(),
+        lastSyncScannedCount: result.scannedCount ?? result.importedCount,
+        lastSyncImportedCount: result.importedCount,
+        lastSyncSkippedDuplicateCount: result.skippedDuplicateCount ?? 0,
+        lastSyncError: null
+      }
     });
     await this.writeAuditLog(context, "update", "email_account", account.id, {
       summary: `Synced email account ${account.emailAddress}`,
-      details: { provider: account.provider, importedCount: 0 }
+      details: {
+        provider: account.provider,
+        scannedCount: result.scannedCount ?? result.importedCount,
+        importedCount: result.importedCount,
+        skippedDuplicateCount: result.skippedDuplicateCount ?? 0
+      }
     });
-    return { account: mapEmailAccount(updated), importedCount: 0, status: "synced" };
+    return mapEmailAccount(updated);
+  }
+
+  async markEmailAccountSyncFailed(context: RequestContext, accountId: string, errorMessage: string): Promise<EmailAccount> {
+    requirePermission(context, "crm.admin");
+    const account = await this.assertEmailAccount(context, accountId);
+    const normalizedError = errorMessage.trim() || "Mailbox sync failed";
+    const updated = await this.db.emailAccount.update({
+      where: { id: account.id },
+      data: {
+        lastSyncStatus: "failed",
+        lastSyncFinishedAt: new Date(),
+        lastSyncError: normalizedError
+      }
+    });
+    await this.writeAuditLog(context, "update", "email_account", account.id, {
+      summary: `Email account sync failed ${account.emailAddress}`,
+      details: { provider: account.provider, error: normalizedError }
+    });
+    return mapEmailAccount(updated);
   }
 
   async getEmailAccountConnectionConfig(context: RequestContext, accountId: string): Promise<EmailConnectionConfig | undefined> {

@@ -155,6 +155,7 @@ export interface NotificationChannel {
 
 export type EmailProviderType = "smtp_imap" | "gmail" | "outlook" | "custom";
 export type EmailAccountStatus = "draft" | "active" | "disabled" | "error";
+export type EmailAccountSyncStatus = "idle" | "queued" | "running" | "synced" | "failed";
 export type EmailDirection = "inbound" | "outbound";
 export type EmailMessageStatus = "received" | "draft" | "queued" | "sending" | "sent" | "failed";
 export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize";
@@ -189,6 +190,13 @@ export interface EmailAccount {
   lastConnectionError?: string;
   createdById: string;
   lastSyncedAt?: string;
+  lastSyncStatus?: EmailAccountSyncStatus;
+  lastSyncStartedAt?: string;
+  lastSyncFinishedAt?: string;
+  lastSyncScannedCount?: number;
+  lastSyncImportedCount?: number;
+  lastSyncSkippedDuplicateCount?: number;
+  lastSyncError?: string;
   createdAt: string;
   updatedAt: string;
 }

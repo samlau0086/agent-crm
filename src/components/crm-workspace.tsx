@@ -308,6 +308,7 @@ type EmailSyncAllRun = {
   accounts: Array<{
     accountId: string;
     emailAddress: string;
+    account?: EmailAccount;
     status: string;
     importedCount: number;
     scannedCount?: number;
@@ -1103,6 +1104,51 @@ function getEmailThreadUserLabels(thread: EmailThread, state: EmailThreadUiState
 
 function canSelectEmailAccountForSending(account: EmailAccount): boolean {
   return account.status !== "disabled" && account.sendEnabled && account.connectionConfigured && getEmailProviderCapability(account.provider).supportsSend;
+}
+
+function getEmailAccountSyncStatus(account: EmailAccount): "idle" | "queued" | "running" | "synced" | "failed" {
+  return account.lastSyncStatus ?? (account.lastSyncedAt ? "synced" : "idle");
+}
+
+function getEmailAccountSyncStatusText(account: EmailAccount): string {
+  const status = getEmailAccountSyncStatus(account);
+  const startedAt = account.lastSyncStartedAt ? formatDateTimeSeconds(account.lastSyncStartedAt) : "";
+  const finishedAt = account.lastSyncFinishedAt ?? account.lastSyncedAt;
+  const finishedLabel = finishedAt ? formatDateTimeSeconds(finishedAt) : "";
+  const scanned = account.lastSyncScannedCount ?? 0;
+  const imported = account.lastSyncImportedCount ?? 0;
+  const skippedDuplicate = account.lastSyncSkippedDuplicateCount ?? 0;
+  if (status === "queued") {
+    return "同步排队中，等待后台 worker 开始拉取";
+  }
+  if (status === "running") {
+    return `正在拉取邮件${startedAt ? ` · 开始 ${startedAt}` : ""}`;
+  }
+  if (status === "failed") {
+    return `同步失败${finishedLabel ? ` · ${finishedLabel}` : ""}${account.lastSyncError ? ` · ${account.lastSyncError}` : ""}`;
+  }
+  if (status === "synced") {
+    return `上次同步 ${finishedLabel || "已完成"} · 扫描 ${scanned} · 新增 ${imported} · 重复 ${skippedDuplicate}`;
+  }
+  return "尚未同步";
+}
+
+function getEmailAccountSyncInlineText(account: EmailAccount): string {
+  const status = getEmailAccountSyncStatus(account);
+  if (status === "queued") {
+    return "同步排队中";
+  }
+  if (status === "running") {
+    return "正在拉取";
+  }
+  if (status === "failed") {
+    return account.lastSyncError ? `同步失败：${account.lastSyncError}` : "同步失败";
+  }
+  if (status === "synced") {
+    const finishedAt = account.lastSyncFinishedAt ?? account.lastSyncedAt;
+    return finishedAt ? `同步 ${formatDateTimeSeconds(finishedAt)}` : "已同步";
+  }
+  return "尚未同步";
 }
 
 function getEmailCategoryLabel(categoryKey: EmailCategoryKey): string {
@@ -3882,7 +3928,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     await refreshEmailThreads({ reloadSelectedMessages: true });
     if (result.status === "queued") {
       scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true });
-      setMessage(`邮箱同步已提交后台：${result.account.emailAddress}。正在拉取邮件，完成后列表会自动刷新。`);
+      setMessage(`邮箱同步已提交后台：${result.account.emailAddress}。可以在左侧发件账户或邮箱设置页查看排队、拉取进度和最终扫描结果。`);
       router.refresh();
       return;
     }
@@ -3892,6 +3938,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   async function syncAllEmailAccounts() {
     const result = await fetchJson<EmailSyncAllRun>("/api/email/sync-all", { method: "POST" });
+    const updatedAccounts = result.accounts.map((entry) => entry.account).filter((account): account is EmailAccount => Boolean(account));
+    if (updatedAccounts.length) {
+      setEmailAccounts((current) => mergeEmailAccounts(current, updatedAccounts));
+    }
     const failed = result.accounts.filter((account) => account.status === "failed");
     const queued = result.accounts.filter((account) => account.status === "queued");
     const skipped = result.accounts.filter((account) => account.status === "skipped" || account.skipped);
@@ -3917,7 +3967,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true });
       const queuedAccounts = queued.map((account) => account.emailAddress).join("、");
       const completedDetail = completed.length ? `；已即时完成 ${completed.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封` : "";
-      setMessage(`邮箱后台同步已提交：${queued.length} 个账号（${queuedAccounts}）。正在拉取邮件，完成后列表会自动刷新${completedDetail}${skippedDetail}，失败 ${failed.length} 个`);
+      setMessage(`邮箱后台同步已提交：${queued.length} 个账号（${queuedAccounts}）。状态会显示在左侧发件账户和邮箱设置页：排队中、正在拉取、最终扫描结果都会自动更新${completedDetail}${skippedDetail}，失败 ${failed.length} 个`);
       router.refresh();
       return;
     }
@@ -4010,6 +4060,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     );
     setEmailThreads((current) => mergeEmailThreads(current, fetchedThreads));
     return fetchedThreads;
+  }
+
+  async function refreshEmailAccounts() {
+    const accounts = await fetchJson<EmailAccount[]>("/api/email/accounts", { method: "GET" });
+    setEmailAccounts(accounts);
   }
 
   async function openEmailThread(threadId: string) {
@@ -4174,7 +4229,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const delays = [1500, 3500, 6500, 10000, 15000, 22000, 30000];
     delays.forEach((delay) => {
       window.setTimeout(() => {
-        void refreshEmailThreads(options).catch((error) => {
+        void Promise.all([refreshEmailThreads(options), refreshEmailAccounts()]).catch((error) => {
           setError(error instanceof Error ? error.message : "刷新邮件列表失败");
         });
       }, delay);
@@ -9364,6 +9419,7 @@ function EmailWorkspace({
             const capability = getEmailProviderCapability(account.provider);
             const testState = accountConnectionTests[emailConnectionTestStateKey(account.id)];
             const isTesting = testState?.status === "testing";
+            const syncStatus = getEmailAccountSyncStatus(account);
             return (
               <div className="settings-item" key={account.id}>
                 <strong>{account.name}</strong>
@@ -9372,6 +9428,10 @@ function EmailWorkspace({
                   <span className={account.sendEnabled && capability.supportsSend ? "badge" : "danger-badge"}>发送 {account.sendEnabled && capability.supportsSend ? "on" : "off"}</span>
                   <span className={account.syncEnabled && capability.supportsSync ? "badge" : "danger-badge"}>同步 {account.syncEnabled && capability.supportsSync ? "on" : "off"}</span>
                   <span className={account.connectionConfigured ? "badge" : "danger-badge"}>连接 {account.connectionConfigured ? "已配置" : "未配置"}</span>
+                </div>
+                <div className={`email-sync-status-line ${syncStatus}`}>
+                  <span className="sync-status-dot" aria-hidden="true" />
+                  <span>{getEmailAccountSyncStatusText(account)}</span>
                 </div>
                 {canManageEmailSettings ? (
                   <div className="toolbar email-account-actions">
@@ -9722,6 +9782,9 @@ function EmailWorkspace({
                     <span>
                       <strong>{account.name}</strong>
                       <em>{account.emailAddress}</em>
+                      <em className={`email-sync-inline-status ${getEmailAccountSyncStatus(account)}`}>
+                        {getEmailAccountSyncInlineText(account)}
+                      </em>
                     </span>
                     <small>{accountThreadCounts.get(account.id) || ""}</small>
                   </button>

@@ -604,6 +604,13 @@ model EmailAccount {
   lastConnectionError String?
   createdById   String
   lastSyncedAt  DateTime?
+  lastSyncStatus String?
+  lastSyncStartedAt DateTime?
+  lastSyncFinishedAt DateTime?
+  lastSyncScannedCount Int @default(0)
+  lastSyncImportedCount Int @default(0)
+  lastSyncSkippedDuplicateCount Int @default(0)
+  lastSyncError String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   workspace     Workspace      @relation(fields: [workspaceId], references: [id])

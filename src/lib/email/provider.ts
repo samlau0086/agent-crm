@@ -69,6 +69,15 @@ export function createEmailProviderAdapter(repository: PrismaCrmRepository, opti
   return new RepositoryEmailProviderAdapter(repository, options);
 }
 
+type EmailSyncCounters = Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount">;
+
+type RepositoryEmailSyncStatusMethods = {
+  markEmailAccountSyncRunning?: (context: RequestContext, accountId: string) => Promise<EmailAccount> | EmailAccount;
+  markEmailAccountSyncCompleted?: (context: RequestContext, accountId: string, result: EmailSyncCounters) => Promise<EmailAccount> | EmailAccount;
+  markEmailAccountSyncFailed?: (context: RequestContext, accountId: string, errorMessage: string) => Promise<EmailAccount> | EmailAccount;
+  syncEmailAccount?: (context: RequestContext, accountId: string) => Promise<{ account: EmailAccount; importedCount: number; status: string }> | { account: EmailAccount; importedCount: number; status: string };
+};
+
 class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
   private readonly repository: PrismaCrmRepository;
   private readonly options: EmailProviderAdapterOptions;
@@ -163,16 +172,17 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
     assertProviderSupports(account, "sync");
     const syncLimit = normalizeEmailSyncLimit(limit ?? this.options.oauth?.limit);
+    await this.markSyncRunning(context, accountId);
     if (isOAuthProvider(account.provider)) {
       const config = await this.getOAuthProviderConfig(context, account);
       try {
         const result = await fetchRecentOAuthEmails(account.provider, config, { ...this.options.oauth, limit: syncLimit });
         await this.repository.updateEmailAccountConnectionConfig(context, accountId, result.config);
         const importResult = await this.importInboundMessages(context, account, result.messages);
-        const synced = await this.repository.syncEmailAccount(context, accountId);
         await this.repository.markEmailAccountConnectionError(context, accountId, null);
+        const syncedAccount = await this.markSyncCompleted(context, accountId, importResult);
         return {
-          ...synced,
+          account: syncedAccount,
           ...importResult,
           pageCount: result.pageCount,
           hasMore: result.hasMore,
@@ -181,6 +191,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       } catch (error) {
         const message = error instanceof Error ? error.message : `${account.provider} sync failed`;
         await this.repository.markEmailAccountConnectionError(context, accountId, message);
+        await this.markSyncFailed(context, accountId, message);
         throw new Error(message);
       }
     }
@@ -188,19 +199,47 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     if (!config) {
       const message = "Email account connection is not configured";
       await this.repository.markEmailAccountConnectionError(context, accountId, message);
+      await this.markSyncFailed(context, accountId, message);
       throw new Error(message);
     }
 
     try {
       const inbound = await fetchRecentMailboxEmails(config, syncLimit);
       const importResult = await this.importInboundMessages(context, account, inbound);
-      const result = await this.repository.syncEmailAccount(context, accountId);
       await this.repository.markEmailAccountConnectionError(context, accountId, null);
-      return { ...result, ...importResult, hasMore: inbound.length >= syncLimit, status: "synced" };
+      const syncedAccount = await this.markSyncCompleted(context, accountId, importResult);
+      return { account: syncedAccount, ...importResult, hasMore: inbound.length >= syncLimit, status: "synced" };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Mailbox sync failed";
       await this.repository.markEmailAccountConnectionError(context, accountId, message);
+      await this.markSyncFailed(context, accountId, message);
       throw new Error(message);
+    }
+  }
+
+  private async markSyncRunning(context: RequestContext, accountId: string): Promise<void> {
+    const repository = this.repository as PrismaCrmRepository & RepositoryEmailSyncStatusMethods;
+    if (repository.markEmailAccountSyncRunning) {
+      await repository.markEmailAccountSyncRunning(context, accountId);
+    }
+  }
+
+  private async markSyncCompleted(context: RequestContext, accountId: string, result: EmailSyncCounters): Promise<EmailAccount> {
+    const repository = this.repository as PrismaCrmRepository & RepositoryEmailSyncStatusMethods;
+    if (repository.markEmailAccountSyncCompleted) {
+      return repository.markEmailAccountSyncCompleted(context, accountId, result);
+    }
+    if (repository.syncEmailAccount) {
+      const synced = await repository.syncEmailAccount(context, accountId);
+      return synced.account;
+    }
+    return this.repository.getEmailAccount(context, accountId);
+  }
+
+  private async markSyncFailed(context: RequestContext, accountId: string, errorMessage: string): Promise<void> {
+    const repository = this.repository as PrismaCrmRepository & RepositoryEmailSyncStatusMethods;
+    if (repository.markEmailAccountSyncFailed) {
+      await repository.markEmailAccountSyncFailed(context, accountId, errorMessage);
     }
   }
 

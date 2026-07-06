@@ -603,6 +603,10 @@ export class CrmStore {
       sendEnabled: toggles.sendEnabled,
       connectionConfigured: Boolean(input.connectionConfig),
       createdById: context.user.id,
+      lastSyncStatus: "idle",
+      lastSyncScannedCount: 0,
+      lastSyncImportedCount: 0,
+      lastSyncSkippedDuplicateCount: 0,
       createdAt: now,
       updatedAt: now
     };
@@ -814,6 +818,94 @@ export class CrmStore {
         }
       });
     }
+    return clone(account);
+  }
+
+  syncEmailAccount(context: RequestContext, accountId: string): { account: EmailAccount; importedCount: number; status: string } {
+    const account = this.markEmailAccountSyncCompleted(context, accountId, {
+      importedCount: 0,
+      scannedCount: 0,
+      skippedDuplicateCount: 0
+    });
+    return { account, importedCount: 0, status: "synced" };
+  }
+
+  markEmailAccountSyncQueued(context: RequestContext, accountId: string): EmailAccount {
+    requirePermission(context, "crm.admin");
+    const account = this.assertEmailAccount(context, accountId);
+    if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
+      throw new Error("Email account is not enabled for sync");
+    }
+    account.lastSyncStatus = "queued";
+    delete account.lastSyncStartedAt;
+    delete account.lastSyncFinishedAt;
+    account.lastSyncScannedCount = 0;
+    account.lastSyncImportedCount = 0;
+    account.lastSyncSkippedDuplicateCount = 0;
+    delete account.lastSyncError;
+    account.updatedAt = stamp();
+    return clone(account);
+  }
+
+  markEmailAccountSyncRunning(context: RequestContext, accountId: string): EmailAccount {
+    requirePermission(context, "crm.admin");
+    const account = this.assertEmailAccount(context, accountId);
+    if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
+      throw new Error("Email account is not enabled for sync");
+    }
+    account.lastSyncStatus = "running";
+    account.lastSyncStartedAt = stamp();
+    delete account.lastSyncFinishedAt;
+    account.lastSyncScannedCount = 0;
+    account.lastSyncImportedCount = 0;
+    account.lastSyncSkippedDuplicateCount = 0;
+    delete account.lastSyncError;
+    account.updatedAt = stamp();
+    return clone(account);
+  }
+
+  markEmailAccountSyncCompleted(
+    context: RequestContext,
+    accountId: string,
+    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number }
+  ): EmailAccount {
+    requirePermission(context, "crm.admin");
+    const account = this.assertEmailAccount(context, accountId);
+    if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
+      throw new Error("Email account is not enabled for sync");
+    }
+    const now = stamp();
+    account.lastSyncedAt = now;
+    account.lastSyncStatus = "synced";
+    account.lastSyncFinishedAt = now;
+    account.lastSyncScannedCount = result.scannedCount ?? result.importedCount;
+    account.lastSyncImportedCount = result.importedCount;
+    account.lastSyncSkippedDuplicateCount = result.skippedDuplicateCount ?? 0;
+    delete account.lastSyncError;
+    account.updatedAt = now;
+    this.writeAuditLog(context, "update", "email_account", account.id, {
+      summary: `Synced email account ${account.emailAddress}`,
+      details: {
+        provider: account.provider,
+        scannedCount: account.lastSyncScannedCount,
+        importedCount: account.lastSyncImportedCount,
+        skippedDuplicateCount: account.lastSyncSkippedDuplicateCount
+      }
+    });
+    return clone(account);
+  }
+
+  markEmailAccountSyncFailed(context: RequestContext, accountId: string, errorMessage: string): EmailAccount {
+    requirePermission(context, "crm.admin");
+    const account = this.assertEmailAccount(context, accountId);
+    account.lastSyncStatus = "failed";
+    account.lastSyncFinishedAt = stamp();
+    account.lastSyncError = errorMessage.trim() || "Mailbox sync failed";
+    account.updatedAt = stamp();
+    this.writeAuditLog(context, "update", "email_account", account.id, {
+      summary: `Email account sync failed ${account.emailAddress}`,
+      details: { provider: account.provider, error: account.lastSyncError }
+    });
     return clone(account);
   }
 
