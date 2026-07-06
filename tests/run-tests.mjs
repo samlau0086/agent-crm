@@ -7545,6 +7545,121 @@ await run("email sync scheduler queues active or retryable sync-enabled accounts
   assert.match(summary.accounts[6].skipReason, /不支持收件同步/);
 });
 
+await run("email sync scheduler does not enqueue accounts that are already syncing", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const now = new Date().toISOString();
+  const accounts = [
+    {
+      id: "email-queued",
+      workspaceId: defaultWorkspaceId,
+      name: "Queued",
+      emailAddress: "queued@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      lastSyncStatus: "queued",
+      createdById: "user-admin",
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "email-running",
+      workspaceId: defaultWorkspaceId,
+      name: "Running",
+      emailAddress: "running@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      lastSyncStatus: "running",
+      lastSyncStartedAt: now,
+      createdById: "user-admin",
+      createdAt: now,
+      updatedAt: now
+    }
+  ];
+  let scheduledCount = 0;
+  const repository = {
+    async listEmailAccounts() {
+      return accounts;
+    },
+    async markEmailAccountSyncFailed() {
+      throw new Error("fresh in-progress sync should not be marked failed");
+    }
+  };
+  const executor = {
+    async runEmailSyncJob() {
+      scheduledCount += 1;
+      throw new Error("fresh in-progress sync should not be scheduled");
+    }
+  };
+
+  const summary = await scheduleEmailSyncForActiveAccounts(context, { repository, executor });
+
+  assert.equal(scheduledCount, 0);
+  assert.equal(summary.scheduledCount, 0);
+  assert.equal(summary.skippedCount, 2);
+  assert.match(summary.accounts[0].skipReason, /队列/);
+  assert.match(summary.accounts[1].skipReason, /正在拉取/);
+});
+
+await run("email sync scheduler marks stale running accounts failed before retrying", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const staleTime = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+  const account = {
+    id: "email-stale-running",
+    workspaceId: defaultWorkspaceId,
+    name: "Stale Running",
+    emailAddress: "stale@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true,
+    connectionConfigured: true,
+    lastSyncStatus: "running",
+    lastSyncStartedAt: staleTime,
+    createdById: "user-admin",
+    createdAt: staleTime,
+    updatedAt: staleTime
+  };
+  const calls = [];
+  const repository = {
+    async listEmailAccounts() {
+      return [account];
+    },
+    async markEmailAccountSyncFailed(_context, accountId, errorMessage) {
+      calls.push({ method: "markEmailAccountSyncFailed", accountId, errorMessage });
+      return { ...account, lastSyncStatus: "failed", lastSyncError: errorMessage, updatedAt: new Date().toISOString() };
+    }
+  };
+  const executor = {
+    async runEmailSyncJob(_context, payload) {
+      calls.push({ method: "runEmailSyncJob", accountId: payload.accountId });
+      return {
+        account: { ...account, lastSyncStatus: "queued" },
+        importedCount: 0,
+        scannedCount: 0,
+        skippedDuplicateCount: 0,
+        hasMore: false,
+        status: "queued"
+      };
+    }
+  };
+
+  const summary = await scheduleEmailSyncForActiveAccounts(context, { repository, executor });
+
+  assert.equal(summary.scheduledCount, 1);
+  assert.equal(summary.skippedCount, 0);
+  assert.equal(summary.accounts[0].status, "queued");
+  assert.deepEqual(calls.map((call) => call.method), ["markEmailAccountSyncFailed", "runEmailSyncJob"]);
+  assert.match(calls[0].errorMessage, /超过 10 分钟未结束/);
+});
+
 await run("email sync scheduler requires admin permission", async () => {
   const store = new CrmStore();
   const salesContext = store.getContext("user-sales");

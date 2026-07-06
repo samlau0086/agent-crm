@@ -1110,6 +1110,21 @@ function getEmailAccountSyncStatus(account: EmailAccount): "idle" | "queued" | "
   return account.lastSyncStatus ?? (account.lastSyncedAt ? "synced" : "idle");
 }
 
+const EMAIL_SYNC_CLIENT_STALE_AFTER_MS = 10 * 60 * 1000;
+
+function isEmailAccountSyncStale(account: EmailAccount): boolean {
+  const status = getEmailAccountSyncStatus(account);
+  if (status !== "queued" && status !== "running") {
+    return false;
+  }
+  const timestamp = status === "running" ? account.lastSyncStartedAt : account.updatedAt;
+  if (!timestamp) {
+    return false;
+  }
+  const startedAt = new Date(timestamp).getTime();
+  return Number.isFinite(startedAt) && Date.now() - startedAt > EMAIL_SYNC_CLIENT_STALE_AFTER_MS;
+}
+
 function getEmailAccountSyncStatusText(account: EmailAccount): string {
   const status = getEmailAccountSyncStatus(account);
   const startedAt = account.lastSyncStartedAt ? formatDateTimeSeconds(account.lastSyncStartedAt) : "";
@@ -1118,6 +1133,9 @@ function getEmailAccountSyncStatusText(account: EmailAccount): string {
   const scanned = account.lastSyncScannedCount ?? 0;
   const imported = account.lastSyncImportedCount ?? 0;
   const skippedDuplicate = account.lastSyncSkippedDuplicateCount ?? 0;
+  if (isEmailAccountSyncStale(account)) {
+    return "上一轮邮件同步超过 10 分钟未结束，可能已卡住。请重新同步，系统会先清理旧状态再重试。";
+  }
   if (status === "queued") {
     return "同步排队中，等待后台 worker 开始拉取";
   }
@@ -1135,6 +1153,9 @@ function getEmailAccountSyncStatusText(account: EmailAccount): string {
 
 function getEmailAccountSyncInlineText(account: EmailAccount): string {
   const status = getEmailAccountSyncStatus(account);
+  if (isEmailAccountSyncStale(account)) {
+    return "同步可能已卡住，请重新同步";
+  }
   if (status === "queued") {
     return "同步排队中";
   }
@@ -4249,7 +4270,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   function hasPendingEmailSync(accounts: EmailAccount[]): boolean {
-    return accounts.some((account) => account.lastSyncStatus === "queued" || account.lastSyncStatus === "running");
+    return accounts.some((account) => (account.lastSyncStatus === "queued" || account.lastSyncStatus === "running") && !isEmailAccountSyncStale(account));
   }
 
   async function updateEmailThread(threadId: string, recordId: string) {

@@ -2,6 +2,7 @@ import { requirePermission } from "@/lib/auth/rbac";
 import { getCrmRepository, type PrismaCrmRepository } from "@/lib/crm/repository";
 import type { EmailAccount, RequestContext } from "@/lib/crm/types";
 import { getEmailProviderCapability } from "@/lib/email/providers";
+import { getEmailSyncProgressState } from "@/lib/email/sync-state";
 import { getBackgroundJobExecutor, type BackgroundJobExecutor } from "@/lib/jobs/executor";
 
 export interface ScheduledEmailSyncAccount {
@@ -36,12 +37,30 @@ export async function scheduleEmailSyncForActiveAccounts(
   const results: ScheduledEmailSyncAccount[] = [];
 
   for (const account of accounts) {
-    const skipReason = getEmailSyncSkipReason(account);
+    let currentAccount = account;
+    const progress = getEmailSyncProgressState(currentAccount);
+    if (progress.inProgress && !progress.stale) {
+      results.push({
+        accountId: currentAccount.id,
+        emailAddress: currentAccount.emailAddress,
+        account: currentAccount,
+        status: "skipped",
+        importedCount: 0,
+        skipped: true,
+        skipReason: progress.reason
+      });
+      continue;
+    }
+    if (progress.stale && progress.staleMessage) {
+      currentAccount = await repository.markEmailAccountSyncFailed(context, currentAccount.id, progress.staleMessage);
+    }
+
+    const skipReason = getEmailSyncSkipReason(currentAccount);
     if (skipReason) {
       results.push({
-        accountId: account.id,
-        emailAddress: account.emailAddress,
-        account,
+        accountId: currentAccount.id,
+        emailAddress: currentAccount.emailAddress,
+        account: currentAccount,
         status: "skipped",
         importedCount: 0,
         skipped: true,
@@ -51,10 +70,10 @@ export async function scheduleEmailSyncForActiveAccounts(
     }
 
     try {
-      const result = await executor.runEmailSyncJob(context, { accountId: account.id, limit: options.limit });
+      const result = await executor.runEmailSyncJob(context, { accountId: currentAccount.id, limit: options.limit });
       results.push({
-        accountId: account.id,
-        emailAddress: account.emailAddress,
+        accountId: currentAccount.id,
+        emailAddress: currentAccount.emailAddress,
         account: result.account,
         status: result.status,
         importedCount: result.importedCount,
@@ -64,9 +83,9 @@ export async function scheduleEmailSyncForActiveAccounts(
       });
     } catch (error) {
       results.push({
-        accountId: account.id,
-        emailAddress: account.emailAddress,
-        account,
+        accountId: currentAccount.id,
+        emailAddress: currentAccount.emailAddress,
+        account: currentAccount,
         status: "failed",
         importedCount: 0,
         error: error instanceof Error ? error.message : "Email sync scheduling failed"

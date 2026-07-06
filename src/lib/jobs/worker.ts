@@ -44,7 +44,22 @@ export async function runQueuedJobOnce(repository: PrismaCrmRepository = getCrmR
     if (envelope.type === "csv_import") {
       await repository.markCsvImportJobFailedFromWorker(envelope.workspaceId, envelope.jobId, envelope.payload.objectKey, message);
     }
+    if (envelope.type === "email_sync") {
+      await markDeadLetteredEmailSyncFailed(repository, envelope, message);
+    }
     return { processed: true, jobType: envelope.type, deadLettered: true, error: message };
+  }
+}
+
+async function markDeadLetteredEmailSyncFailed(repository: PrismaCrmRepository, envelope: QueuedJobEnvelope, message: string) {
+  try {
+    const context = await getRequestContextByUserId(envelope.userId);
+    if (context.workspaceId !== envelope.workspaceId || envelope.type !== "email_sync") {
+      return;
+    }
+    await repository.markEmailAccountSyncFailed(context, envelope.payload.accountId, message);
+  } catch {
+    // The dead-letter entry remains the source of truth if account status update fails.
   }
 }
 
