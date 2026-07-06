@@ -201,7 +201,31 @@ function startFakePop3Server(messages, options = {}) {
   const server = createServer((socket) => {
     let commandBuffer = "";
     socket.setEncoding("utf8");
-    socket.write("+OK fake-pop3.local ready\r\n");
+    const scheduledWrites = new Set();
+    const writeSafely = (value) => {
+      if (socket.destroyed || !socket.writable) return;
+      try {
+        socket.write(value);
+      } catch {
+        // The client may close the socket while this fake server is streaming a slow response.
+      }
+    };
+    const scheduleWrite = (value, delayMs) => {
+      const timer = setTimeout(() => {
+        scheduledWrites.delete(timer);
+        writeSafely(value);
+      }, delayMs);
+      scheduledWrites.add(timer);
+    };
+    const clearScheduledWrites = () => {
+      for (const timer of scheduledWrites) {
+        clearTimeout(timer);
+      }
+      scheduledWrites.clear();
+    };
+    socket.once("close", clearScheduledWrites);
+    socket.on("error", () => undefined);
+    writeSafely("+OK fake-pop3.local ready\r\n");
     socket.on("data", (chunk) => {
       commandBuffer += chunk;
       const lines = commandBuffer.split(/\r\n/);
@@ -229,7 +253,16 @@ function startFakePop3Server(messages, options = {}) {
           if (!message) {
             socket.write("-ERR no such message\r\n");
           } else {
-            socket.write(`+OK ${message.raw.length} octets\r\n${dotStuffPop3Message(message.raw)}\r\n.\r\n`);
+            const response = `+OK ${message.raw.length} octets\r\n${dotStuffPop3Message(message.raw)}\r\n.\r\n`;
+            if (options.slowRetr) {
+              const chunkSize = options.slowRetr.chunkSize ?? 12;
+              const chunkDelayMs = options.slowRetr.chunkDelayMs ?? 10;
+              for (let offset = 0, index = 0; offset < response.length; offset += chunkSize, index += 1) {
+                scheduleWrite(response.slice(offset, offset + chunkSize), index * chunkDelayMs);
+              }
+            } else {
+              socket.write(response);
+            }
           }
         } else if (/^TOP$/i.test(command)) {
           if (options.hangTop) {
@@ -12761,6 +12794,47 @@ await run("pop3 provider fetches recent raw messages through RETR by default", a
     assert.ok(pop3.commands().some((command) => /^RETR 2$/i.test(command)));
     assert.ok(!pop3.commands().some((command) => /^TOP /i.test(command)));
   } finally {
+    await pop3.close();
+  }
+});
+
+await run("pop3 provider allows slow streaming RETR responses while data is still arriving", async () => {
+  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
+  const pop3 = await startFakePop3Server(
+    [
+      {
+        uid: "pop3-slow-retr-uid",
+        raw: [
+          "Message-ID: <pop3-slow-retr@example.com>",
+          "From: Buyer <buyer@example.com>",
+          "To: Sales <sales@example.com>",
+          "Subject: Slow POP3 RETR",
+          "",
+          "This message is intentionally streamed in small chunks so the fetch takes longer than the configured timeout."
+        ].join("\r\n")
+      }
+    ],
+    { slowRetr: { chunkSize: 8, chunkDelayMs: 10 } }
+  );
+  try {
+    const messages = await fetchRecentPop3Emails({
+      syncProtocol: "pop3",
+      pop3Host: "127.0.0.1",
+      pop3Port: pop3.port,
+      pop3Secure: false,
+      username: "sales@example.com",
+      password: "password"
+    }, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].subject, "Slow POP3 RETR");
+    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+    } else {
+      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
+    }
     await pop3.close();
   }
 });

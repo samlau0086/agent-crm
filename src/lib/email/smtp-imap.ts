@@ -193,23 +193,24 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
     await client.command(`USER ${config.username ?? ""}`);
     await client.command(`PASS ${config.password ?? ""}`);
     const list = await client.command("LIST");
-    const messageNumbers = parsePop3List(list).slice(-limit);
+    const messageEntries = parsePop3ListEntries(list).slice(-limit);
     const uidlMap = await client.command("UIDL").then(parsePop3Uidl).catch(() => new Map<string, string>());
     const messages: InboundEmail[] = [];
-    for (const messageNumber of messageNumbers) {
+    for (const messageEntry of messageEntries) {
+      const messageNumber = messageEntry.number;
       let raw: string;
       if (useRetrOnly) {
-        raw = await fetchPop3MessageByRetr(config, messageNumber);
+        raw = await fetchPop3MessageByRetr(config, messageEntry);
       } else {
         try {
-          raw = await fetchPop3MessagePreview(client, messageNumber);
+          raw = await fetchPop3MessagePreview(client, messageEntry);
         } catch (error) {
           if (!isPop3TopTimeout(error)) {
             throw error;
           }
           useRetrOnly = true;
           client.close();
-          raw = await fetchPop3MessageByRetr(config, messageNumber);
+          raw = await fetchPop3MessageByRetr(config, messageEntry);
         }
       }
       const parsed = parsePop3Message(raw);
@@ -226,25 +227,38 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
   }
 }
 
-async function fetchPop3MessagePreview(client: Pop3Client, messageNumber: string): Promise<string> {
+type Pop3ListEntry = {
+  number: string;
+  size?: number;
+};
+
+async function fetchPop3MessagePreview(client: Pop3Client, messageEntry: Pop3ListEntry): Promise<string> {
+  const messageNumber = messageEntry.number;
   const topLines = getMailPop3TopLines();
   try {
     return await client.command(`TOP ${messageNumber} ${topLines}`, getMailFetchResponseTimeoutMs());
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (!/POP3 TOP failed: POP3 command failed/i.test(message)) {
-      throw error;
+      throw withPop3MessageContext(error, messageEntry);
     }
-    return client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
+    try {
+      return await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
+    } catch (retrError) {
+      throw withPop3MessageContext(retrError, messageEntry);
+    }
   }
 }
 
-async function fetchPop3MessageByRetr(config: EmailConnectionConfig, messageNumber: string): Promise<string> {
+async function fetchPop3MessageByRetr(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<string> {
+  const messageNumber = messageEntry.number;
   const client = await Pop3Client.connect(config);
   try {
     await client.command(`USER ${config.username ?? ""}`);
     await client.command(`PASS ${config.password ?? ""}`);
-    const raw = await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
+    const raw = await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs()).catch((error) => {
+      throw withPop3MessageContext(error, messageEntry);
+    });
     await client.command("QUIT").catch(() => undefined);
     return raw;
   } finally {
@@ -255,6 +269,22 @@ async function fetchPop3MessageByRetr(config: EmailConnectionConfig, messageNumb
 function isPop3TopTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
   return /POP3 TOP failed: Mail server response timed out/i.test(message);
+}
+
+function withPop3MessageContext(error: unknown, messageEntry: Pop3ListEntry): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const size = typeof messageEntry.size === "number" ? `, size ${formatMailByteCount(messageEntry.size)}` : "";
+  return new Error(`${message} [message ${messageEntry.number}${size}]`);
+}
+
+function formatMailByteCount(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes} bytes`;
 }
 
 export function buildImapFallbackExternalMessageId(mailbox: string, uid: string): string {
@@ -503,21 +533,32 @@ function readUntil(socket: net.Socket, done: () => boolean, read: () => string, 
     return Promise.resolve(read());
   }
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => cleanup(reject, new Error(`Mail server response timed out after ${timeoutMs} ms`)), timeoutMs);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const armTimeout = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      timeout = setTimeout(() => cleanup(reject, new Error(`Mail server response timed out after ${timeoutMs} ms`)), timeoutMs);
+    };
     const onData = () => {
       if (done()) {
         cleanup(resolve, read());
+        return;
       }
+      armTimeout();
     };
     const onError = (error: Error) => cleanup(reject, error);
     const cleanup = <T>(callback: (value: T) => void, value: T) => {
-      clearTimeout(timeout);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       socket.off("data", onData);
       socket.off("error", onError);
       callback(value);
     };
     socket.on("data", onData);
     socket.once("error", onError);
+    armTimeout();
   });
 }
 
@@ -621,10 +662,21 @@ function parseFetchedMessage(response: string): InboundEmail | undefined {
 }
 
 function parsePop3List(response: string): string[] {
+  return parsePop3ListEntries(response).map((entry) => entry.number);
+}
+
+function parsePop3ListEntries(response: string): Pop3ListEntry[] {
   return stripPop3MultilineResponse(response)
     .split(/\r?\n/)
-    .map((line) => line.trim().split(/\s+/)[0])
-    .filter((value) => /^\d+$/.test(value));
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => /^\d+$/.test(parts[0] ?? ""))
+    .map(([number, size]) => {
+      const parsedSize = Number.parseInt(size ?? "", 10);
+      return {
+        number,
+        size: Number.isFinite(parsedSize) && parsedSize >= 0 ? parsedSize : undefined
+      };
+    });
 }
 
 function parsePop3Uidl(response: string): Map<string, string> {
