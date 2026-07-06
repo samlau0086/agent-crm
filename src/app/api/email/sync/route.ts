@@ -3,7 +3,7 @@ import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from
 import { emailSyncSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { getFailedEmailSyncResultOrThrow } from "@/lib/email/sync-failure";
-import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
+import { InlineBackgroundJobExecutor } from "@/lib/jobs/executor";
 
 
 export const dynamic = "force-dynamic";
@@ -12,8 +12,9 @@ async function postApiMetricsHandler(request: NextRequest) {
     const context = await getRequestContext(request);
     const body = await parseJson(request, emailSyncSchema);
     const repository = getCrmRepository();
+    const executor = new InlineBackgroundJobExecutor(repository);
     try {
-      return ok(await getBackgroundJobExecutor(repository).runEmailSyncJob(context, { accountId: body.accountId, limit: body.limit }));
+      return ok(await executor.runEmailSyncJob(context, { accountId: body.accountId, limit: body.limit }));
     } catch (syncError) {
       return ok(await getFailedEmailSyncResultOrThrow(context, repository, body.accountId, syncError), { status: 202 });
     }

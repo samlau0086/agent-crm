@@ -310,6 +310,9 @@ type EmailSyncAllRun = {
     emailAddress: string;
     status: string;
     importedCount: number;
+    scannedCount?: number;
+    skippedDuplicateCount?: number;
+    hasMore?: boolean;
     skipped?: boolean;
     skipReason?: string;
     error?: string;
@@ -3892,10 +3895,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setError(`没有可同步邮箱：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`);
     }
     await refreshEmailThreads({ reloadSelectedMessages: true });
+    const completed = result.accounts.filter((account) => account.status !== "failed" && account.status !== "skipped" && !account.skipped);
+    const scannedTotal = completed.reduce((sum, account) => sum + (account.scannedCount ?? account.importedCount ?? 0), 0);
+    const importedTotal = completed.reduce((sum, account) => sum + (account.importedCount ?? 0), 0);
+    const duplicateTotal = completed.reduce((sum, account) => sum + (account.skippedDuplicateCount ?? 0), 0);
     const skippedDetail = skipped.length
       ? `，跳过 ${skipped.length} 个：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`
       : `，跳过 ${result.skippedCount} 个`;
-    setMessage(`邮箱批量同步完成：已调度 ${result.scheduledCount} 个${skippedDetail}，失败 ${failed.length} 个`);
+    setMessage(`邮箱批量同步完成：同步 ${completed.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封${skippedDetail}，失败 ${failed.length} 个`);
     router.refresh();
   }
 
@@ -9288,7 +9295,7 @@ function EmailWorkspace({
               disabled ||
               !accounts.some((account) => {
                 const capability = getEmailProviderCapability(account.provider);
-                return account.status === "active" && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
+                return (account.status === "active" || account.status === "error") && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
               })
             }
           >
@@ -9373,7 +9380,7 @@ function EmailWorkspace({
                     >
                       {account.status === "disabled" ? "启用" : "停用"}
                     </button>
-                    <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || account.status !== "active"}>
+                    <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || (account.status !== "active" && account.status !== "error")}>
                       <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
                       同步
                     </button>
@@ -9393,7 +9400,7 @@ function EmailWorkspace({
   function renderEmailSyncSettingsPanel() {
     const enabledAccountCount = accounts.filter((account) => {
       const capability = getEmailProviderCapability(account.provider);
-      return account.status === "active" && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
+      return (account.status === "active" || account.status === "error") && account.syncEnabled && account.connectionConfigured && capability.supportsSync;
     }).length;
     return (
       <section className="section email-account-list-panel" data-testid="email-sync-settings-panel">

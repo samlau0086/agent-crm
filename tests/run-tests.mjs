@@ -2384,15 +2384,17 @@ await run("public api docs describe email and ai mail endpoints", () => {
   assert.match(docs, /stale `sending` message/);
 });
 
-await run("email sync route forwards bounded sync limit to the job executor", () => {
+await run("email sync route runs manual sync inline and forwards bounded sync limit", () => {
   const source = readFileSync("src/app/api/email/sync/route.ts", "utf8");
+  assert.match(source, /new InlineBackgroundJobExecutor\(repository\)/);
   assert.match(source, /runEmailSyncJob\(context,\s*\{\s*accountId:\s*body\.accountId,\s*limit:\s*body\.limit\s*\}\)/);
 });
 
-await run("email sync-all route keeps empty body support and forwards bounded limits", () => {
+await run("email sync-all route keeps empty body support and runs manual sync inline", () => {
   const source = readFileSync("src/app/api/email/sync-all/route.ts", "utf8");
   assert.match(source, /parseOptionalJson\(request,\s*emailSyncAllSchema,\s*\{\s*\}\)/);
-  assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*limit:\s*body\.limit\s*\}\)/);
+  assert.match(source, /new InlineBackgroundJobExecutor\(repository\)/);
+  assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*repository,\s*executor:\s*new InlineBackgroundJobExecutor\(repository\),\s*limit:\s*body\.limit\s*\}\)/);
 });
 
 await run("email send route rejects live unconfigured accounts before queueing", () => {
@@ -2413,8 +2415,8 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
   assert.match(source, /data-testid="email-account-pop3-host"/);
   assert.match(source, /POP3 \$\{result\.result\.pop3 \?\? "skipped"\}/);
   assert.match(source, /onSyncAllAccounts/);
-  assert.match(source, /account\.status === "active" && account\.syncEnabled && account\.connectionConfigured && capability\.supportsSync/);
-  assert.match(source, /disabled=\{disabled \|\| !account\.syncEnabled \|\| !account\.connectionConfigured \|\| !capability\.supportsSync \|\| account\.status !== "active"\}/);
+  assert.match(source, /\(account\.status === "active" \|\| account\.status === "error"\) && account\.syncEnabled && account\.connectionConfigured && capability\.supportsSync/);
+  assert.match(source, /disabled=\{disabled \|\| !account\.syncEnabled \|\| !account\.connectionConfigured \|\| !capability\.supportsSync \|\| \(account\.status !== "active" && account\.status !== "error"\)\}/);
   assert.match(source, /function canSelectEmailAccountForSending\(account: EmailAccount\): boolean/);
   assert.match(source, /account\.status !== "disabled" && account\.sendEnabled && account\.connectionConfigured/);
   assert.match(providerSource, /fetchRecentMailboxEmails\(config, syncLimit\)/);

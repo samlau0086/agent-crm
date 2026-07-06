@@ -9,6 +9,9 @@ export interface ScheduledEmailSyncAccount {
   emailAddress: string;
   status: string;
   importedCount: number;
+  scannedCount?: number;
+  skippedDuplicateCount?: number;
+  hasMore?: boolean;
   skipped?: boolean;
   skipReason?: string;
   error?: string;
@@ -51,7 +54,10 @@ export async function scheduleEmailSyncForActiveAccounts(
         accountId: account.id,
         emailAddress: account.emailAddress,
         status: result.status,
-        importedCount: result.importedCount
+        importedCount: result.importedCount,
+        scannedCount: result.scannedCount,
+        skippedDuplicateCount: result.skippedDuplicateCount,
+        hasMore: result.hasMore
       });
     } catch (error) {
       results.push({
