@@ -12793,6 +12793,7 @@ await run("pop3 provider fetches recent raw messages through RETR by default", a
     assert.equal(messages[0].bodyText, ".Newer message with a leading dot.");
     assert.ok(pop3.commands().some((command) => /^RETR 2$/i.test(command)));
     assert.ok(!pop3.commands().some((command) => /^TOP /i.test(command)));
+    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 1);
   } finally {
     await pop3.close();
   }
@@ -12874,6 +12875,8 @@ await run("pop3 provider falls back to RETR on a fresh connection when TOP times
     assert.equal(messages[0].bodyText, "Large message body.");
     assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
     assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
+    assert.ok(pop3.commands().some((command) => /^STAT$/i.test(command)));
+    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 2);
   } finally {
     if (previousTimeout === undefined) {
       delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;

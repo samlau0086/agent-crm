@@ -189,6 +189,7 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
   assertPop3Config(config);
   const client = await Pop3Client.connect(config);
   let useRetrOnly = getMailPop3FetchMode() === "retr";
+  let useSeparateRetrConnection = false;
   try {
     await client.command(`USER ${config.username ?? ""}`);
     await client.command(`PASS ${config.password ?? ""}`);
@@ -200,7 +201,7 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
       const messageNumber = messageEntry.number;
       let raw: string;
       if (useRetrOnly) {
-        raw = await fetchPop3MessageByRetr(config, messageEntry);
+        raw = useSeparateRetrConnection ? await fetchPop3MessageByRetr(config, messageEntry) : await fetchPop3MessageByRetrOnClient(client, messageEntry);
       } else {
         try {
           raw = await fetchPop3MessagePreview(client, messageEntry);
@@ -209,6 +210,7 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
             throw error;
           }
           useRetrOnly = true;
+          useSeparateRetrConnection = true;
           client.close();
           raw = await fetchPop3MessageByRetr(config, messageEntry);
         }
@@ -218,7 +220,7 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
         messages.push(withPop3FallbackExternalMessageId(parsed, uidlMap.get(messageNumber) ?? messageNumber));
       }
     }
-    if (!useRetrOnly) {
+    if (!useSeparateRetrConnection) {
       await client.command("QUIT").catch(() => undefined);
     }
     return messages;
@@ -242,12 +244,15 @@ async function fetchPop3MessagePreview(client: Pop3Client, messageEntry: Pop3Lis
     if (!/POP3 TOP failed: POP3 command failed/i.test(message)) {
       throw withPop3MessageContext(error, messageEntry);
     }
-    try {
-      return await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
-    } catch (retrError) {
-      throw withPop3MessageContext(retrError, messageEntry);
-    }
+    return fetchPop3MessageByRetrOnClient(client, messageEntry);
   }
+}
+
+async function fetchPop3MessageByRetrOnClient(client: Pop3Client, messageEntry: Pop3ListEntry): Promise<string> {
+  const messageNumber = messageEntry.number;
+  return client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs()).catch((error) => {
+    throw withPop3MessageContext(error, messageEntry);
+  });
 }
 
 async function fetchPop3MessageByRetr(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<string> {
@@ -256,6 +261,7 @@ async function fetchPop3MessageByRetr(config: EmailConnectionConfig, messageEntr
   try {
     await client.command(`USER ${config.username ?? ""}`);
     await client.command(`PASS ${config.password ?? ""}`);
+    await client.command("STAT").catch(() => undefined);
     const raw = await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs()).catch((error) => {
       throw withPop3MessageContext(error, messageEntry);
     });
