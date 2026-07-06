@@ -3107,7 +3107,7 @@ export class PrismaCrmRepository {
   async syncEmailAccount(context: RequestContext, accountId: string): Promise<{ account: EmailAccount; importedCount: number; status: string }> {
     requirePermission(context, "crm.admin");
     const account = await this.assertEmailAccount(context, accountId);
-    if (!account.syncEnabled || account.status !== "active") {
+    if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
       throw new Error("Email account is not enabled for sync");
     }
 

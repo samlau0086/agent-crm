@@ -77,7 +77,7 @@ export async function scheduleEmailSyncForActiveAccounts(
 
 function getEmailSyncSkipReason(account: EmailAccount): string | undefined {
   const capability = getEmailProviderCapability(account.provider);
-  if (account.status !== "active") {
+  if (account.status !== "active" && account.status !== "error") {
     return `账号状态为 ${account.status}`;
   }
   if (!account.syncEnabled) {

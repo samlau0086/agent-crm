@@ -158,7 +158,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
   async sync(context: RequestContext, accountId: string, limit?: number): Promise<EmailSyncResult> {
     requirePermission(context, "crm.admin");
     const account = await this.repository.getEmailAccount(context, accountId);
-    if (!account.syncEnabled || account.status !== "active") {
+    if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
       throw new Error("Email account is not enabled for sync");
     }
     assertProviderSupports(account, "sync");

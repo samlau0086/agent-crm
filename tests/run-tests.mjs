@@ -7344,7 +7344,7 @@ await run("queued provider send failures persist a message-level failure reason"
   assert.match(failedMessage.failureReason, /Gmail send failed with HTTP 503/);
 });
 
-await run("email sync scheduler queues only active sync-enabled accounts and keeps batch errors isolated", async () => {
+await run("email sync scheduler queues active or retryable sync-enabled accounts and keeps batch errors isolated", async () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
   const accounts = [
@@ -7372,6 +7372,21 @@ await run("email sync scheduler queues only active sync-enabled accounts and kee
       syncEnabled: true,
       sendEnabled: true,
       connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    {
+      id: "email-error",
+      workspaceId: defaultWorkspaceId,
+      name: "Retryable Error",
+      emailAddress: "retryable-error@example.com",
+      provider: "smtp_imap",
+      status: "error",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      lastConnectionError: "Previous mailbox timeout",
       createdById: "user-admin",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -7452,12 +7467,13 @@ await run("email sync scheduler queues only active sync-enabled accounts and kee
 
   const summary = await scheduleEmailSyncForActiveAccounts(context, { repository, executor, limit: 20 });
 
-  assert.equal(summary.scheduledCount, 1);
+  assert.equal(summary.scheduledCount, 2);
   assert.equal(summary.skippedCount, 4);
   assert.equal(summary.limit, 20);
   assert.deepEqual(summary.accounts.map((account) => account.accountId), [
     "email-active-a",
     "email-active-b",
+    "email-error",
     "email-disabled",
     "email-send-only",
     "email-unconfigured",
@@ -7466,11 +7482,12 @@ await run("email sync scheduler queues only active sync-enabled accounts and kee
   assert.equal(summary.accounts[0].status, "queued");
   assert.equal(summary.accounts[1].status, "failed");
   assert.match(summary.accounts[1].error, /temporarily unavailable/);
-  assert.equal(summary.accounts[2].status, "skipped");
-  assert.match(summary.accounts[2].skipReason, /disabled/);
-  assert.match(summary.accounts[3].skipReason, /未开启收件同步/);
-  assert.match(summary.accounts[4].skipReason, /未配置收件连接/);
-  assert.match(summary.accounts[5].skipReason, /不支持收件同步/);
+  assert.equal(summary.accounts[2].status, "queued");
+  assert.equal(summary.accounts[3].status, "skipped");
+  assert.match(summary.accounts[3].skipReason, /disabled/);
+  assert.match(summary.accounts[4].skipReason, /未开启收件同步/);
+  assert.match(summary.accounts[5].skipReason, /未配置收件连接/);
+  assert.match(summary.accounts[6].skipReason, /不支持收件同步/);
 });
 
 await run("email sync scheduler requires admin permission", async () => {
