@@ -12673,6 +12673,92 @@ await run("pop3 provider does not fall back to RETR when TOP times out", async (
   }
 });
 
+await run("email provider records inbound POP3 endpoint on sync timeout", async () => {
+  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
+  const pop3 = await startFakePop3Server(
+    [
+      {
+        uid: "pop3-status-timeout-uid",
+        raw: [
+          "Message-ID: <pop3-status-timeout@example.com>",
+          "From: Buyer <buyer@example.com>",
+          "To: Sales <sales@example.com>",
+          "Subject: Timeout POP3 status",
+          "",
+          "Large message body."
+        ].join("\r\n")
+      }
+    ],
+    { hangTop: true }
+  );
+  const account = {
+    id: "pop3-status-timeout-account",
+    workspaceId: defaultWorkspaceId,
+    name: "POP3 Status Timeout",
+    emailAddress: "sales@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: false,
+    connectionConfigured: true,
+    createdById: "user-admin",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  let connectionError;
+  let syncError;
+  const fakeRepository = {
+    async getEmailAccount() {
+      return account;
+    },
+    async getEmailAccountConnectionConfig() {
+      return {
+        inbound: {
+          syncProtocol: "pop3",
+          pop3Host: "127.0.0.1",
+          pop3Port: pop3.port,
+          pop3Secure: false,
+          username: "sales@example.com",
+          password: "password"
+        }
+      };
+    },
+    async markEmailAccountSyncRunning() {},
+    async markEmailAccountSyncFailed(_context, accountId, errorMessage) {
+      assert.equal(accountId, account.id);
+      syncError = errorMessage;
+    },
+    async markEmailAccountConnectionError(_context, accountId, errorMessage) {
+      assert.equal(accountId, account.id);
+      connectionError = errorMessage;
+      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
+    },
+    async findEmailMessageByExternalId() {
+      return undefined;
+    },
+    async recordEmailMessage() {
+      throw new Error("POP3 timeout should happen before import");
+    }
+  };
+  const adapter = createEmailProviderAdapter(fakeRepository);
+  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+  try {
+    await assert.rejects(() => adapter.sync(context, account.id), /POP3 TOP failed: Mail server response timed out/);
+    assert.match(connectionError, new RegExp(`POP3 TOP failed: Mail server response timed out.*\\[inbound POP3 127\\.0\\.0\\.1:${pop3.port} plain\\]`));
+    assert.equal(syncError, connectionError);
+    assert.equal(connectionError.includes("password"), false);
+    assert.equal(connectionError.includes("sales@example.com"), false);
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+    } else {
+      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
+    }
+    await pop3.close();
+  }
+});
+
 await run("imap raw email parser ignores malformed date headers", () => {
   const parsed = parseRawEmailMessage(
     [

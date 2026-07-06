@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { EmailAccount, EmailAttachment, EmailMessage, RequestContext } from "@/lib/crm/types";
+import type { EmailAccount, EmailAttachment, EmailConnectionConfig, EmailMessage, RequestContext } from "@/lib/crm/types";
 import type { PrismaCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { assertEmailDeliveryModeAllowed, getEmailDeliveryMode } from "@/lib/email/delivery-mode";
 import { fetchRecentMailboxEmails, sendSmtpEmail, testMailConnection, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
-import { getDefaultOutboundService, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
+import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import { sendResendEmail } from "@/lib/email/resend";
 import { assertOAuthConfig, isOAuthProvider } from "@/lib/email/oauth";
 import { fetchRecentOAuthEmails, sendOAuthEmail, testOAuthConnection, type OAuthMailApiOptions } from "@/lib/email/oauth-api";
@@ -211,8 +211,9 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       return { account: syncedAccount, ...importResult, hasMore: inbound.length >= syncLimit, status: "synced" };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Mailbox sync failed";
-      await this.repository.markEmailAccountConnectionError(context, accountId, message);
-      await this.markSyncFailed(context, accountId, message);
+      const statusMessage = withInboundEndpointContext(message, config);
+      await this.repository.markEmailAccountConnectionError(context, accountId, statusMessage);
+      await this.markSyncFailed(context, accountId, statusMessage);
       throw new Error(message);
     }
   }
@@ -276,7 +277,8 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       return { account: updated, result };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Email connection test failed";
-      const updated = await this.repository.markEmailAccountConnectionError(context, accountId, message);
+      const statusMessage = options.scope === "outbound" ? message : withInboundEndpointContext(message, config);
+      const updated = await this.repository.markEmailAccountConnectionError(context, accountId, statusMessage);
       throw Object.assign(new Error(message), { account: updated });
     }
   }
@@ -398,6 +400,30 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
 
 function normalizeEmailSyncLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(100, Math.floor(limit ?? 10)));
+}
+
+function withInboundEndpointContext(message: string, config: EmailConnectionConfig): string {
+  const endpoint = describeInboundEndpoint(config);
+  if (!endpoint || message.includes(endpoint)) {
+    return message;
+  }
+  return `${message} [inbound ${endpoint}]`;
+}
+
+function describeInboundEndpoint(config: EmailConnectionConfig): string | undefined {
+  const inbound = getInboundConnectionConfig(config);
+  const protocol = inbound.syncProtocol === "pop3" ? "POP3" : "IMAP";
+  const host = protocol === "POP3" ? inbound.pop3Host : inbound.imapHost;
+  const port = protocol === "POP3" ? inbound.pop3Port : inbound.imapPort;
+  const secure = protocol === "POP3" ? inbound.pop3Secure : inbound.imapSecure;
+  if (!host && !port) {
+    return `${protocol} host not configured`;
+  }
+  const hostText = host ?? "host not configured";
+  const portText = port ? `:${port}` : "";
+  const securityText = secure === false ? "plain" : "TLS";
+  const mailboxText = protocol === "IMAP" && inbound.mailbox ? ` mailbox=${inbound.mailbox}` : "";
+  return `${protocol} ${hostText}${portText} ${securityText}${mailboxText}`;
 }
 
 function ensureEmailSendMessageId(input: EmailSendInput): EmailSendInput {
