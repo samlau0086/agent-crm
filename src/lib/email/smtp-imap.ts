@@ -39,6 +39,11 @@ export interface SmtpTransportOptions {
   startTls: boolean;
 }
 
+const DEFAULT_MAIL_CONNECT_TIMEOUT_MS = 15000;
+const DEFAULT_MAIL_RESPONSE_TIMEOUT_MS = 30000;
+const DEFAULT_MAIL_FETCH_RESPONSE_TIMEOUT_MS = 60000;
+const MAX_MAIL_TIMEOUT_MS = 300000;
+
 export function resolveSmtpTransport(config: EmailConnectionConfig | EmailOutboundServiceConfig): SmtpTransportOptions {
   const startTls = config.smtpStartTls === true;
   const secure = !startTls && config.smtpSecure !== false;
@@ -148,13 +153,15 @@ export async function fetchRecentImapEmails(config: EmailConnectionConfig, limit
   const client = await ImapClient.connect(config);
   try {
     await client.command(`LOGIN "${escapeImap(config.username ?? "")}" "${escapeImap(config.password ?? "")}"`);
-    await client.command(`SELECT "${escapeImap(config.mailbox ?? "INBOX")}"`);
-    const search = await client.command("UID SEARCH ALL");
-    const uids = parseUidSearch(search).slice(-limit);
+    const selectResponse = await client.command(`SELECT "${escapeImap(config.mailbox ?? "INBOX")}"`);
+    const messageCount = parseMailboxExists(selectResponse);
+    const safeLimit = normalizeMailboxFetchLimit(limit);
+    const startSequenceNumber = Math.max(1, messageCount - safeLimit + 1);
     const messages: InboundEmail[] = [];
-    for (const uid of uids) {
-      const raw = await client.command(`UID FETCH ${uid} (BODY.PEEK[])`);
+    for (let sequenceNumber = startSequenceNumber; sequenceNumber <= messageCount; sequenceNumber += 1) {
+      const raw = await client.command(`FETCH ${sequenceNumber} (UID BODY.PEEK[])`, getMailFetchResponseTimeoutMs());
       const parsed = parseFetchedMessage(raw);
+      const uid = parseFetchUid(raw) ?? `seq-${sequenceNumber}`;
       if (parsed) {
         messages.push(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", uid));
       }
@@ -182,7 +189,7 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
     const uidlMap = await client.command("UIDL").then(parsePop3Uidl).catch(() => new Map<string, string>());
     const messages: InboundEmail[] = [];
     for (const messageNumber of messageNumbers) {
-      const raw = await client.command(`RETR ${messageNumber}`);
+      const raw = await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
       const parsed = parsePop3Message(raw);
       if (parsed) {
         messages.push(withPop3FallbackExternalMessageId(parsed, uidlMap.get(messageNumber) ?? messageNumber));
@@ -305,10 +312,15 @@ class ImapClient {
     return client;
   }
 
-  async command(command: string): Promise<string> {
+  async command(command: string, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
     const tag = `A${String(this.tagCounter++).padStart(4, "0")}`;
     this.socket.write(`${tag} ${command}\r\n`);
-    const response = await readUntil(this.socket, () => this.buffer.includes(`${tag} OK`) || this.buffer.includes(`${tag} NO`) || this.buffer.includes(`${tag} BAD`), () => this.buffer);
+    const response = await readUntil(
+      this.socket,
+      () => this.buffer.includes(`${tag} OK`) || this.buffer.includes(`${tag} NO`) || this.buffer.includes(`${tag} BAD`),
+      () => this.buffer,
+      timeoutMs
+    );
     this.buffer = "";
     if (response.includes(`${tag} NO`) || response.includes(`${tag} BAD`)) {
       throw new Error(`IMAP command failed: ${response.slice(0, 300)}`);
@@ -341,21 +353,22 @@ class Pop3Client {
     return client;
   }
 
-  async command(command: string): Promise<string> {
+  async command(command: string, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
     const isMultiline = /^(LIST|UIDL|RETR)\b/i.test(command);
     this.socket.write(`${command}\r\n`);
-    return this.readResponse(isMultiline);
+    return this.readResponse(isMultiline, timeoutMs);
   }
 
   close(): void {
     this.socket.destroy();
   }
 
-  private async readResponse(multiline: boolean): Promise<string> {
+  private async readResponse(multiline: boolean, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
     const response = await readUntil(
       this.socket,
       () => (multiline ? /\r?\n\.\r?\n$/.test(this.buffer) : /\r?\n$/.test(this.buffer)),
-      () => this.buffer
+      () => this.buffer,
+      timeoutMs
     );
     this.buffer = "";
     if (response.startsWith("-ERR")) {
@@ -374,7 +387,7 @@ function connectSocket(host: string, port: number, secure: boolean): Promise<net
     const timeout = setTimeout(() => {
       socket.destroy();
       reject(new Error(`Connection to ${host}:${port} timed out`));
-    }, 15000);
+    }, getMailConnectTimeoutMs());
     socket.once("connect", () => {
       clearTimeout(timeout);
       resolve(socket);
@@ -395,7 +408,7 @@ function waitForSecureConnect(socket: tls.TLSSocket): Promise<void> {
     const timeout = setTimeout(() => {
       socket.destroy();
       reject(new Error("STARTTLS handshake timed out"));
-    }, 15000);
+    }, getMailConnectTimeoutMs());
     socket.once("secureConnect", () => {
       clearTimeout(timeout);
       resolve();
@@ -407,12 +420,12 @@ function waitForSecureConnect(socket: tls.TLSSocket): Promise<void> {
   });
 }
 
-function readUntil(socket: net.Socket, done: () => boolean, read: () => string): Promise<string> {
+function readUntil(socket: net.Socket, done: () => boolean, read: () => string, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
   if (done()) {
     return Promise.resolve(read());
   }
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => cleanup(reject, new Error("Mail server response timed out")), 20000);
+    const timeout = setTimeout(() => cleanup(reject, new Error(`Mail server response timed out after ${timeoutMs} ms`)), timeoutMs);
     const onData = () => {
       if (done()) {
         cleanup(resolve, read());
@@ -511,9 +524,17 @@ function encodeHeader(value: string): string {
   return /[^\x20-\x7e]/.test(sanitized) ? `=?UTF-8?B?${Buffer.from(sanitized, "utf8").toString("base64")}?=` : sanitized;
 }
 
-function parseUidSearch(response: string): string[] {
-  const line = response.split(/\r?\n/).find((candidate) => candidate.startsWith("* SEARCH")) ?? "";
-  return line.replace("* SEARCH", "").trim().split(/\s+/).filter(Boolean);
+function parseMailboxExists(response: string): number {
+  const value = Number(response.match(/^\* (\d+) EXISTS\b/m)?.[1] ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function parseFetchUid(response: string): string | undefined {
+  return response.match(/\bUID\s+(\d+)\b/i)?.[1];
+}
+
+function normalizeMailboxFetchLimit(limit: number): number {
+  return Math.max(1, Math.min(100, Math.floor(Number.isFinite(limit) ? limit : 10)));
 }
 
 function parseFetchedMessage(response: string): InboundEmail | undefined {
@@ -547,6 +568,26 @@ function stripPop3MultilineResponse(response: string): string {
     .replace(/^\+OK[^\r\n]*(?:\r?\n)?/, "")
     .replace(/\r?\n\.\r?\n?$/, "")
     .replace(/(^|\r?\n)\.\./g, "$1.");
+}
+
+function getMailConnectTimeoutMs(): number {
+  return resolvePositiveEnvInt("MAIL_CONNECT_TIMEOUT_MS", DEFAULT_MAIL_CONNECT_TIMEOUT_MS);
+}
+
+function getMailResponseTimeoutMs(): number {
+  return resolvePositiveEnvInt("MAIL_RESPONSE_TIMEOUT_MS", DEFAULT_MAIL_RESPONSE_TIMEOUT_MS);
+}
+
+function getMailFetchResponseTimeoutMs(): number {
+  return resolvePositiveEnvInt("MAIL_FETCH_RESPONSE_TIMEOUT_MS", DEFAULT_MAIL_FETCH_RESPONSE_TIMEOUT_MS);
+}
+
+function resolvePositiveEnvInt(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(parsed, MAX_MAIL_TIMEOUT_MS);
 }
 
 export function parseRawEmailMessage(messageText: string): InboundEmail | undefined {

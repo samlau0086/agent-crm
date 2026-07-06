@@ -70,7 +70,7 @@ import { getEmailProviderCapability, getEmailProviderSetupVisibility, getOAuthEm
 import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
 import { repairEmailMojibake } from "../src/lib/email/mojibake.ts";
-import { buildImapFallbackExternalMessageId, buildPop3FallbackExternalMessageId, fetchRecentPop3Emails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId, withPop3FallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
+import { buildImapFallbackExternalMessageId, buildPop3FallbackExternalMessageId, fetchRecentImapEmails, fetchRecentPop3Emails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId, withPop3FallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
 import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
 import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
 import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.ts";
@@ -12444,6 +12444,77 @@ await run("imap sync fallback message ids prevent duplicate imports without mess
 
   const withProviderId = withImapFallbackExternalMessageId({ ...parsed, externalMessageId: "<provider@example.com>" }, "INBOX", "43");
   assert.equal(withProviderId.externalMessageId, "<provider@example.com>");
+});
+
+await run("imap provider fetches a bounded recent sequence range without scanning the whole mailbox", async () => {
+  const net = await import("node:net");
+  const commands = [];
+  const messageForSequence = (sequenceNumber) =>
+    [
+      `From: Buyer ${sequenceNumber} <buyer${sequenceNumber}@example.com>`,
+      "To: Sales <sales@example.com>",
+      `Subject: Test ${sequenceNumber}`,
+      `Date: Wed, 01 Jul 2026 00:0${sequenceNumber}:00 +0000`,
+      "",
+      `Message ${sequenceNumber}`
+    ].join("\r\n");
+  const server = net.createServer((socket) => {
+    socket.setEncoding("utf8");
+    socket.write("* OK fake imap ready\r\n");
+    socket.on("data", (chunk) => {
+      for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
+        const match = line.match(/^(A\d+)\s+(.+)$/);
+        if (!match) {
+          continue;
+        }
+        const [, tag, command] = match;
+        commands.push(command);
+        if (/^LOGIN\b/i.test(command)) {
+          socket.write(`${tag} OK LOGIN completed\r\n`);
+          continue;
+        }
+        if (/^SELECT\b/i.test(command)) {
+          socket.write(`* FLAGS (\\Seen)\r\n* 4 EXISTS\r\n${tag} OK [READ-WRITE] SELECT completed\r\n`);
+          continue;
+        }
+        const fetchMatch = command.match(/^FETCH\s+(\d+)\s+\(UID BODY\.PEEK\[\]\)$/i);
+        if (fetchMatch) {
+          const sequenceNumber = Number(fetchMatch[1]);
+          const raw = messageForSequence(sequenceNumber);
+          socket.write(`* ${sequenceNumber} FETCH (UID ${1000 + sequenceNumber} BODY[] {${Buffer.byteLength(raw, "utf8")}}\r\n${raw}\r\n)\r\n${tag} OK FETCH completed\r\n`);
+          continue;
+        }
+        if (/^LOGOUT\b/i.test(command)) {
+          socket.write(`* BYE logging out\r\n${tag} OK LOGOUT completed\r\n`);
+          continue;
+        }
+        socket.write(`${tag} BAD unsupported command\r\n`);
+      }
+    });
+  });
+  await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));
+  try {
+    const address = server.address();
+    const messages = await fetchRecentImapEmails(
+      {
+        imapHost: "127.0.0.1",
+        imapPort: address.port,
+        imapSecure: false,
+        username: "user",
+        password: "pass",
+        mailbox: "INBOX"
+      },
+      3
+    );
+    assert.deepEqual(messages.map((message) => message.subject), ["Test 2", "Test 3", "Test 4"]);
+    assert.equal(messages[0].externalMessageId, "imap:inbox:1002");
+    assert.equal(commands.some((command) => /UID SEARCH ALL/i.test(command)), false);
+    assert.equal(commands.some((command) => /^FETCH 1\b/i.test(command)), false);
+    assert.equal(commands.some((command) => /^FETCH 2\b/i.test(command)), true);
+    assert.equal(commands.some((command) => /^FETCH 4\b/i.test(command)), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 await run("pop3 sync fallback message ids prevent duplicate imports without message-id headers", () => {
