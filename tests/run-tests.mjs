@@ -90,7 +90,7 @@ import { compareRecords, findRelatedRecords, matchesSavedView } from "../src/lib
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, isValidWebhookEvent, signWebhookPayload } from "../src/lib/integrations/webhook.ts";
 import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailSendJobEnvelope, buildEmailSummarizeJobEnvelope, buildEmailSyncJobEnvelope, buildEmailTranslateJobEnvelope, buildWebhookEventEnvelope, buildWorkflowRunJobEnvelope, InlineBackgroundJobExecutor, RedisBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
 import { encodeRedisCommand, getDeadLetterQueueName } from "../src/lib/jobs/redis-queue.ts";
-import { buildFailedJobEnvelope, getMaxJobAttempts } from "../src/lib/jobs/worker-policy.ts";
+import { buildFailedJobEnvelope, getMaxJobAttempts, getMaxJobAttemptsForEnvelope } from "../src/lib/jobs/worker-policy.ts";
 import { formatJobWorkerResult, processQueuedJobEnvelope } from "../src/lib/jobs/worker.ts";
 import { checkJobHealth, toSafeDatabaseHealthError, toSafeHealthError } from "../src/lib/ops/health.ts";
 import { buildServiceHealthPayload } from "../src/lib/ops/service-health.ts";
@@ -2461,7 +2461,8 @@ await run("email workspace treats queued sync as background work and polls for i
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /result\.status === "queued"/);
   assert.match(source, /const queued = result\.accounts\.filter\(\(account\) => account\.status === "queued"\)/);
-  assert.match(source, /scheduleEmailThreadsRefreshPolling\(\{ reloadSelectedMessages: true \}\)/);
+  assert.match(source, /scheduleEmailThreadsRefreshPolling\(\{[\s\S]*reloadSelectedMessages: true[\s\S]*accountIds:/);
+  assert.match(source, /summarizeEmailSyncCompletion/);
   assert.match(source, /邮箱同步已提交后台/);
   assert.match(source, /邮箱后台同步已提交/);
   assert.match(source, /account\.status === "synced"/);
@@ -8440,22 +8441,39 @@ await run("worker retry envelopes increment attempts and preserve the last error
 
 await run("worker queue settings expose max attempts and dead letter queue names", () => {
   const previousMaxAttempts = process.env.JOB_MAX_ATTEMPTS;
+  const previousEmailSyncMaxAttempts = process.env.EMAIL_SYNC_JOB_MAX_ATTEMPTS;
   const previousDeadLetterQueue = process.env.JOB_DEAD_LETTER_QUEUE_NAME;
   try {
     delete process.env.JOB_MAX_ATTEMPTS;
+    delete process.env.EMAIL_SYNC_JOB_MAX_ATTEMPTS;
     delete process.env.JOB_DEAD_LETTER_QUEUE_NAME;
     assert.equal(getMaxJobAttempts(), 3);
     assert.equal(getDeadLetterQueueName("crm:jobs"), "crm:jobs:dead");
+    const emailSyncEnvelope = buildEmailSyncJobEnvelope(
+      { workspaceId: defaultWorkspaceId, user: { id: "user-admin" } },
+      {
+        accountId: "account-1",
+        limit: 10
+      }
+    );
+    assert.equal(getMaxJobAttemptsForEnvelope(emailSyncEnvelope), 1);
 
     process.env.JOB_MAX_ATTEMPTS = "5";
+    process.env.EMAIL_SYNC_JOB_MAX_ATTEMPTS = "2";
     process.env.JOB_DEAD_LETTER_QUEUE_NAME = "crm:jobs:failed";
     assert.equal(getMaxJobAttempts(), 5);
+    assert.equal(getMaxJobAttemptsForEnvelope(emailSyncEnvelope), 2);
     assert.equal(getDeadLetterQueueName("crm:jobs"), "crm:jobs:failed");
   } finally {
     if (previousMaxAttempts === undefined) {
       delete process.env.JOB_MAX_ATTEMPTS;
     } else {
       process.env.JOB_MAX_ATTEMPTS = previousMaxAttempts;
+    }
+    if (previousEmailSyncMaxAttempts === undefined) {
+      delete process.env.EMAIL_SYNC_JOB_MAX_ATTEMPTS;
+    } else {
+      process.env.EMAIL_SYNC_JOB_MAX_ATTEMPTS = previousEmailSyncMaxAttempts;
     }
     if (previousDeadLetterQueue === undefined) {
       delete process.env.JOB_DEAD_LETTER_QUEUE_NAME;
@@ -12701,7 +12719,7 @@ await run("pop3 sync fallback message ids prevent duplicate imports without mess
   assert.equal(withPop3FallbackExternalMessageId({ ...parsed, externalMessageId: "<provider@example.com>" }, "UID 43").externalMessageId, "<provider@example.com>");
 });
 
-await run("pop3 provider fetches recent raw messages through the mailbox adapter", async () => {
+await run("pop3 provider fetches recent raw messages through RETR by default", async () => {
   const rawMessages = [
     {
       uid: "pop3-uid-1",
@@ -12740,8 +12758,8 @@ await run("pop3 provider fetches recent raw messages through the mailbox adapter
     assert.equal(messages[0].externalMessageId, "<pop3-message@example.com>");
     assert.equal(messages[0].subject, "Newer POP3");
     assert.equal(messages[0].bodyText, ".Newer message with a leading dot.");
-    assert.ok(pop3.commands().some((command) => /^TOP 2 \d+$/i.test(command)));
-    assert.ok(!pop3.commands().some((command) => /^RETR /i.test(command)));
+    assert.ok(pop3.commands().some((command) => /^RETR 2$/i.test(command)));
+    assert.ok(!pop3.commands().some((command) => /^TOP /i.test(command)));
   } finally {
     await pop3.close();
   }
@@ -12749,7 +12767,9 @@ await run("pop3 provider fetches recent raw messages through the mailbox adapter
 
 await run("pop3 provider falls back to RETR on a fresh connection when TOP times out", async () => {
   const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+  const previousFetchMode = process.env.MAIL_POP3_FETCH_MODE;
   process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
+  process.env.MAIL_POP3_FETCH_MODE = "top";
   const pop3 = await startFakePop3Server(
     [
       {
@@ -12785,6 +12805,11 @@ await run("pop3 provider falls back to RETR on a fresh connection when TOP times
       delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
     } else {
       process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
+    }
+    if (previousFetchMode === undefined) {
+      delete process.env.MAIL_POP3_FETCH_MODE;
+    } else {
+      process.env.MAIL_POP3_FETCH_MODE = previousFetchMode;
     }
     await pop3.close();
   }

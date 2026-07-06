@@ -3948,7 +3948,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     await refreshEmailThreads({ reloadSelectedMessages: true });
     if (result.status === "queued") {
-      scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true });
+      scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true, accountIds: [result.account.id] });
       setMessage(`邮箱同步已提交后台：${result.account.emailAddress}。可以在左侧发件账户或邮箱设置页查看排队、拉取进度和最终扫描结果。`);
       router.refresh();
       return;
@@ -3985,7 +3985,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       ? `，跳过 ${skipped.length} 个：${skipped.map((account) => `${account.emailAddress}（${account.skipReason ?? "不符合同步条件"}）`).join("；")}`
       : `，跳过 ${result.skippedCount} 个`;
     if (queued.length) {
-      scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true });
+      scheduleEmailThreadsRefreshPolling({
+        reloadSelectedMessages: true,
+        accountIds: queued.map((entry) => entry.accountId).filter(Boolean)
+      });
       const queuedAccounts = queued.map((account) => account.emailAddress).join("、");
       const completedDetail = completed.length ? `；已即时完成 ${completed.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封` : "";
       setMessage(`邮箱后台同步已提交：${queued.length} 个账号（${queuedAccounts}）。状态会显示在左侧发件账户和邮箱设置页：排队中、正在拉取、最终扫描结果都会自动更新${completedDetail}${skippedDetail}，失败 ${failed.length} 个`);
@@ -4247,19 +4250,77 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
   }
 
-  function scheduleEmailThreadsRefreshPolling(options: { reloadSelectedMessages?: boolean } = {}) {
+  function summarizeEmailSyncCompletion(accounts: EmailAccount[]): { type: "message" | "error"; text: string } | undefined {
+    if (!accounts.length) {
+      return undefined;
+    }
+    const failed = accounts.filter((account) => getEmailAccountSyncStatus(account) === "failed" || isEmailAccountSyncStale(account));
+    if (failed.length) {
+      return {
+        type: "error",
+        text: `邮箱后台同步结束，但 ${failed.length} 个账号失败：${failed
+          .map((account) => `${account.emailAddress}${account.lastSyncError || account.lastConnectionError ? `（${account.lastSyncError ?? account.lastConnectionError}）` : ""}`)
+          .join("；")}`
+      };
+    }
+    const synced = accounts.filter((account) => getEmailAccountSyncStatus(account) === "synced");
+    if (!synced.length) {
+      return {
+        type: "message",
+        text: "邮箱后台同步结束，但没有账号返回扫描结果。请在邮箱设置页查看账号状态和连接日志。"
+      };
+    }
+    const scannedTotal = synced.reduce((sum, account) => sum + (account.lastSyncScannedCount ?? 0), 0);
+    const importedTotal = synced.reduce((sum, account) => sum + (account.lastSyncImportedCount ?? 0), 0);
+    const duplicateTotal = synced.reduce((sum, account) => sum + (account.lastSyncSkippedDuplicateCount ?? 0), 0);
+    return {
+      type: "message",
+      text: `邮箱后台同步完成：同步 ${synced.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封`
+    };
+  }
+
+  function scheduleEmailThreadsRefreshPolling(options: { reloadSelectedMessages?: boolean; accountIds?: string[] } = {}) {
     const intervals = [1500, 2500, 5000, 7500, 10000, 15000, 20000, 30000, 45000];
+    const pickTrackedAccounts = (accounts: EmailAccount[]) =>
+      options.accountIds?.length ? accounts.filter((account) => options.accountIds?.includes(account.id)) : accounts;
+    const applyCompletionSummary = (accounts: EmailAccount[]) => {
+      const summary = summarizeEmailSyncCompletion(pickTrackedAccounts(accounts));
+      if (!summary) {
+        return;
+      }
+      if (summary.type === "error") {
+        setError(summary.text);
+      } else {
+        setMessage(summary.text);
+      }
+      router.refresh();
+    };
     const poll = (index: number) => {
       const delay = intervals[index];
       if (delay === undefined) {
+        void refreshEmailAccounts()
+          .then((accounts) => {
+            const trackedAccounts = pickTrackedAccounts(accounts);
+            if (hasPendingEmailSync(trackedAccounts)) {
+              setError("邮箱后台同步仍未结束。请在邮箱设置页查看当前账号状态和连接错误，或稍后重新同步。");
+              return;
+            }
+            applyCompletionSummary(accounts);
+          })
+          .catch((error) => {
+            setError(error instanceof Error ? error.message : "刷新邮箱同步状态失败");
+          });
         return;
       }
       window.setTimeout(() => {
-        void Promise.all([refreshEmailThreads(options), refreshEmailAccounts()])
+        void Promise.all([refreshEmailThreads({ reloadSelectedMessages: options.reloadSelectedMessages }), refreshEmailAccounts()])
           .then(([, accounts]) => {
-            if (hasPendingEmailSync(accounts)) {
+            const trackedAccounts = pickTrackedAccounts(accounts);
+            if (hasPendingEmailSync(trackedAccounts)) {
               poll(index + 1);
+              return;
             }
+            applyCompletionSummary(accounts);
           })
           .catch((error) => {
             setError(error instanceof Error ? error.message : "刷新邮件列表失败");

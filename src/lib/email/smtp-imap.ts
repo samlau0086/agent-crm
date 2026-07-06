@@ -47,6 +47,8 @@ const DEFAULT_MAIL_IMAP_FETCH_BYTES = 262144;
 const MAX_MAIL_IMAP_FETCH_BYTES = 5000000;
 const DEFAULT_MAIL_POP3_TOP_LINES = 500;
 const MAX_MAIL_POP3_TOP_LINES = 10000;
+type Pop3FetchMode = "retr" | "top";
+const DEFAULT_MAIL_POP3_FETCH_MODE: Pop3FetchMode = "retr";
 
 export function resolveSmtpTransport(config: EmailConnectionConfig | EmailOutboundServiceConfig): SmtpTransportOptions {
   const startTls = config.smtpStartTls === true;
@@ -186,7 +188,7 @@ export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, li
 export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
   assertPop3Config(config);
   const client = await Pop3Client.connect(config);
-  let useRetrOnly = false;
+  let useRetrOnly = getMailPop3FetchMode() === "retr";
   try {
     await client.command(`USER ${config.username ?? ""}`);
     await client.command(`PASS ${config.password ?? ""}`);
@@ -664,6 +666,10 @@ function getMailImapFetchBytes(): number {
 
 function getMailPop3TopLines(): number {
   return resolvePositiveEnvIntWithMax("MAIL_POP3_TOP_LINES", DEFAULT_MAIL_POP3_TOP_LINES, MAX_MAIL_POP3_TOP_LINES);
+}
+
+function getMailPop3FetchMode(): Pop3FetchMode {
+  return process.env.MAIL_POP3_FETCH_MODE?.trim().toLowerCase() === "top" ? "top" : DEFAULT_MAIL_POP3_FETCH_MODE;
 }
 
 function resolvePositiveEnvInt(name: string, fallback: number): number {

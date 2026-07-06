@@ -6,7 +6,7 @@ import { createEmailProviderAdapter, type EmailSyncResult } from "@/lib/email/pr
 import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
 import { dequeueJob, enqueueJob, getDeadLetterQueueName, getJobQueueName } from "@/lib/jobs/redis-queue";
-import { buildFailedJobEnvelope, getMaxJobAttempts } from "@/lib/jobs/worker-policy";
+import { buildFailedJobEnvelope, getMaxJobAttemptsForEnvelope } from "@/lib/jobs/worker-policy";
 
 export interface JobWorkerResult {
   processed: boolean;
@@ -35,7 +35,7 @@ export async function runQueuedJobOnce(repository: PrismaCrmRepository = getCrmR
   } catch (error) {
     const message = error instanceof Error ? error.message : "Queued job failed";
     const failedEnvelope = buildFailedJobEnvelope(envelope, message);
-    if (failedEnvelope.attempts < getMaxJobAttempts()) {
+    if (failedEnvelope.attempts < getMaxJobAttemptsForEnvelope(envelope)) {
       await enqueueJob(queueName, failedEnvelope);
       return { processed: true, jobType: envelope.type, requeued: true, error: message };
     }
