@@ -555,7 +555,7 @@ export function parseRawEmailMessage(messageText: string): InboundEmail | undefi
   const from = firstAddress(headers.from ?? "");
   const to = splitAddressHeader(headers.to ?? "");
   const cc = splitAddressHeader(headers.cc ?? "");
-  if (!from || to.length === 0) {
+  if (!from) {
     return undefined;
   }
   const contentType = parseContentType(headers["content-type"]);
@@ -595,11 +595,18 @@ function parseHeaders(raw: string): Record<string, string> {
 }
 
 function splitAddressHeader(value: string): string[] {
-  return value.split(",").map(firstAddress).filter(Boolean);
+  return uniqueParsedEmailAddresses(value);
 }
 
 function firstAddress(value: string): string {
-  return value.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() ?? value.trim().toLowerCase();
+  return splitAddressHeader(value)[0] ?? "";
+}
+
+const EMAIL_ADDRESS_PATTERN = /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/gi;
+
+function uniqueParsedEmailAddresses(value: string): string[] {
+  const matches = decodeHeader(value).match(EMAIL_ADDRESS_PATTERN) ?? [];
+  return Array.from(new Set(matches.map((email) => email.toLowerCase())));
 }
 
 interface ParsedContentType {

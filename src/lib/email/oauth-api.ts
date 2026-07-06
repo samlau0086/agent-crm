@@ -385,7 +385,7 @@ function parseGmailMessage(payload: unknown): InboundEmail | undefined {
     snippet?: string;
   };
   const headers = normalizeHeaders(message.payload?.headers ?? []);
-  const from = headers.from;
+  const from = parseAddressList(headers.from)[0];
   const to = parseAddressList(headers.to);
   const cc = parseAddressList(headers.cc);
   const subject = headers.subject || "(no subject)";
@@ -443,12 +443,11 @@ function normalizeHeaders(headers: Array<{ name?: string; value?: string }>): Re
 }
 
 function parseAddressList(value?: string): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.match(/<([^>]+)>/)?.[1] ?? item)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const matches = (value ?? "").match(EMAIL_ADDRESS_PATTERN) ?? [];
+  return Array.from(new Set(matches.map((item) => item.toLowerCase())));
 }
+
+const EMAIL_ADDRESS_PATTERN = /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/gi;
 
 interface GmailPart {
   filename?: string;

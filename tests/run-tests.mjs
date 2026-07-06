@@ -12344,6 +12344,25 @@ await run("imap raw email parser decodes quoted printable charset html bodies", 
   assert.equal(parsed?.bodyText, "你好 Instagram");
 });
 
+await run("imap raw email parser ignores invalid recipient headers and keeps valid addresses", () => {
+  const parsed = parseRawEmailMessage(
+    [
+      "Message-ID: <invalid-recipients@example.com>",
+      "From: Sam Lau <sam@example.com>",
+      "To: undisclosed-recipients:;",
+      "Cc: Not an email, Manager <manager@example.com>",
+      "Subject: Invalid recipients",
+      "",
+      "Hello"
+    ].join("\r\n")
+  );
+
+  assert.equal(parsed?.from, "sam@example.com");
+  assert.deepEqual(parsed?.to, []);
+  assert.deepEqual(parsed?.cc, ["manager@example.com"]);
+  assert.equal(parsed?.subject, "Invalid recipients");
+});
+
 await run("email mojibake repair recovers already-stored utf8 text decoded as windows-1252", () => {
   const mojibake = new TextDecoder("windows-1252").decode(Buffer.from("看看 Instagram 上的新鲜事吧", "utf8"));
   assert.notEqual(mojibake, "看看 Instagram 上的新鲜事吧");
