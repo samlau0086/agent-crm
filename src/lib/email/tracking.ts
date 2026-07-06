@@ -2,6 +2,14 @@ import { randomUUID } from "node:crypto";
 import * as geoip from "geoip-lite";
 import type { EmailInboundMetadata, EmailTrackingEvent } from "@/lib/crm/types";
 
+type GeoIpLookupResult = { country?: string; timezone?: string } | null;
+type GeoIpModuleShape = {
+  lookup?: (ip: string) => GeoIpLookupResult;
+  default?: {
+    lookup?: (ip: string) => GeoIpLookupResult;
+  };
+};
+
 export function createEmailTrackingId(): string {
   return `trk_${randomUUID().replace(/-/g, "")}`;
 }
@@ -80,11 +88,24 @@ function lookupIpGeo(ip?: string): { country?: string; timezone?: string } {
   if (!ip || !isPublicIp(ip)) {
     return {};
   }
-  const result = geoip.lookup(ip);
+  const result = lookupGeoIp(ip);
   return {
     country: formatCountryCode(result?.country),
     timezone: result?.timezone
   };
+}
+
+function lookupGeoIp(ip: string): GeoIpLookupResult {
+  const geoipModule = geoip as unknown as GeoIpModuleShape;
+  const lookup = typeof geoipModule.lookup === "function" ? geoipModule.lookup : geoipModule.default?.lookup;
+  if (typeof lookup !== "function") {
+    return null;
+  }
+  try {
+    return lookup(ip);
+  } catch {
+    return null;
+  }
 }
 
 function formatCountryCode(countryCode?: string): string | undefined {

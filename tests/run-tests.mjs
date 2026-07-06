@@ -74,6 +74,7 @@ import { buildImapFallbackExternalMessageId, buildPop3FallbackExternalMessageId,
 import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
 import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
 import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.ts";
+import { extractInboundMetadata } from "../src/lib/email/tracking.ts";
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
@@ -12622,6 +12623,13 @@ await run("imap raw email parser ignores invalid recipient headers and keeps val
   assert.deepEqual(parsed?.to, []);
   assert.deepEqual(parsed?.cc, ["manager@example.com"]);
   assert.equal(parsed?.subject, "Invalid recipients");
+});
+
+await run("email inbound metadata geo lookup tolerates esm geoip-lite exports", () => {
+  const metadata = extractInboundMetadata({
+    received: "from mail.example.com (mail.example.com [8.8.8.8]) by mx.example.com with ESMTPS id abc"
+  });
+  assert.equal(metadata?.sourceIp, "8.8.8.8");
 });
 
 await run("email mojibake repair recovers already-stored utf8 text decoded as windows-1252", () => {
