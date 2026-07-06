@@ -9660,6 +9660,48 @@ await run("email messages without explicit thread id join matching conversation 
   assert.equal(store.listEmailMessages(context, first.threadId).length, 2);
 });
 
+await run("email threading ignores stale invalid participant addresses from historical data", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Legacy Thread Inbox",
+    emailAddress: "sales@example.com",
+    provider: "custom",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const first = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: ["sales@example.com"],
+    subject: "Legacy address cleanup",
+    bodyText: "Please review this thread."
+  });
+
+  const snapshot = store.snapshot();
+  const staleThread = snapshot.emailThreads?.find((thread) => thread.id === first.threadId);
+  assert.ok(staleThread);
+  staleThread.participantEmails = ["lin@example.com", "sales@example.com", "undisclosed-recipients:;"];
+
+  const restored = new CrmStore(snapshot);
+  const restoredContext = restored.getContext("user-admin");
+  const reply = restored.recordEmailMessage(restoredContext, {
+    accountId: account.id,
+    direction: "outbound",
+    from: "sales@example.com",
+    to: ["lin@example.com"],
+    subject: "Re: Legacy address cleanup",
+    bodyText: "This should still join the thread."
+  });
+
+  assert.equal(reply.threadId, first.threadId);
+  const cleanedThread = restored.snapshot().emailThreads?.find((thread) => thread.id === first.threadId);
+  assert.deepEqual(cleanedThread?.participantEmails.sort(), ["lin@example.com", "sales@example.com"]);
+});
+
 await run("email reply draft pre-fills recipients subject and linked record conservatively", () => {
   const inboundReply = buildEmailReplyDraft({
     accountEmail: "sales@example.com",

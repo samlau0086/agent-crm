@@ -4588,7 +4588,7 @@ export class CrmStore {
       return undefined;
     }
     const accountAddress = normalizeEmailAddress(accountEmail);
-    const participantSet = new Set(participants.map(normalizeEmailAddress).filter((email) => email !== accountAddress));
+    const participantSet = new Set(uniqueValidEmails(participants).filter((email) => email !== accountAddress));
     return (this.data.emailThreads ?? [])
       .filter((thread) => thread.workspaceId === context.workspaceId && thread.accountId === accountId && (!recordId || !thread.recordId || thread.recordId === recordId))
       .sort((left, right) => (emailThreadTime(right).localeCompare(emailThreadTime(left))))
@@ -4600,15 +4600,15 @@ export class CrmStore {
           return true;
         }
         return thread.participantEmails.some((email) => {
-          const normalized = normalizeEmailAddress(email);
-          return normalized !== accountAddress && participantSet.has(normalized);
+          const normalized = tryNormalizeEmailAddress(email);
+          return normalized !== undefined && normalized !== accountAddress && participantSet.has(normalized);
         });
       });
   }
 
   private findRecordIdByEmailParticipants(context: RequestContext, accountEmail: string, participants: string[]): string | undefined {
     const accountAddress = normalizeEmailAddress(accountEmail);
-    const emails = Array.from(new Set(participants.map((participant) => normalizeEmailAddress(participant)).filter((email) => email !== accountAddress)));
+    const emails = uniqueValidEmails(participants).filter((email) => email !== accountAddress);
     return this.data.records
       .filter((record) => record.workspaceId === context.workspaceId && record.objectKey === "contacts" && this.canAccessRecord(context, record))
       .find((record) => emails.some((email) => recordDataHasEmail(record.data, email)))?.id;
@@ -4637,7 +4637,7 @@ export class CrmStore {
   private updateEmailThreadFromMessage(thread: EmailThread, message: EmailMessage, recordId?: string): void {
     const settings = this.ensureEmailAiSettings(thread.workspaceId);
     thread.subject = thread.subject || message.subject;
-    thread.participantEmails = Array.from(new Set([...thread.participantEmails, message.from, ...message.to, ...(message.cc ?? [])].map(normalizeEmailAddress)));
+    thread.participantEmails = uniqueValidEmails([...thread.participantEmails, message.from, ...message.to, ...(message.cc ?? [])]);
     thread.recordId = recordId ?? thread.recordId;
     thread.lastMessageAt = emailMessageTime(message);
     thread.updatedAt = stamp();
@@ -4760,6 +4760,21 @@ function normalizeEmailAddress(value: string): string {
     throw new Error("Email address must be valid");
   }
   return email;
+}
+
+function tryNormalizeEmailAddress(value: string | undefined | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return normalizeEmailAddress(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function uniqueValidEmails(values: string[]): string[] {
+  return Array.from(new Set(values.map(tryNormalizeEmailAddress).filter((email): email is string => Boolean(email))));
 }
 
 function recordDataHasEmail(data: unknown, emailAddress: string): boolean {

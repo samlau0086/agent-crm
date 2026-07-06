@@ -2818,7 +2818,7 @@ export class PrismaCrmRepository {
     }
 
     const mappedMessage = mapEmailMessage(message);
-    const participantEmails = uniqueEmails([...thread.participantEmails, mappedMessage.from, ...mappedMessage.to, ...(mappedMessage.cc ?? [])]);
+    const participantEmails = uniqueValidEmails([...thread.participantEmails, mappedMessage.from, ...mappedMessage.to, ...(mappedMessage.cc ?? [])]);
     const threadMessages = await this.db.emailMessage.findMany({
       where: { workspaceId: context.workspaceId, threadId: thread.id },
       orderBy: { createdAt: "asc" }
@@ -8647,7 +8647,7 @@ export class PrismaCrmRepository {
       return undefined;
     }
     const accountAddress = normalizeEmailAddress(accountEmail);
-    const participantSet = new Set(participants.map(normalizeEmailAddress).filter((email) => email !== accountAddress));
+    const participantSet = new Set(uniqueValidEmails(participants).filter((email) => email !== accountAddress));
     const threads = await this.db.emailThread.findMany({
       where: {
         workspaceId: context.workspaceId,
@@ -8665,8 +8665,8 @@ export class PrismaCrmRepository {
         return true;
       }
       return thread.participantEmails.some((email) => {
-        const normalized = normalizeEmailAddress(email);
-        return normalized !== accountAddress && participantSet.has(normalized);
+        const normalized = tryNormalizeEmailAddress(email);
+        return normalized !== undefined && normalized !== accountAddress && participantSet.has(normalized);
       });
     });
     if (!match) {
@@ -8677,7 +8677,7 @@ export class PrismaCrmRepository {
 
   private async findVisibleRecordByEmailParticipants(context: RequestContext, accountEmail: string, participants: string[]): Promise<CrmRecord | undefined> {
     const accountAddress = normalizeEmailAddress(accountEmail);
-    const emails = Array.from(new Set(participants.map((participant) => normalizeEmailAddress(participant)).filter((email) => email !== accountAddress)));
+    const emails = uniqueValidEmails(participants).filter((email) => email !== accountAddress);
     for (const email of emails) {
       const records = await this.db.crmRecord.findMany({
         where: {
@@ -9712,6 +9712,21 @@ function normalizeEmailAddress(value: string): string {
 
 function uniqueEmails(values: string[]): string[] {
   return Array.from(new Set(values.map(normalizeEmailAddress)));
+}
+
+function tryNormalizeEmailAddress(value: string | undefined | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return normalizeEmailAddress(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function uniqueValidEmails(values: string[]): string[] {
+  return Array.from(new Set(values.map(tryNormalizeEmailAddress).filter((email): email is string => Boolean(email))));
 }
 
 function normalizeEmailSubject(value: string): string {
