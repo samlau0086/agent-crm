@@ -19571,11 +19571,32 @@ async function fetchJson<T = unknown>(
   });
 
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error ?? "请求失败");
+    throw new Error(await readFetchErrorMessage(response));
   }
 
   return (await response.json().catch(() => ({}))) as T;
+}
+
+async function readFetchErrorMessage(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string | { message?: string }; message?: string; details?: unknown }
+      | null;
+    if (typeof payload?.error === "string" && payload.error.trim()) return payload.error;
+    if (
+      payload?.error &&
+      typeof payload.error === "object" &&
+      typeof payload.error.message === "string" &&
+      payload.error.message.trim()
+    ) {
+      return payload.error.message;
+    }
+    if (typeof payload?.message === "string" && payload.message.trim()) return payload.message;
+    if (typeof payload?.details === "string" && payload.details.trim()) return payload.details;
+  }
+  const text = await response.text().catch(() => "");
+  return text.trim() || "请求失败";
 }
 
 function titleFor(activeNav: NavKey, activeObjectLabel?: string): string {

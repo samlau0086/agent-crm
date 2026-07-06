@@ -6163,9 +6163,40 @@ async function fetchJson<T = unknown>(
   });
 
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error ?? "请求失败");
+    throw new Error(await readFetchErrorMessage(response));
   }
 
   return (await response.json().catch(() => ({}))) as T;
+}
+async function readFetchErrorMessage(response: Response): Promise<string> {
+  const fallback = response.statusText || "请求失败";
+  try {
+    const text = await response.text();
+    if (!text.trim()) {
+      return fallback;
+    }
+    try {
+      const payload = JSON.parse(text) as { error?: unknown; message?: unknown; details?: unknown };
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        return payload.error;
+      }
+      if (typeof payload.message === "string" && payload.message.trim()) {
+        return payload.message;
+      }
+      if (typeof payload.details === "string" && payload.details.trim()) {
+        return payload.details;
+      }
+      if (payload.error && typeof payload.error === "object") {
+        const serialized = JSON.stringify(payload.error);
+        if (serialized !== "{}") {
+          return serialized;
+        }
+      }
+      return text;
+    } catch {
+      return text;
+    }
+  } catch {
+    return fallback;
+  }
 }

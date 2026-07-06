@@ -45,6 +45,8 @@ const DEFAULT_MAIL_FETCH_RESPONSE_TIMEOUT_MS = 60000;
 const MAX_MAIL_TIMEOUT_MS = 300000;
 const DEFAULT_MAIL_IMAP_FETCH_BYTES = 262144;
 const MAX_MAIL_IMAP_FETCH_BYTES = 5000000;
+const DEFAULT_MAIL_POP3_TOP_LINES = 500;
+const MAX_MAIL_POP3_TOP_LINES = 10000;
 
 export function resolveSmtpTransport(config: EmailConnectionConfig | EmailOutboundServiceConfig): SmtpTransportOptions {
   const startTls = config.smtpStartTls === true;
@@ -192,7 +194,7 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
     const uidlMap = await client.command("UIDL").then(parsePop3Uidl).catch(() => new Map<string, string>());
     const messages: InboundEmail[] = [];
     for (const messageNumber of messageNumbers) {
-      const raw = await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
+      const raw = await fetchPop3MessagePreview(client, messageNumber);
       const parsed = parsePop3Message(raw);
       if (parsed) {
         messages.push(withPop3FallbackExternalMessageId(parsed, uidlMap.get(messageNumber) ?? messageNumber));
@@ -202,6 +204,19 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
     return messages;
   } finally {
     client.close();
+  }
+}
+
+async function fetchPop3MessagePreview(client: Pop3Client, messageNumber: string): Promise<string> {
+  const topLines = getMailPop3TopLines();
+  try {
+    return await client.command(`TOP ${messageNumber} ${topLines}`, getMailFetchResponseTimeoutMs());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!/POP3 TOP failed: POP3 command failed/i.test(message)) {
+      throw error;
+    }
+    return client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
   }
 }
 
@@ -357,9 +372,15 @@ class Pop3Client {
   }
 
   async command(command: string, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
-    const isMultiline = /^(LIST|UIDL|RETR)\b/i.test(command);
+    const isMultiline = /^(LIST|UIDL|RETR|TOP)\b/i.test(command);
+    const commandName = command.trim().split(/\s+/)[0]?.toUpperCase() ?? "COMMAND";
     this.socket.write(`${command}\r\n`);
-    return this.readResponse(isMultiline, timeoutMs);
+    try {
+      return await this.readResponse(isMultiline, timeoutMs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown POP3 error";
+      throw new Error(`POP3 ${commandName} failed: ${message}`);
+    }
   }
 
   close(): void {
@@ -387,22 +408,39 @@ class Pop3Client {
 function connectSocket(host: string, port: number, secure: boolean): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = secure ? tls.connect({ host, port, servername: host }) : net.connect({ host, port });
-    const timeout = setTimeout(() => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.removeListener("connect", done);
+      socket.removeListener("secureConnect", done);
+      socket.removeListener("error", fail);
+    };
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(socket);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       socket.destroy();
-      reject(new Error(`Connection to ${host}:${port} timed out`));
-    }, getMailConnectTimeoutMs());
-    socket.once("connect", () => {
-      clearTimeout(timeout);
-      resolve(socket);
-    });
-    socket.once("secureConnect", () => {
-      clearTimeout(timeout);
-      resolve(socket);
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timeout);
       reject(error);
-    });
+    };
+
+    timeout = setTimeout(() => {
+      fail(new Error(`Connection to ${host}:${port} timed out`));
+    }, getMailConnectTimeoutMs());
+
+    if (secure) {
+      socket.once("secureConnect", done);
+    } else {
+      socket.once("connect", done);
+    }
+    socket.once("error", fail);
   });
 }
 
@@ -587,6 +625,10 @@ function getMailFetchResponseTimeoutMs(): number {
 
 function getMailImapFetchBytes(): number {
   return resolvePositiveEnvIntWithMax("MAIL_IMAP_FETCH_BYTES", DEFAULT_MAIL_IMAP_FETCH_BYTES, MAX_MAIL_IMAP_FETCH_BYTES);
+}
+
+function getMailPop3TopLines(): number {
+  return resolvePositiveEnvIntWithMax("MAIL_POP3_TOP_LINES", DEFAULT_MAIL_POP3_TOP_LINES, MAX_MAIL_POP3_TOP_LINES);
 }
 
 function resolvePositiveEnvInt(name: string, fallback: number): number {

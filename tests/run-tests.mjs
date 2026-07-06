@@ -196,7 +196,8 @@ function startFakeSmtpServer() {
   });
 }
 
-function startFakePop3Server(messages) {
+function startFakePop3Server(messages, options = {}) {
+  const commands = [];
   const server = createServer((socket) => {
     let commandBuffer = "";
     socket.setEncoding("utf8");
@@ -206,7 +207,10 @@ function startFakePop3Server(messages) {
       const lines = commandBuffer.split(/\r\n/);
       commandBuffer = lines.pop() ?? "";
       for (const line of lines) {
-        const [command, arg] = line.split(/\s+/, 2);
+        const parts = line.trim().split(/\s+/);
+        const command = parts[0];
+        const arg = parts[1];
+        commands.push(line);
         if (!command) continue;
         if (/^(USER|PASS)$/i.test(command)) {
           socket.write("+OK\r\n");
@@ -224,6 +228,18 @@ function startFakePop3Server(messages) {
           } else {
             socket.write(`+OK ${message.raw.length} octets\r\n${dotStuffPop3Message(message.raw)}\r\n.\r\n`);
           }
+        } else if (/^TOP$/i.test(command)) {
+          if (options.hangTop) {
+            continue;
+          }
+          const message = messages[Number(arg) - 1];
+          if (!message) {
+            socket.write("-ERR no such message\r\n");
+          } else {
+            const lineLimit = Number.parseInt(parts[2] ?? "0", 10);
+            const raw = buildPop3TopMessage(message.raw, Number.isFinite(lineLimit) ? lineLimit : 0);
+            socket.write(`+OK top of message follows\r\n${dotStuffPop3Message(raw)}\r\n.\r\n`);
+          }
         } else if (/^QUIT$/i.test(command)) {
           socket.write("+OK bye\r\n");
           socket.end();
@@ -240,10 +256,22 @@ function startFakePop3Server(messages) {
       const address = server.address();
       resolve({
         port: address.port,
+        commands: () => [...commands],
         close: () => new Promise((closeResolve, closeReject) => server.close((error) => (error ? closeReject(error) : closeResolve())))
       });
     });
   });
+}
+
+function buildPop3TopMessage(raw, lineLimit) {
+  const normalized = raw.replace(/\r?\n/g, "\r\n");
+  const separator = normalized.indexOf("\r\n\r\n");
+  if (separator < 0) {
+    return normalized;
+  }
+  const headers = normalized.slice(0, separator);
+  const body = normalized.slice(separator + 4).split("\r\n").slice(0, Math.max(0, lineLimit)).join("\r\n");
+  return `${headers}\r\n\r\n${body}`;
 }
 
 function dotStuffPop3Message(raw) {
@@ -12581,7 +12609,53 @@ await run("pop3 provider fetches recent raw messages through the mailbox adapter
     assert.equal(messages[0].externalMessageId, "<pop3-message@example.com>");
     assert.equal(messages[0].subject, "Newer POP3");
     assert.equal(messages[0].bodyText, ".Newer message with a leading dot.");
+    assert.ok(pop3.commands().some((command) => /^TOP 2 \d+$/i.test(command)));
+    assert.ok(!pop3.commands().some((command) => /^RETR /i.test(command)));
   } finally {
+    await pop3.close();
+  }
+});
+
+await run("pop3 provider does not fall back to RETR when TOP times out", async () => {
+  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
+  const pop3 = await startFakePop3Server(
+    [
+      {
+        uid: "pop3-timeout-uid",
+        raw: [
+          "Message-ID: <pop3-timeout@example.com>",
+          "From: Buyer <buyer@example.com>",
+          "To: Sales <sales@example.com>",
+          "Subject: Timeout POP3",
+          "",
+          "Large message body."
+        ].join("\r\n")
+      }
+    ],
+    { hangTop: true }
+  );
+  try {
+    await assert.rejects(
+      () =>
+        fetchRecentPop3Emails({
+          syncProtocol: "pop3",
+          pop3Host: "127.0.0.1",
+          pop3Port: pop3.port,
+          pop3Secure: false,
+          username: "sales@example.com",
+          password: "password"
+        }, 1),
+      /POP3 TOP failed: Mail server response timed out/
+    );
+    assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
+    assert.ok(!pop3.commands().some((command) => /^RETR /i.test(command)));
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+    } else {
+      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
+    }
     await pop3.close();
   }
 });
