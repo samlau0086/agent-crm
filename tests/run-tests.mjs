@@ -222,6 +222,9 @@ function startFakePop3Server(messages, options = {}) {
         } else if (/^UIDL$/i.test(command)) {
           socket.write(["+OK unique-id listing", ...messages.map((message, index) => `${index + 1} ${message.uid}`), "."].join("\r\n") + "\r\n");
         } else if (/^RETR$/i.test(command)) {
+          if (options.hangRetr) {
+            continue;
+          }
           const message = messages[Number(arg) - 1];
           if (!message) {
             socket.write("-ERR no such message\r\n");
@@ -12629,7 +12632,7 @@ await run("pop3 provider fetches recent raw messages through the mailbox adapter
   }
 });
 
-await run("pop3 provider does not fall back to RETR when TOP times out", async () => {
+await run("pop3 provider falls back to RETR on a fresh connection when TOP times out", async () => {
   const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
   process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
   const pop3 = await startFakePop3Server(
@@ -12649,20 +12652,19 @@ await run("pop3 provider does not fall back to RETR when TOP times out", async (
     { hangTop: true }
   );
   try {
-    await assert.rejects(
-      () =>
-        fetchRecentPop3Emails({
-          syncProtocol: "pop3",
-          pop3Host: "127.0.0.1",
-          pop3Port: pop3.port,
-          pop3Secure: false,
-          username: "sales@example.com",
-          password: "password"
-        }, 1),
-      /POP3 TOP failed: Mail server response timed out/
-    );
+    const messages = await fetchRecentPop3Emails({
+      syncProtocol: "pop3",
+      pop3Host: "127.0.0.1",
+      pop3Port: pop3.port,
+      pop3Secure: false,
+      username: "sales@example.com",
+      password: "password"
+    }, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].subject, "Timeout POP3");
+    assert.equal(messages[0].bodyText, "Large message body.");
     assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
-    assert.ok(!pop3.commands().some((command) => /^RETR /i.test(command)));
+    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
   } finally {
     if (previousTimeout === undefined) {
       delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
@@ -12690,7 +12692,7 @@ await run("email provider records inbound POP3 endpoint on sync timeout", async 
         ].join("\r\n")
       }
     ],
-    { hangTop: true }
+    { hangTop: true, hangRetr: true }
   );
   const account = {
     id: "pop3-status-timeout-account",
@@ -12744,8 +12746,8 @@ await run("email provider records inbound POP3 endpoint on sync timeout", async 
   const adapter = createEmailProviderAdapter(fakeRepository);
   const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
   try {
-    await assert.rejects(() => adapter.sync(context, account.id), /POP3 TOP failed: Mail server response timed out/);
-    assert.match(connectionError, new RegExp(`POP3 TOP failed: Mail server response timed out.*\\[inbound POP3 127\\.0\\.0\\.1:${pop3.port} plain\\]`));
+    await assert.rejects(() => adapter.sync(context, account.id), /POP3 RETR failed: Mail server response timed out/);
+    assert.match(connectionError, new RegExp(`POP3 RETR failed: Mail server response timed out.*\\[inbound POP3 127\\.0\\.0\\.1:${pop3.port} plain\\]`));
     assert.equal(syncError, connectionError);
     assert.equal(connectionError.includes("password"), false);
     assert.equal(connectionError.includes("sales@example.com"), false);

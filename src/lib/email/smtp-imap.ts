@@ -186,6 +186,7 @@ export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, li
 export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
   assertPop3Config(config);
   const client = await Pop3Client.connect(config);
+  let useRetrOnly = false;
   try {
     await client.command(`USER ${config.username ?? ""}`);
     await client.command(`PASS ${config.password ?? ""}`);
@@ -194,13 +195,29 @@ export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit
     const uidlMap = await client.command("UIDL").then(parsePop3Uidl).catch(() => new Map<string, string>());
     const messages: InboundEmail[] = [];
     for (const messageNumber of messageNumbers) {
-      const raw = await fetchPop3MessagePreview(client, messageNumber);
+      let raw: string;
+      if (useRetrOnly) {
+        raw = await fetchPop3MessageByRetr(config, messageNumber);
+      } else {
+        try {
+          raw = await fetchPop3MessagePreview(client, messageNumber);
+        } catch (error) {
+          if (!isPop3TopTimeout(error)) {
+            throw error;
+          }
+          useRetrOnly = true;
+          client.close();
+          raw = await fetchPop3MessageByRetr(config, messageNumber);
+        }
+      }
       const parsed = parsePop3Message(raw);
       if (parsed) {
         messages.push(withPop3FallbackExternalMessageId(parsed, uidlMap.get(messageNumber) ?? messageNumber));
       }
     }
-    await client.command("QUIT").catch(() => undefined);
+    if (!useRetrOnly) {
+      await client.command("QUIT").catch(() => undefined);
+    }
     return messages;
   } finally {
     client.close();
@@ -218,6 +235,24 @@ async function fetchPop3MessagePreview(client: Pop3Client, messageNumber: string
     }
     return client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
   }
+}
+
+async function fetchPop3MessageByRetr(config: EmailConnectionConfig, messageNumber: string): Promise<string> {
+  const client = await Pop3Client.connect(config);
+  try {
+    await client.command(`USER ${config.username ?? ""}`);
+    await client.command(`PASS ${config.password ?? ""}`);
+    const raw = await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs());
+    await client.command("QUIT").catch(() => undefined);
+    return raw;
+  } finally {
+    client.close();
+  }
+}
+
+function isPop3TopTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return /POP3 TOP failed: Mail server response timed out/i.test(message);
 }
 
 export function buildImapFallbackExternalMessageId(mailbox: string, uid: string): string {

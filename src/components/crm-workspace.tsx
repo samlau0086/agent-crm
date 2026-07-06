@@ -4062,9 +4062,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return fetchedThreads;
   }
 
-  async function refreshEmailAccounts() {
+  async function refreshEmailAccounts(): Promise<EmailAccount[]> {
     const accounts = await fetchJson<EmailAccount[]>("/api/email/accounts", { method: "GET" });
     setEmailAccounts(accounts);
+    return accounts;
   }
 
   async function openEmailThread(threadId: string) {
@@ -4226,14 +4227,29 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   function scheduleEmailThreadsRefreshPolling(options: { reloadSelectedMessages?: boolean } = {}) {
-    const delays = [1500, 3500, 6500, 10000, 15000, 22000, 30000];
-    delays.forEach((delay) => {
+    const intervals = [1500, 2500, 5000, 7500, 10000, 15000, 20000, 30000, 45000];
+    const poll = (index: number) => {
+      const delay = intervals[index];
+      if (delay === undefined) {
+        return;
+      }
       window.setTimeout(() => {
-        void Promise.all([refreshEmailThreads(options), refreshEmailAccounts()]).catch((error) => {
-          setError(error instanceof Error ? error.message : "刷新邮件列表失败");
-        });
+        void Promise.all([refreshEmailThreads(options), refreshEmailAccounts()])
+          .then(([, accounts]) => {
+            if (hasPendingEmailSync(accounts)) {
+              poll(index + 1);
+            }
+          })
+          .catch((error) => {
+            setError(error instanceof Error ? error.message : "刷新邮件列表失败");
+          });
       }, delay);
-    });
+    };
+    poll(0);
+  }
+
+  function hasPendingEmailSync(accounts: EmailAccount[]): boolean {
+    return accounts.some((account) => account.lastSyncStatus === "queued" || account.lastSyncStatus === "running");
   }
 
   async function updateEmailThread(threadId: string, recordId: string) {
