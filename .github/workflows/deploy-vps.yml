@@ -396,6 +396,25 @@ jobs:
             fi
           fi
           docker compose pull
+          crm_image="$(grep -E '^CRM_IMAGE=' .env | sed -E "s/^CRM_IMAGE='?([^']*)'?.*/\1/")"
+          if [ -z "$crm_image" ]; then
+            echo "::error title=Missing CRM image::CRM_IMAGE is missing from the deployed .env file"
+            exit 1
+          fi
+          echo "Deploying CRM image: $crm_image"
+          docker image inspect "$crm_image" --format 'id={{.Id}} digests={{join .RepoDigests ","}}' || true
+          migration_path="prisma/migrations/20260707110000_company_domain_optional/migration.sql"
+          migration_sql="$(docker run --rm --entrypoint sh "$crm_image" -lc "cat \"$migration_path\"")"
+          echo "===== CRM image migration sanity check: $migration_path ====="
+          printf '%s\n' "$migration_sql" | sed -n '1,20p'
+          if printf '%s\n' "$migration_sql" | grep -q 'WHERE "objectKey"'; then
+            echo "::error title=Stale CRM image migration::Image $crm_image still contains the old company domain migration SQL. Rebuild and push a fresh image before deploying."
+            exit 1
+          fi
+          if ! printf '%s\n' "$migration_sql" | grep -q 'FROM "ObjectDefinition" object_definition'; then
+            echo "::error title=Unexpected CRM image migration::Image $crm_image does not contain the expected fixed company domain migration SQL."
+            exit 1
+          fi
           dump_diagnostics() {
             echo "===== docker compose ps -a ====="
             docker compose ps -a || true
