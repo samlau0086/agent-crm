@@ -3637,11 +3637,23 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /onViewChange=\{\(nextView\) => \{[\s\S]*emailView: nextView[\s\S]*router\.push\(nextPath\)/);
   assert.match(source, /onRouteChange=\{\(patch\) => \{[\s\S]*const nextPath = buildEmailRoutePath\(patch\)[\s\S]*router\.push\(nextPath\)/);
   assert.match(source, /const applyEmailRoute = useCallback\(\(patch: EmailRoutePatch\) => \{[\s\S]*onRouteChange\(\{[\s\S]*mailbox: nextMailbox[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId/);
+  assert.match(source, /const pendingDetailRouteThreadIdRef = useRef\(""\)/);
+  assert.match(source, /pendingDetailRouteThreadIdRef\.current = nextMode === "detail" && nextThreadId \? nextThreadId : ""/);
+  assert.match(source, /if \(!detailThreadId && pendingDetailThreadId && selectedThreadId === pendingDetailThreadId\) \{[\s\S]*return;[\s\S]*\}/);
   assert.match(source, /onClick=\{\(\) => \{ applyEmailRoute\(\{ mailbox: item\.key, mailMode: "list", threadId: "" \}\)/);
   assert.match(source, /function openThreadDetail\(threadId: string\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId \}\)/);
   assert.match(source, /aria-label="返回列表"[\s\S]*onClick=\{\(\) => applyEmailRoute\(\{ mailMode: "list", threadId: "" \}\)\}/);
   assert.match(source, /data-testid="email-tab-settings"[\s\S]*onClick=\{\(\) => onViewChange\("settings"\)\}/);
   assert.match(source, /data-testid="email-tab-ai"[\s\S]*onClick=\{\(\) => onViewChange\("ai"\)\}/);
+});
+
+await run("email thread state updates do not reorder the visible list", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+
+  assert.match(source, /function replaceEmailThreadsInPlace\(current: EmailThread\[\], updated: EmailThread\[\]\): EmailThread\[\]/);
+  assert.match(source, /const merged = current\.map\(\(thread\) => updates\.get\(thread\.id\) \?\? thread\)/);
+  assert.match(source, /setEmailThreads\(\(current\) => replaceEmailThreadsInPlace\(current, fetchedThreads\)\)/);
+  assert.match(source, /setEmailThreads\(\(current\) => replaceEmailThreadsInPlace\(current, \[thread\]\)\)/);
 });
 
 await run("email category tabs only apply to inbox", () => {

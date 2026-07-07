@@ -1385,6 +1385,16 @@ function buildEmailThreadUiStateMap(threads: EmailThread[]): Record<string, Emai
   return Object.fromEntries(threads.map((thread) => [thread.id, emailThreadUiStateFromThread(thread)]));
 }
 
+function replaceEmailThreadsInPlace(current: EmailThread[], updated: EmailThread[]): EmailThread[] {
+  if (!updated.length) {
+    return current;
+  }
+  const updates = new Map(updated.map((thread) => [thread.id, thread]));
+  const merged = current.map((thread) => updates.get(thread.id) ?? thread);
+  const existingIds = new Set(current.map((thread) => thread.id));
+  return [...merged, ...updated.filter((thread) => !existingIds.has(thread.id))];
+}
+
 const navigationItems: typeof navItems = navItems.some((item) => item.key === "email")
   ? navItems
   : [...navItems.slice(0, -1), { key: "email", label: "邮件", icon: Mail }, navItems[navItems.length - 1]];
@@ -4189,7 +4199,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const fetchedThreads = await Promise.all(
       uniqueThreadIds.map((threadId) => fetchJson<EmailThread>(`/api/email/threads/${threadId}`, { method: "GET" }))
     );
-    setEmailThreads((current) => mergeEmailThreads(current, fetchedThreads));
+    setEmailThreads((current) => replaceEmailThreadsInPlace(current, fetchedThreads));
     return fetchedThreads;
   }
 
@@ -4561,7 +4571,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       method: "PATCH",
       body: patch
     });
-    setEmailThreads((current) => [thread, ...current.filter((candidate) => candidate.id !== thread.id)]);
+    setEmailThreads((current) => replaceEmailThreadsInPlace(current, [thread]));
     return thread;
   }
 
@@ -8499,6 +8509,7 @@ function EmailWorkspace({
   const handledComposeOpenRequestRef = useRef("");
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const pendingDetailRouteThreadIdRef = useRef("");
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || hasEmailDraftBody(emailDraft) || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const signatureOptions = useMemo(() => getEmailSignatureOptions(signatures, accounts, emailDraft.accountId), [accounts, emailDraft.accountId, signatures]);
   const selectedSignature = getSelectedEmailSignature(emailDraft, signatures, accounts);
@@ -8727,6 +8738,7 @@ function EmailWorkspace({
     const nextSearch = patch.search ?? searchQuery;
     const nextThreadId = patch.threadId ?? (nextMode === "detail" ? selectedThreadId : "");
 
+    pendingDetailRouteThreadIdRef.current = nextMode === "detail" && nextThreadId ? nextThreadId : "";
     setMailbox(nextMailbox);
     setCategory(nextCategory);
     setMailMode(nextMode);
@@ -8809,6 +8821,13 @@ function EmailWorkspace({
   }, [accounts, applyEmailRoute, selectedMailboxAccountId]);
 
   useEffect(() => {
+    const pendingDetailThreadId = pendingDetailRouteThreadIdRef.current;
+    if (detailThreadId && pendingDetailThreadId === detailThreadId) {
+      pendingDetailRouteThreadIdRef.current = "";
+    }
+    if (!detailThreadId && pendingDetailThreadId && selectedThreadId === pendingDetailThreadId) {
+      return;
+    }
     setMailbox((current) => (current === routeMailbox ? current : routeMailbox));
     setCategory((current) => (current === routeCategory ? current : routeCategory));
     setMailMode((current) => {
@@ -9103,7 +9122,6 @@ function EmailWorkspace({
   function openThreadDetail(threadId: string) {
     applyEmailRoute({ mailMode: "detail", threadId });
     patchThreadUiState([threadId], { read: true });
-    persistThreadState(threadId, { read: true });
     onSelectThread(threadId);
   }
 
