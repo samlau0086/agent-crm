@@ -1284,7 +1284,7 @@ function isEmailMessageInMailbox(message: EmailMessage, mailbox: EmailMailboxKey
 
 function getEmailThreadMailboxMessages(messages: EmailMessage[], mailbox: EmailMailboxKey): EmailMessage[] {
   if (mailbox === "all") {
-    return messages;
+    return messages.filter((message) => message.direction === "inbound" && message.status === "received");
   }
   if (mailbox === "inbox" || mailbox === "sent" || mailbox === "scheduled" || mailbox === "drafts") {
     return messages.filter((message) => isEmailMessageInMailbox(message, mailbox));
@@ -8551,6 +8551,7 @@ function EmailWorkspace({
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasScheduledSend(messages);
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
+      const hasAllMailMessage = getEmailThreadMailboxMessages(messages, "all").length > 0;
       const matchesMailbox =
         mailbox === "trash"
           ? isDeleted
@@ -8569,7 +8570,7 @@ function EmailWorkspace({
                     : mailbox === "drafts"
                       ? hasDraft && !isDeleted
                       : mailbox === "all"
-                        ? !isDeleted
+                        ? !isDeleted && hasAllMailMessage
                         : !isDeleted && !isArchived && !isSnoozed && hasInboxMessage;
       const matchesCategory = mailbox === "inbox" ? threadCategory === category : true;
       const matchesLabel = labelFilter ? displayLabels.includes(labelFilter.toLowerCase()) : true;
@@ -8589,6 +8590,7 @@ function EmailWorkspace({
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasScheduledSend(messages);
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
+      const hasAllMailMessage = getEmailThreadMailboxMessages(messages, "all").length > 0;
       if (!isDeleted && !isArchived && !isSnoozed && hasInboxMessage) counts.inbox += 1;
       if (state.starred && !isDeleted) counts.starred += 1;
       if (isSnoozed && !isDeleted) counts.snoozed += 1;
@@ -8598,7 +8600,7 @@ function EmailWorkspace({
       if (hasDraft && !isDeleted) counts.drafts += 1;
       if (isArchived && !isDeleted) counts.archived += 1;
       if (isDeleted) counts.trash += 1;
-      if (!isDeleted) counts.all += 1;
+      if (!isDeleted && hasAllMailMessage) counts.all += 1;
     }
     return counts;
   }, [accountFilteredThreads, messagesByThread, threadUiState]);

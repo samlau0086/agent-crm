@@ -4452,6 +4452,10 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts", "trash"\]\.includes\(mailbox\)/);
   assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
   assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
+  assert.match(workspace, /if \(mailbox === "all"\) \{\s*return messages\.filter\(\(message\) => message\.direction === "inbound" && message\.status === "received"\);\s*\}/);
+  assert.match(workspace, /const hasAllMailMessage = getEmailThreadMailboxMessages\(messages, "all"\)\.length > 0/);
+  assert.match(workspace, /mailbox === "all"\s*\?\s*!isDeleted && hasAllMailMessage/);
+  assert.match(workspace, /if \(!isDeleted && hasAllMailMessage\) counts\.all \+= 1/);
   assert.match(workspace, /if \(mailbox === "trash"\) \{[\s\S]*const preferredMessage = preferredMessageId \? messages\.find/);
   assert.match(workspace, /const inboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)/);
   assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
