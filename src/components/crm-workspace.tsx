@@ -217,6 +217,7 @@ type EmailMailMode = "list" | "detail";
 type EmailRoutePatch = {
   accountId?: string;
   category?: EmailCategoryKey;
+  emailView?: EmailWorkspaceView;
   label?: string;
   mailbox?: EmailMailboxKey;
   mailMode?: EmailMailMode;
@@ -560,6 +561,10 @@ function normalizeEmailMailMode(value: string | null): EmailMailMode {
   return value === "detail" ? "detail" : "list";
 }
 
+function normalizeEmailWorkspaceView(value: string | null): EmailWorkspaceView {
+  return value === "settings" || value === "ai" ? value : "mail";
+}
+
 function routeEmailThreadIdToMode(threadId: string, mode: EmailMailMode): EmailMailMode {
   return threadId ? "detail" : mode;
 }
@@ -578,6 +583,9 @@ function buildEmailRoutePath(patch: EmailRoutePatch): string {
   }
   if (patch.search) {
     params.set("mailSearch", patch.search);
+  }
+  if (patch.emailView && patch.emailView !== "mail") {
+    params.set("emailView", patch.emailView);
   }
   if (patch.mailMode === "detail" && patch.threadId) {
     params.set("mailMode", "detail");
@@ -1882,6 +1890,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeEmailMailbox = normalizeEmailMailboxKey(searchParams.get("mailbox"));
   const routeEmailCategory = normalizeEmailCategoryKey(searchParams.get("category"));
   const routeEmailMode = normalizeEmailMailMode(searchParams.get("mailMode"));
+  const routeEmailView = normalizeEmailWorkspaceView(searchParams.get("emailView"));
   const routeEmailAccountId = searchParams.get("accountId") ?? allEmailAccountsKey;
   const routeEmailLabel = searchParams.get("label") ?? "";
   const routeEmailSearch = searchParams.get("mailSearch") ?? "";
@@ -1958,7 +1967,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailMessagesByThread, setEmailMessagesByThread] = useState<Record<string, EmailMessage[]>>({});
   const [selectedEmailThreadId, setSelectedEmailThreadId] = useState(routeEmailThreadId || props.emailThreads[0]?.id || "");
   const [emailDetailThreadId, setEmailDetailThreadId] = useState(routeEmailThreadId);
-  const [emailWorkspaceView, setEmailWorkspaceView] = useState<EmailWorkspaceView>("mail");
+  const [emailWorkspaceView, setEmailWorkspaceView] = useState<EmailWorkspaceView>(routeEmailView);
   const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
   const [emailSyncSettings, setEmailSyncSettings] = useState<EmailSyncSettings>(props.emailSyncSettings ?? defaultEmailSyncSettings);
   const [customerLevelSettings, setCustomerLevelSettings] = useState<CustomerLevelSettings>(props.customerLevelSettings);
@@ -2507,7 +2516,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
       setShowListSettings(false);
     } else if (nextNav === "email") {
-      setEmailWorkspaceView("mail");
+      setEmailWorkspaceView(routeEmailView);
       if (routeEmailThreadId) {
         setSelectedEmailThreadId(routeEmailThreadId);
         setEmailDetailThreadId(routeEmailThreadId);
@@ -2515,7 +2524,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         setEmailDetailThreadId("");
       }
     }
-  }, [pathname, routeEmailThreadId, routeObjectKeys, routeRecordId, routeReturnEmailThreadId, routeMode]);
+  }, [pathname, routeEmailThreadId, routeEmailView, routeObjectKeys, routeRecordId, routeReturnEmailThreadId, routeMode]);
 
   useEffect(() => {
     setRecordPool(routeRecordPool);
@@ -2628,7 +2637,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setSelectedEmailThreadId(routeEmailThreadId);
     }
     setEmailDetailThreadId(routeEmailThreadId);
-    setEmailWorkspaceView("mail");
+    setEmailWorkspaceView(routeEmailView);
     if (!emailMessagesByThread[routeEmailThreadId]) {
       let didCancel = false;
       fetchJson<EmailMessage[]>(`/api/email/threads/${routeEmailThreadId}/messages`, { method: "GET" })
@@ -2646,7 +2655,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         didCancel = true;
       };
     }
-  }, [emailMessagesByThread, routeEmailThreadId, selectedEmailThreadId]);
+  }, [emailMessagesByThread, routeEmailThreadId, routeEmailView, selectedEmailThreadId]);
 
   useEffect(() => {
     if (activeNav !== "email" || !routeEmailCompose) {
@@ -6905,7 +6914,22 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUploadMediaAssets={uploadMediaAssets}
             onAiPurposeChange={setEmailAiPurpose}
             onAiPromptChange={setEmailAiPrompt}
-            onViewChange={setEmailWorkspaceView}
+            onViewChange={(nextView) => {
+              setEmailWorkspaceView(nextView);
+              const nextPath = buildEmailRoutePath({
+                accountId: routeEmailAccountId,
+                category: routeEmailCategory,
+                emailView: nextView,
+                label: routeEmailLabel,
+                mailbox: routeEmailMailbox,
+                mailMode: routeEmailMode,
+                search: routeEmailSearch,
+                threadId: routeEmailThreadId
+              });
+              if (`${pathname}?${searchParams.toString()}` !== nextPath) {
+                router.push(nextPath);
+              }
+            }}
             onRouteChange={(patch) => {
               const nextPath = buildEmailRoutePath(patch);
               if (`${pathname}?${searchParams.toString()}` !== nextPath) {

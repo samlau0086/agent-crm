@@ -3581,16 +3581,23 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /const routeEmailMailbox = normalizeEmailMailboxKey\(searchParams\.get\("mailbox"\)\)/);
   assert.match(source, /const routeEmailCategory = normalizeEmailCategoryKey\(searchParams\.get\("category"\)\)/);
   assert.match(source, /const routeEmailMode = normalizeEmailMailMode\(searchParams\.get\("mailMode"\)\)/);
+  assert.match(source, /const routeEmailView = normalizeEmailWorkspaceView\(searchParams\.get\("emailView"\)\)/);
   assert.match(source, /const routeEmailAccountId = searchParams\.get\("accountId"\) \?\? allEmailAccountsKey/);
   assert.match(source, /const routeEmailSearch = searchParams\.get\("mailSearch"\) \?\? ""/);
   assert.match(source, /function buildEmailRoutePath\(patch: EmailRoutePatch\)/);
   assert.match(source, /params\.set\("mailbox", patch\.mailbox \?\? "inbox"\)/);
+  assert.match(source, /if \(patch\.emailView && patch\.emailView !== "mail"\) \{[\s\S]*params\.set\("emailView", patch\.emailView\)/);
   assert.match(source, /params\.set\("mailMode", "detail"\)[\s\S]*params\.set\("emailThreadId", patch\.threadId\)/);
+  assert.match(source, /const \[emailWorkspaceView, setEmailWorkspaceView\] = useState<EmailWorkspaceView>\(routeEmailView\)/);
+  assert.match(source, /setEmailWorkspaceView\(routeEmailView\)/);
+  assert.match(source, /onViewChange=\{\(nextView\) => \{[\s\S]*emailView: nextView[\s\S]*router\.push\(nextPath\)/);
   assert.match(source, /onRouteChange=\{\(patch\) => \{[\s\S]*const nextPath = buildEmailRoutePath\(patch\)[\s\S]*router\.push\(nextPath\)/);
   assert.match(source, /const applyEmailRoute = useCallback\(\(patch: EmailRoutePatch\) => \{[\s\S]*onRouteChange\(\{[\s\S]*mailbox: nextMailbox[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId/);
   assert.match(source, /onClick=\{\(\) => \{ applyEmailRoute\(\{ mailbox: item\.key, mailMode: "list", threadId: "" \}\)/);
   assert.match(source, /function openThreadDetail\(threadId: string\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId \}\)/);
   assert.match(source, /aria-label="返回列表"[\s\S]*onClick=\{\(\) => applyEmailRoute\(\{ mailMode: "list", threadId: "" \}\)\}/);
+  assert.match(source, /data-testid="email-tab-settings"[\s\S]*onClick=\{\(\) => onViewChange\("settings"\)\}/);
+  assert.match(source, /data-testid="email-tab-ai"[\s\S]*onClick=\{\(\) => onViewChange\("ai"\)\}/);
 });
 
 await run("email category tabs only apply to inbox", () => {
