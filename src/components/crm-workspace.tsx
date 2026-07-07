@@ -1204,6 +1204,64 @@ function emailMessageTimeValue(message: EmailMessage): string {
   return message.sentAt ?? message.receivedAt ?? message.scheduledSendAt ?? message.sendAttemptedAt ?? message.createdAt;
 }
 
+function getEmailMessageSendStatus(message: EmailMessage | undefined): { key: string; label: string; title: string; icon: "calendar" | "send" } | undefined {
+  if (!message || message.direction !== "outbound") {
+    return undefined;
+  }
+  if (message.scheduledSendAt && (message.status === "queued" || message.status === "sending")) {
+    return {
+      key: "scheduled",
+      label: `待发送 ${formatDate(message.scheduledSendAt)}`,
+      title: `邮件将在 ${formatDateTimeSeconds(message.scheduledSendAt)} 发送`,
+      icon: "calendar"
+    };
+  }
+  if (message.status === "queued") {
+    return {
+      key: "queued",
+      label: "已队列",
+      title: "邮件已进入后台发送队列，等待 worker 发送",
+      icon: "send"
+    };
+  }
+  if (message.status === "sending") {
+    return {
+      key: "sending",
+      label: "发送中",
+      title: message.sendAttemptedAt ? `开始发送：${formatDateTimeSeconds(message.sendAttemptedAt)}` : "正在发送邮件",
+      icon: "send"
+    };
+  }
+  if (message.status === "sent") {
+    return {
+      key: "sent",
+      label: message.sentAt ? `已发送 ${formatDate(message.sentAt)}` : "已发送",
+      title: message.sentAt ? `发送成功：${formatDateTimeSeconds(message.sentAt)}` : "邮件已发送成功",
+      icon: "send"
+    };
+  }
+  if (message.status === "failed") {
+    return {
+      key: "failed",
+      label: "发送失败",
+      title: message.failureReason ? `发送失败：${message.failureReason}` : "邮件发送失败",
+      icon: "send"
+    };
+  }
+  return undefined;
+}
+
+function getEmailThreadSendStatus(messages: EmailMessage[], displayMessage: EmailMessage | undefined): ReturnType<typeof getEmailMessageSendStatus> {
+  const displayStatus = getEmailMessageSendStatus(displayMessage);
+  if (displayStatus) {
+    return displayStatus;
+  }
+  const latestOutboundMessage = messages
+    .filter((message) => message.direction === "outbound")
+    .sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))[0];
+  return getEmailMessageSendStatus(latestOutboundMessage);
+}
+
 function isEmailMessageInMailbox(message: EmailMessage, mailbox: EmailMailboxKey): boolean {
   if (mailbox === "inbox") {
     return message.direction === "inbound" && message.status === "received";
@@ -4666,6 +4724,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       translatedAt: undefined
     }));
     setMessage(messages.length > 1 ? `已创建 ${messages.length} 封单显邮件${message.scheduledSendAt ? `，将在 ${formatDate(message.scheduledSendAt)} 发送` : ""}` : formatEmailSendResultMessage(message));
+    for (const delayMs of [2500, 8000]) {
+      window.setTimeout(() => {
+        void Promise.all([
+          refreshEmailThreadsByIds(sentThreadIds),
+          ...sentThreadIds.map((threadId) => loadEmailMessages(threadId))
+        ]).catch(() => undefined);
+      }, delayMs);
+    }
     router.refresh();
   }
 
@@ -10029,7 +10095,7 @@ function EmailWorkspace({
                   const snippet = repairEmailMojibake(displayMessage?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
                   const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
-                  const scheduledSendAt = emailThreadNextScheduledSendAt(messages);
+                  const sendStatus = getEmailThreadSendStatus(messages, displayMessage);
                   const rowSubject = displayMessage?.subject || thread.subject;
                   const rowTime = displayMessage ? emailMessageTimeValue(displayMessage) : emailThreadTimeValue(thread);
                   return (
@@ -10071,7 +10137,12 @@ function EmailWorkspace({
                         <span className="gmail-thread-labels">
                           {labels.map((label) => <span className="badge" key={label}>{label}</span>)}
                           {isSnoozed && state.snoozedUntil ? <span className="badge">稍后 {formatDate(state.snoozedUntil)}</span> : null}
-                          {scheduledSendAt ? <span className="badge"><CalendarClock size={12} /> {formatDate(scheduledSendAt)}</span> : null}
+                          {sendStatus ? (
+                            <span className={`badge email-send-status email-send-status-${sendStatus.key}`} data-testid="email-thread-send-status" title={sendStatus.title}>
+                              {sendStatus.icon === "calendar" ? <CalendarClock size={12} /> : <Send size={12} />}
+                              {sendStatus.label}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                       <span className="gmail-thread-date">{formatDate(rowTime)}</span>
@@ -10326,6 +10397,7 @@ function EmailWorkspace({
                   <div className="email-message-list">
                     {selectedDisplayedMessages.map((message) => {
                       const messageHasExternalImages = emailHtmlHasExternalImages(message.bodyHtml ?? "");
+                      const sendStatus = getEmailMessageSendStatus(message);
                       return (
                       <article className="email-message-card gmail-message-card" key={message.id}>
                         <div className="email-message-header">
@@ -10336,8 +10408,11 @@ function EmailWorkspace({
                           <div className="activity-meta">{formatDate(message.createdAt)}</div>
                         </div>
                         <div className="toolbar" style={{ marginTop: 8 }}>
-                          {message.scheduledSendAt && (message.status === "queued" || message.status === "sending") ? (
-                            <span className="badge"><CalendarClock size={12} /> 计划发送 {formatDate(message.scheduledSendAt)}</span>
+                          {sendStatus ? (
+                            <span className={`badge email-send-status email-send-status-${sendStatus.key}`} data-testid="email-message-send-status" title={sendStatus.title}>
+                              {sendStatus.icon === "calendar" ? <CalendarClock size={12} /> : <Send size={12} />}
+                              {sendStatus.label}
+                            </span>
                           ) : null}
                           {message.groupSendMode ? <span className="badge">群发单显</span> : null}
                           {message.trackingEnabled ? <span className="badge">追踪已开启</span> : null}

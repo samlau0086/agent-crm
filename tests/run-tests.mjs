@@ -4440,9 +4440,15 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /data-testid="email-compose-group-send"/);
   assert.match(workspace, /data-testid="email-compose-tracking"/);
   assert.match(workspace, /function removeEmailLabel\(threadId: string, label: string\)/);
-  assert.match(workspace, /计划发送 \{formatDate\(message\.scheduledSendAt\)\}/);
+  assert.match(workspace, /function getEmailMessageSendStatus\(message: EmailMessage \| undefined\)/);
+  assert.match(workspace, /label: "已队列"/);
+  assert.match(workspace, /label: "发送中"/);
+  assert.match(workspace, /label: message\.sentAt \? `已发送 \$\{formatDate\(message\.sentAt\)\}` : "已发送"/);
+  assert.match(workspace, /data-testid="email-thread-send-status"/);
+  assert.match(workspace, /data-testid="email-message-send-status"/);
   assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
+  assert.match(workspace, /for \(const delayMs of \[2500, 8000\]\)/);
   assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts", "trash"\]\.includes\(mailbox\)/);
   assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
   assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
