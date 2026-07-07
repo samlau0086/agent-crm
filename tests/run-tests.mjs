@@ -3143,6 +3143,30 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(threadRoute, /deleteEmailThread\(context, params\.id\)/);
 });
 
+await run("contact and company editing refinements are guarded", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const seed = readFileSync("src/lib/crm/seed.ts", "utf8");
+  const migration = readFileSync("prisma/migrations/20260707110000_company_domain_optional/migration.sql", "utf8");
+
+  assert.match(source, /function contactMethodTypePatch/);
+  assert.match(source, /contactMethodTypePatch\(method, event\.target\.value as ContactMethodType\)/);
+  assert.match(source, /function hasRecordUpdatePatchChanges/);
+  assert.match(source, /selectedRecordApprovalSaveDisabled/);
+  assert.match(source, /saveDisabled=\{selectedRecordApprovalSaveDisabled\}/);
+  assert.match(source, /saveDisabled\?: boolean/);
+  assert.match(source, /disabled=\{isPending \|\| !title\.trim\(\) \|\| Boolean\(saveDisabled\)\}/);
+  assert.match(source, /function TimezoneSearchInput/);
+  assert.match(source, /<TimezoneSearchInput/);
+  assert.match(source, /function AddressAiParserButton/);
+  assert.match(source, /function parseAddressWithLocalAi/);
+  assert.match(source, /isAddressTextField\(field\)/);
+  assert.match(source, /formatParsedAddressText\(address\)/);
+  assert.match(source, /<AddressAiParserButton[\s\S]*initialText=\{formatParsedAddressText\(address\)\}/);
+  assert.match(seed, /id: "field-company-domain"[\s\S]*required: false/);
+  assert.match(migration, /"objectKey" = 'companies'/);
+  assert.match(migration, /"key" = 'domain'/);
+});
+
 await run("record create and detail panels render full width in the main content flow", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");

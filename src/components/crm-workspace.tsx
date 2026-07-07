@@ -206,6 +206,34 @@ const customerLevelFieldKeys = new Set([
   "customerLevelSuggestedAt"
 ]);
 
+function normalizeComparableRecordValue(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  return JSON.stringify(value);
+}
+
+function hasRecordUpdatePatchChanges(record: CrmRecord, patch: RecordApprovalPatch): boolean {
+  if (typeof patch.title === "string" && patch.title.trim() !== record.title.trim()) {
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "ownerId")) {
+    const nextOwnerId = patch.ownerId ? String(patch.ownerId) : "";
+    const currentOwnerId = record.ownerId ?? "";
+    if (nextOwnerId !== currentOwnerId) {
+      return true;
+    }
+  }
+  if (typeof patch.stageKey === "string" && patch.stageKey !== (record.stageKey ?? "")) {
+    return true;
+  }
+  const data = patch.data && typeof patch.data === "object" && !Array.isArray(patch.data) ? patch.data : {};
+  return Object.entries(data).some(([key, nextValue]) => normalizeComparableRecordValue(nextValue) !== normalizeComparableRecordValue(record.data[key]));
+}
+
 type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "automation" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type DealWorkspaceView = "pipeline" | "list";
@@ -2381,6 +2409,23 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
   const currencies = useMemo(() => getCurrencyDefinitions(currencyRecords), [currencyRecords]);
+  const selectedRecordUpdatePatch = useMemo<RecordApprovalPatch>(() => {
+    if (!selectedRecord) {
+      return {};
+    }
+    return {
+      title: editTitle.trim(),
+      data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
+      stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
+      ownerId: editOwnerId || undefined
+    };
+  }, [currencyRecords, editOwnerId, editTitle, editValues, selectedFields, selectedRecord]);
+  const selectedRecordApprovalSaveDisabled = useMemo(() => {
+    if (!selectedRecord || !editApprovalObjectKeys.has(selectedRecord.objectKey)) {
+      return false;
+    }
+    return !hasRecordUpdatePatchChanges(selectedRecord, selectedRecordUpdatePatch);
+  }, [selectedRecord, selectedRecordUpdatePatch]);
   const totalPipeline = useMemo(
     () => props.dashboardSummary.totalPipeline,
     [props.dashboardSummary.totalPipeline]
@@ -3212,13 +3257,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       return;
     }
 
-    const updatePatch: RecordApprovalPatch = {
-      title: editTitle.trim(),
-      data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
-      stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
-      ownerId: editOwnerId || undefined
-    };
-    await submitRecordUpdatePatch(updatePatch);
+    await submitRecordUpdatePatch(selectedRecordUpdatePatch);
     if (selectedRecord.objectKey === "contacts") {
       setContactMethodEditingId("");
       setContactMethodEditingRecordId("");
@@ -5990,6 +6029,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           pendingDeleteRequest={selectedRecordPendingDeleteRequest}
                           pendingUpdateRequest={selectedRecordPendingUpdateRequest}
                           record={selectedRecord}
+                          saveDisabled={selectedRecordApprovalSaveDisabled}
                           saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                           title={editTitle}
                           users={props.users}
@@ -6039,6 +6079,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           pendingUpdateRequest={selectedRecordPendingUpdateRequest}
                           primaryContactId={editValues[companyPrimaryContactValueKey] ?? ""}
                           record={selectedRecord}
+                          saveDisabled={selectedRecordApprovalSaveDisabled}
                           saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                           shippingAddressEditingId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
                           shippingAddressValue={editValues[companyShippingAddressesValueKey] ?? ""}
@@ -6103,6 +6144,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           pendingUpdateRequest={selectedRecordPendingUpdateRequest}
                           pipelineName={activePipeline?.name}
                           record={selectedRecord}
+                          saveDisabled={selectedRecordApprovalSaveDisabled}
                           saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                           stages={activePipelineStages}
                           title={editTitle}
@@ -6242,7 +6284,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       ) : null}
                     </div>
                     <div className="toolbar" style={{ marginTop: 12 }}>
-                      <button className="primary-button" data-testid="edit-record-save" type="button" onClick={() => runAction(submitUpdateRecord)} disabled={isPending || !editTitle.trim()}>
+                      <button className="primary-button" data-testid="edit-record-save" type="button" onClick={() => runAction(submitUpdateRecord)} disabled={isPending || !editTitle.trim() || selectedRecordApprovalSaveDisabled}>
                         <Save size={16} />
                         保存
                       </button>
@@ -14995,6 +15037,174 @@ function formatEditableFieldValue(field: FieldDefinition, value: string, allReco
   return value;
 }
 
+type ParsedAddressDraft = {
+  country?: string;
+  region?: string;
+  city?: string;
+  line1?: string;
+  line2?: string;
+  postalCode?: string;
+};
+
+function isAddressTextField(field: FieldDefinition): boolean {
+  const key = field.key.toLowerCase();
+  const label = field.label.toLowerCase();
+  return field.type === "textarea" && (key.includes("address") || label.includes("address") || label.includes("地址"));
+}
+
+function parseAddressWithLocalAi(input: string): ParsedAddressDraft {
+  const text = input.trim();
+  if (!text) {
+    return {};
+  }
+  const rawParts = text.split(/[\n,，;；|]+/).map((part) => part.trim()).filter(Boolean);
+  const lowerText = text.toLowerCase();
+  const countryOptions = getCountrySelectOptions();
+  const matchedCountry = countryOptions.find((option) =>
+    [option.value, option.label, option.meta].filter(Boolean).some((candidate) => lowerText.includes(String(candidate).toLowerCase()))
+  );
+  const postalCode = text.match(/\b[A-Z]\d[A-Z][ -]?\d[A-Z]\d\b/i)?.[0] ?? text.match(/\b\d{5,6}(?:-\d{4})?\b/)?.[0];
+  const countryTokens = matchedCountry
+    ? [matchedCountry.value, matchedCountry.label, matchedCountry.meta].filter(Boolean).map((value) => String(value).toLowerCase())
+    : [];
+  const parts = rawParts.filter((part) => {
+    const normalized = part.toLowerCase();
+    if (postalCode && normalized === postalCode.toLowerCase()) {
+      return false;
+    }
+    return !countryTokens.includes(normalized);
+  });
+  const regionIndex = parts.findIndex((part) => /(省|州|自治区|特别行政区|province|state|region)$/i.test(part));
+  const cityIndex = parts.findIndex((part) => /(市|city)$/i.test(part));
+  let region = regionIndex >= 0 ? parts[regionIndex] : "";
+  let city = cityIndex >= 0 ? parts[cityIndex] : "";
+  let lineParts = parts.filter((_, index) => index !== regionIndex && index !== cityIndex);
+
+  if (!city && parts.length >= 2) {
+    city = parts[parts.length - 1] ?? "";
+    lineParts = parts.slice(0, -1).filter((_, index) => index !== regionIndex);
+  }
+  if (!region && parts.length >= 3) {
+    region = parts[parts.length - 2] ?? "";
+    city = city || parts[parts.length - 1] || "";
+    lineParts = parts.slice(0, -2);
+  }
+
+  return {
+    country: matchedCountry?.value,
+    postalCode,
+    region: region || undefined,
+    city: city || undefined,
+    line1: lineParts[0] ?? (!city ? text : undefined),
+    line2: lineParts.slice(1).join(", ") || undefined
+  };
+}
+
+function formatParsedAddressText(address: ParsedAddressDraft): string {
+  return [
+    address.line1,
+    address.line2,
+    [address.city, address.region, address.country ? getCountryLabel(address.country) : ""].filter(Boolean).join(", "),
+    address.postalCode
+  ].filter(Boolean).join("\n");
+}
+
+function AddressAiParserButton({
+  initialText,
+  onApply
+}: {
+  initialText: string;
+  onApply: (address: ParsedAddressDraft) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [input, setInput] = useState(initialText);
+  const [parsed, setParsed] = useState<ParsedAddressDraft>(() => parseAddressWithLocalAi(initialText));
+
+  useEffect(() => {
+    if (!isOpen) {
+      setInput(initialText);
+      setParsed(parseAddressWithLocalAi(initialText));
+    }
+  }, [initialText, isOpen]);
+
+  function updateParsed(patch: Partial<ParsedAddressDraft>) {
+    setParsed((current) => ({ ...current, ...patch }));
+  }
+
+  return (
+    <>
+      <button className="secondary-button" type="button" onClick={() => setIsOpen(true)}>
+        <Bot size={16} />
+        AI 识别地址
+      </button>
+      {isOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="AI 识别地址">
+          <div className="modal-panel app-dialog editable-field-dialog">
+            <div className="stage-header">
+              <div>
+                <strong>AI 识别地址</strong>
+                <div className="subtle">输入自然语言地址后，自动拆分国家、城市、邮编和详细地址。</div>
+              </div>
+              <button className="icon-button" aria-label="关闭" type="button" onClick={() => setIsOpen(false)}>
+                <XCircle size={16} />
+              </button>
+            </div>
+            <label className="wide">
+              <span className="subtle">自然语言地址</span>
+              <textarea className="textarea" value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：Fuhai Street, Shenzhen, Guangdong, China 518000" />
+            </label>
+            <div className="toolbar">
+              <button className="secondary-button" type="button" onClick={() => setParsed(parseAddressWithLocalAi(input))}>
+                <Bot size={16} />
+                识别
+              </button>
+            </div>
+            <div className="form-grid two">
+              <CountrySearchInput label="国家/地区" value={parsed.country ?? ""} onChange={(country) => updateParsed({ country })} />
+              <label>
+                <span className="subtle">省/州</span>
+                <input className="input" value={parsed.region ?? ""} onChange={(event) => updateParsed({ region: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">城市</span>
+                <input className="input" value={parsed.city ?? ""} onChange={(event) => updateParsed({ city: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">邮编</span>
+                <input className="input" value={parsed.postalCode ?? ""} onChange={(event) => updateParsed({ postalCode: event.target.value })} />
+              </label>
+              <label className="wide">
+                <span className="subtle">地址 1</span>
+                <input className="input" value={parsed.line1 ?? ""} onChange={(event) => updateParsed({ line1: event.target.value })} />
+              </label>
+              <label className="wide">
+                <span className="subtle">地址 2</span>
+                <input className="input" value={parsed.line2 ?? ""} onChange={(event) => updateParsed({ line2: event.target.value })} />
+              </label>
+            </div>
+            <div className="toolbar end">
+              <button className="secondary-button" type="button" onClick={() => setIsOpen(false)}>
+                取消
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => {
+                  onApply(parsed);
+                  setIsOpen(false);
+                }}
+              >
+                <Save size={16} />
+                应用识别结果
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function EditableFieldRow({
   allRecords,
   field,
@@ -15077,6 +15287,12 @@ function EditableFieldRow({
               users={users}
               value={draftValue}
             />
+            {isAddressTextField(field) ? (
+              <AddressAiParserButton
+                initialText={draftValue}
+                onApply={(parsedAddress) => setDraftValue(formatParsedAddressText(parsedAddress))}
+              />
+            ) : null}
             <div className="toolbar end">
               <button className="secondary-button" type="button" onClick={() => setIsOpen(false)} disabled={isSaving}>
                 取消
@@ -15214,12 +15430,14 @@ function OwnerSelect({
 function SelectSearchInput({
   label,
   options,
+  placeholder,
   testId,
   value,
   onChange
 }: {
   label: string;
   options: Array<{ label: string; value: string; meta?: string }>;
+  placeholder?: string;
   testId?: string;
   value: string;
   onChange: (value: string) => void;
@@ -15234,6 +15452,7 @@ function SelectSearchInput({
     <SearchDropdown
       label={label}
       options={filteredOptions}
+      placeholder={placeholder}
       search={search}
       selectedLabel={options.find((option) => option.value === value)?.label ?? ""}
       testId={testId}
@@ -15288,6 +15507,52 @@ function LanguageSearchInput({
   );
 }
 
+const preferredTimezoneOptions = [
+  "Asia/Shanghai",
+  "Asia/Hong_Kong",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Europe/London",
+  "Europe/Berlin",
+  "Europe/Paris",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "UTC"
+];
+
+function getTimezoneSelectOptions(): Array<{ label: string; value: string; meta?: string }> {
+  const supportedValuesOf = (Intl as unknown as { supportedValuesOf?: (input: "timeZone") => string[] }).supportedValuesOf;
+  const supported = typeof supportedValuesOf === "function" ? supportedValuesOf("timeZone") : [];
+  return Array.from(new Set([...preferredTimezoneOptions, ...supported]))
+    .sort((left, right) => left.localeCompare(right))
+    .map((timezone) => ({ label: timezone.replaceAll("_", " "), value: timezone }));
+}
+
+function TimezoneSearchInput({
+  label,
+  testId,
+  value,
+  onChange
+}: {
+  label: string;
+  testId?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <SelectSearchInput
+      label={label}
+      options={getTimezoneSelectOptions()}
+      placeholder="搜索时区，例如 Asia/Shanghai"
+      testId={testId}
+      value={value}
+      onChange={onChange}
+    />
+  );
+}
+
 function PreferredContactWindowInput({
   label,
   testId,
@@ -15308,10 +15573,12 @@ function PreferredContactWindowInput({
   return (
     <div className="preferred-window-editor wide" data-testid={testId}>
       <span className="subtle">{label}</span>
-      <label>
-        <span className="subtle">时区</span>
-        <input className="input" value={windowValue.timezone} onChange={(event) => updateWindow({ timezone: event.target.value })} placeholder="Asia/Shanghai" />
-      </label>
+      <TimezoneSearchInput
+        label="时区"
+        testId={testId ? `${testId}-timezone` : undefined}
+        value={windowValue.timezone}
+        onChange={(timezone) => updateWindow({ timezone })}
+      />
       <div className="form-grid two">
         <label>
           <span className="subtle">开始时间</span>
@@ -16303,6 +16570,7 @@ function ContactProfileEditor({
   pendingDeleteRequest,
   pendingUpdateRequest,
   record,
+  saveDisabled,
   saveLabel,
   showContactMethodEditor,
   title,
@@ -16336,6 +16604,7 @@ function ContactProfileEditor({
   pendingDeleteRequest?: RecordChangeRequest;
   pendingUpdateRequest?: RecordChangeRequest;
   record: CrmRecord;
+  saveDisabled?: boolean;
   saveLabel: string;
   showContactMethodEditor: boolean;
   title: string;
@@ -16396,7 +16665,7 @@ function ContactProfileEditor({
             </div>
           </div>
           <div className="contact-profile-actions">
-            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
+            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim() || Boolean(saveDisabled)}>
               <Save size={16} />
               {saveLabel}
             </button>
@@ -16673,6 +16942,7 @@ function CompanyProfileEditor({
   pendingUpdateRequest,
   primaryContactId,
   record,
+  saveDisabled,
   saveLabel,
   shippingAddressEditingId,
   shippingAddressValue,
@@ -16717,6 +16987,7 @@ function CompanyProfileEditor({
   pendingUpdateRequest?: RecordChangeRequest;
   primaryContactId: string;
   record: CrmRecord;
+  saveDisabled?: boolean;
   saveLabel: string;
   shippingAddressEditingId: string;
   shippingAddressValue: string;
@@ -16794,7 +17065,7 @@ function CompanyProfileEditor({
             </div>
           </div>
           <div className="contact-profile-actions">
-            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
+            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim() || Boolean(saveDisabled)}>
               <Save size={16} />
               {saveLabel}
             </button>
@@ -16928,6 +17199,7 @@ function DealProfileEditor({
   pendingUpdateRequest,
   pipelineName,
   record,
+  saveDisabled,
   saveLabel,
   stages,
   title,
@@ -16956,6 +17228,7 @@ function DealProfileEditor({
   pendingUpdateRequest?: RecordChangeRequest;
   pipelineName?: string;
   record: CrmRecord;
+  saveDisabled?: boolean;
   saveLabel: string;
   stages: PipelineStage[];
   title: string;
@@ -17010,7 +17283,7 @@ function DealProfileEditor({
             </div>
           </div>
           <div className="contact-profile-actions">
-            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim()}>
+            <button className="primary-button" data-testid="edit-record-save" type="button" onClick={onSave} disabled={isPending || !title.trim() || Boolean(saveDisabled)}>
               <Save size={16} />
               {saveLabel}
             </button>
@@ -17584,7 +17857,7 @@ function ContactMethodsEditor({
                   className="select"
                   data-testid={`${testIdPrefix}-type-${index}`}
                   value={method.type}
-                  onChange={(event) => updateMethod(method.id, { type: event.target.value as ContactMethodType })}
+                  onChange={(event) => updateMethod(method.id, contactMethodTypePatch(method, event.target.value as ContactMethodType))}
                 >
                   {Object.entries(contactMethodTypeLabels).map(([type, label]) => (
                     <option key={type} value={type}>{label}</option>
@@ -17627,6 +17900,15 @@ function ContactMethodsEditor({
       </div>
     </section>
   );
+}
+
+function contactMethodTypePatch(method: ContactMethodDraft, nextType: ContactMethodType): Partial<ContactMethodDraft> {
+  const currentLabel = method.label?.trim() ?? "";
+  const previousDefaultLabel = contactMethodTypeLabels[method.type];
+  return {
+    type: nextType,
+    label: !currentLabel || currentLabel === previousDefaultLabel ? contactMethodTypeLabels[nextType] : method.label
+  };
 }
 
 function ContactMethodSingleEditor({
@@ -17687,7 +17969,7 @@ function ContactMethodSingleEditor({
             className="select"
             data-testid={`${testIdPrefix}-type`}
             value={method.type}
-            onChange={(event) => updateMethod({ type: event.target.value as ContactMethodType })}
+            onChange={(event) => updateMethod(contactMethodTypePatch(method, event.target.value as ContactMethodType))}
           >
             {Object.entries(contactMethodTypeLabels).map(([type, label]) => (
               <option key={type} value={type}>{label}</option>
@@ -18058,6 +18340,12 @@ function CompanyAddressSingleEditor({
         </div>
       </div>
       <div className="form-grid" style={{ marginTop: 10 }}>
+        <div className="wide">
+          <AddressAiParserButton
+            initialText={formatParsedAddressText(address)}
+            onApply={(parsedAddress) => updateAddress(parsedAddress)}
+          />
+        </div>
         <label>
           <span className="subtle">标签</span>
           <input className="input" value={address.label ?? ""} onChange={(event) => updateAddress({ label: event.target.value })} placeholder="总部 / 仓库 / 办公室" />
