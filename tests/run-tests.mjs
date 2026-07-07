@@ -5375,6 +5375,45 @@ await run("inbound email recording tolerates malformed participant addresses", (
   assert.deepEqual(message.bcc, []);
 });
 
+await run("inbound email auto-link tolerates display-name contact emails", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const contact = store.createRecord(context, "contacts", {
+    title: "Legacy Instagram Contact",
+    data: {
+      email: "Instagram<no-reply@mail.instagram.com>",
+      contactMethods: [
+        {
+          id: "legacy-email",
+          type: "email",
+          label: "Instagram Email",
+          value: "Instagram<no-reply@mail.instagram.com>",
+          primary: true
+        }
+      ]
+    }
+  });
+  const account = store.createEmailAccount(context, {
+    name: "Legacy Auto Link Inbox",
+    emailAddress: "legacy-auto-link@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "no-reply@mail.instagram.com",
+    to: ["legacy-auto-link@example.com"],
+    subject: "Legacy display-name address",
+    bodyText: "This inbound message should auto-link."
+  });
+
+  assert.equal(store.getEmailThread(context, message.threadId).recordId, contact.id);
+});
+
 await run("outbound email recording still rejects malformed recipient addresses", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");

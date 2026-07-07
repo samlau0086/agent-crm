@@ -10045,11 +10045,18 @@ function emailMessageLifecycleEvent(message: Pick<EmailMessage, "direction" | "s
   return undefined;
 }
 
+function normalizeEmailCandidates(value: string): string[] {
+  return uniqueValidEmails(value.split(/[,\s;<>]+/).filter(Boolean));
+}
+
 function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return false;
   }
-  const normalizedEmail = normalizeEmailAddress(emailAddress);
+  const normalizedEmail = tryNormalizeEmailAddress(emailAddress);
+  if (!normalizedEmail) {
+    return false;
+  }
   const record = data as Record<string, unknown>;
   const contactMethods = Array.isArray(record.contactMethods) ? record.contactMethods : [];
   const methodEmails = contactMethods.flatMap((method) => {
@@ -10068,12 +10075,7 @@ function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
     }
     return [value];
   });
-  return [...methodEmails, ...fieldEmails].some((value) =>
-    value
-      .split(/[,\s;]+/)
-      .map(normalizeEmailAddress)
-      .includes(normalizedEmail)
-  );
+  return [...methodEmails, ...fieldEmails].some((value) => normalizeEmailCandidates(value).includes(normalizedEmail));
 }
 
 function emailMessageTime(message: EmailMessage): string {
