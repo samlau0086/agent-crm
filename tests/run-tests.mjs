@@ -12903,6 +12903,57 @@ await run("pop3 provider allows slow streaming RETR responses while data is stil
   }
 });
 
+await run("pop3 provider falls back to TOP on a fresh connection when RETR times out", async () => {
+  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+  const previousFetchMode = process.env.MAIL_POP3_FETCH_MODE;
+  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
+  delete process.env.MAIL_POP3_FETCH_MODE;
+  const pop3 = await startFakePop3Server(
+    [
+      {
+        uid: "pop3-retr-timeout-top-fallback-uid",
+        raw: [
+          "Message-ID: <pop3-retr-timeout-top-fallback@example.com>",
+          "From: Buyer <buyer@example.com>",
+          "To: Sales <sales@example.com>",
+          "Subject: RETR Timeout TOP Fallback",
+          "",
+          "This server hangs on RETR but returns TOP."
+        ].join("\r\n")
+      }
+    ],
+    { hangRetr: true }
+  );
+  try {
+    const messages = await fetchRecentPop3Emails({
+      syncProtocol: "pop3",
+      pop3Host: "127.0.0.1",
+      pop3Port: pop3.port,
+      pop3Secure: false,
+      username: "sales@example.com",
+      password: "password"
+    }, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].subject, "RETR Timeout TOP Fallback");
+    assert.equal(messages[0].bodyText, "This server hangs on RETR but returns TOP.");
+    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
+    assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
+    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 2);
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+    } else {
+      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
+    }
+    if (previousFetchMode === undefined) {
+      delete process.env.MAIL_POP3_FETCH_MODE;
+    } else {
+      process.env.MAIL_POP3_FETCH_MODE = previousFetchMode;
+    }
+    await pop3.close();
+  }
+});
+
 await run("pop3 provider falls back to RETR on a fresh connection when TOP times out", async () => {
   const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
   const previousFetchMode = process.env.MAIL_POP3_FETCH_MODE;
