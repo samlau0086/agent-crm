@@ -3163,7 +3163,9 @@ await run("contact and company editing refinements are guarded", () => {
   assert.match(source, /formatParsedAddressText\(address\)/);
   assert.match(source, /<AddressAiParserButton[\s\S]*initialText=\{formatParsedAddressText\(address\)\}/);
   assert.match(seed, /id: "field-company-domain"[\s\S]*required: false/);
-  assert.match(migration, /"objectKey" = 'companies'/);
+  assert.match(migration, /FROM "ObjectDefinition" object_definition/);
+  assert.match(migration, /field_definition\."objectDefinitionId" = object_definition\."id"/);
+  assert.match(migration, /object_definition\."key" = 'companies'/);
   assert.match(migration, /"key" = 'domain'/);
 });
 
