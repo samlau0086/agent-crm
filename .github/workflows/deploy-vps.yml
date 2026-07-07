@@ -409,12 +409,12 @@ jobs:
           if [ "$pull_code" -ne 0 ]; then
             echo "::error title=Docker compose pull failed::Failed to pull deployment images. Check the lines immediately above for GHCR/network/layer extraction errors."
             docker compose ps -a || true
-            docker image inspect "$crm_image" --format 'local_image_id={{.Id}} local_digests={{join .RepoDigests ","}}' || true
+            docker image inspect "$crm_image" --format 'local_image_id={{.Id}} local_digests={{json .RepoDigests}}' || true
             exit "$pull_code"
           fi
           echo "===== docker compose pull complete ====="
           echo "Deploying CRM image: $crm_image"
-          docker image inspect "$crm_image" --format 'id={{.Id}} digests={{join .RepoDigests ","}}' || true
+          docker image inspect "$crm_image" --format 'id={{.Id}} digests={{json .RepoDigests}}' || true
           migration_path="prisma/migrations/20260707110000_company_domain_optional/migration.sql"
           migration_sql="$(docker run --rm --entrypoint sh "$crm_image" -lc "cat \"$migration_path\"")"
           echo "===== CRM image migration sanity check: $migration_path ====="
@@ -427,6 +427,10 @@ jobs:
             echo "::error title=Unexpected CRM image migration::Image $crm_image does not contain the expected fixed company domain migration SQL."
             exit 1
           fi
+          echo "===== prepare database services ====="
+          docker compose up -d postgres redis
+          echo "===== known failed migration recovery ====="
+          docker compose run --rm --no-deps --entrypoint sh web -lc 'node scripts/wait-for-database.mjs && node scripts/recover-known-failed-migrations.mjs'
           dump_diagnostics() {
             echo "===== docker compose ps -a ====="
             docker compose ps -a || true
