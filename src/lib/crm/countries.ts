@@ -206,9 +206,34 @@ export const countryOptions: CountryOption[] = [
   { code: "KP", name: "North Korea", zhName: "朝鲜", developmentTier: "low_income", developmentLabel: "Low income economy" },
 ];
 
-const countryByName = new Map(countryOptions.map((country) => [country.name.toLowerCase(), country]));
-const countryByCode = new Map(countryOptions.map((country) => [country.code.toLowerCase(), country]));
-const countryByZhName = new Map(countryOptions.map((country) => [country.zhName.toLowerCase(), country]));
+function normalizeCountryLookup(value: string): string {
+  return value.trim().toLowerCase().replace(/\./g, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+}
+
+const countryByName = new Map(countryOptions.map((country) => [normalizeCountryLookup(country.name), country]));
+const countryByCode = new Map(countryOptions.map((country) => [normalizeCountryLookup(country.code), country]));
+const countryByZhName = new Map(countryOptions.map((country) => [normalizeCountryLookup(country.zhName), country]));
+const countryAliasCodes = new Map<string, string>([
+  ["uk", "gb"],
+  ["u k", "gb"],
+  ["great britain", "gb"],
+  ["britain", "gb"],
+  ["england", "gb"],
+  ["scotland", "gb"],
+  ["wales", "gb"],
+  ["northern ireland", "gb"],
+  ["usa", "us"],
+  ["u s", "us"],
+  ["u s a", "us"],
+  ["america", "us"],
+  ["united states of america", "us"],
+  ["uae", "ae"],
+  ["u a e", "ae"],
+  ["south korea", "kr"],
+  ["republic of korea", "kr"],
+  ["north korea", "kp"],
+  ["viet nam", "vn"]
+]);
 
 export function getCountrySelectOptions(): Array<{ label: string; value: string; meta: string }> {
   return countryOptions.map((country) => ({
@@ -223,12 +248,13 @@ export function resolveCountry(value: unknown): CountryOption | undefined {
     return undefined;
   }
 
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeCountryLookup(value);
   if (!normalized) {
     return undefined;
   }
 
-  return countryByName.get(normalized) ?? countryByCode.get(normalized) ?? countryByZhName.get(normalized);
+  const aliasCode = countryAliasCodes.get(normalized);
+  return countryByName.get(normalized) ?? countryByCode.get(normalized) ?? countryByZhName.get(normalized) ?? (aliasCode ? countryByCode.get(aliasCode) : undefined);
 }
 
 export function getCountryLabel(value: unknown): string {

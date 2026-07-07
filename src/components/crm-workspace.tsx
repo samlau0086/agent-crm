@@ -79,6 +79,7 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
+import { formatParsedAddressText, parseAddressWithLocalAi, type ParsedAddressDraft } from "@/lib/crm/address-parser";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "@/lib/crm/languages";
 import { SettingsAdmin } from "@/components/settings-admin";
@@ -15037,76 +15038,10 @@ function formatEditableFieldValue(field: FieldDefinition, value: string, allReco
   return value;
 }
 
-type ParsedAddressDraft = {
-  country?: string;
-  region?: string;
-  city?: string;
-  line1?: string;
-  line2?: string;
-  postalCode?: string;
-};
-
 function isAddressTextField(field: FieldDefinition): boolean {
   const key = field.key.toLowerCase();
   const label = field.label.toLowerCase();
   return field.type === "textarea" && (key.includes("address") || label.includes("address") || label.includes("地址"));
-}
-
-function parseAddressWithLocalAi(input: string): ParsedAddressDraft {
-  const text = input.trim();
-  if (!text) {
-    return {};
-  }
-  const rawParts = text.split(/[\n,，;；|]+/).map((part) => part.trim()).filter(Boolean);
-  const lowerText = text.toLowerCase();
-  const countryOptions = getCountrySelectOptions();
-  const matchedCountry = countryOptions.find((option) =>
-    [option.value, option.label, option.meta].filter(Boolean).some((candidate) => lowerText.includes(String(candidate).toLowerCase()))
-  );
-  const postalCode = text.match(/\b[A-Z]\d[A-Z][ -]?\d[A-Z]\d\b/i)?.[0] ?? text.match(/\b\d{5,6}(?:-\d{4})?\b/)?.[0];
-  const countryTokens = matchedCountry
-    ? [matchedCountry.value, matchedCountry.label, matchedCountry.meta].filter(Boolean).map((value) => String(value).toLowerCase())
-    : [];
-  const parts = rawParts.filter((part) => {
-    const normalized = part.toLowerCase();
-    if (postalCode && normalized === postalCode.toLowerCase()) {
-      return false;
-    }
-    return !countryTokens.includes(normalized);
-  });
-  const regionIndex = parts.findIndex((part) => /(省|州|自治区|特别行政区|province|state|region)$/i.test(part));
-  const cityIndex = parts.findIndex((part) => /(市|city)$/i.test(part));
-  let region = regionIndex >= 0 ? parts[regionIndex] : "";
-  let city = cityIndex >= 0 ? parts[cityIndex] : "";
-  let lineParts = parts.filter((_, index) => index !== regionIndex && index !== cityIndex);
-
-  if (!city && parts.length >= 2) {
-    city = parts[parts.length - 1] ?? "";
-    lineParts = parts.slice(0, -1).filter((_, index) => index !== regionIndex);
-  }
-  if (!region && parts.length >= 3) {
-    region = parts[parts.length - 2] ?? "";
-    city = city || parts[parts.length - 1] || "";
-    lineParts = parts.slice(0, -2);
-  }
-
-  return {
-    country: matchedCountry?.value,
-    postalCode,
-    region: region || undefined,
-    city: city || undefined,
-    line1: lineParts[0] ?? (!city ? text : undefined),
-    line2: lineParts.slice(1).join(", ") || undefined
-  };
-}
-
-function formatParsedAddressText(address: ParsedAddressDraft): string {
-  return [
-    address.line1,
-    address.line2,
-    [address.city, address.region, address.country ? getCountryLabel(address.country) : ""].filter(Boolean).join(", "),
-    address.postalCode
-  ].filter(Boolean).join("\n");
 }
 
 function AddressAiParserButton({

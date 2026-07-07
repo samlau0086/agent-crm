@@ -54,6 +54,8 @@ import {
   workflowCreateSchema
 } from "../src/lib/crm/api-schemas.ts";
 import { defaultWorkspaceId, seedData } from "../src/lib/crm/seed.ts";
+import { parseAddressWithLocalAi } from "../src/lib/crm/address-parser.ts";
+import { resolveCountry } from "../src/lib/crm/countries.ts";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "../src/lib/crm/languages.ts";
 import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
@@ -3145,6 +3147,7 @@ await run("email thread contact linking is driven by sender email and can return
 
 await run("contact and company editing refinements are guarded", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const addressParser = readFileSync("src/lib/crm/address-parser.ts", "utf8");
   const seed = readFileSync("src/lib/crm/seed.ts", "utf8");
   const migration = readFileSync("prisma/migrations/20260707110000_company_domain_optional/migration.sql", "utf8");
 
@@ -3158,7 +3161,8 @@ await run("contact and company editing refinements are guarded", () => {
   assert.match(source, /function TimezoneSearchInput/);
   assert.match(source, /<TimezoneSearchInput/);
   assert.match(source, /function AddressAiParserButton/);
-  assert.match(source, /function parseAddressWithLocalAi/);
+  assert.match(source, /parseAddressWithLocalAi\(initialText\)/);
+  assert.match(addressParser, /export function parseAddressWithLocalAi/);
   assert.match(source, /isAddressTextField\(field\)/);
   assert.match(source, /formatParsedAddressText\(address\)/);
   assert.match(source, /<AddressAiParserButton[\s\S]*initialText=\{formatParsedAddressText\(address\)\}/);
@@ -3324,6 +3328,7 @@ await run("contact and company lists render avatar and logo media fields", () =>
 await run("contact and company country fields use searchable sovereign country options", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const countries = readFileSync("src/lib/crm/countries.ts", "utf8");
+  const addressParser = readFileSync("src/lib/crm/address-parser.ts", "utf8");
   const seed = readFileSync("src/lib/crm/seed.ts", "utf8");
   const migration = readFileSync("prisma/migrations/20260702090000_add_contact_company_country_fields/migration.sql", "utf8");
 
@@ -3344,7 +3349,7 @@ await run("contact and company country fields use searchable sovereign country o
   assert.match(source, /\$\{option\.label\} \$\{option\.value\} \$\{option\.meta \?\? ""\}/);
   assert.match(source, /testId=\{`\$\{testIdPrefix\}-country-\$\{index\}`\}/);
   assert.match(source, /testId=\{`\$\{testIdPrefix\}-country`\}/);
-  assert.match(source, /getCountryLabel\(address\.country\)/);
+  assert.match(addressParser, /getCountryLabel\(address\.country\)/);
   assert.match(seed, /objectKey: "contacts", key: "country"/);
   assert.match(seed, /objectKey: "companies", key: "country"/);
   assert.match(seed, /columns: \["title", "customerLevel", "email", "phone", "companyId", "country", "birthday", "gender"\]/);
@@ -3352,6 +3357,19 @@ await run("contact and company country fields use searchable sovereign country o
   assert.match(migration, /'country', '国家\/地区', 'text'/);
   assert.match(migration, /ARRAY\['title', 'email', 'phone', 'companyId', 'country', 'birthday', 'gender'\]/);
   assert.match(migration, /ARRAY\['title', 'domain', 'industry', 'country', 'billingAddresses', 'shippingAddresses'\]/);
+});
+
+await run("address parser maps UK aliases and postcodes into CRM country values", () => {
+  const parsed = parseAddressWithLocalAi("27 Tresham Road\nOrton Southgate, Peterborough, UK\nPE2 6SG");
+
+  assert.equal(parsed.country, "United Kingdom");
+  assert.equal(parsed.region ?? "", "");
+  assert.equal(parsed.city, "Peterborough");
+  assert.equal(parsed.postalCode, "PE2 6SG");
+  assert.equal(parsed.line1, "27 Tresham Road");
+  assert.equal(parsed.line2, "Orton Southgate");
+  assert.equal(resolveCountry("UK")?.name, "United Kingdom");
+  assert.equal(resolveCountry("U.S.A.")?.name, "United States");
 });
 
 await run("contact and company communication preferences drive compose translation and scheduling", () => {
