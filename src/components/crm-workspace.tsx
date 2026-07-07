@@ -2996,6 +2996,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
   }
 
+  function pushEmailHistoryRoute(nextPath: string) {
+    const currentPath = typeof window === "undefined" ? `${pathname}?${searchParams.toString()}` : `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== nextPath) {
+      window.history.pushState(window.history.state, "", nextPath);
+    }
+  }
+
   function openObject(objectKey: string) {
     const nextNav = coreObjects.has(objectKey) ? (objectKey as NavKey) : "records";
     setActiveObjectKey(objectKey);
@@ -4215,9 +4222,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailDetailThreadId(threadId);
     setEmailWorkspaceView("mail");
     setActiveNav("email");
-    if (`${pathname}?${searchParams.toString()}` !== nextEmailThreadPath) {
-      router.push(nextEmailThreadPath);
-    }
+    pushEmailHistoryRoute(nextEmailThreadPath);
     if (!emailMessagesByThread[threadId]) {
       await loadEmailMessages(threadId);
     }
@@ -6979,15 +6984,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 search: routeEmailSearch,
                 threadId: routeEmailThreadId
               });
-              if (`${pathname}?${searchParams.toString()}` !== nextPath) {
-                router.push(nextPath);
-              }
+              pushEmailHistoryRoute(nextPath);
             }}
             onRouteChange={(patch) => {
               const nextPath = buildEmailRoutePath(patch);
-              if (`${pathname}?${searchParams.toString()}` !== nextPath) {
-                router.push(nextPath);
-              }
+              pushEmailHistoryRoute(nextPath);
             }}
             onLoadThreadMessages={(threadId) => loadEmailMessages(threadId)}
             onSelectThread={(threadId) => {
@@ -8509,7 +8510,15 @@ function EmailWorkspace({
   const handledComposeOpenRequestRef = useRef("");
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
-  const pendingDetailRouteThreadIdRef = useRef("");
+  const pendingEmailRouteRef = useRef<{
+    accountId: string;
+    category: EmailCategoryKey;
+    label: string;
+    mailbox: EmailMailboxKey;
+    mailMode: EmailMailMode;
+    search: string;
+    threadId: string;
+  } | null>(null);
   const hasEmailDraftContent = Boolean(emailDraft.to.trim() || emailDraft.cc.trim() || emailDraft.bcc.trim() || emailDraft.subject.trim() || hasEmailDraftBody(emailDraft) || emailDraft.attachments?.length || emailDraft.aiAssisted);
   const signatureOptions = useMemo(() => getEmailSignatureOptions(signatures, accounts, emailDraft.accountId), [accounts, emailDraft.accountId, signatures]);
   const selectedSignature = getSelectedEmailSignature(emailDraft, signatures, accounts);
@@ -8738,7 +8747,15 @@ function EmailWorkspace({
     const nextSearch = patch.search ?? searchQuery;
     const nextThreadId = patch.threadId ?? (nextMode === "detail" ? selectedThreadId : "");
 
-    pendingDetailRouteThreadIdRef.current = nextMode === "detail" && nextThreadId ? nextThreadId : "";
+    pendingEmailRouteRef.current = {
+      accountId: nextAccountId,
+      category: nextCategory,
+      label: nextLabel,
+      mailbox: nextMailbox,
+      mailMode: nextMode,
+      search: nextSearch,
+      threadId: nextThreadId
+    };
     setMailbox(nextMailbox);
     setCategory(nextCategory);
     setMailMode(nextMode);
@@ -8821,12 +8838,33 @@ function EmailWorkspace({
   }, [accounts, applyEmailRoute, selectedMailboxAccountId]);
 
   useEffect(() => {
-    const pendingDetailThreadId = pendingDetailRouteThreadIdRef.current;
-    if (detailThreadId && pendingDetailThreadId === detailThreadId) {
-      pendingDetailRouteThreadIdRef.current = "";
-    }
-    if (!detailThreadId && pendingDetailThreadId && selectedThreadId === pendingDetailThreadId) {
-      return;
+    const pendingRoute = pendingEmailRouteRef.current;
+    if (pendingRoute) {
+      const routeMode = routeEmailThreadIdToMode(detailThreadId, routeMailMode);
+      const routeMatchesPending =
+        routeMailbox === pendingRoute.mailbox &&
+        (pendingRoute.mailbox !== "inbox" || routeCategory === pendingRoute.category) &&
+        routeMode === pendingRoute.mailMode &&
+        routeAccountId === pendingRoute.accountId &&
+        routeLabel === pendingRoute.label &&
+        routeSearch === pendingRoute.search &&
+        detailThreadId === pendingRoute.threadId;
+      if (routeMatchesPending) {
+        pendingEmailRouteRef.current = null;
+      } else {
+        const localThreadId = mailMode === "detail" ? selectedThreadId : "";
+        const localMatchesPending =
+          mailbox === pendingRoute.mailbox &&
+          (pendingRoute.mailbox !== "inbox" || category === pendingRoute.category) &&
+          mailMode === pendingRoute.mailMode &&
+          selectedMailboxAccountId === pendingRoute.accountId &&
+          labelFilter === pendingRoute.label &&
+          searchQuery === pendingRoute.search &&
+          localThreadId === pendingRoute.threadId;
+        if (localMatchesPending) {
+          return;
+        }
+      }
     }
     setMailbox((current) => (current === routeMailbox ? current : routeMailbox));
     setCategory((current) => (current === routeCategory ? current : routeCategory));
@@ -8840,7 +8878,7 @@ function EmailWorkspace({
     if (detailThreadId && detailThreadId !== selectedThreadId) {
       onSelectThread(detailThreadId);
     }
-  }, [detailThreadId, onSelectThread, routeAccountId, routeCategory, routeLabel, routeMailMode, routeMailbox, routeSearch, selectedThreadId]);
+  }, [category, detailThreadId, labelFilter, mailbox, mailMode, onSelectThread, routeAccountId, routeCategory, routeLabel, routeMailMode, routeMailbox, routeSearch, searchQuery, selectedMailboxAccountId, selectedThreadId]);
 
   useEffect(() => {
     if (!selectedThreadId || !messagesByThread[selectedThreadId]?.length) {

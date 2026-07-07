@@ -2996,7 +2996,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /if \(!routeEmailThreadId\) \{[\s\S]*return;[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*fetchJson<EmailMessage\[\]>\(`\/api\/email\/threads\/\$\{routeEmailThreadId\}\/messages`/);
   assert.match(source, /pendingRecordOpen\?\.objectKey === route\.objectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
-  assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*const nextEmailThreadPath = buildEmailRoutePath\(\{ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, search: routeEmailSearch, mailMode: "detail", threadId \}\)[\s\S]*selectEmailThread\(threadId\)[\s\S]*setEmailDetailThreadId\(threadId\)[\s\S]*router\.push\(nextEmailThreadPath\)[\s\S]*await loadEmailMessages\(threadId\)/);
+  assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*const nextEmailThreadPath = buildEmailRoutePath\(\{ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, search: routeEmailSearch, mailMode: "detail", threadId \}\)[\s\S]*selectEmailThread\(threadId\)[\s\S]*setEmailDetailThreadId\(threadId\)[\s\S]*pushEmailHistoryRoute\(nextEmailThreadPath\)[\s\S]*await loadEmailMessages\(threadId\)/);
   assert.match(source, /if \(!detailThreadId\) \{[\s\S]*return;[\s\S]*const thread = threads\.find\(\(candidate\) => candidate\.id === detailThreadId\)/);
   assert.match(source, /setMailMode\(\(current\) => \{[\s\S]*const nextMode = routeEmailThreadIdToMode\(detailThreadId, routeMailMode\)[\s\S]*return current === nextMode \? current : nextMode/);
   assert.match(source, /function startCreateContactForCompany\(company: CrmRecord\)/);
@@ -3634,12 +3634,14 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /params\.set\("mailMode", "detail"\)[\s\S]*params\.set\("emailThreadId", patch\.threadId\)/);
   assert.match(source, /const \[emailWorkspaceView, setEmailWorkspaceView\] = useState<EmailWorkspaceView>\(routeEmailView\)/);
   assert.match(source, /setEmailWorkspaceView\(routeEmailView\)/);
-  assert.match(source, /onViewChange=\{\(nextView\) => \{[\s\S]*emailView: nextView[\s\S]*router\.push\(nextPath\)/);
-  assert.match(source, /onRouteChange=\{\(patch\) => \{[\s\S]*const nextPath = buildEmailRoutePath\(patch\)[\s\S]*router\.push\(nextPath\)/);
+  assert.match(source, /function pushEmailHistoryRoute\(nextPath: string\)/);
+  assert.match(source, /window\.history\.pushState\(window\.history\.state, "", nextPath\)/);
+  assert.match(source, /onViewChange=\{\(nextView\) => \{[\s\S]*emailView: nextView[\s\S]*pushEmailHistoryRoute\(nextPath\)/);
+  assert.match(source, /onRouteChange=\{\(patch\) => \{[\s\S]*const nextPath = buildEmailRoutePath\(patch\)[\s\S]*pushEmailHistoryRoute\(nextPath\)/);
   assert.match(source, /const applyEmailRoute = useCallback\(\(patch: EmailRoutePatch\) => \{[\s\S]*onRouteChange\(\{[\s\S]*mailbox: nextMailbox[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId/);
-  assert.match(source, /const pendingDetailRouteThreadIdRef = useRef\(""\)/);
-  assert.match(source, /pendingDetailRouteThreadIdRef\.current = nextMode === "detail" && nextThreadId \? nextThreadId : ""/);
-  assert.match(source, /if \(!detailThreadId && pendingDetailThreadId && selectedThreadId === pendingDetailThreadId\) \{[\s\S]*return;[\s\S]*\}/);
+  assert.match(source, /const pendingEmailRouteRef = useRef<\{/);
+  assert.match(source, /pendingEmailRouteRef\.current = \{[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId[\s\S]*\}/);
+  assert.match(source, /if \(localMatchesPending\) \{[\s\S]*return;[\s\S]*\}/);
   assert.match(source, /onClick=\{\(\) => \{ applyEmailRoute\(\{ mailbox: item\.key, mailMode: "list", threadId: "" \}\)/);
   assert.match(source, /function openThreadDetail\(threadId: string\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId \}\)/);
   assert.match(source, /aria-label="返回列表"[\s\S]*onClick=\{\(\) => applyEmailRoute\(\{ mailMode: "list", threadId: "" \}\)\}/);
