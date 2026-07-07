@@ -10475,52 +10475,8 @@ function EmailWorkspace({
                       )}
                     </div>
                   </div>
-                  <div className="gmail-ai-summary-grid">
-                    <div className="ai-box" data-testid="email-thread-summary">
-                      <div className="section-title-row">
-                        <div className="activity-meta">Compact 摘要 {selectedThread.summaryUpdatedAt ? `(${formatDate(selectedThread.summaryUpdatedAt)})` : ""}</div>
-                        <button className="secondary-button" data-testid="email-thread-summarize" type="button" onClick={onSummarizeThread} disabled={disabled || !aiSettings.features.auto_summarize}>
-                          <Bot size={16} />
-                          刷新摘要
-                        </button>
-                      </div>
-                      {selectedThread.summary ? <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.summary}</div> : <div className="subtle">暂无摘要，点击刷新摘要生成 compact 上下文。</div>}
-                      <div className="toolbar" style={{ marginTop: 8 }}>
-                        <span className="badge">用于后续 AI 上下文</span>
-                        <span className="badge">减少长线程 token 消耗</span>
-                      </div>
-                    </div>
-                    <details className="ai-box email-thread-analysis" data-testid="email-thread-analysis" open={Boolean(selectedThread.aiAnalysis)}>
-                      <summary>
-                        <span>
-                          AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}
-                        </span>
-                        <strong>{selectedThread.aiAnalysis ? getEmailAnalysisPreview(selectedThread.aiAnalysis) : "暂无分析"}</strong>
-                        <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onAnalyzeThread(); }} disabled={disabled || !aiSettings.features.context_analysis}>
-                          <Bot size={16} />
-                          刷新分析
-                        </button>
-                      </summary>
-                      {selectedThread.aiAnalysis ? (
-                        <>
-                          <div className="email-thread-analysis-body">{formatEmailAnalysisForDisplay(selectedThread.aiAnalysis)}</div>
-                          {renderEmailAiSources(selectedThread.aiAnalysisSources)}
-                        </>
-                      ) : (
-                        <div className="subtle">暂无分析，点击刷新分析生成上下文建议。</div>
-                      )}
-                    </details>
-                  </div>
-                  <TalkAboutThisPanel
-                    target={{ type: "email_thread", threadId: selectedThread.id, label: selectedDisplayMessage?.subject || selectedThread.subject }}
-                    disabled={disabled}
-                    onOpenRecord={onOpenTalkSourceRecord}
-                    onKnowledgeCreated={onKnowledgeArticleCreated}
-                    onRequestConfirm={onRequestConfirm}
-                    onShowToast={onShowToast}
-                  />
                   <div className="email-message-list">
-                    {selectedDisplayedMessages.map((message) => {
+                    {selectedDisplayedMessages.map((message, messageIndex) => {
                       const messageHasExternalImages = emailHtmlHasExternalImages(message.bodyHtml ?? "");
                       const sendStatus = getEmailMessageSendStatus(message);
                       return (
@@ -10631,6 +10587,54 @@ function EmailWorkspace({
                             <div className="activity-meta">翻译 {message.translatedLocale ? `(${message.translatedLocale})` : ""}</div>
                             <div>{message.translatedBodyText}</div>
                             {renderEmailAiSources(message.translatedSources)}
+                          </div>
+                        ) : null}
+                        {messageIndex === 0 ? (
+                          <div className="email-thread-insights">
+                            <div className="gmail-ai-summary-grid">
+                              <div className="ai-box" data-testid="email-thread-summary">
+                                <div className="section-title-row">
+                                  <div className="activity-meta">Compact 摘要 {selectedThread.summaryUpdatedAt ? `(${formatDate(selectedThread.summaryUpdatedAt)})` : ""}</div>
+                                  <button className="secondary-button" data-testid="email-thread-summarize" type="button" onClick={onSummarizeThread} disabled={disabled || !aiSettings.features.auto_summarize}>
+                                    <Bot size={16} />
+                                    刷新摘要
+                                  </button>
+                                </div>
+                                {selectedThread.summary ? <div style={{ whiteSpace: "pre-wrap" }}>{selectedThread.summary}</div> : <div className="subtle">暂无摘要，点击刷新摘要生成 compact 上下文。</div>}
+                                <div className="toolbar" style={{ marginTop: 8 }}>
+                                  <span className="badge">用于后续 AI 上下文</span>
+                                  <span className="badge">减少长线程 token 消耗</span>
+                                </div>
+                              </div>
+                              <details className="ai-box email-thread-analysis" data-testid="email-thread-analysis" open={Boolean(selectedThread.aiAnalysis)}>
+                                <summary>
+                                  <span>
+                                    AI 线程分析 {selectedThread.aiAnalysisUpdatedAt ? `(${formatDate(selectedThread.aiAnalysisUpdatedAt)})` : ""}
+                                  </span>
+                                  <strong>{selectedThread.aiAnalysis ? getEmailAnalysisPreview(selectedThread.aiAnalysis) : "暂无分析"}</strong>
+                                  <button className="secondary-button" data-testid="email-thread-analyze" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onAnalyzeThread(); }} disabled={disabled || !aiSettings.features.context_analysis}>
+                                    <Bot size={16} />
+                                    刷新分析
+                                  </button>
+                                </summary>
+                                {selectedThread.aiAnalysis ? (
+                                  <>
+                                    <div className="email-thread-analysis-body">{formatEmailAnalysisForDisplay(selectedThread.aiAnalysis)}</div>
+                                    {renderEmailAiSources(selectedThread.aiAnalysisSources)}
+                                  </>
+                                ) : (
+                                  <div className="subtle">暂无分析，点击刷新分析生成上下文建议。</div>
+                                )}
+                              </details>
+                            </div>
+                            <TalkAboutThisPanel
+                              target={{ type: "email_thread", threadId: selectedThread.id, label: selectedDisplayMessage?.subject || selectedThread.subject }}
+                              disabled={disabled}
+                              onOpenRecord={onOpenTalkSourceRecord}
+                              onKnowledgeCreated={onKnowledgeArticleCreated}
+                              onRequestConfirm={onRequestConfirm}
+                              onShowToast={onShowToast}
+                            />
                           </div>
                         ) : null}
                         <div className="toolbar" style={{ marginTop: 8 }}>

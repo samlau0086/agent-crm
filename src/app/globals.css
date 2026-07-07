@@ -3349,13 +3349,31 @@ body.deal-pipeline-dragging {
   margin: 0 36px;
 }
 
+.email-thread-insights {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.email-thread-insights .gmail-ai-summary-grid {
+  margin: 0;
+}
+
 .gmail-ai-summary-grid .ai-box {
   min-width: 0;
   margin-top: 12px;
 }
 
+.email-thread-insights .gmail-ai-summary-grid .ai-box {
+  margin-top: 0;
+}
+
 .gmail-detail-pane > .talk-panel {
   margin: 12px 36px 0;
+}
+
+.email-thread-insights > .talk-panel {
+  margin: 0;
 }
 
 .gmail-message-card {
