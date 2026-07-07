@@ -395,12 +395,24 @@ jobs:
               exit 1
             fi
           fi
-          docker compose pull
           crm_image="$(grep -E '^CRM_IMAGE=' .env | sed -E "s/^CRM_IMAGE='?([^']*)'?.*/\1/")"
           if [ -z "$crm_image" ]; then
             echo "::error title=Missing CRM image::CRM_IMAGE is missing from the deployed .env file"
             exit 1
           fi
+          echo "===== docker compose pull start ====="
+          echo "Target CRM image: $crm_image"
+          set +e
+          docker compose pull
+          pull_code="$?"
+          set -e
+          if [ "$pull_code" -ne 0 ]; then
+            echo "::error title=Docker compose pull failed::Failed to pull deployment images. Check the lines immediately above for GHCR/network/layer extraction errors."
+            docker compose ps -a || true
+            docker image inspect "$crm_image" --format 'local_image_id={{.Id}} local_digests={{join .RepoDigests ","}}' || true
+            exit "$pull_code"
+          fi
+          echo "===== docker compose pull complete ====="
           echo "Deploying CRM image: $crm_image"
           docker image inspect "$crm_image" --format 'id={{.Id}} digests={{join .RepoDigests ","}}' || true
           migration_path="prisma/migrations/20260707110000_company_domain_optional/migration.sql"
@@ -423,15 +435,15 @@ jobs:
             echo "===== web health inspect ====="
             docker inspect --format '{{json .State.Health}}' ai-agent-crm-web-1 || true
             echo "===== web logs ====="
-            docker compose logs --no-color --tail=200 web || true
+            docker compose logs --no-color --since=20m --tail=200 web || true
             echo "===== worker logs ====="
-            docker compose logs --no-color --tail=120 worker || true
+            docker compose logs --no-color --since=20m --tail=120 worker || true
             echo "===== email-sync logs ====="
-            docker compose logs --no-color --tail=120 email-sync || true
+            docker compose logs --no-color --since=20m --tail=120 email-sync || true
             echo "===== redis logs ====="
-            docker compose logs --no-color --tail=80 redis || true
+            docker compose logs --no-color --since=20m --tail=80 redis || true
             echo "===== postgres logs ====="
-            docker compose logs --no-color --tail=120 postgres || true
+            docker compose logs --no-color --since=20m --tail=120 postgres || true
           }
           set +e
           docker compose up -d --remove-orphans
