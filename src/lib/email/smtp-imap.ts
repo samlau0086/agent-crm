@@ -188,62 +188,32 @@ export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, li
 export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
   assertPop3Config(config);
   const client = await Pop3Client.connect(config);
-  let useRetrOnly = getMailPop3FetchMode() === "retr";
-  let useTopOnly = false;
-  let useSeparateRetrConnection = false;
-  let useSeparateTopConnection = false;
   try {
     await client.command(`USER ${config.username ?? ""}`);
     await client.command(`PASS ${config.password ?? ""}`);
     const list = await client.command("LIST");
     const messageEntries = parsePop3ListEntries(list).slice(-limit);
     const uidlMap = await client.command("UIDL").then(parsePop3Uidl).catch(() => new Map<string, string>());
+    await client.command("QUIT").catch(() => undefined);
+    client.close();
+
     const messages: InboundEmail[] = [];
+    const skippedFetchErrors: string[] = [];
+    const preferredFetchMode = getMailPop3FetchMode();
     for (const messageEntry of messageEntries) {
       const messageNumber = messageEntry.number;
-      let raw: string;
-      if (useTopOnly) {
-        raw = useSeparateTopConnection ? await fetchPop3MessageByTop(config, messageEntry) : await fetchPop3MessagePreview(client, messageEntry);
-      } else if (useRetrOnly) {
-        try {
-          raw = useSeparateRetrConnection ? await fetchPop3MessageByRetr(config, messageEntry) : await fetchPop3MessageByRetrOnClient(client, messageEntry);
-        } catch (error) {
-          if (!isPop3RetrTimeout(error)) {
-            throw error;
-          }
-          useTopOnly = true;
-          useRetrOnly = false;
-          useSeparateRetrConnection = true;
-          useSeparateTopConnection = true;
-          client.close();
-          try {
-            raw = await fetchPop3MessageByTop(config, messageEntry);
-          } catch (topError) {
-            const retrMessage = error instanceof Error ? error.message : String(error);
-            const topMessage = topError instanceof Error ? topError.message : String(topError);
-            throw new Error(`${retrMessage}; TOP fallback also failed: ${topMessage}`);
-          }
-        }
-      } else {
-        try {
-          raw = await fetchPop3MessagePreview(client, messageEntry);
-        } catch (error) {
-          if (!isPop3TopTimeout(error)) {
-            throw error;
-          }
-          useRetrOnly = true;
-          useSeparateRetrConnection = true;
-          client.close();
-          raw = await fetchPop3MessageByRetr(config, messageEntry);
-        }
+      const fetchResult = await fetchPop3MessageWithFallback(config, messageEntry, preferredFetchMode);
+      if (!fetchResult.raw) {
+        skippedFetchErrors.push(fetchResult.errorMessage ?? `POP3 message ${messageNumber} fetch failed`);
+        continue;
       }
-      const parsed = parsePop3Message(raw);
+      const parsed = parsePop3Message(fetchResult.raw);
       if (parsed) {
         messages.push(withPop3FallbackExternalMessageId(parsed, uidlMap.get(messageNumber) ?? messageNumber));
       }
     }
-    if (!useSeparateRetrConnection) {
-      await client.command("QUIT").catch(() => undefined);
+    if (messages.length === 0 && skippedFetchErrors.length > 0) {
+      throw new Error(skippedFetchErrors[0]);
     }
     return messages;
   } finally {
@@ -255,6 +225,64 @@ type Pop3ListEntry = {
   number: string;
   size?: number;
 };
+
+type Pop3MessageFetchResult = {
+  raw?: string;
+  errorMessage?: string;
+};
+
+async function fetchPop3MessageWithFallback(
+  config: EmailConnectionConfig,
+  messageEntry: Pop3ListEntry,
+  preferredFetchMode: "retr" | "top"
+): Promise<Pop3MessageFetchResult> {
+  if (preferredFetchMode === "top") {
+    return fetchPop3MessageWithTopFallback(config, messageEntry);
+  }
+  return fetchPop3MessageWithRetrFallback(config, messageEntry);
+}
+
+async function fetchPop3MessageWithRetrFallback(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<Pop3MessageFetchResult> {
+  try {
+    return { raw: await fetchPop3MessageByRetr(config, messageEntry) };
+  } catch (retrError) {
+    if (!isPop3RetrTimeout(retrError)) {
+      throw retrError;
+    }
+    try {
+      return { raw: await fetchPop3MessageByTop(config, messageEntry) };
+    } catch (topError) {
+      if (!isPop3TopTimeout(topError)) {
+        throw topError;
+      }
+      return { errorMessage: formatPop3FallbackError(retrError, topError, "TOP") };
+    }
+  }
+}
+
+async function fetchPop3MessageWithTopFallback(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<Pop3MessageFetchResult> {
+  try {
+    return { raw: await fetchPop3MessageByTop(config, messageEntry) };
+  } catch (topError) {
+    if (!isPop3TopTimeout(topError)) {
+      throw topError;
+    }
+    try {
+      return { raw: await fetchPop3MessageByRetr(config, messageEntry) };
+    } catch (retrError) {
+      if (!isPop3RetrTimeout(retrError)) {
+        throw retrError;
+      }
+      return { errorMessage: formatPop3FallbackError(topError, retrError, "RETR") };
+    }
+  }
+}
+
+function formatPop3FallbackError(primaryError: unknown, fallbackError: unknown, fallbackCommand: "RETR" | "TOP"): string {
+  const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
+  const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+  return `${primaryMessage}; ${fallbackCommand} fallback also failed: ${fallbackMessage}`;
+}
 
 async function fetchPop3MessagePreview(client: Pop3Client, messageEntry: Pop3ListEntry): Promise<string> {
   const messageNumber = messageEntry.number;

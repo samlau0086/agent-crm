@@ -247,7 +247,9 @@ function startFakePop3Server(messages, options = {}) {
         } else if (/^UIDL$/i.test(command)) {
           socket.write(["+OK unique-id listing", ...messages.map((message, index) => `${index + 1} ${message.uid}`), "."].join("\r\n") + "\r\n");
         } else if (/^RETR$/i.test(command)) {
-          if (options.hangRetr) {
+          const shouldHangRetr =
+            options.hangRetr === true || (Array.isArray(options.hangRetrMessages) && options.hangRetrMessages.includes(String(arg)));
+          if (shouldHangRetr) {
             continue;
           }
           const message = messages[Number(arg) - 1];
@@ -266,7 +268,9 @@ function startFakePop3Server(messages, options = {}) {
             }
           }
         } else if (/^TOP$/i.test(command)) {
-          if (options.hangTop) {
+          const shouldHangTop =
+            options.hangTop === true || (Array.isArray(options.hangTopMessages) && options.hangTopMessages.includes(String(arg)));
+          if (shouldHangTop) {
             continue;
           }
           const message = messages[Number(arg) - 1];
@@ -12856,7 +12860,7 @@ await run("pop3 provider fetches recent raw messages through RETR by default", a
     assert.equal(messages[0].bodyText, ".Newer message with a leading dot.");
     assert.ok(pop3.commands().some((command) => /^RETR 2$/i.test(command)));
     assert.ok(!pop3.commands().some((command) => /^TOP /i.test(command)));
-    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 1);
+    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 2);
   } finally {
     await pop3.close();
   }
@@ -12938,7 +12942,7 @@ await run("pop3 provider falls back to TOP on a fresh connection when RETR times
     assert.equal(messages[0].bodyText, "This server hangs on RETR but returns TOP.");
     assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
     assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
-    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 2);
+    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 3);
   } finally {
     if (previousTimeout === undefined) {
       delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
@@ -12990,7 +12994,68 @@ await run("pop3 provider falls back to RETR on a fresh connection when TOP times
     assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
     assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
     assert.ok(pop3.commands().some((command) => /^STAT$/i.test(command)));
-    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 2);
+    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 3);
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+    } else {
+      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
+    }
+    if (previousFetchMode === undefined) {
+      delete process.env.MAIL_POP3_FETCH_MODE;
+    } else {
+      process.env.MAIL_POP3_FETCH_MODE = previousFetchMode;
+    }
+    await pop3.close();
+  }
+});
+
+await run("pop3 provider skips one timed-out message and continues with later messages", async () => {
+  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
+  const previousFetchMode = process.env.MAIL_POP3_FETCH_MODE;
+  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
+  delete process.env.MAIL_POP3_FETCH_MODE;
+  const pop3 = await startFakePop3Server(
+    [
+      {
+        uid: "pop3-skipped-timeout-uid",
+        raw: [
+          "Message-ID: <pop3-skipped-timeout@example.com>",
+          "From: Buyer <buyer@example.com>",
+          "To: Sales <sales@example.com>",
+          "Subject: Timeout POP3 skipped",
+          "",
+          "This message never finishes."
+        ].join("\r\n")
+      },
+      {
+        uid: "pop3-after-skipped-timeout-uid",
+        raw: [
+          "Message-ID: <pop3-after-skipped-timeout@example.com>",
+          "From: Buyer <buyer@example.com>",
+          "To: Sales <sales@example.com>",
+          "Subject: POP3 after skipped timeout",
+          "",
+          "This message should still be imported."
+        ].join("\r\n")
+      }
+    ],
+    { hangRetrMessages: ["1"], hangTopMessages: ["1"] }
+  );
+  try {
+    const messages = await fetchRecentPop3Emails({
+      syncProtocol: "pop3",
+      pop3Host: "127.0.0.1",
+      pop3Port: pop3.port,
+      pop3Secure: false,
+      username: "sales@example.com",
+      password: "password"
+    }, 2);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].subject, "POP3 after skipped timeout");
+    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
+    assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
+    assert.ok(pop3.commands().some((command) => /^RETR 2$/i.test(command)));
   } finally {
     if (previousTimeout === undefined) {
       delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
