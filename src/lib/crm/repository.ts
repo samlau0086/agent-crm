@@ -2698,6 +2698,12 @@ export class PrismaCrmRepository {
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
+    const accountAddress = normalizeEmailAddress(account.emailAddress);
+    const fromAddress = normalizeMessageFromAddress(input.direction, input.from);
+    const toAddresses = normalizeMessageRecipientAddresses(input.direction, input.to, accountAddress);
+    const ccAddresses = normalizeMessageRecipientAddresses(input.direction, input.cc ?? []);
+    const bccAddresses = normalizeMessageRecipientAddresses(input.direction, input.bcc ?? []);
+    const messageParticipants = [fromAddress, ...toAddresses, ...ccAddresses];
     const normalizedExternalMessageId = input.externalMessageId?.trim() || undefined;
     const normalizedClientRequestId = input.clientRequestId?.trim() || undefined;
     const createdById = input.createdById ?? context.user.id;
@@ -2730,18 +2736,18 @@ export class PrismaCrmRepository {
     const requestedRecord = input.recordId ? await this.assertVisibleRecord(context, input.recordId) : undefined;
     const autoLinkedRecord = requestedRecord || input.skipAutoLink
       ? undefined
-      : await this.findVisibleRecordByEmailParticipants(context, account.emailAddress, [input.from, ...input.to, ...(input.cc ?? [])]);
+      : await this.findVisibleRecordByEmailParticipants(context, account.emailAddress, messageParticipants);
     const linkedRecordId = requestedRecord?.id ?? autoLinkedRecord?.id;
     const thread = input.threadId
         ? await this.assertEmailThread(context, input.threadId)
-      : (!input.skipAutoLink ? await this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], linkedRecordId) : undefined) ??
+      : (!input.skipAutoLink ? await this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, messageParticipants, linkedRecordId) : undefined) ??
         mapEmailThread(
             await this.db.emailThread.create({
               data: {
                 workspaceId: context.workspaceId,
                 accountId: account.id,
                 subject: normalizeRequiredText(input.subject, "Email subject"),
-                participantEmails: uniqueEmails([input.from, ...input.to]),
+                participantEmails: uniqueValidEmails([fromAddress, ...toAddresses]),
                 recordId: linkedRecordId
               }
             })
@@ -2781,10 +2787,10 @@ export class PrismaCrmRepository {
           accountId: account.id,
           direction: input.direction,
           status,
-          fromAddress: normalizeEmailAddress(input.from),
-          toAddresses: uniqueEmails(input.to),
-          ccAddresses: uniqueEmails(input.cc ?? []),
-          bccAddresses: uniqueEmails(input.bcc ?? []),
+          fromAddress,
+          toAddresses,
+          ccAddresses,
+          bccAddresses,
           subject: normalizeRequiredText(input.subject, "Email subject"),
           bodyText: normalizeRequiredText(input.bodyText, "Email body"),
           bodyHtml: trackingEnabled ? appendEmailTrackingHtml(input.bodyHtml?.trim() || undefined, trackingId!) : input.bodyHtml?.trim() || undefined,
@@ -9827,6 +9833,28 @@ function tryNormalizeEmailAddress(value: string | undefined | null): string | un
 
 function uniqueValidEmails(values: string[]): string[] {
   return Array.from(new Set(values.map(tryNormalizeEmailAddress).filter((email): email is string => Boolean(email))));
+}
+
+function normalizeMessageFromAddress(direction: EmailMessage["direction"], value: string): string {
+  const normalized = tryNormalizeEmailAddress(value);
+  if (normalized) {
+    return normalized;
+  }
+  if (direction === "inbound") {
+    return "unknown-sender@invalid.local";
+  }
+  return normalizeEmailAddress(value);
+}
+
+function normalizeMessageRecipientAddresses(direction: EmailMessage["direction"], values: string[], inboundFallback?: string): string[] {
+  if (direction !== "inbound") {
+    return uniqueEmails(values);
+  }
+  const normalized = uniqueValidEmails(values);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  return inboundFallback ? [inboundFallback] : [];
 }
 
 function normalizeEmailSubject(value: string): string {

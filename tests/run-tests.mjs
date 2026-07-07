@@ -5342,6 +5342,61 @@ await run("email message lifecycle webhook events distinguish received queued se
   assert.equal(deliveries.some((delivery) => delivery.event === "email.message.failed" && delivery.requestBody.data?.messageId === failed.id && delivery.requestBody.data?.failureReason === "SMTP 550"), true);
 });
 
+await run("inbound email recording tolerates malformed participant addresses", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Malformed Inbox",
+    emailAddress: "malformed-inbox@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "",
+    to: ["undisclosed-recipients:;"],
+    cc: ["manager@example.com", "not-an-email"],
+    bcc: ["also-not-an-email"],
+    subject: "Malformed recipients",
+    bodyText: "This inbound message should still sync."
+  });
+
+  assert.equal(message.from, "unknown-sender@invalid.local");
+  assert.deepEqual(message.to, ["malformed-inbox@example.com"]);
+  assert.deepEqual(message.cc, ["manager@example.com"]);
+  assert.deepEqual(message.bcc, []);
+});
+
+await run("outbound email recording still rejects malformed recipient addresses", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Strict Outbox",
+    emailAddress: "strict-outbox@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  assert.throws(
+    () =>
+      store.recordEmailMessage(context, {
+        accountId: account.id,
+        direction: "outbound",
+        from: "strict-outbox@example.com",
+        to: ["not-an-email"],
+        subject: "Invalid outbound",
+        bodyText: "This should not be sent."
+      }),
+    /Email address must be valid/
+  );
+});
+
 await run("webhook delivery filters and retries preserve payload attempts", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");

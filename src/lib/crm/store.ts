@@ -1198,6 +1198,12 @@ export class CrmStore {
   ): EmailMessage {
     requirePermission(context, "crm.write");
     const account = this.assertEmailAccount(context, input.accountId);
+    const accountAddress = normalizeEmailAddress(account.emailAddress);
+    const fromAddress = normalizeMessageFromAddress(input.direction, input.from);
+    const toAddresses = normalizeMessageRecipientAddresses(input.direction, input.to, accountAddress);
+    const ccAddresses = normalizeMessageRecipientAddresses(input.direction, input.cc ?? []);
+    const bccAddresses = normalizeMessageRecipientAddresses(input.direction, input.bcc ?? []);
+    const messageParticipants = [fromAddress, ...toAddresses, ...ccAddresses];
     const normalizedExternalMessageId = input.externalMessageId?.trim() || undefined;
     const normalizedClientRequestId = input.clientRequestId?.trim() || undefined;
     const createdById = input.createdById ?? context.user.id;
@@ -1227,11 +1233,11 @@ export class CrmStore {
     }
     const now = stamp();
     const requestedRecordId = input.recordId ? this.assertVisibleRecordById(context, input.recordId).id : undefined;
-    const autoRecordId = requestedRecordId ?? (input.skipAutoLink ? undefined : this.findRecordIdByEmailParticipants(context, account.emailAddress, [input.from, ...input.to, ...(input.cc ?? [])]));
+    const autoRecordId = requestedRecordId ?? (input.skipAutoLink ? undefined : this.findRecordIdByEmailParticipants(context, account.emailAddress, messageParticipants));
     const thread = input.threadId
       ? this.assertEmailThread(context, input.threadId)
-      : (!input.skipAutoLink ? this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, [input.from, ...input.to, ...(input.cc ?? [])], autoRecordId) : undefined) ??
-        this.createEmailThreadForMessage(context, account.id, { ...input, recordId: autoRecordId }, now);
+      : (!input.skipAutoLink ? this.findMatchingEmailThread(context, account.id, account.emailAddress, input.subject, messageParticipants, autoRecordId) : undefined) ??
+        this.createEmailThreadForMessage(context, account.id, { ...input, from: fromAddress, to: toAddresses, recordId: autoRecordId }, now);
     const aiSourceMessageId = input.aiSourceMessageId?.trim() || undefined;
     if (aiSourceMessageId) {
       this.getEmailMessage(context, aiSourceMessageId);
@@ -1255,10 +1261,10 @@ export class CrmStore {
       accountId: account.id,
       direction: input.direction,
       status: input.status ?? (input.direction === "inbound" ? "received" : "draft"),
-      from: normalizeEmailAddress(input.from),
-      to: input.to.map(normalizeEmailAddress),
-      cc: input.cc?.map(normalizeEmailAddress),
-      bcc: input.bcc?.map(normalizeEmailAddress),
+      from: fromAddress,
+      to: toAddresses,
+      cc: ccAddresses,
+      bcc: bccAddresses,
       subject: normalizeRequiredText(input.subject, "Email subject"),
       bodyText: normalizeRequiredText(input.bodyText, "Email body"),
       bodyHtml: trackingEnabled ? appendEmailTrackingHtml(input.bodyHtml, trackingId!) : input.bodyHtml,
@@ -4717,7 +4723,7 @@ export class CrmStore {
       workspaceId: context.workspaceId,
       accountId,
       subject: normalizeRequiredText(input.subject, "Email subject"),
-      participantEmails: Array.from(new Set([input.from, ...input.to].map(normalizeEmailAddress))),
+      participantEmails: uniqueValidEmails([input.from, ...input.to]),
       recordId: input.recordId,
       createdAt: now,
       updatedAt: now
@@ -4867,6 +4873,28 @@ function tryNormalizeEmailAddress(value: string | undefined | null): string | un
 
 function uniqueValidEmails(values: string[]): string[] {
   return Array.from(new Set(values.map(tryNormalizeEmailAddress).filter((email): email is string => Boolean(email))));
+}
+
+function normalizeMessageFromAddress(direction: EmailMessage["direction"], value: string): string {
+  const normalized = tryNormalizeEmailAddress(value);
+  if (normalized) {
+    return normalized;
+  }
+  if (direction === "inbound") {
+    return "unknown-sender@invalid.local";
+  }
+  return normalizeEmailAddress(value);
+}
+
+function normalizeMessageRecipientAddresses(direction: EmailMessage["direction"], values: string[], inboundFallback?: string): string[] {
+  if (direction !== "inbound") {
+    return values.map(normalizeEmailAddress);
+  }
+  const normalized = uniqueValidEmails(values);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  return inboundFallback ? [inboundFallback] : [];
 }
 
 function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
