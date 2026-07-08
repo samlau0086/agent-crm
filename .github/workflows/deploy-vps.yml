@@ -359,6 +359,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ vars.VPS_PORT || secrets.VPS_PORT || '22' }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SUDO: ${{ vars.VPS_SUDO || 'sudo' }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
           RUN_EMAIL_CONNECTION_TESTS: ${{ inputs.run_email_connections || vars.RUN_EMAIL_CONNECTION_TESTS || 'false' }}
@@ -368,11 +369,59 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/ai_agent_crm_deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' GHCR_USERNAME='$GHCR_USERNAME' GHCR_TOKEN='$GHCR_TOKEN' RUN_EMAIL_CONNECTION_TESTS='$RUN_EMAIL_CONNECTION_TESTS' RUN_EMAIL_AI_PROVIDER_TEST='$RUN_EMAIL_AI_PROVIDER_TEST' RUN_EMAIL_SMOKE_TEST='$RUN_EMAIL_SMOKE_TEST' REQUIRE_LIVE_EMAIL_READINESS='$REQUIRE_LIVE_EMAIL_READINESS' sh -s" <<'REMOTE'
+            "DEPLOY_PATH='$DEPLOY_PATH' VPS_SUDO='$VPS_SUDO' GHCR_USERNAME='$GHCR_USERNAME' GHCR_TOKEN='$GHCR_TOKEN' RUN_EMAIL_CONNECTION_TESTS='$RUN_EMAIL_CONNECTION_TESTS' RUN_EMAIL_AI_PROVIDER_TEST='$RUN_EMAIL_AI_PROVIDER_TEST' RUN_EMAIL_SMOKE_TEST='$RUN_EMAIL_SMOKE_TEST' REQUIRE_LIVE_EMAIL_READINESS='$REQUIRE_LIVE_EMAIL_READINESS' sh -s" <<'REMOTE'
           set -eu
           cd "$DEPLOY_PATH"
-          if [ -n "${GHCR_TOKEN:-}" ]; then
+          if [ "$(id -u)" -eq 0 ]; then
+            SUDO=""
+          else
+            SUDO="${VPS_SUDO:-sudo}"
+          fi
+          resolve_ghcr() {
+            getent hosts ghcr.io >/dev/null 2>&1 \
+              || { command -v resolvectl >/dev/null 2>&1 && resolvectl query ghcr.io >/dev/null 2>&1; } \
+              || { command -v nslookup >/dev/null 2>&1 && nslookup ghcr.io >/dev/null 2>&1; }
+          }
+          restart_system_resolver() {
+            if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files systemd-resolved.service >/dev/null 2>&1; then
+              echo "Restarting systemd-resolved after GHCR DNS lookup failure"
+              $SUDO systemctl restart systemd-resolved || true
+              sleep 2
+            fi
+          }
+          docker_login_ghcr() {
             printf '%s\n' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+          }
+          if ! resolve_ghcr; then
+            restart_system_resolver
+            if ! resolve_ghcr; then
+              echo "::error title=VPS DNS cannot resolve GHCR::The VPS cannot resolve ghcr.io before Docker login. Check systemd-resolved or /etc/resolv.conf DNS settings."
+              exit 1
+            fi
+          fi
+          if [ -n "${GHCR_TOKEN:-}" ]; then
+            login_stderr="$(mktemp)"
+            set +e
+            docker_login_ghcr 2>"$login_stderr"
+            login_code="$?"
+            set -e
+            if [ "$login_code" -ne 0 ]; then
+              if grep -Eiq 'lookup ghcr\.io|server misbehaving|EAI_AGAIN|temporary failure' "$login_stderr"; then
+                cat "$login_stderr" >&2
+                restart_system_resolver
+                resolve_ghcr || {
+                  echo "::error title=VPS DNS cannot resolve GHCR::Docker login failed because the VPS DNS resolver cannot resolve ghcr.io."
+                  rm -f "$login_stderr"
+                  exit 1
+                }
+                docker_login_ghcr
+              else
+                cat "$login_stderr" >&2
+                rm -f "$login_stderr"
+                exit "$login_code"
+              fi
+            fi
+            rm -f "$login_stderr"
           fi
           docker compose config >/dev/null
           postgres_host="$(grep -E '^POSTGRES_HOST=' .env | sed -E "s/^POSTGRES_HOST='?([^']*)'?.*/\1/")"
