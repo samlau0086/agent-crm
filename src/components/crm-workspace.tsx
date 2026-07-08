@@ -8297,24 +8297,6 @@ function Dashboard({
         <Metric label="待办任务" value={openTaskCount || openTasks.length} icon={CalendarClock} />
       </section>
 
-      <SmartReminderPanel
-        compact={false}
-        generating={smartReminderGenerating}
-        reminders={visibleSmartReminders}
-        title="今日最佳行动"
-        emptyMessage="暂无 AI 智能提醒。可手动刷新生成今日跟进建议。"
-        onComplete={onCompleteSmartReminder}
-        onConvertTask={onConvertSmartReminderToTask}
-        onDelete={onDeleteSmartReminder}
-        onDismiss={onDismissSmartReminder}
-        onGenerate={onGenerateSmartReminders}
-        onOpenRecord={onOpenSmartReminder}
-        onRestore={onRestoreSmartReminder}
-        onSnooze={onSnoozeSmartReminder}
-        pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
-        onCancelDeleteRequest={onCancelSmartReminderDeleteRequest}
-      />
-
       <div className="workspace-grid">
         <section className="section">
           <div className="topbar">
@@ -8345,6 +8327,24 @@ function Dashboard({
             })}
           </div>
         </section>
+
+        <SmartReminderPanel
+          compact={false}
+          generating={smartReminderGenerating}
+          reminders={visibleSmartReminders}
+          title="今日最佳行动"
+          emptyMessage="暂无 AI 智能提醒。可手动刷新生成今日跟进建议。"
+          onComplete={onCompleteSmartReminder}
+          onConvertTask={onConvertSmartReminderToTask}
+          onDelete={onDeleteSmartReminder}
+          onDismiss={onDismissSmartReminder}
+          onGenerate={onGenerateSmartReminders}
+          onOpenRecord={onOpenSmartReminder}
+          onRestore={onRestoreSmartReminder}
+          onSnooze={onSnoozeSmartReminder}
+          pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+          onCancelDeleteRequest={onCancelSmartReminderDeleteRequest}
+        />
 
         <ObjectDirectory objects={objects} recordCounts={recordCounts} onOpenObject={onOpenObject} />
       </div>
@@ -16426,16 +16426,16 @@ function RecordPoolPanel({
   const isMine = record.ownerId === currentUserId;
 
   return (
-    <section className="section compact-section" data-testid={`record-pool-panel-${record.id}`}>
-      <div className="settings-panel-header">
-        <div>
+    <section className="section record-pool-panel" data-testid={`record-pool-panel-${record.id}`}>
+      <div className="settings-panel-header record-pool-panel-header">
+        <div className="record-pool-summary">
           <div className="subtle">公海 / 私海</div>
-          <div className="toolbar">
+          <div className="toolbar record-pool-status">
             <span className={isPublic ? "status-pill success" : "status-pill"}>{isPublic ? "公海" : "私海"}</span>
             <span className="subtle">{isPublic ? "当前没有负责人" : `负责人：${ownerLabel(record.ownerId, users)}`}</span>
           </div>
         </div>
-        <div className="toolbar">
+        <div className="toolbar record-pool-actions">
           {isPublic ? (
             <button className="primary-button" type="button" onClick={onClaim} disabled={disabled}>
               <UserPlus size={16} />
@@ -16449,7 +16449,7 @@ function RecordPoolPanel({
           ) : null}
           {canManagePool ? (
             <>
-              <select className="select" value={transferOwnerId} onChange={(event) => setTransferOwnerId(event.target.value)} disabled={disabled}>
+              <select className="select record-pool-owner-select" value={transferOwnerId} onChange={(event) => setTransferOwnerId(event.target.value)} disabled={disabled}>
                 <option value="">释放到公海</option>
                 {users.filter((user) => user.active).map((user) => (
                   <option key={user.id} value={user.id}>

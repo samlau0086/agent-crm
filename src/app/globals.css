@@ -6162,6 +6162,42 @@ body.deal-pipeline-dragging {
   gap: 12px;
 }
 
+.record-pool-panel {
+  padding: 10px 14px;
+}
+
+.record-pool-panel-header {
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.record-pool-summary,
+.record-pool-actions {
+  min-width: 0;
+}
+
+.record-pool-status {
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.record-pool-actions {
+  justify-content: flex-end;
+}
+
+.record-pool-actions .primary-button,
+.record-pool-actions .secondary-button,
+.record-pool-actions .select {
+  min-height: 32px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.record-pool-owner-select {
+  width: clamp(240px, 30vw, 460px);
+}
+
 .talk-panel {
   background: #f8fbff;
 }
