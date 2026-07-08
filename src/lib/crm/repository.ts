@@ -5182,7 +5182,7 @@ export class PrismaCrmRepository {
   async convertSmartReminderToTask(context: RequestContext, id: string): Promise<{ reminder: SmartReminder; task: Activity }> {
     requirePermission(context, "crm.write");
     const reminder = await this.getSmartReminderForAction(context, id);
-    const taskDueAt = reminder.dueAt ? new Date(reminder.dueAt).toISOString() : undefined;
+    const taskDueAt = reminder.dueAt ? new Date(reminder.dueAt).toISOString() : smartReminderDefaultDueAt();
     const task = await this.createActivity(context, {
       recordId: reminder.recordId,
       type: "task",
@@ -9769,15 +9769,16 @@ function parseSmartReminderCandidates(value: unknown, payload: SmartReminderGene
       const title = normalizeShortText(raw.title, "");
       if (!title) return undefined;
       const sourceList = Array.isArray(raw.sources) ? raw.sources.filter(isJsonRecord) : [];
+      const kind = normalizeSmartReminderKind(typeof raw.kind === "string" ? raw.kind : "");
       return {
-        kind: normalizeSmartReminderKind(typeof raw.kind === "string" ? raw.kind : ""),
+        kind,
         priority: normalizeSmartReminderPriority(typeof raw.priority === "string" ? raw.priority : ""),
         title,
         body: normalizeOptionalText(raw.body, 1000),
         actionLabel: normalizeOptionalText(raw.actionLabel, 80),
         objectKey: typeof raw.objectKey === "string" ? raw.objectKey : record?.objectKey,
         recordId,
-        dueAt: normalizeOptionalDate(raw.dueAt),
+        dueAt: normalizeOptionalDate(raw.dueAt) ?? smartReminderDefaultDueAt(),
         sources: sourceList.length > 0 ? sourceList.map((source) => ({
           label: normalizeShortText(source.label, "AI source"),
           objectKey: typeof source.objectKey === "string" ? source.objectKey : record?.objectKey,
@@ -9825,6 +9826,12 @@ function normalizeOptionalDate(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function smartReminderDefaultDueAt(now = new Date()): string {
+  const dueAt = new Date(now);
+  dueAt.setHours(23, 59, 59, 999);
+  return dueAt.toISOString();
 }
 
 function normalizeScore(value: unknown, fallback: number): number {
