@@ -5182,12 +5182,13 @@ export class PrismaCrmRepository {
   async convertSmartReminderToTask(context: RequestContext, id: string): Promise<{ reminder: SmartReminder; task: Activity }> {
     requirePermission(context, "crm.write");
     const reminder = await this.getSmartReminderForAction(context, id);
+    const taskDueAt = reminder.dueAt ? new Date(reminder.dueAt).toISOString() : undefined;
     const task = await this.createActivity(context, {
       recordId: reminder.recordId,
       type: "task",
       title: reminder.actionLabel || reminder.title,
       body: reminder.body,
-      dueAt: reminder.dueAt,
+      dueAt: taskDueAt,
       completedAt: undefined,
       archivedAt: undefined
     });

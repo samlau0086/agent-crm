@@ -362,6 +362,8 @@ await run("smart reminders support portfolio operating actions", () => {
   assert.match(repositorySource, /kind: query.kind/);
   assert.match(repositorySource, /pruneStaleSmartReminderRecordSources\(context, reminders\.map\(mapSmartReminder\)\)/);
   assert.match(repositorySource, /tx\.smartReminder\.deleteMany\(\{[\s\S]*\{ recordId \}[\s\S]*array_contains: \[\{ objectKey, recordId \}\]/);
+  assert.match(repositorySource, /const taskDueAt = reminder\.dueAt \? new Date\(reminder\.dueAt\)\.toISOString\(\) : undefined;/);
+  assert.match(repositorySource, /convertSmartReminderToTask[\s\S]*dueAt: taskDueAt/);
   const workspaceSource = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(workspaceSource, /function smartReminderFallbackObjectKey\(kind: SmartReminder\["kind"\], availableObjectKeys: string\[\]\): string/);
   assert.match(workspaceSource, /const isAvailableRecordObject = \(objectKey\?: string\) => Boolean\(objectKey && props\.objects\.some\(\(object\) => object\.key === objectKey\)\)/);
