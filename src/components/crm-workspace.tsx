@@ -3156,20 +3156,40 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function openSmartReminderRecord(reminder: SmartReminder) {
-    if (reminder.objectKey && reminder.recordId) {
+    const isAvailableRecordObject = (objectKey?: string) => Boolean(objectKey && props.objects.some((object) => object.key === objectKey));
+    const sourceThreadId = reminder.sources.find((source) => source.threadId)?.threadId;
+    if (sourceThreadId || reminder.kind === "email_reply" || reminder.objectKey === "emails" || reminder.objectKey === "emailThreads") {
+      if (sourceThreadId) {
+        await openEmailThread(sourceThreadId);
+      } else {
+        setActiveNav("email");
+        setEmailWorkspaceView("mail");
+        router.push(buildEmailRoutePath({ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, listDisplayMode: routeEmailListDisplayMode, search: routeEmailSearch, mailMode: "list", threadId: "" }));
+      }
+      showToast({ intent: "info", message: "已打开邮件模块，可继续处理相关邮件提醒。" });
+      return;
+    }
+    if (reminder.objectKey === "tasks" || reminder.objectKey === "activities") {
+      const nextNav = reminder.objectKey === "tasks" ? "tasks" : "activities";
+      setActiveNav(nextNav);
+      router.push(crmPathForNav(nextNav));
+      showToast({ intent: "info", message: "已打开相关模块，可继续处理该提醒。" });
+      return;
+    }
+    if (isAvailableRecordObject(reminder.objectKey) && reminder.objectKey && reminder.recordId) {
       await openTalkSourceRecord({ objectKey: reminder.objectKey, recordId: reminder.recordId });
       return;
     }
-    const sourceRecord = reminder.sources.find((source) => source.objectKey && source.recordId);
+    const sourceRecord = reminder.sources.find((source) => isAvailableRecordObject(source.objectKey) && source.objectKey && source.recordId);
     if (sourceRecord?.objectKey && sourceRecord.recordId) {
       await openTalkSourceRecord({ objectKey: sourceRecord.objectKey, recordId: sourceRecord.recordId });
       return;
     }
-    const sourceObjectKey = reminder.sources.find((source) => source.objectKey)?.objectKey;
+    const sourceObjectKey = reminder.sources.find((source) => isAvailableRecordObject(source.objectKey))?.objectKey;
     const targetObjectKey =
-      reminder.objectKey ||
+      (isAvailableRecordObject(reminder.objectKey) ? reminder.objectKey : undefined) ||
       sourceObjectKey ||
-      (reminder.kind === "pipeline_optimization" || reminder.kind === "deal_close" ? "deals" : reminder.kind === "data_quality" ? "contacts" : "contacts");
+      smartReminderFallbackObjectKey(reminder.kind, props.objects.map((object) => object.key));
     const nextParams = new URLSearchParams();
     nextParams.set("smartReminderKind", reminder.kind);
     if (reminder.kind === "customer_level") {
@@ -20093,6 +20113,16 @@ function smartReminderMatchesKindFilter(reminder: SmartReminder, filter: SmartRe
     return ["pipeline_optimization", "deal_close", "risk"].includes(reminder.kind);
   }
   return reminder.kind === filter;
+}
+
+function smartReminderFallbackObjectKey(kind: SmartReminder["kind"], availableObjectKeys: string[]): string {
+  const preferred =
+    kind === "pipeline_optimization" || kind === "deal_close" || kind === "risk"
+      ? "deals"
+      : kind === "data_quality" || kind === "customer_level" || kind === "portfolio_health"
+        ? "contacts"
+        : "contacts";
+  return availableObjectKeys.includes(preferred) ? preferred : availableObjectKeys[0] ?? "contacts";
 }
 
 function smartReminderKindIcon(kind: SmartReminder["kind"]): LucideIcon {

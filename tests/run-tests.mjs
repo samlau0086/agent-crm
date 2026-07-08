@@ -362,6 +362,11 @@ await run("smart reminders support portfolio operating actions", () => {
   assert.match(repositorySource, /kind: query.kind/);
   assert.match(repositorySource, /pruneStaleSmartReminderRecordSources\(context, reminders\.map\(mapSmartReminder\)\)/);
   assert.match(repositorySource, /tx\.smartReminder\.deleteMany\(\{[\s\S]*\{ recordId \}[\s\S]*array_contains: \[\{ objectKey, recordId \}\]/);
+  const workspaceSource = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(workspaceSource, /function smartReminderFallbackObjectKey\(kind: SmartReminder\["kind"\], availableObjectKeys: string\[\]\): string/);
+  assert.match(workspaceSource, /const isAvailableRecordObject = \(objectKey\?: string\) => Boolean\(objectKey && props\.objects\.some\(\(object\) => object\.key === objectKey\)\)/);
+  assert.match(workspaceSource, /reminder\.objectKey === "emails" \|\| reminder\.objectKey === "emailThreads"/);
+  assert.match(workspaceSource, /\(isAvailableRecordObject\(reminder\.objectKey\) \? reminder\.objectKey : undefined\)/);
 });
 
 await run("workflow permissions and designer agent are registered", () => {
