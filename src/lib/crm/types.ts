@@ -318,6 +318,16 @@ export interface EmailThreadState {
   updatedAt: string;
 }
 
+export interface EmailDeletedMessage {
+  id: string;
+  workspaceId: string;
+  accountId: string;
+  externalMessageId: string;
+  threadId?: string;
+  deletedById?: string;
+  createdAt: string;
+}
+
 export interface EmailAttachment {
   id?: string;
   fileName: string;
@@ -1252,6 +1262,7 @@ export interface CrmSnapshot {
   emailThreads: EmailThread[];
   emailThreadStates: EmailThreadState[];
   emailMessages: EmailMessage[];
+  emailDeletedMessages?: EmailDeletedMessage[];
   knowledgeArticles: KnowledgeArticle[];
   knowledgeVectorSettings?: KnowledgeVectorSettings[];
   knowledgeEmbeddingChunks?: KnowledgeEmbeddingChunk[];

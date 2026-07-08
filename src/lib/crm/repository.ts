@@ -2622,7 +2622,29 @@ export class PrismaCrmRepository {
   async deleteEmailThread(context: RequestContext, threadId: string): Promise<void> {
     requirePermission(context, "crm.write");
     const thread = await this.assertEmailThread(context, threadId);
+    const deletedMessages = await this.db.emailMessage.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        threadId: thread.id,
+        externalMessageId: { not: null }
+      },
+      select: { accountId: true, externalMessageId: true }
+    });
     await this.db.$transaction([
+      ...(deletedMessages.length
+        ? [
+            this.db.emailDeletedMessage.createMany({
+              data: deletedMessages.map((message) => ({
+                workspaceId: context.workspaceId,
+                accountId: message.accountId,
+                externalMessageId: message.externalMessageId!,
+                threadId: thread.id,
+                deletedById: context.user.id
+              })),
+              skipDuplicates: true
+            })
+          ]
+        : []),
       this.db.emailMessage.deleteMany({ where: { workspaceId: context.workspaceId, threadId: thread.id } }),
       this.db.emailThreadState.deleteMany({ where: { workspaceId: context.workspaceId, threadId: thread.id } }),
       this.db.emailThread.delete({ where: { id: thread.id } })
@@ -2961,6 +2983,26 @@ export class PrismaCrmRepository {
       }
     });
     return message ? mapEmailMessage(message) : undefined;
+  }
+
+  async isEmailExternalMessageDeleted(context: RequestContext, accountId: string, externalMessageId: string): Promise<boolean> {
+    requirePermission(context, "crm.read");
+    await this.assertEmailAccount(context, accountId);
+    const normalizedExternalMessageId = externalMessageId.trim();
+    if (!normalizedExternalMessageId) {
+      return false;
+    }
+    const deleted = await this.db.emailDeletedMessage.findUnique({
+      where: {
+        workspaceId_accountId_externalMessageId: {
+          workspaceId: context.workspaceId,
+          accountId,
+          externalMessageId: normalizedExternalMessageId
+        }
+      },
+      select: { id: true }
+    });
+    return Boolean(deleted);
   }
 
   async listEmailSendingMessages(context: RequestContext, limit = 50): Promise<EmailMessage[]> {

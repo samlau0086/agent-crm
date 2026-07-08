@@ -367,6 +367,15 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     let skippedDuplicateCount = 0;
     for (const message of messages) {
       try {
+        const isDeletedExternalMessage = this.repository.isEmailExternalMessageDeleted
+          ? message.externalMessageId
+            ? await this.repository.isEmailExternalMessageDeleted(context, account.id, message.externalMessageId)
+            : false
+          : false;
+        if (isDeletedExternalMessage) {
+          skippedDuplicateCount += 1;
+          continue;
+        }
         if (message.externalMessageId && (await this.repository.findEmailMessageByExternalId(context, account.id, message.externalMessageId))) {
           skippedDuplicateCount += 1;
           continue;

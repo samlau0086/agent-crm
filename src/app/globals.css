@@ -5822,6 +5822,49 @@ body.deal-pipeline-dragging {
   gap: 12px;
 }
 
+.record-approval-manager {
+  display: grid;
+  gap: 14px;
+}
+
+.record-approval-bulkbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.record-approval-select-all,
+.record-approval-card-title {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.record-approval-select-all {
+  align-items: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.record-approval-card-title span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.record-approval-card-title strong,
+.record-approval-card-title .subtle {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .record-review-card {
   display: grid;
   gap: 12px;
@@ -6566,6 +6609,11 @@ body.deal-pipeline-dragging {
 
   .audit-item {
     grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .record-approval-bulkbar {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .audit-time {

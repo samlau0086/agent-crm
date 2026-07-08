@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   Clock3,
   Download,
   Eye,
@@ -235,7 +236,7 @@ function hasRecordUpdatePatchChanges(record: CrmRecord, patch: RecordApprovalPat
   return Object.entries(data).some(([key, nextValue]) => normalizeComparableRecordValue(nextValue) !== normalizeComparableRecordValue(record.data[key]));
 }
 
-type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "automation" | "email" | "settings";
+type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "record-approvals" | "automation" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type DealWorkspaceView = "pipeline" | "list";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
@@ -258,6 +259,7 @@ type EmailRoutePatch = {
 };
 type RecordChangeRequestResponse = { pendingApproval: true; request: RecordChangeRequest; record?: CrmRecord };
 type RecordApprovalReasonRequiredResponse = { approvalReasonRequired: true };
+type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 type EmailThreadUiState = {
   archived?: boolean;
   category?: EmailCategoryKey;
@@ -548,6 +550,7 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
   { key: "objects", label: "对象", icon: LayoutList },
   { key: "tasks", label: "任务", icon: CheckCircle2 },
   { key: "activities", label: "活动", icon: ActivityIcon },
+  { key: "record-approvals", label: "变更审批", icon: ClipboardList },
   { key: "automation", label: "自动化", icon: WorkflowIcon },
   { key: "settings", label: "设置", icon: Settings }
 ];
@@ -2085,6 +2088,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [smartReminders, setSmartReminders] = useState<SmartReminder[]>(props.dashboardSummary.smartReminders);
   const [isGeneratingSmartReminders, setIsGeneratingSmartReminders] = useState(false);
   const [recordChangeRequests, setRecordChangeRequests] = useState<RecordChangeRequest[]>(props.recordChangeRequests);
+  const [selectedRecordApprovalIds, setSelectedRecordApprovalIds] = useState<Set<string>>(() => new Set());
+  const [reviewingRecordApprovalIds, setReviewingRecordApprovalIds] = useState<Set<string>>(() => new Set());
   const [knowledgeDraft, setKnowledgeDraft] = useState<KnowledgeArticleDraft>({ title: "", body: "", tags: "", active: true });
   const [deletedActivityIds, setDeletedActivityIds] = useState<Set<string>>(() => new Set());
   const [message, setMessage] = useState<string | null>(null);
@@ -2318,6 +2323,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           .filter((request) => request.objectKey === "smart_reminders" && request.action === "delete" && request.status === "pending")
           .map((request) => [request.recordId, request])
       ),
+    [recordChangeRequests]
+  );
+  const pendingRecordApprovalRequests = useMemo(
+    () => recordChangeRequests.filter((request) => request.status === "pending"),
     [recordChangeRequests]
   );
   const selectedFields = useMemo(
@@ -2688,6 +2697,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   useEffect(() => {
     setRecordChangeRequests(props.recordChangeRequests);
   }, [props.recordChangeRequests]);
+
+  useEffect(() => {
+    const pendingIds = new Set(pendingRecordApprovalRequests.map((request) => request.id));
+    setSelectedRecordApprovalIds((current) => {
+      const next = new Set([...current].filter((id) => pendingIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [pendingRecordApprovalRequests]);
 
   useEffect(() => {
     setRecordEmailActivityFilter("");
@@ -3629,6 +3646,94 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [updated]).filter((candidate) => candidate.status === "pending"));
     setMessage("删除申请已取消");
     router.refresh();
+  }
+
+  function toggleRecordApprovalSelection(requestId: string, selected: boolean) {
+    setSelectedRecordApprovalIds((current) => {
+      const next = new Set(current);
+      if (selected) {
+        next.add(requestId);
+      } else {
+        next.delete(requestId);
+      }
+      return next;
+    });
+  }
+
+  function setAllRecordApprovalSelection(selected: boolean) {
+    setSelectedRecordApprovalIds(selected ? new Set(pendingRecordApprovalRequests.map((request) => request.id)) : new Set());
+  }
+
+  async function reviewRecordChangeRequests(requests: RecordChangeRequest[], decision: "approve" | "reject") {
+    const pendingRequests = requests.filter((request) => request.status === "pending");
+    if (!pendingRequests.length) {
+      return;
+    }
+    const isBatch = pendingRequests.length > 1;
+    const confirmed = await requestConfirm(
+      decision === "reject"
+        ? {
+            title: isBatch ? "批量拒绝审批" : "拒绝审批",
+            message: isBatch
+              ? `确定拒绝选中的 ${pendingRequests.length} 条记录变更申请？`
+              : `确定拒绝“${pendingRequests[0].recordTitle}”的${pendingRequests[0].action === "delete" ? "删除" : "修改"}申请？`,
+            confirmLabel: "拒绝",
+            danger: true
+          }
+        : {
+            title: isBatch ? "批量通过审批" : "通过审批",
+            message: isBatch
+              ? `确定通过选中的 ${pendingRequests.length} 条记录变更申请？删除申请通过后记录会被正式删除。`
+              : pendingRequests[0].action === "delete"
+                ? `确定通过“${pendingRequests[0].recordTitle}”的删除申请？通过后记录会被正式删除。`
+                : `确定通过“${pendingRequests[0].recordTitle}”的修改申请？`,
+            confirmLabel: "通过"
+          }
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const requestIds = new Set(pendingRequests.map((request) => request.id));
+    setReviewingRecordApprovalIds((current) => new Set([...current, ...requestIds]));
+    try {
+      const results: RecordChangeReviewResponse[] = [];
+      for (const request of pendingRequests) {
+        const result = await fetchJson<RecordChangeReviewResponse>(`/api/record-change-requests/${request.id}`, {
+          method: "PATCH",
+          body: { decision }
+        });
+        results.push(result);
+      }
+      const reviewedRequests = results.map((result) => result.request);
+      setRecordChangeRequests((current) =>
+        mergeRecordChangeRequests(current, reviewedRequests).filter((candidate) => candidate.status === "pending")
+      );
+      setSelectedRecordApprovalIds((current) => new Set([...current].filter((id) => !requestIds.has(id))));
+      const updatedRecords = results.map((result) => result.record).filter((record): record is CrmRecord => Boolean(record));
+      if (updatedRecords.length) {
+        mergeLoadedRecords(updatedRecords);
+      }
+      if (decision === "approve") {
+        const deletedRequests = reviewedRequests.filter((request) => request.action === "delete");
+        if (deletedRequests.length) {
+          const deletedRecordKeys = new Set(deletedRequests.map((request) => `${request.objectKey}:${request.recordId}`));
+          setRecords((current) => current.filter((record) => !deletedRecordKeys.has(`${record.objectKey}:${record.id}`)));
+          setActivities((current) => current.filter((activity) => !deletedRecordKeys.has(`activities:${activity.id}`)));
+          setSmartReminders((current) => current.filter((reminder) => !deletedRecordKeys.has(`smart_reminders:${reminder.id}`)));
+        }
+      }
+      showSuccess(
+        isBatch
+          ? `已${decision === "approve" ? "通过" : "拒绝"} ${reviewedRequests.length} 条审批`
+          : decision === "approve"
+            ? "审批已通过"
+            : "审批已拒绝"
+      );
+      router.refresh();
+    } finally {
+      setReviewingRecordApprovalIds((current) => new Set([...current].filter((id) => !requestIds.has(id))));
+    }
   }
 
   async function createRecordActivity(input: {
@@ -5854,6 +5959,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
         {activeNav === "objects" && (
           <ObjectDirectory objects={props.objects} recordCounts={props.dashboardSummary.recordCounts} onOpenObject={openObject} />
+        )}
+
+        {activeNav === "record-approvals" && (
+          <RecordChangeApprovalManager
+            activities={activities}
+            fields={props.fields}
+            objects={props.objects}
+            records={records}
+            requests={pendingRecordApprovalRequests}
+            selectedRequestIds={selectedRecordApprovalIds}
+            reviewingRequestIds={reviewingRecordApprovalIds}
+            users={props.users}
+            onApprove={(request) => { void runImmediateAction(() => reviewRecordChangeRequests([request], "approve")); }}
+            onReject={(request) => { void runImmediateAction(() => reviewRecordChangeRequests([request], "reject")); }}
+            onBatchApprove={(requests) => { void runImmediateAction(() => reviewRecordChangeRequests(requests, "approve")); }}
+            onBatchReject={(requests) => { void runImmediateAction(() => reviewRecordChangeRequests(requests, "reject")); }}
+            onSelect={toggleRecordApprovalSelection}
+            onSelectAll={setAllRecordApprovalSelection}
+          />
         )}
 
         {showRecordWorkspace && activeObject && (
@@ -16560,6 +16684,172 @@ type RecordChangeDiff = {
   newValue: string;
 };
 
+function RecordChangeApprovalManager({
+  activities,
+  fields,
+  objects,
+  records,
+  requests,
+  selectedRequestIds,
+  reviewingRequestIds,
+  users,
+  onApprove,
+  onReject,
+  onBatchApprove,
+  onBatchReject,
+  onSelect,
+  onSelectAll
+}: {
+  activities: Activity[];
+  fields: FieldDefinition[];
+  objects: ObjectDefinition[];
+  records: CrmRecord[];
+  requests: RecordChangeRequest[];
+  selectedRequestIds: Set<string>;
+  reviewingRequestIds: Set<string>;
+  users: User[];
+  onApprove: (request: RecordChangeRequest) => void;
+  onReject: (request: RecordChangeRequest) => void;
+  onBatchApprove: (requests: RecordChangeRequest[]) => void;
+  onBatchReject: (requests: RecordChangeRequest[]) => void;
+  onSelect: (requestId: string, selected: boolean) => void;
+  onSelectAll: (selected: boolean) => void;
+}) {
+  const selectedRequests = requests.filter((request) => selectedRequestIds.has(request.id));
+  const allSelected = requests.length > 0 && selectedRequests.length === requests.length;
+  const hasProcessing = reviewingRequestIds.size > 0;
+
+  return (
+    <section className="settings-panel record-approval-manager" data-testid="record-change-approval-manager">
+      <div className="settings-panel-header">
+        <div>
+          <h2 className="page-title">记录变更审批</h2>
+          <div className="subtle">集中审核记录修改和删除申请，支持批量通过或拒绝。</div>
+        </div>
+        <span className="badge">{requests.length} 待审批</span>
+      </div>
+
+      <div className="record-approval-bulkbar">
+        <label className="record-approval-select-all">
+          <input
+            checked={allSelected}
+            data-testid="record-change-select-all"
+            disabled={!requests.length || hasProcessing}
+            type="checkbox"
+            onChange={(event) => onSelectAll(event.target.checked)}
+          />
+          <span>已选择 {selectedRequests.length} / {requests.length}</span>
+        </label>
+        <div className="toolbar">
+          <button
+            className="primary-button"
+            data-testid="record-change-batch-approve"
+            disabled={!selectedRequests.length || hasProcessing}
+            type="button"
+            onClick={() => onBatchApprove(selectedRequests)}
+          >
+            <CheckCircle2 size={16} />
+            批量通过
+          </button>
+          <button
+            className="danger-button"
+            data-testid="record-change-batch-reject"
+            disabled={!selectedRequests.length || hasProcessing}
+            type="button"
+            onClick={() => onBatchReject(selectedRequests)}
+          >
+            <XCircle size={16} />
+            批量拒绝
+          </button>
+        </div>
+      </div>
+
+      {requests.length > 0 ? (
+        <div className="record-review-list">
+          {requests.map((request) => {
+            const object = objects.find((item) => item.key === request.objectKey);
+            const record = records.find((item) => item.id === request.recordId && item.objectKey === request.objectKey);
+            const activity = activities.find((item) => item.id === request.recordId);
+            const requestFields = fields.filter((field) => field.objectKey === request.objectKey);
+            const rows = buildRecordApprovalPreviewRows(request, record, activity, requestFields, users);
+            const requestedBy = users.find((user) => user.id === request.requestedById);
+            const objectLabel = recordApprovalObjectLabel(request.objectKey, object);
+            const isSelected = selectedRequestIds.has(request.id);
+            const isProcessing = reviewingRequestIds.has(request.id);
+
+            return (
+              <article className={`record-review-card ${request.action === "delete" ? "delete-review" : "update-review"}`} data-testid={`record-change-request-${request.id}`} key={request.id}>
+                <div className="record-review-header">
+                  <label className="record-approval-card-title">
+                    <input
+                      checked={isSelected}
+                      data-testid={`record-change-select-${request.id}`}
+                      disabled={hasProcessing}
+                      type="checkbox"
+                      onChange={(event) => onSelect(request.id, event.target.checked)}
+                    />
+                    <span>
+                      <strong>{request.recordTitle}</strong>
+                      <span className="subtle">
+                        {objectLabel} · {requestedBy?.name ?? request.requestedById} · {formatDate(request.createdAt)}
+                      </span>
+                    </span>
+                  </label>
+                  <span className={request.action === "delete" ? "danger-badge" : "badge"}>{request.action === "delete" ? "删除申请" : "修改申请"}</span>
+                </div>
+
+                <div className="record-review-reason">
+                  <span>申请原因</span>
+                  <strong>{request.reason || "未填写"}</strong>
+                </div>
+
+                {request.action === "delete" ? (
+                  <div className="record-review-delete-note">
+                    <strong>通过后将正式删除</strong>
+                    <span>请确认业务侧不再需要保留该记录，或相关信息已完成迁移。</span>
+                  </div>
+                ) : null}
+
+                {rows.length > 0 ? (
+                  <div className="record-review-diff-table" data-testid={`record-change-diff-${request.id}`}>
+                    <div className="record-review-diff-head">
+                      <span>字段</span>
+                      <span>当前值</span>
+                      <span>{request.action === "delete" ? "记录值" : "申请值"}</span>
+                    </div>
+                    {rows.map((row) => (
+                      <div className="record-review-diff-row" key={`${request.id}-${row.key}`}>
+                        <strong>{row.label}</strong>
+                        <span className="record-review-value old-value">{row.oldValue || "空"}</span>
+                        <span className="record-review-value new-value">{row.newValue || "空"}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state compact-empty">此申请没有可展示的字段差异。</div>
+                )}
+
+                <div className="toolbar compact-toolbar">
+                  <button className="primary-button" data-testid={`record-change-approve-${request.id}`} disabled={hasProcessing} type="button" onClick={() => onApprove(request)}>
+                    <CheckCircle2 size={15} />
+                    {isProcessing ? "处理中" : "通过"}
+                  </button>
+                  <button className="danger-button" data-testid={`record-change-reject-${request.id}`} disabled={hasProcessing} type="button" onClick={() => onReject(request)}>
+                    <XCircle size={15} />
+                    拒绝
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="empty-state">暂无待审批的记录变更。</div>
+      )}
+    </section>
+  );
+}
+
 function buildRecordUpdateDiffs(record: CrmRecord, request: RecordChangeRequest, fields: FieldDefinition[], users: User[]): RecordChangeDiff[] {
   const patch = request.patch ?? {};
   const previousPatch = previousRecordApprovalPatch(patch);
@@ -16597,6 +16887,73 @@ function buildRecordUpdateDiffs(record: CrmRecord, request: RecordChangeRequest,
     });
   }
   return diffs;
+}
+
+function buildRecordApprovalPreviewRows(
+  request: RecordChangeRequest,
+  record: CrmRecord | undefined,
+  activity: Activity | undefined,
+  fields: FieldDefinition[],
+  users: User[]
+): RecordChangeDiff[] {
+  if (request.action === "update") {
+    return record ? buildRecordUpdateDiffs(record, request, fields, users) : [];
+  }
+
+  if (request.objectKey === "activities") {
+    const activitySnapshot = activity ?? (isPlainRecord(request.patch?.activity) ? request.patch.activity : undefined);
+    if (!activitySnapshot) {
+      return [];
+    }
+    return [
+      { key: "type", label: "类型", oldValue: formatActivityType(String(activitySnapshot.type ?? "") as Activity["type"]), newValue: formatActivityType(String(activitySnapshot.type ?? "") as Activity["type"]) },
+      { key: "title", label: "标题", oldValue: String(activitySnapshot.title ?? request.recordTitle), newValue: String(activitySnapshot.title ?? request.recordTitle) },
+      ...(activitySnapshot.body ? [{ key: "body", label: "内容", oldValue: String(activitySnapshot.body), newValue: String(activitySnapshot.body) }] : []),
+      ...(activitySnapshot.createdAt ? [{ key: "createdAt", label: "创建时间", oldValue: formatDate(String(activitySnapshot.createdAt)), newValue: formatDate(String(activitySnapshot.createdAt)) }] : [])
+    ];
+  }
+
+  if (request.objectKey === "smart_reminders") {
+    const reminder = isPlainRecord(request.patch?.smartReminder) ? request.patch.smartReminder : undefined;
+    if (!reminder) {
+      return [];
+    }
+    return [
+      { key: "title", label: "提醒标题", oldValue: String(reminder.title ?? request.recordTitle), newValue: String(reminder.title ?? request.recordTitle) },
+      ...(reminder.body ? [{ key: "body", label: "建议内容", oldValue: String(reminder.body), newValue: String(reminder.body) }] : []),
+      ...(reminder.actionLabel ? [{ key: "actionLabel", label: "建议动作", oldValue: String(reminder.actionLabel), newValue: String(reminder.actionLabel) }] : []),
+      ...(reminder.priority ? [{ key: "priority", label: "优先级", oldValue: String(reminder.priority), newValue: String(reminder.priority) }] : [])
+    ];
+  }
+
+  if (!record) {
+    return [];
+  }
+
+  const rows: RecordChangeDiff[] = [
+    { key: "title", label: "名称", oldValue: record.title, newValue: record.title }
+  ];
+  if (record.ownerId) {
+    rows.push({ key: "ownerId", label: "负责人", oldValue: ownerLabel(record.ownerId, users), newValue: ownerLabel(record.ownerId, users) });
+  }
+  for (const field of fields) {
+    if (!(field.key in record.data)) {
+      continue;
+    }
+    const value = formatRecordChangeValue(field, record.data[field.key], users);
+    rows.push({ key: field.key, label: field.label, oldValue: value, newValue: value });
+  }
+  return rows;
+}
+
+function recordApprovalObjectLabel(objectKey: string, object?: ObjectDefinition): string {
+  if (objectKey === "activities") {
+    return "活动";
+  }
+  if (objectKey === "smart_reminders") {
+    return "AI 智能提醒";
+  }
+  return object?.label ?? objectKey;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

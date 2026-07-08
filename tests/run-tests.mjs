@@ -9997,6 +9997,47 @@ await run("email message recording is idempotent per account external message id
   assert.notEqual(otherAccount.id, first.id);
 });
 
+await run("email sync skips externally deleted messages after local thread deletion", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Deleted Sync Inbox",
+    emailAddress: "deleted-sync@example.com",
+    provider: "custom",
+    status: "active",
+    syncEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Do not reimport",
+    bodyText: "This was deleted locally.",
+    externalMessageId: "provider-deleted-message-id"
+  });
+
+  store.deleteEmailThread(context, message.threadId);
+  assert.equal(store.isEmailExternalMessageDeleted(context, account.id, "provider-deleted-message-id"), true);
+
+  const adapter = createEmailProviderAdapter(store);
+  const result = await adapter.importInboundMessages(context, account, [
+    {
+      from: "buyer@example.com",
+      to: [account.emailAddress],
+      cc: [],
+      subject: "Do not reimport",
+      bodyText: "The provider still has this message.",
+      externalMessageId: "provider-deleted-message-id",
+      receivedAt: "2026-07-08T07:30:00.000Z"
+    }
+  ]);
+
+  assert.equal(result.importedCount, 0);
+  assert.equal(result.skippedDuplicateCount, 1);
+  assert.equal(store.listEmailThreads(context).some((thread) => thread.subject === "Do not reimport"), false);
+});
+
 await run("email messages auto-link to contacts by participant email unless explicitly linked", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");

@@ -55,6 +55,7 @@ import type {
   AiProviderConfig,
   AiProviderProfile,
   EmailConnectionConfig,
+  EmailDeletedMessage,
   EmailMessage,
   EmailSignature,
   EmailThread,
@@ -963,6 +964,28 @@ export class CrmStore {
   deleteEmailThread(context: RequestContext, threadId: string): void {
     requirePermission(context, "crm.write");
     const thread = this.assertEmailThread(context, threadId);
+    const now = stamp();
+    const deletedMessages = (this.data.emailMessages ?? []).filter(
+      (message) => message.workspaceId === context.workspaceId && message.threadId === thread.id && message.externalMessageId
+    );
+    const deletedMessageKeys = new Set((this.data.emailDeletedMessages ?? []).map((message) => `${message.workspaceId}:${message.accountId}:${message.externalMessageId}`));
+    for (const message of deletedMessages) {
+      const key = `${context.workspaceId}:${message.accountId}:${message.externalMessageId}`;
+      if (deletedMessageKeys.has(key)) {
+        continue;
+      }
+      const deletedMessage: EmailDeletedMessage = {
+        id: createId("email_deleted_message"),
+        workspaceId: context.workspaceId,
+        accountId: message.accountId,
+        externalMessageId: message.externalMessageId!,
+        threadId: thread.id,
+        deletedById: context.user.id,
+        createdAt: now
+      };
+      (this.data.emailDeletedMessages ??= []).push(deletedMessage);
+      deletedMessageKeys.add(key);
+    }
     this.data.emailMessages = (this.data.emailMessages ?? []).filter((message) => message.threadId !== thread.id);
     this.data.emailThreadStates = (this.data.emailThreadStates ?? []).filter((state) => state.threadId !== thread.id);
     this.data.emailThreads = (this.data.emailThreads ?? []).filter((candidate) => candidate.id !== thread.id);
@@ -1053,6 +1076,21 @@ export class CrmStore {
         candidate.externalMessageId === normalizedExternalMessageId
     );
     return message ? clone(message) : undefined;
+  }
+
+  isEmailExternalMessageDeleted(context: RequestContext, accountId: string, externalMessageId: string): boolean {
+    requirePermission(context, "crm.read");
+    this.assertEmailAccount(context, accountId);
+    const normalizedExternalMessageId = externalMessageId.trim();
+    if (!normalizedExternalMessageId) {
+      return false;
+    }
+    return (this.data.emailDeletedMessages ?? []).some(
+      (candidate) =>
+        candidate.workspaceId === context.workspaceId &&
+        candidate.accountId === accountId &&
+        candidate.externalMessageId === normalizedExternalMessageId
+    );
   }
 
   updateEmailThreadSummary(context: RequestContext, threadId: string, summary: string): EmailThread {
