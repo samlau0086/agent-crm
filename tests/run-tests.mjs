@@ -2996,6 +2996,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /if \(!routeEmailThreadId\) \{[\s\S]*return;[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*fetchJson<EmailMessage\[\]>\(`\/api\/email\/threads\/\$\{routeEmailThreadId\}\/messages`/);
   assert.match(source, /pendingRecordOpen\?\.objectKey === route\.objectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
+  assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*void updateEmailThreadState\(threadId, \{ read: true \}\)/);
   assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*const nextEmailThreadPath = buildEmailRoutePath\(\{ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, listDisplayMode: routeEmailListDisplayMode, search: routeEmailSearch, mailMode: "detail", threadId \}\)[\s\S]*selectEmailThread\(threadId\)[\s\S]*setEmailDetailThreadId\(threadId\)[\s\S]*pushEmailHistoryRoute\(nextEmailThreadPath\)[\s\S]*await loadEmailMessages\(threadId\)/);
   assert.match(source, /if \(!detailThreadId\) \{[\s\S]*return;[\s\S]*const thread = threads\.find\(\(candidate\) => candidate\.id === detailThreadId\)/);
   assert.match(source, /setMailMode\(\(current\) => \{[\s\S]*const nextMode = routeEmailThreadIdToMode\(detailThreadId, routeMailMode\)[\s\S]*return current === nextMode \? current : nextMode/);
@@ -3030,6 +3031,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /data-testid="email-thread-bulk-permanent-delete"/);
   assert.match(source, /data-testid=\{`email-thread-row-permanent-delete-\$\{thread\.id\}`\}/);
   assert.match(source, /async function deleteEmailThreads\(threadIds: string\[\]\)/);
+  assert.match(source, /function openThreadDetail\(threadId: string, messageId = ""\)[\s\S]*patchThreadUiState\(\[threadId\], \{ read: true \}\)[\s\S]*persistThreadState\(threadId, \{ read: true \}\)/);
   assert.match(source, /action === "delete" && threadIds\.some\(\(threadId\) => Boolean\(threadUiState\[threadId\]\?\.deleted\)\)/);
   assert.match(source, /selectedThreadState\.deleted \|\| mailbox === "trash"/);
   assert.match(source, /className=\{`gmail-thread-row \$\{selectedThreadId === thread\.id \? "selected" : ""\} \$\{isRead \? "" : "unread"\} \$\{mailbox === "trash" \? "trash-row" : ""\}`\}/);
@@ -3634,6 +3636,7 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /params\.set\("mailbox", patch\.mailbox \?\? "inbox"\)/);
   assert.match(source, /function normalizeEmailListDisplayMode\(value: string \| null\): EmailListDisplayMode/);
   assert.match(source, /if \(patch\.listDisplayMode === "message"\) \{[\s\S]*params\.set\("mailListView", "message"\)/);
+  assert.match(source, /if \(patch\.messageId\) \{[\s\S]*params\.set\("emailMessageId", patch\.messageId\)/);
   assert.match(source, /if \(patch\.emailView && patch\.emailView !== "mail"\) \{[\s\S]*params\.set\("emailView", patch\.emailView\)/);
   assert.match(source, /params\.set\("mailMode", "detail"\)[\s\S]*params\.set\("emailThreadId", patch\.threadId\)/);
   assert.match(source, /const \[emailWorkspaceView, setEmailWorkspaceView\] = useState<EmailWorkspaceView>\(routeEmailView\)/);
@@ -3642,7 +3645,7 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /window\.history\.pushState\(window\.history\.state, "", nextPath\)/);
   assert.match(source, /onViewChange=\{\(nextView\) => \{[\s\S]*emailView: nextView[\s\S]*pushEmailHistoryRoute\(nextPath\)/);
   assert.match(source, /onRouteChange=\{\(patch\) => \{[\s\S]*const nextPath = buildEmailRoutePath\(patch\)[\s\S]*pushEmailHistoryRoute\(nextPath\)/);
-  assert.match(source, /const applyEmailRoute = useCallback\(\(patch: EmailRoutePatch\) => \{[\s\S]*const nextListDisplayMode = patch\.listDisplayMode \?\? emailListDisplayMode[\s\S]*onRouteChange\(\{[\s\S]*listDisplayMode: nextListDisplayMode[\s\S]*mailbox: nextMailbox[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId/);
+  assert.match(source, /const applyEmailRoute = useCallback\(\(patch: EmailRoutePatch\) => \{[\s\S]*const nextListDisplayMode = patch\.listDisplayMode \?\? emailListDisplayMode[\s\S]*const nextMessageId = patch\.messageId \?\? \(nextMode === "detail" \? selectedDetailMessageId : ""\)[\s\S]*onRouteChange\(\{[\s\S]*listDisplayMode: nextListDisplayMode[\s\S]*mailbox: nextMailbox[\s\S]*mailMode: nextMode[\s\S]*messageId: nextMessageId[\s\S]*threadId: nextThreadId/);
   assert.match(source, /async function updateCurrentUserPreferencesPatch\(patch: Partial<Pick<User, "emailListDisplayMode">>\)/);
   assert.match(source, /fetchJson<User>\("\/api\/users\/me\/preferences", \{[\s\S]*method: "PATCH"[\s\S]*body: patch/);
   assert.match(source, /onUpdateListDisplayModePreference=\{\(mode\) => \{ void runImmediateAction\(\(\) => updateCurrentUserPreferencesPatch\(\{ emailListDisplayMode: mode \}\)\); \}\}/);
@@ -3650,7 +3653,7 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /pendingEmailRouteRef\.current = \{[\s\S]*listDisplayMode: nextListDisplayMode[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId[\s\S]*\}/);
   assert.match(source, /if \(localMatchesPending\) \{[\s\S]*return;[\s\S]*\}/);
   assert.match(source, /onClick=\{\(\) => \{ applyEmailRoute\(\{ mailbox: item\.key, mailMode: "list", threadId: "" \}\)/);
-  assert.match(source, /function openThreadDetail\(threadId: string\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId \}\)/);
+  assert.match(source, /function openThreadDetail\(threadId: string, messageId = ""\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId, messageId: emailListDisplayMode === "message" \? messageId : "" \}\)/);
   assert.match(source, /aria-label="返回列表"[\s\S]*onClick=\{\(\) => applyEmailRoute\(\{ mailMode: "list", threadId: "" \}\)\}/);
   assert.match(source, /data-testid="email-tab-settings"[\s\S]*onClick=\{\(\) => onViewChange\("settings"\)\}/);
   assert.match(source, /data-testid="email-tab-ai"[\s\S]*onClick=\{\(\) => onViewChange\("ai"\)\}/);
@@ -3826,7 +3829,7 @@ await run("talk about this panel can chat and save transcript to rag knowledge",
   assert.match(source, /\["talk", "rag", target\.objectKey, target\.recordId\]/);
   assert.match(source, /\["talk", "rag", "email_thread", target\.threadId\]/);
   assert.match(source, /target=\{\{ type: "record", objectKey: selectedRecord\.objectKey, recordId: selectedRecord\.id, label: selectedRecord\.title \}\}/);
-  assert.match(source, /target=\{\{ type: "email_thread", threadId: selectedThread\.id, label: selectedDisplayMessage\?\.subject \|\| selectedThread\.subject \}\}/);
+  assert.match(source, /target=\{\{ type: "email_thread", threadId: selectedThread\.id, label: selectedDetailHeadingMessage\?\.subject \|\| selectedThread\.subject \}\}/);
 });
 
 await run("talk about this input suggests context-aware completions", () => {
@@ -4547,6 +4550,9 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /key=\{key\}/);
   assert.match(workspace, /emailMessageParticipantLabel\(displayMessage, thread, activeAccounts\)/);
   assert.match(workspace, /const selectedDisplayedMessages = selectedMailboxMessages\.length > 0 \? selectedMailboxMessages : selectedMessages/);
+  assert.match(workspace, /const selectedThreadDetailMessages =\s*emailListDisplayMode === "message"[\s\S]*\? selectedDetailMessage[\s\S]*\? \[selectedDetailMessage\][\s\S]*: selectedDisplayMessage[\s\S]*\? \[selectedDisplayMessage\][\s\S]*: \[\][\s\S]*: selectedMessages\.length > 0[\s\S]*\? selectedMessages[\s\S]*: selectedDisplayedMessages/);
+  assert.match(workspace, /selectedThreadDetailMessages\.map\(\(message, messageIndex\) => \{/);
+  assert.match(workspace, /onClick=\{\(\) => openThreadDetail\(thread\.id, displayMessage\?\.id \?\? ""\)\}/);
   assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);
   assert.match(workspace, /snoozedUntil: null/);
   assert.match(workspace, /aria-label="取消稍后提醒"/);

@@ -252,6 +252,7 @@ type EmailRoutePatch = {
   listDisplayMode?: EmailListDisplayMode;
   mailbox?: EmailMailboxKey;
   mailMode?: EmailMailMode;
+  messageId?: string;
   search?: string;
   threadId?: string;
 };
@@ -628,6 +629,9 @@ function buildEmailRoutePath(patch: EmailRoutePatch): string {
   if (patch.mailMode === "detail" && patch.threadId) {
     params.set("mailMode", "detail");
     params.set("emailThreadId", patch.threadId);
+    if (patch.messageId) {
+      params.set("emailMessageId", patch.messageId);
+    }
   }
   const query = params.toString();
   return query ? `${crmPathForNav("email")}?${query}` : crmPathForNav("email");
@@ -1950,6 +1954,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeRecordId = searchParams.get("recordId") ?? "";
   const routeReturnEmailThreadId = searchParams.get("returnEmailThreadId") ?? "";
   const routeEmailThreadId = searchParams.get("emailThreadId") ?? "";
+  const routeEmailMessageId = searchParams.get("emailMessageId") ?? "";
   const routeEmailMailbox = normalizeEmailMailboxKey(searchParams.get("mailbox"));
   const routeEmailCategory = normalizeEmailCategoryKey(searchParams.get("category"));
   const routeEmailMode = normalizeEmailMailMode(searchParams.get("mailMode"));
@@ -4249,6 +4254,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailWorkspaceView("mail");
     setActiveNav("email");
     pushEmailHistoryRoute(nextEmailThreadPath);
+    void updateEmailThreadState(threadId, { read: true });
     if (!emailMessagesByThread[threadId]) {
       await loadEmailMessages(threadId);
     }
@@ -6974,6 +6980,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             messagesByThread={emailMessagesByThread}
             selectedThreadId={selectedEmailThreadId}
             detailThreadId={emailDetailThreadId}
+            detailMessageId={routeEmailMessageId}
             routeMailbox={routeEmailMailbox}
             routeCategory={routeEmailCategory}
             routeListDisplayMode={routeEmailListDisplayMode}
@@ -8279,6 +8286,7 @@ function EmailWorkspace({
   messagesByThread,
   selectedThreadId,
   detailThreadId,
+  detailMessageId,
   routeMailbox,
   routeCategory,
   routeListDisplayMode,
@@ -8382,6 +8390,7 @@ function EmailWorkspace({
   messagesByThread: Record<string, EmailMessage[]>;
   selectedThreadId: string;
   detailThreadId: string;
+  detailMessageId: string;
   routeMailbox: EmailMailboxKey;
   routeCategory: EmailCategoryKey;
   routeListDisplayMode: EmailListDisplayMode;
@@ -8521,6 +8530,7 @@ function EmailWorkspace({
   const [mailbox, setMailbox] = useState<EmailMailboxKey>(routeMailbox);
   const [category, setCategory] = useState<EmailCategoryKey>(routeCategory);
   const [mailMode, setMailMode] = useState<EmailMailMode>(routeEmailThreadIdToMode(detailThreadId, routeMailMode));
+  const [selectedDetailMessageId, setSelectedDetailMessageId] = useState(detailMessageId);
   const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(routeAccountId);
   const [mailboxAccountsCollapsed, setMailboxAccountsCollapsed] = useState(true);
   const [searchQuery, setSearchQuery] = useState(routeSearch);
@@ -8533,6 +8543,18 @@ function EmailWorkspace({
   const selectedMailboxMessages = selectedThread ? getEmailThreadMailboxDisplayMessages(selectedMessages, mailbox, labelFilter) : [];
   const selectedDisplayedMessages = selectedMailboxMessages.length > 0 ? selectedMailboxMessages : selectedMessages;
   const selectedDisplayMessage = getEmailThreadDisplayMessage(selectedDisplayedMessages, mailbox, selectedThread ? trashDisplayMessageIds[selectedThread.id] : undefined);
+  const selectedDetailMessage = selectedDetailMessageId ? selectedMessages.find((message) => message.id === selectedDetailMessageId) : undefined;
+  const selectedDetailHeadingMessage = selectedDetailMessage ?? selectedDisplayMessage;
+  const selectedThreadDetailMessages =
+    emailListDisplayMode === "message"
+      ? selectedDetailMessage
+        ? [selectedDetailMessage]
+        : selectedDisplayMessage
+          ? [selectedDisplayMessage]
+          : []
+      : selectedMessages.length > 0
+        ? selectedMessages
+        : selectedDisplayedMessages;
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const selectedThreadIsRead = Boolean(selectedThreadState.read);
   const selectedThreadIsSnoozed = Boolean(selectedThreadState.snoozedUntil && new Date(selectedThreadState.snoozedUntil).getTime() > Date.now());
@@ -8566,6 +8588,7 @@ function EmailWorkspace({
     listDisplayMode: EmailListDisplayMode;
     mailbox: EmailMailboxKey;
     mailMode: EmailMailMode;
+    messageId: string;
     search: string;
     threadId: string;
   } | null>(null);
@@ -8820,6 +8843,7 @@ function EmailWorkspace({
     const nextListDisplayMode = patch.listDisplayMode ?? emailListDisplayMode;
     const nextSearch = patch.search ?? searchQuery;
     const nextThreadId = patch.threadId ?? (nextMode === "detail" ? selectedThreadId : "");
+    const nextMessageId = patch.messageId ?? (nextMode === "detail" ? selectedDetailMessageId : "");
 
     pendingEmailRouteRef.current = {
       accountId: nextAccountId,
@@ -8828,6 +8852,7 @@ function EmailWorkspace({
       listDisplayMode: nextListDisplayMode,
       mailbox: nextMailbox,
       mailMode: nextMode,
+      messageId: nextMessageId,
       search: nextSearch,
       threadId: nextThreadId
     };
@@ -8837,6 +8862,7 @@ function EmailWorkspace({
     setSelectedMailboxAccountId(nextAccountId);
     setLabelFilter(nextLabel);
     setEmailListDisplayMode(nextListDisplayMode);
+    setSelectedDetailMessageId(nextMessageId);
     setSearchQuery(nextSearch);
     onRouteChange({
       accountId: nextAccountId,
@@ -8845,10 +8871,11 @@ function EmailWorkspace({
       listDisplayMode: nextListDisplayMode,
       mailbox: nextMailbox,
       mailMode: nextMode,
+      messageId: nextMessageId,
       search: nextSearch,
       threadId: nextThreadId
     });
-  }, [category, emailListDisplayMode, labelFilter, mailMode, mailbox, onRouteChange, searchQuery, selectedMailboxAccountId, selectedThreadId]);
+  }, [category, emailListDisplayMode, labelFilter, mailMode, mailbox, onRouteChange, searchQuery, selectedDetailMessageId, selectedMailboxAccountId, selectedThreadId]);
 
   const toggleEmailListDisplayMode = useCallback(() => {
     const nextMode = emailListDisplayMode === "thread" ? "message" : "thread";
@@ -8932,7 +8959,8 @@ function EmailWorkspace({
         routeLabel === pendingRoute.label &&
         routeListDisplayMode === pendingRoute.listDisplayMode &&
         routeSearch === pendingRoute.search &&
-        detailThreadId === pendingRoute.threadId;
+        detailThreadId === pendingRoute.threadId &&
+        detailMessageId === pendingRoute.messageId;
       if (routeMatchesPending) {
         pendingEmailRouteRef.current = null;
       } else {
@@ -8945,7 +8973,8 @@ function EmailWorkspace({
           labelFilter === pendingRoute.label &&
           emailListDisplayMode === pendingRoute.listDisplayMode &&
           searchQuery === pendingRoute.search &&
-          localThreadId === pendingRoute.threadId;
+          localThreadId === pendingRoute.threadId &&
+          selectedDetailMessageId === pendingRoute.messageId;
         if (localMatchesPending) {
           return;
         }
@@ -8960,11 +8989,12 @@ function EmailWorkspace({
     setSelectedMailboxAccountId((current) => (current === routeAccountId ? current : routeAccountId));
     setLabelFilter((current) => (current === routeLabel ? current : routeLabel));
     setEmailListDisplayMode((current) => (current === routeListDisplayMode ? current : routeListDisplayMode));
+    setSelectedDetailMessageId((current) => (current === detailMessageId ? current : detailMessageId));
     setSearchQuery((current) => (current === routeSearch ? current : routeSearch));
     if (detailThreadId && detailThreadId !== selectedThreadId) {
       onSelectThread(detailThreadId);
     }
-  }, [category, detailThreadId, emailListDisplayMode, labelFilter, mailbox, mailMode, onSelectThread, routeAccountId, routeCategory, routeLabel, routeListDisplayMode, routeMailMode, routeMailbox, routeSearch, searchQuery, selectedMailboxAccountId, selectedThreadId]);
+  }, [category, detailMessageId, detailThreadId, emailListDisplayMode, labelFilter, mailbox, mailMode, onSelectThread, routeAccountId, routeCategory, routeLabel, routeListDisplayMode, routeMailMode, routeMailbox, routeSearch, searchQuery, selectedDetailMessageId, selectedMailboxAccountId, selectedThreadId]);
 
   useEffect(() => {
     if (!selectedThreadId || !messagesByThread[selectedThreadId]?.length) {
@@ -9243,9 +9273,10 @@ function EmailWorkspace({
     });
   }
 
-  function openThreadDetail(threadId: string) {
-    applyEmailRoute({ mailMode: "detail", threadId });
+  function openThreadDetail(threadId: string, messageId = "") {
+    applyEmailRoute({ mailMode: "detail", threadId, messageId: emailListDisplayMode === "message" ? messageId : "" });
     patchThreadUiState([threadId], { read: true });
+    persistThreadState(threadId, { read: true });
     onSelectThread(threadId);
   }
 
@@ -10350,7 +10381,7 @@ function EmailWorkspace({
                       >
                         <Flag size={15} />
                       </button>
-                      <button className="gmail-thread-open" data-testid={`email-thread-row-${thread.id}`} type="button" onClick={() => openThreadDetail(thread.id)}>
+                      <button className="gmail-thread-open" data-testid={`email-thread-row-${thread.id}`} type="button" onClick={() => openThreadDetail(thread.id, displayMessage?.id ?? "")}>
                         <span className="gmail-thread-sender">{emailMessageParticipantLabel(displayMessage, thread, activeAccounts)}</span>
                         <span className="gmail-thread-subject">{rowSubject}</span>
                         <span className="gmail-thread-snippet">{snippet}</span>
@@ -10410,13 +10441,13 @@ function EmailWorkspace({
                   title="回复"
                   type="button"
                   onClick={() => {
-                    const message = selectedDisplayedMessages.at(-1);
+                    const message = selectedThreadDetailMessages.at(-1);
                     if (message) {
                       onReplyToMessage(message);
                       openComposePopup();
                     }
                   }}
-                  disabled={!selectedDisplayedMessages.length}
+                  disabled={!selectedThreadDetailMessages.length}
                 >
                   <Send size={16} />
                 </button>
@@ -10485,7 +10516,7 @@ function EmailWorkspace({
               {selectedThread ? (
                 <>
                   <div className="gmail-detail-header">
-                    <h2>{selectedDisplayMessage?.subject || selectedThread.subject}</h2>
+                    <h2>{selectedDetailHeadingMessage?.subject || selectedThread.subject}</h2>
                     <div className="toolbar">
                       <span className="badge">类别：{getEmailCategoryLabel((threadUiState[selectedThread.id]?.category ?? inferEmailThreadCategory(selectedThread, selectedMessages)) as EmailCategoryKey)}</span>
                       {threadUiState[selectedThread.id]?.starred ? <span className="badge">星标</span> : null}
@@ -10571,7 +10602,7 @@ function EmailWorkspace({
                     </div>
                   </div>
                   <div className="email-message-list">
-                    {selectedDisplayedMessages.map((message, messageIndex) => {
+                    {selectedThreadDetailMessages.map((message, messageIndex) => {
                       const messageHasExternalImages = emailHtmlHasExternalImages(message.bodyHtml ?? "");
                       const sendStatus = getEmailMessageSendStatus(message);
                       return (
@@ -10723,7 +10754,7 @@ function EmailWorkspace({
                               </details>
                             </div>
                             <TalkAboutThisPanel
-                              target={{ type: "email_thread", threadId: selectedThread.id, label: selectedDisplayMessage?.subject || selectedThread.subject }}
+                              target={{ type: "email_thread", threadId: selectedThread.id, label: selectedDetailHeadingMessage?.subject || selectedThread.subject }}
                               disabled={disabled}
                               onOpenRecord={onOpenTalkSourceRecord}
                               onKnowledgeCreated={onKnowledgeArticleCreated}
@@ -10758,7 +10789,7 @@ function EmailWorkspace({
                       </article>
                       );
                     })}
-                    {selectedDisplayedMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
+                    {selectedThreadDetailMessages.length === 0 ? <div className="empty-state">选择线程后会加载消息</div> : null}
                   </div>
                 </>
               ) : (
