@@ -12643,6 +12643,10 @@ await run("smtp transport resolves direct tls starttls and plaintext ports", () 
   assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpSecure: false }), { port: 25, secure: false, startTls: false });
   assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpStartTls: true }), { port: 587, secure: false, startTls: true });
   assert.deepEqual(resolveSmtpTransport({ smtpHost: "smtp.example.com", smtpPort: 2525, smtpStartTls: true }), { port: 2525, secure: false, startTls: true });
+  const source = readFileSync("src/lib/email/smtp-imap.ts", "utf8");
+  assert.match(source, /function isTransientDnsError\(error: unknown\): boolean/);
+  assert.match(source, /code === "EAI_AGAIN"/);
+  assert.match(source, /await delay\(500\)/);
 });
 
 await run("smtp provider encodes non-ascii message headers", async () => {

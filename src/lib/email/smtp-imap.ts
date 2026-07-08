@@ -549,7 +549,19 @@ class Pop3Client {
   }
 }
 
-function connectSocket(host: string, port: number, secure: boolean): Promise<net.Socket> {
+async function connectSocket(host: string, port: number, secure: boolean): Promise<net.Socket> {
+  try {
+    return await connectSocketOnce(host, port, secure);
+  } catch (error) {
+    if (!isTransientDnsError(error)) {
+      throw error;
+    }
+    await delay(500);
+    return connectSocketOnce(host, port, secure);
+  }
+}
+
+function connectSocketOnce(host: string, port: number, secure: boolean): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = secure ? tls.connect({ host, port, servername: host }) : net.connect({ host, port });
     let settled = false;
@@ -586,6 +598,14 @@ function connectSocket(host: string, port: number, secure: boolean): Promise<net
     }
     socket.once("error", fail);
   });
+}
+
+function isTransientDnsError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && (error as NodeJS.ErrnoException).code === "EAI_AGAIN");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function waitForSecureConnect(socket: tls.TLSSocket): Promise<void> {
