@@ -1816,7 +1816,28 @@ function WorkflowGraphInspector({
       ) : null}
 
       {node.type === "if" ? (
-        <ConditionFields config={config} onChange={updateConfig} />
+        <>
+          <ConditionFields config={config} onChange={updateConfig} />
+          <label className="settings-toggle">
+            <input type="checkbox" checked={Boolean(config.dateMatch)} onChange={(event) => updateConfig("dateMatch", event.target.checked)} />
+            Annual date match
+          </label>
+          {config.dateMatch ? (
+            <>
+              <label>
+                <span className="subtle">Date field</span>
+                <input className="input" value={String(config.field ?? "birthday")} onChange={(event) => updateConfig("field", event.target.value)} />
+              </label>
+              <label>
+                <span className="subtle">Match mode</span>
+                <select className="select" value={String(config.dateMatchMode ?? "annual")} onChange={(event) => updateConfig("dateMatchMode", event.target.value)}>
+                  <option value="annual">Same month/day every year</option>
+                  <option value="exact">Exact date</option>
+                </select>
+              </label>
+            </>
+          ) : null}
+        </>
       ) : null}
 
       {node.type === "switch" ? (
@@ -2495,6 +2516,7 @@ function workflowStatusLabel(status: WorkflowDefinition["status"]): string {
 }
 
 function workflowRunStatusLabel(status: WorkflowRun["status"]): string {
+  if (status === "waiting") return "Waiting";
   return { running: "运行中", completed: "完成", failed: "失败", skipped: "跳过", approval_required: "待审批" }[status];
 }
 

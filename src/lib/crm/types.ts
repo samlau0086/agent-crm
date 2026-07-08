@@ -941,7 +941,8 @@ export type AuditAction =
   | "workflow.action_rejected";
 
 export type WorkflowStatus = "draft" | "active" | "disabled" | "archived";
-export type WorkflowRunStatus = "running" | "completed" | "failed" | "skipped" | "approval_required";
+export type WorkflowRunStatus = "running" | "waiting" | "completed" | "failed" | "skipped" | "approval_required";
+export type WorkflowResumeStatus = "pending" | "completed" | "cancelled" | "failed";
 export type WorkflowTriggerType = "crm_event" | "email_event" | "task_event" | "schedule" | "manual";
 export type WorkflowConditionType = "field" | "activity" | "email_behavior" | "ai" | "if" | "switch" | "loop";
 export type WorkflowActionType = "create_activity" | "send_email" | "update_stage" | "update_record" | "notify" | "create_knowledge_article" | "run_ai_agent";
@@ -1036,7 +1037,7 @@ export interface WorkflowRun {
   idempotencyKey?: string;
   conditionResults: Array<{ key: string; passed: boolean; actualValue?: unknown }>;
   actionResults: Array<{ actionKey: string; status: "completed" | "skipped" | "approval_required" | "failed"; message?: string; approvalId?: string }>;
-  nodeResults?: Array<{ nodeId: string; status: "completed" | "skipped" | "approval_required" | "failed"; outputHandle?: string; message?: string; startedAt: string; completedAt?: string }>;
+  nodeResults?: Array<{ nodeId: string; status: "completed" | "waiting" | "skipped" | "approval_required" | "failed"; outputHandle?: string; message?: string; startedAt: string; completedAt?: string; resumeAt?: string }>;
   errorMessage?: string;
   startedAt: string;
   completedAt?: string;
@@ -1058,6 +1059,21 @@ export interface WorkflowActionApproval {
   reviewNote?: string;
   createdAt: string;
   reviewedAt?: string;
+}
+
+export interface WorkflowResume {
+  id: string;
+  workspaceId: string;
+  workflowId: string;
+  runId: string;
+  nodeId: string;
+  resumeAt: string;
+  triggerData: Record<string, unknown>;
+  status: WorkflowResumeStatus;
+  idempotencyKey: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface WorkflowAiGenerationRequest {
@@ -1275,6 +1291,7 @@ export interface CrmSnapshot {
   mediaAssets?: MediaAsset[];
   workflowDefinitions?: WorkflowDefinition[];
   workflowRuns?: WorkflowRun[];
+  workflowResumes?: WorkflowResume[];
   workflowActionApprovals?: WorkflowActionApproval[];
   smartReminderSettings?: SmartReminderSettings[];
   smartReminders?: SmartReminder[];

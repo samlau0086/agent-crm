@@ -47,6 +47,14 @@ export interface WorkflowRunJobPayload {
   idempotencyKey?: string;
 }
 
+export interface WorkflowResumeScanJobPayload {
+  limit?: number;
+}
+
+export interface WorkflowScheduleScanJobPayload {
+  limit?: number;
+}
+
 export interface CsvImportQueuedJobEnvelope {
   type: "csv_import";
   workspaceId: string;
@@ -128,6 +136,26 @@ export interface WorkflowRunQueuedJobEnvelope {
   lastError?: string;
 }
 
+export interface WorkflowResumeScanQueuedJobEnvelope {
+  type: "workflow_resume_scan";
+  workspaceId: string;
+  userId: string;
+  payload: WorkflowResumeScanJobPayload;
+  enqueuedAt: string;
+  attempts: number;
+  lastError?: string;
+}
+
+export interface WorkflowScheduleScanQueuedJobEnvelope {
+  type: "workflow_schedule_scan";
+  workspaceId: string;
+  userId: string;
+  payload: WorkflowScheduleScanJobPayload;
+  enqueuedAt: string;
+  attempts: number;
+  lastError?: string;
+}
+
 export type QueuedJobEnvelope =
   | CsvImportQueuedJobEnvelope
   | WebhookEventQueuedJobEnvelope
@@ -136,7 +164,9 @@ export type QueuedJobEnvelope =
   | EmailTranslateQueuedJobEnvelope
   | EmailAnalyzeQueuedJobEnvelope
   | EmailSummarizeQueuedJobEnvelope
-  | WorkflowRunQueuedJobEnvelope;
+  | WorkflowRunQueuedJobEnvelope
+  | WorkflowResumeScanQueuedJobEnvelope
+  | WorkflowScheduleScanQueuedJobEnvelope;
 
 export interface BackgroundJobExecutor {
   runCsvImportJob(context: RequestContext, jobId: string, payload: CsvImportJobPayload): Promise<CsvImportJob>;
@@ -147,6 +177,8 @@ export interface BackgroundJobExecutor {
   runEmailAnalyzeJob(context: RequestContext, payload: EmailAnalyzeJobPayload): Promise<EmailAnalyzeResult>;
   runEmailSummarizeJob(context: RequestContext, payload: EmailSummarizeJobPayload): Promise<EmailSummarizeResult>;
   runWorkflowJob(context: RequestContext, payload: WorkflowRunJobPayload): Promise<WorkflowRun[]>;
+  runWorkflowResumeScanJob(context: RequestContext, payload: WorkflowResumeScanJobPayload): Promise<{ scanned: number; resumed: number; runs: WorkflowRun[] }>;
+  runWorkflowScheduleScanJob(context: RequestContext, payload: WorkflowScheduleScanJobPayload): Promise<{ scanned: number; triggered: number; runs: WorkflowRun[] }>;
 }
 
 export class InlineBackgroundJobExecutor implements BackgroundJobExecutor {
@@ -186,6 +218,14 @@ export class InlineBackgroundJobExecutor implements BackgroundJobExecutor {
 
   async runWorkflowJob(context: RequestContext, payload: WorkflowRunJobPayload): Promise<WorkflowRun[]> {
     return this.repository.runWorkflowsForEvent(context, payload.event, payload.data, { workflowId: payload.workflowId, idempotencyKey: payload.idempotencyKey });
+  }
+
+  async runWorkflowResumeScanJob(context: RequestContext, payload: WorkflowResumeScanJobPayload): Promise<{ scanned: number; resumed: number; runs: WorkflowRun[] }> {
+    return this.repository.runWorkflowResumeScan(context, { limit: payload.limit });
+  }
+
+  async runWorkflowScheduleScanJob(context: RequestContext, payload: WorkflowScheduleScanJobPayload): Promise<{ scanned: number; triggered: number; runs: WorkflowRun[] }> {
+    return this.repository.runWorkflowScheduleScan(context, { limit: payload.limit });
   }
 }
 
@@ -266,6 +306,16 @@ export class RedisBackgroundJobExecutor implements BackgroundJobExecutor {
   async runWorkflowJob(context: RequestContext, payload: WorkflowRunJobPayload): Promise<WorkflowRun[]> {
     await enqueueJob(getJobQueueName(), buildWorkflowRunJobEnvelope(context, payload));
     return [];
+  }
+
+  async runWorkflowResumeScanJob(context: RequestContext, payload: WorkflowResumeScanJobPayload): Promise<{ scanned: number; resumed: number; runs: WorkflowRun[] }> {
+    await enqueueJob(getJobQueueName(), buildWorkflowResumeScanJobEnvelope(context, payload));
+    return { scanned: 0, resumed: 0, runs: [] };
+  }
+
+  async runWorkflowScheduleScanJob(context: RequestContext, payload: WorkflowScheduleScanJobPayload): Promise<{ scanned: number; triggered: number; runs: WorkflowRun[] }> {
+    await enqueueJob(getJobQueueName(), buildWorkflowScheduleScanJobEnvelope(context, payload));
+    return { scanned: 0, triggered: 0, runs: [] };
   }
 }
 
@@ -389,6 +439,28 @@ export function buildEmailSummarizeJobEnvelope(context: RequestContext, payload:
 export function buildWorkflowRunJobEnvelope(context: RequestContext, payload: WorkflowRunJobPayload): WorkflowRunQueuedJobEnvelope {
   return {
     type: "workflow_run",
+    workspaceId: context.workspaceId,
+    userId: context.user.id,
+    payload,
+    enqueuedAt: new Date().toISOString(),
+    attempts: 0
+  };
+}
+
+export function buildWorkflowResumeScanJobEnvelope(context: RequestContext, payload: WorkflowResumeScanJobPayload): WorkflowResumeScanQueuedJobEnvelope {
+  return {
+    type: "workflow_resume_scan",
+    workspaceId: context.workspaceId,
+    userId: context.user.id,
+    payload,
+    enqueuedAt: new Date().toISOString(),
+    attempts: 0
+  };
+}
+
+export function buildWorkflowScheduleScanJobEnvelope(context: RequestContext, payload: WorkflowScheduleScanJobPayload): WorkflowScheduleScanQueuedJobEnvelope {
+  return {
+    type: "workflow_schedule_scan",
     workspaceId: context.workspaceId,
     userId: context.user.id,
     payload,

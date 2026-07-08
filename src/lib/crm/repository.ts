@@ -121,6 +121,7 @@ import type {
   WorkflowAiGenerationResult,
   WorkflowCondition,
   WorkflowDefinition,
+  WorkflowResume,
   WorkflowRun,
   WorkflowTrigger
 } from "@/lib/crm/types";
@@ -277,7 +278,68 @@ function normalizeWorkflowStatus(value: unknown): WorkflowDefinition["status"] {
 }
 
 function normalizeWorkflowRunStatus(value: unknown): WorkflowRun["status"] {
-  return value === "completed" || value === "failed" || value === "skipped" || value === "approval_required" ? value : "running";
+  return value === "waiting" || value === "completed" || value === "failed" || value === "skipped" || value === "approval_required" ? value : "running";
+}
+
+function normalizeWorkflowResumeStatus(value: unknown): WorkflowResume["status"] {
+  return value === "completed" || value === "cancelled" || value === "failed" ? value : "pending";
+}
+
+function workflowGraphRunStatus(
+  actionResults: WorkflowRun["actionResults"],
+  nodeResults: NonNullable<WorkflowRun["nodeResults"]>
+): WorkflowRun["status"] {
+  if (actionResults.some((result) => result.status === "failed") || nodeResults.some((result) => result.status === "failed")) return "failed";
+  if (nodeResults.at(-1)?.status === "waiting") return "waiting";
+  if (actionResults.some((result) => result.status === "approval_required") || nodeResults.some((result) => result.status === "approval_required")) return "approval_required";
+  if (nodeResults.some((result) => result.status === "completed")) return "completed";
+  return "skipped";
+}
+
+function workflowDelayResumeAt(amount: number, unit: string, from = new Date()): Date {
+  const multiplier = unit === "minutes" ? 60_000 : unit === "hours" ? 60 * 60_000 : 24 * 60 * 60_000;
+  return new Date(from.getTime() + amount * multiplier);
+}
+
+function workflowDateKey(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function workflowMonthDay(value: Date): string {
+  return value.toISOString().slice(5, 10);
+}
+
+function workflowReplySince(triggerData: Record<string, unknown>, lookbackDays: number): Date {
+  const candidates = [triggerData.waitStartedAt, triggerData.sentAt, triggerData.createdAt, triggerData.scheduledAt]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => new Date(value))
+    .filter((value) => Number.isFinite(value.getTime()));
+  return candidates[0] ?? new Date(Date.now() - lookbackDays * 24 * 60 * 60_000);
+}
+
+function normalizeWorkflowEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function parseWorkflowDate(value: unknown): Date | undefined {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value;
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : undefined;
+}
+
+function workflowDateMatchConfig(workflow: WorkflowDefinition): { objectKey?: string; field: string } | undefined {
+  const triggerConfig = isJsonRecord(workflow.trigger.config) ? workflow.trigger.config : {};
+  const triggerField = typeof triggerConfig.dateField === "string" ? triggerConfig.dateField : undefined;
+  if (triggerField) {
+    return { objectKey: typeof triggerConfig.objectKey === "string" ? triggerConfig.objectKey : workflow.trigger.objectKey, field: triggerField };
+  }
+  const node = workflow.graph?.nodes.find((candidate) =>
+    (candidate.type === "if" || candidate.type === "switch") &&
+    (candidate.config.dateMatch === true || candidate.config.dateMatchMode === "annual" || candidate.config.field === "birthday")
+  );
+  const field = typeof node?.config.field === "string" ? node.config.field : undefined;
+  return field ? { objectKey: workflow.graph?.scope.objectKey ?? workflow.trigger.objectKey, field } : undefined;
 }
 
 function normalizeWorkflowTrigger(value: unknown): WorkflowTrigger {
@@ -447,6 +509,23 @@ function mapUser(user: {
     emailListDisplayMode: user.emailListDisplayMode === "message" ? "message" : "thread",
     active: user.active,
     disabledAt: user.disabledAt?.toISOString()
+  };
+}
+
+function mapWorkflowResume(row: Record<string, unknown>): WorkflowResume {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspaceId),
+    workflowId: String(row.workflowId),
+    runId: String(row.runId),
+    nodeId: String(row.nodeId),
+    resumeAt: row.resumeAt instanceof Date ? row.resumeAt.toISOString() : String(row.resumeAt ?? new Date().toISOString()),
+    triggerData: isJsonRecord(row.triggerData) ? row.triggerData : {},
+    status: normalizeWorkflowResumeStatus(row.status),
+    idempotencyKey: String(row.idempotencyKey ?? ""),
+    errorMessage: typeof row.errorMessage === "string" ? row.errorMessage : undefined,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt ?? new Date().toISOString()),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? new Date().toISOString())
   };
 }
 
@@ -2102,6 +2181,16 @@ export class PrismaCrmRepository {
     return rows.map((row: Record<string, unknown>) => mapWorkflowApproval(row));
   }
 
+  async listWorkflowResumes(context: RequestContext, workflowId?: string): Promise<WorkflowResume[]> {
+    requirePermission(context, "workflow.read");
+    const rows = await this.workflowTables().workflowResume.findMany({
+      where: { workspaceId: context.workspaceId, ...(workflowId ? { workflowId } : {}) },
+      orderBy: { resumeAt: "asc" },
+      take: 100
+    });
+    return rows.map((row: Record<string, unknown>) => mapWorkflowResume(row));
+  }
+
   async testWorkflow(context: RequestContext, workflowId: string, data: Record<string, unknown> = {}): Promise<WorkflowRun> {
     requirePermission(context, "workflow.write");
     const workflow = await this.getWorkflow(context, workflowId);
@@ -2145,6 +2234,107 @@ export class PrismaCrmRepository {
       }
     }
     return runs;
+  }
+
+  async runWorkflowResume(context: RequestContext, resumeId: string): Promise<WorkflowRun | undefined> {
+    requirePermission(context, "workflow.write");
+    const row = await this.workflowTables().workflowResume.findFirst({ where: { id: resumeId, workspaceId: context.workspaceId } });
+    if (!row) throw new Error("Workflow resume not found");
+    const resume = mapWorkflowResume(row);
+    if (resume.status !== "pending") {
+      return undefined;
+    }
+    const workflow = await this.getWorkflow(context, resume.workflowId);
+    const existingRun = await this.workflowTables().workflowRun.findFirst({ where: { id: resume.runId, workspaceId: context.workspaceId } });
+    if (!existingRun) throw new Error("Workflow run not found");
+    const startedAt = new Date(existingRun.startedAt as Date | string);
+    const run = mapWorkflowRun(existingRun);
+    const record = await this.workflowRecordFromData(context, resume.triggerData);
+    try {
+      const graphResults = await this.runWorkflowGraph(context, workflow, resume.triggerData, record, run.id, {
+        startNodeId: resume.nodeId,
+        previousNodeResults: run.nodeResults ?? []
+      });
+      const finalStatus = workflowGraphRunStatus(graphResults.actionResults, graphResults.nodeResults);
+      await this.workflowTables().workflowResume.update({ where: { id: resume.id }, data: { status: "completed", errorMessage: null } });
+      const updatedRun = mapWorkflowRun(
+        await this.workflowTables().workflowRun.update({
+          where: { id: run.id },
+          data: {
+            status: finalStatus,
+            conditionResults: toJsonArray([...(run.conditionResults ?? []), ...graphResults.conditionResults]),
+            actionResults: toJsonArray([...(run.actionResults ?? []), ...graphResults.actionResults]),
+            nodeResults: toJsonArray(graphResults.nodeResults),
+            completedAt: finalStatus === "waiting" ? null : new Date(),
+            durationMs: Date.now() - startedAt.getTime()
+          }
+        })
+      );
+      await this.workflowTables().workflowDefinition.update({ where: { id: workflow.id }, data: { lastRunAt: new Date() } });
+      return updatedRun;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Workflow resume failed";
+      await this.workflowTables().workflowResume.update({ where: { id: resume.id }, data: { status: "failed", errorMessage: message } });
+      await this.workflowTables().workflowRun.update({ where: { id: run.id }, data: { status: "failed", errorMessage: message, completedAt: new Date(), durationMs: Date.now() - startedAt.getTime() } });
+      throw error;
+    }
+  }
+
+  async runWorkflowResumeScan(context: RequestContext, options: { limit?: number; now?: Date } = {}): Promise<{ scanned: number; resumed: number; runs: WorkflowRun[] }> {
+    requirePermission(context, "workflow.write");
+    const now = options.now ?? new Date();
+    const rows = await this.workflowTables().workflowResume.findMany({
+      where: { workspaceId: context.workspaceId, status: "pending", resumeAt: { lte: now } },
+      orderBy: { resumeAt: "asc" },
+      take: Math.min(Math.max(options.limit ?? 25, 1), 100)
+    });
+    const runs: WorkflowRun[] = [];
+    for (const row of rows) {
+      const run = await this.runWorkflowResume(context, String(row.id));
+      if (run) runs.push(run);
+    }
+    return { scanned: rows.length, resumed: runs.length, runs };
+  }
+
+  async runWorkflowScheduleScan(context: RequestContext, options: { now?: Date; limit?: number } = {}): Promise<{ scanned: number; triggered: number; runs: WorkflowRun[] }> {
+    requirePermission(context, "workflow.write");
+    const now = options.now ?? new Date();
+    const todayKey = workflowDateKey(now);
+    const workflows = await this.workflowTables()
+      .workflowDefinition.findMany({ where: { workspaceId: context.workspaceId, status: "active" }, orderBy: { updatedAt: "desc" } })
+      .then((rows: Array<Record<string, unknown>>) => rows.map(mapWorkflowDefinition).filter((workflow) => workflow.trigger.type === "schedule" && workflow.trigger.event === "schedule.daily"));
+    const runs: WorkflowRun[] = [];
+    let scanned = 0;
+    for (const workflow of workflows.slice(0, Math.min(Math.max(options.limit ?? 50, 1), 200))) {
+      scanned += 1;
+      const dateConfig = workflowDateMatchConfig(workflow);
+      if (!dateConfig) {
+        const idempotencyKey = `${workflow.id}:schedule.daily:${todayKey}`;
+        const existing = await this.workflowTables().workflowRun.findFirst({ where: { workspaceId: context.workspaceId, workflowId: workflow.id, idempotencyKey } });
+        if (existing) continue;
+        const [run] = await this.runWorkflowsForEvent(context, "schedule.daily", { scheduledAt: now.toISOString(), date: todayKey }, { workflowId: workflow.id, idempotencyKey });
+        if (run) runs.push(run);
+        continue;
+      }
+      const objectKey = dateConfig.objectKey ?? workflow.trigger.objectKey ?? workflow.graph?.scope.objectKey ?? "contacts";
+      const records = await this.listRecords(context, objectKey);
+      for (const record of records) {
+        const raw = record.data[dateConfig.field];
+        const recordDate = parseWorkflowDate(raw);
+        if (!recordDate || workflowMonthDay(recordDate) !== workflowMonthDay(now)) continue;
+        const idempotencyKey = `${workflow.id}:schedule.daily:${record.id}:${dateConfig.field}:${todayKey}`;
+        const existing = await this.workflowTables().workflowRun.findFirst({ where: { workspaceId: context.workspaceId, workflowId: workflow.id, idempotencyKey } });
+        if (existing) continue;
+        const [run] = await this.runWorkflowsForEvent(
+          context,
+          "schedule.daily",
+          { objectKey, recordId: record.id, title: record.title, scheduledAt: now.toISOString(), date: todayKey, dateField: dateConfig.field, dateValue: String(raw), dateMatch: true },
+          { workflowId: workflow.id, idempotencyKey }
+        );
+        if (run) runs.push(run);
+      }
+    }
+    return { scanned, triggered: runs.length, runs };
   }
 
   async reviewWorkflowApproval(context: RequestContext, approvalId: string, decision: "approved" | "rejected", note?: string): Promise<WorkflowActionApproval> {
@@ -6926,6 +7116,12 @@ export class PrismaCrmRepository {
       create: (args: unknown) => Promise<Record<string, unknown>>;
       update: (args: unknown) => Promise<Record<string, unknown>>;
     };
+    workflowResume: {
+      findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
+      findFirst: (args: unknown) => Promise<Record<string, unknown> | null>;
+      create: (args: unknown) => Promise<Record<string, unknown>>;
+      update: (args: unknown) => Promise<Record<string, unknown>>;
+    };
     workflowActionApproval: {
       findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
       findFirst: (args: unknown) => Promise<Record<string, unknown> | null>;
@@ -6977,13 +7173,7 @@ export class PrismaCrmRepository {
     const record = await this.workflowRecordFromData(context, data);
     if (workflow.graph) {
       const graphResults = await this.runWorkflowGraph(context, workflow, data, record, run.id, options);
-      const finalStatus = graphResults.actionResults.some((result) => result.status === "failed") || graphResults.nodeResults.some((result) => result.status === "failed")
-        ? "failed"
-        : graphResults.actionResults.some((result) => result.status === "approval_required") || graphResults.nodeResults.some((result) => result.status === "approval_required")
-          ? "approval_required"
-          : graphResults.nodeResults.some((result) => result.status === "completed")
-            ? "completed"
-            : "skipped";
+      const finalStatus = workflowGraphRunStatus(graphResults.actionResults, graphResults.nodeResults);
       run = mapWorkflowRun(
         await this.workflowTables().workflowRun.update({
           where: { id: run.id },
@@ -6992,7 +7182,7 @@ export class PrismaCrmRepository {
             conditionResults: toJsonArray(graphResults.conditionResults),
             actionResults: toJsonArray(graphResults.actionResults),
             nodeResults: toJsonArray(graphResults.nodeResults),
-            completedAt: new Date(),
+            completedAt: finalStatus === "waiting" ? null : new Date(),
             durationMs: Date.now() - startedAt.getTime()
           }
         })
@@ -7066,7 +7256,7 @@ export class PrismaCrmRepository {
     triggerData: Record<string, unknown>,
     record: CrmRecord | undefined,
     runId: string,
-    options: { test?: boolean } = {}
+    options: { test?: boolean; startNodeId?: string; previousNodeResults?: NonNullable<WorkflowRun["nodeResults"]> } = {}
   ): Promise<{
     conditionResults: WorkflowRun["conditionResults"];
     actionResults: WorkflowRun["actionResults"];
@@ -7075,10 +7265,10 @@ export class PrismaCrmRepository {
     const graph = workflow.graph ? normalizeWorkflowGraph(workflow.graph, workflow) : normalizeWorkflowGraph(undefined, workflow);
     const conditionResults: WorkflowRun["conditionResults"] = [];
     const actionResults: WorkflowRun["actionResults"] = [];
-    const nodeResults: NonNullable<WorkflowRun["nodeResults"]> = [];
+    const nodeResults: NonNullable<WorkflowRun["nodeResults"]> = [...(options.previousNodeResults ?? [])];
     const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
     const visits = new Map<string, number>();
-    let current = graph.nodes.find((node) => node.type === "start")?.id ?? "start";
+    let current = options.startNodeId ?? graph.nodes.find((node) => node.type === "start")?.id ?? "start";
     for (let step = 0; step < 200 && current; step += 1) {
       const node = nodeById.get(current);
       if (!node) break;
@@ -7099,15 +7289,28 @@ export class PrismaCrmRepository {
         const amount = Math.max(1, Math.min(Number(node.config.delayAmount ?? 1) || 1, 365));
         const unit = node.config.delayUnit === "hours" || node.config.delayUnit === "minutes" ? node.config.delayUnit : "days";
         outputHandle = "after_delay";
-        message = options.test
-          ? `Test run: would wait ${amount} ${unit}.`
-          : `Delay checkpoint reached immediately; scheduler support can resume after ${amount} ${unit}.`;
+        if (options.test) {
+          message = `Test run: would wait ${amount} ${unit}.`;
+        } else {
+          const nextEdge = findWorkflowEdge(graph.edges, node.id, outputHandle) ?? findWorkflowEdge(graph.edges, node.id, "main") ?? findWorkflowEdge(graph.edges, node.id, "default");
+          const resumeAt = workflowDelayResumeAt(amount, unit);
+          const resume = await this.createWorkflowResume(context, workflow, runId, nextEdge?.targetNodeId ?? "end", resumeAt, {
+            ...triggerData,
+            waitStartedAt: startedAt,
+            waitNodeId: node.id,
+            waitAmount: amount,
+            waitUnit: unit
+          });
+          status = "waiting";
+          message = `Waiting until ${resume.resumeAt}; resume node ${resume.nodeId}.`;
+          nodeResults.push({ nodeId: node.id, status, outputHandle, message, startedAt, completedAt: new Date().toISOString(), resumeAt: resume.resumeAt });
+          break;
+        }
       } else if (node.type === "wait_reply") {
-        const condition = workflowNodeToCondition(node);
-        const result = evaluateWorkflowCondition(condition, triggerData, record);
-        conditionResults.push({ key: condition.key, passed: result.passed, actualValue: result.actualValue });
-        outputHandle = result.passed ? "replied" : "not_replied";
-        message = result.passed ? "Reply detected." : "No reply detected.";
+        const replyResult = await this.evaluateWorkflowReplyNode(context, node, triggerData, record);
+        conditionResults.push({ key: replyResult.key, passed: replyResult.replied, actualValue: replyResult.actualValue });
+        outputHandle = replyResult.replied ? "replied" : "not_replied";
+        message = replyResult.replied ? `Reply detected${replyResult.messageId ? `: ${replyResult.messageId}` : ""}.` : "No reply detected.";
       } else if (node.type === "if" || node.type === "switch" || node.type === "loop") {
         const condition = workflowNodeToCondition(node);
         const result = evaluateWorkflowCondition(condition, triggerData, record);
@@ -7145,6 +7348,76 @@ export class PrismaCrmRepository {
       current = nextEdge?.targetNodeId ?? "";
     }
     return { conditionResults, actionResults, nodeResults };
+  }
+
+  private async createWorkflowResume(
+    context: RequestContext,
+    workflow: WorkflowDefinition,
+    runId: string,
+    nodeId: string,
+    resumeAt: Date,
+    triggerData: Record<string, unknown>
+  ): Promise<WorkflowResume> {
+    const waitNodeId = typeof triggerData.waitNodeId === "string" ? triggerData.waitNodeId : nodeId;
+    const waitStartedAt = typeof triggerData.waitStartedAt === "string" ? triggerData.waitStartedAt : new Date().toISOString();
+    const idempotencyKey = `${runId}:${waitNodeId}:${nodeId}:${waitStartedAt}`;
+    const existing = await this.workflowTables().workflowResume.findFirst({ where: { workspaceId: context.workspaceId, idempotencyKey } });
+    if (existing) return mapWorkflowResume(existing);
+    const row = await this.workflowTables().workflowResume.create({
+      data: {
+        workspaceId: context.workspaceId,
+        workflowId: workflow.id,
+        runId,
+        nodeId,
+        resumeAt,
+        triggerData: toJsonObject(triggerData),
+        status: "pending",
+        idempotencyKey
+      }
+    });
+    return mapWorkflowResume(row);
+  }
+
+  private async evaluateWorkflowReplyNode(
+    context: RequestContext,
+    node: { config: Record<string, unknown>; id: string },
+    triggerData: Record<string, unknown>,
+    record?: CrmRecord
+  ): Promise<{ key: string; replied: boolean; actualValue?: unknown; messageId?: string }> {
+    const fallback = evaluateWorkflowCondition(workflowNodeToCondition({ id: node.id, type: "wait_reply", label: node.id, position: { x: 0, y: 0 }, config: node.config }), triggerData, record);
+    const lookbackDays = Math.max(1, Math.min(Number(node.config.lookbackDays ?? triggerData.waitAmount ?? 7) || 7, 365));
+    const since = workflowReplySince(triggerData, lookbackDays);
+    const threadId = typeof triggerData.threadId === "string" ? triggerData.threadId : undefined;
+    const recordId = typeof triggerData.recordId === "string" ? triggerData.recordId : record?.id;
+    const contactEmail = normalizeWorkflowEmail(typeof record?.data.email === "string" ? record.data.email : typeof triggerData.from === "string" ? triggerData.from : "");
+    const threadRows = threadId
+      ? [{ id: threadId }]
+      : recordId
+        ? await this.db.emailThread.findMany({ where: { workspaceId: context.workspaceId, recordId }, select: { id: true } })
+        : [];
+    const threadIds = threadRows.map((thread) => thread.id);
+    const or: Array<Record<string, unknown>> = [];
+    if (threadIds.length) or.push({ threadId: { in: threadIds } });
+    if (contactEmail) or.push({ fromAddress: { equals: contactEmail, mode: "insensitive" } });
+    if (!or.length) {
+      return { key: node.id, replied: fallback.passed, actualValue: fallback.actualValue };
+    }
+    const message = await this.db.emailMessage.findFirst({
+      where: {
+        workspaceId: context.workspaceId,
+        direction: "inbound",
+        status: "received",
+        OR: or,
+        createdAt: { gte: since }
+      },
+      orderBy: { createdAt: "asc" }
+    });
+    return {
+      key: node.id,
+      replied: Boolean(message) || fallback.passed,
+      actualValue: message ? { messageId: message.id, receivedAt: message.receivedAt?.toISOString() ?? message.createdAt.toISOString() } : fallback.actualValue,
+      messageId: message?.id
+    };
   }
 
   private async workflowRecordFromData(context: RequestContext, data: Record<string, unknown>): Promise<CrmRecord | undefined> {

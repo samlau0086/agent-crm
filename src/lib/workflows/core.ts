@@ -181,12 +181,13 @@ export function graphToLegacyWorkflow(graph: WorkflowGraph): Pick<WorkflowDefini
 export function workflowNodeToCondition(node: WorkflowNode): WorkflowCondition {
   const configured = isRecord(node.config.condition) ? node.config.condition : {};
   const configuredType = isWorkflowConditionType(configured.type) ? configured.type : undefined;
+  const isDateMatchNode = node.config.dateMatch === true || node.config.dateMatchMode === "annual";
   return {
     key: getString(configured.key) || node.id,
     type: node.type === "switch" ? "switch" : node.type === "loop" ? "loop" : node.type === "wait_reply" ? "email_behavior" : configuredType ?? "if",
-    field: getString(node.config.field) || getString(configured.field) || (node.type === "wait_reply" ? "reply" : "recordId"),
+    field: isDateMatchNode ? "dateMatch" : getString(node.config.field) || getString(configured.field) || (node.type === "wait_reply" ? "reply" : "recordId"),
     operator: isWorkflowOperator(node.config.operator) ? node.config.operator : isWorkflowOperator(configured.operator) ? configured.operator : "equals",
-    value: node.type === "wait_reply" ? true : node.config.value ?? configured.value,
+    value: isDateMatchNode ? true : node.type === "wait_reply" ? true : node.config.value ?? configured.value,
     prompt: getString(node.config.prompt) || getString(configured.prompt) || undefined,
     config: { ...(isRecord(configured.config) ? configured.config : {}), ...node.config }
   };
@@ -356,7 +357,7 @@ export function buildWorkflowDraftFromGoal(input: WorkflowAiGenerationRequest): 
   };
 }
 
-type WorkflowGenerationIntent = "cold_outreach_until_reply" | "no_reply_follow_up" | "email_intent" | "deal_close" | "dormant_reactivation" | "generic_follow_up";
+type WorkflowGenerationIntent = "cold_outreach_until_reply" | "birthday_greeting" | "no_reply_follow_up" | "email_intent" | "deal_close" | "dormant_reactivation" | "generic_follow_up";
 
 function buildWorkflowDraftFromGoalV2(input: WorkflowAiGenerationRequest, goal: string, recordTitle?: string): WorkflowAiGenerationResult {
   const targetObjectKey = input.objectKey ?? inferGeneratedWorkflowObjectKey(goal);
@@ -412,6 +413,7 @@ function inferGeneratedWorkflowIntent(goal: string, objectKey: string): Workflow
   const coldOutreach = /cold|outreach/.test(lowerGoal) || /冷邮件|冷启动|开发信|陌生|初次联系/.test(goal);
   const untilReply = /until.*(reply|respond|response)/.test(lowerGoal) || /直到.*(回复|回信|回应)|直到客户回复|回复为止/.test(goal);
   if (coldOutreach && untilReply) return "cold_outreach_until_reply";
+  if (/birthday|birth day|anniversary/.test(lowerGoal) || /生日|纪念日|祝福/.test(goal)) return "birthday_greeting";
   const noReply = lowerGoal.includes("no reply") || lowerGoal.includes("not replied") || lowerGoal.includes("unreplied") || untilReply || goal.includes("未回复") || goal.includes("没回复") || goal.includes("未回");
   if (noReply) return "no_reply_follow_up";
   if (lowerGoal.includes("email") || goal.includes("邮件") || goal.includes("回信") || goal.includes("回复")) return "email_intent";
@@ -429,6 +431,7 @@ function inferGeneratedWorkflowDelayDays(goal: string): number {
 
 function buildGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, objectKey: string): WorkflowDefinition["trigger"] {
   if (intent === "cold_outreach_until_reply") return { type: "crm_event", event: "record.created", objectKey };
+  if (intent === "birthday_greeting") return { type: "schedule", event: "schedule.daily", objectKey: "contacts", config: { objectKey: "contacts", dateField: "birthday", dateMatchMode: "annual" }, schedule: { mode: "daily", dailyAt: "09:00" } };
   if (intent === "no_reply_follow_up") return { type: "email_event", event: "email.message.sent" };
   if (intent === "email_intent") return { type: "email_event", event: "email.message.received" };
   if (intent === "dormant_reactivation") return { type: "schedule", event: "schedule.daily", schedule: { mode: "daily", dailyAt: "09:00" } };
@@ -444,6 +447,7 @@ function buildGeneratedWorkflowGraph(input: {
   recordTitle?: string;
 }): WorkflowGraph {
   if (input.intent === "cold_outreach_until_reply") return buildGeneratedColdOutreachUntilReplyGraph(input);
+  if (input.intent === "birthday_greeting") return buildGeneratedBirthdayGreetingGraph(input);
   if (input.intent === "no_reply_follow_up") return buildGeneratedNoReplyGraph(input);
   if (input.intent === "email_intent") return buildGeneratedEmailIntentGraph(input);
   if (input.intent === "deal_close") return buildGeneratedDealCloseGraph(input);
@@ -576,6 +580,62 @@ function generatedFirstNodeAfterStart(scope: WorkflowGraph["scope"], fallbackNod
 
 function generatedScopeEdges(scope: WorkflowGraph["scope"], targetNodeId: string): WorkflowEdge[] {
   return scope.mode === "record" ? [generatedEdge("scope-record", "true", targetNodeId), generatedEdge("scope-record", "false", "end")] : [];
+}
+
+function buildGeneratedBirthdayGreetingGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; recordTitle?: string }): WorkflowGraph {
+  const scope: WorkflowGraph["scope"] = {
+    ...input.scope,
+    mode: input.scope.mode === "record" ? "record" : "object",
+    objectKey: "contacts"
+  };
+  const startTrigger: WorkflowDefinition["trigger"] = {
+    ...input.trigger,
+    objectKey: "contacts",
+    config: { ...(input.trigger.config ?? {}), objectKey: "contacts", dateField: "birthday", dateMatchMode: "annual" }
+  };
+  const nodes = compactNodes([
+    generatedStartNode(startTrigger, scope, input.recordTitle),
+    generatedScopeNode(scope, { x: 300, y: 160 }),
+    {
+      id: "match-birthday",
+      type: "if",
+      label: "IF Birthday Today",
+      position: { x: 560, y: 160 },
+      config: { field: "birthday", dateMatch: true, dateMatchMode: "annual", condition: { key: "birthday-today", type: "field", field: "dateMatch", operator: "equals", value: true } }
+    },
+    {
+      id: "draft-birthday-email",
+      type: "create_email_draft",
+      label: "Draft Birthday Greeting",
+      position: { x: 820, y: 80 },
+      config: {
+        ...generatedEmailDraftConfig(input.goal),
+        subject: "Birthday greetings",
+        bodyText: [
+          "Hi {{record.title}},",
+          "",
+          "Happy birthday. Wishing you a smooth year ahead and continued success.",
+          "",
+          "I hope today is a good chance to pause and celebrate."
+        ].join("\n"),
+        messageGoal: "Send a warm birthday greeting without a sales pitch."
+      }
+    },
+    { id: "create-birthday-task", type: "create_task", label: "Create Birthday Follow-up Task", position: { x: 1080, y: 80 }, config: { ...generatedTaskConfig("Review and send the birthday greeting draft.", 0, "normal"), title: "Review birthday greeting draft" } },
+    { id: "end", type: "end", label: "End", position: { x: 1340, y: 160 }, config: {} }
+  ]);
+  return {
+    scope,
+    nodes,
+    edges: [
+      generatedEdge("start", "main", generatedFirstNodeAfterStart(scope, "match-birthday")),
+      ...generatedScopeEdges(scope, "match-birthday"),
+      generatedEdge("match-birthday", "true", "draft-birthday-email"),
+      generatedEdge("match-birthday", "false", "end"),
+      generatedEdge("draft-birthday-email", "main", "create-birthday-task"),
+      generatedEdge("create-birthday-task", "main", "end")
+    ]
+  };
 }
 
 function buildGeneratedNoReplyGraph(input: { goal: string; trigger: WorkflowDefinition["trigger"]; scope: WorkflowGraph["scope"]; delayDays: number; recordTitle?: string }): WorkflowGraph {
@@ -734,6 +794,7 @@ function buildGeneratedGenericGraph(input: { goal: string; trigger: WorkflowDefi
 function describeGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, scope: WorkflowGraph["scope"], delayDays: number): string {
   const scopeText = scope.mode === "record" ? `This workflow is scoped to only ${scope.recordTitle || "the selected record"}.` : scope.mode === "object" ? `This workflow applies to ${scope.objectKey}.` : "This workflow is global.";
   if (intent === "cold_outreach_until_reply") return `${scopeText} It starts from a new CRM record, drafts the first cold email, waits, checks replies, and continues staged follow-ups until a reply path is reached or manual review is needed.`;
+  if (intent === "birthday_greeting") return `${scopeText} It runs daily, matches contacts whose birthday month/day is today, then creates a birthday greeting draft.`;
   if (intent === "no_reply_follow_up") return `${scopeText} It starts from sent email activity, waits ${delayDays} day(s), then checks whether a reply arrived before drafting follow-up.`;
   if (intent === "email_intent") return `${scopeText} It starts when an email is received and uses an AI condition to classify buying intent before creating actions.`;
   if (intent === "deal_close") return `${scopeText} It starts on deal updates and only continues when the deal has a stage, then creates close follow-up work.`;
@@ -743,6 +804,7 @@ function describeGeneratedWorkflowTrigger(intent: WorkflowGenerationIntent, scop
 
 function describeGeneratedWorkflowOutcome(intent: WorkflowGenerationIntent, delayDays: number): string {
   if (intent === "cold_outreach_until_reply") return "The workflow drafts an initial cold email, checks for replies after each wait, drafts staged follow-ups when there is no reply, and creates a handling task once the customer replies.";
+  if (intent === "birthday_greeting") return "On matching birthdays, the workflow creates a warm email draft and a review task; it does not send automatically.";
   if (intent === "no_reply_follow_up") return `After ${delayDays} day(s), replied paths end quietly; not-replied paths create an AI-assisted email draft and a follow-up task.`;
   if (intent === "email_intent") return "High-intent inbound emails create a sales task and AI-assisted reply draft; low-intent paths stop.";
   if (intent === "deal_close") return "Qualified deal changes create a close task and notify the owner without automatically changing the deal stage.";
@@ -755,7 +817,7 @@ function describeGeneratedWorkflowRisks(intent: WorkflowGenerationIntent): strin
   if (intent === "cold_outreach_until_reply") {
     return [common, "Cold outreach emails are generated as drafts for review, not sent automatically.", "The sequence uses bounded staged follow-ups instead of an infinite loop to avoid accidental repeated outreach."];
   }
-  if (intent === "no_reply_follow_up" || intent === "email_intent" || intent === "dormant_reactivation") {
+  if (intent === "birthday_greeting" || intent === "no_reply_follow_up" || intent === "email_intent" || intent === "dormant_reactivation") {
     return [common, "Email-related nodes create drafts by default; they do not send directly.", "Wait nodes describe the intended timing path; production delayed resume depends on the background scheduler."];
   }
   if (intent === "deal_close") return [common, "The workflow creates tasks and notifications only; it does not automatically mark deals won or lost."];

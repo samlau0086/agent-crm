@@ -21,13 +21,15 @@ export interface JobWorkerResult {
   emailMessage?: EmailMessage;
   emailThread?: EmailThread;
   workflowRuns?: WorkflowRun[];
+  workflowResumeScan?: { scanned: number; resumed: number; runs: WorkflowRun[] };
+  workflowScheduleScan?: { scanned: number; triggered: number; runs: WorkflowRun[] };
 }
 
 export async function runQueuedJobOnce(repository: PrismaCrmRepository = getCrmRepository()): Promise<JobWorkerResult> {
   const queueName = getJobQueueName();
   const envelope = await dequeueJob<QueuedJobEnvelope>(queueName);
   if (!envelope) {
-    return processDueQueuedEmailSend(repository);
+    return (await processDueWorkflowAutomation(repository)) ?? processDueQueuedEmailSend(repository);
   }
 
   try {
@@ -75,6 +77,25 @@ async function processDueQueuedEmailSend(repository: PrismaCrmRepository): Promi
   }
   const emailMessage = await createEmailProviderAdapter(repository).sendQueued(context, message.id);
   return { processed: true, jobType: "email_send", scheduledEmailSend: true, emailMessage };
+}
+
+async function processDueWorkflowAutomation(repository: PrismaCrmRepository): Promise<JobWorkerResult | undefined> {
+  const userId = process.env.WORKFLOW_AUTOMATION_USER_ID || process.env.EMAIL_SYNC_USER_ID || "user-admin";
+  let context: Awaited<ReturnType<typeof getRequestContextByUserId>>;
+  try {
+    context = await getRequestContextByUserId(userId);
+  } catch {
+    return undefined;
+  }
+  const workflowResumeScan = await repository.runWorkflowResumeScan(context, { limit: 25 });
+  if (workflowResumeScan.resumed > 0) {
+    return { processed: true, jobType: "workflow_resume_scan", workflowResumeScan, workflowRuns: workflowResumeScan.runs };
+  }
+  const workflowScheduleScan = await repository.runWorkflowScheduleScan(context, { limit: 50 });
+  if (workflowScheduleScan.triggered > 0) {
+    return { processed: true, jobType: "workflow_schedule_scan", workflowScheduleScan, workflowRuns: workflowScheduleScan.runs };
+  }
+  return undefined;
 }
 
 export async function processQueuedJobEnvelope(
@@ -130,6 +151,16 @@ export async function processQueuedJobEnvelope(
     return { processed: true, jobType: envelope.type, workflowRuns };
   }
 
+  if (envelope.type === "workflow_resume_scan") {
+    const workflowResumeScan = await repository.runWorkflowResumeScan(context, { limit: envelope.payload.limit });
+    return { processed: true, jobType: envelope.type, workflowResumeScan, workflowRuns: workflowResumeScan.runs };
+  }
+
+  if (envelope.type === "workflow_schedule_scan") {
+    const workflowScheduleScan = await repository.runWorkflowScheduleScan(context, { limit: envelope.payload.limit });
+    return { processed: true, jobType: envelope.type, workflowScheduleScan, workflowRuns: workflowScheduleScan.runs };
+  }
+
   throw new Error(`Unsupported queued job type: ${(envelope as { type?: string }).type}`);
 }
 
@@ -156,6 +187,12 @@ export function formatJobWorkerResult(result: JobWorkerResult): string | undefin
   }
   if (result.deliveries) {
     return `Processed webhook event with ${result.deliveries.length} deliveries`;
+  }
+  if (result.workflowResumeScan) {
+    return `Processed workflow resume scan: ${result.workflowResumeScan.resumed}/${result.workflowResumeScan.scanned} resumed`;
+  }
+  if (result.workflowScheduleScan) {
+    return `Processed workflow schedule scan: ${result.workflowScheduleScan.triggered}/${result.workflowScheduleScan.scanned} triggered`;
   }
   if (result.workflowRuns) {
     return `Processed workflow run job with ${result.workflowRuns.length} run(s)`;

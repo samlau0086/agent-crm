@@ -544,6 +544,13 @@ await run("workflow graph supports follow-up wait reply and draft email nodes", 
   const store = new CrmStore(seedData);
   const context = store.getContext();
   const contact = store.listRecords(context, "contacts")[0];
+  store.createEmailAccount(context, {
+    name: "Workflow Drafts",
+    emailAddress: "workflow@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true
+  });
   const workflow = store.createWorkflow(context, {
     name: "Reply follow-up workflow",
     goal: "Wait for a reply and draft a follow-up when there is no response",
@@ -560,6 +567,121 @@ await run("workflow graph supports follow-up wait reply and draft email nodes", 
 
   const replyRun = store.testWorkflow(context, workflow.id, { objectKey: "contacts", recordId: contact.id, title: contact.title, direction: "inbound" });
   assert.equal(replyRun.nodeResults?.some((result) => result.nodeId === "wait-reply" && result.outputHandle === "replied"), true);
+});
+
+await run("workflow wait delay persists a resume and resumes from the next node", () => {
+  const store = new CrmStore(seedData);
+  const context = store.getContext();
+  const contact = store.listRecords(context, "contacts")[0];
+  store.createEmailAccount(context, {
+    name: "Workflow Drafts",
+    emailAddress: "workflow@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true
+  });
+  const graph = {
+    scope: { mode: "record", objectKey: "contacts", recordId: contact.id, recordTitle: contact.title },
+    nodes: [
+      { id: "start", type: "start", label: "Start", position: { x: 40, y: 160 }, config: {} },
+      { id: "wait-delay", type: "wait_delay", label: "Wait", position: { x: 300, y: 160 }, config: { delayAmount: 1, delayUnit: "minutes" } },
+      { id: "wait-reply", type: "wait_reply", label: "Check reply", position: { x: 560, y: 160 }, config: { lookbackDays: 7 } },
+      { id: "draft-email", type: "create_email_draft", label: "Draft follow-up", position: { x: 820, y: 80 }, config: { to: ["{{record.data.email}}"], subject: "Follow up", bodyText: "Checking in." } },
+      { id: "end", type: "end", label: "End", position: { x: 1080, y: 160 }, config: {} }
+    ],
+    edges: [
+      { id: "edge-start-wait", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "wait-delay" },
+      { id: "edge-wait-reply", sourceNodeId: "wait-delay", sourceHandle: "after_delay", targetNodeId: "wait-reply" },
+      { id: "edge-reply-end", sourceNodeId: "wait-reply", sourceHandle: "replied", targetNodeId: "end" },
+      { id: "edge-no-reply-draft", sourceNodeId: "wait-reply", sourceHandle: "not_replied", targetNodeId: "draft-email" },
+      { id: "edge-draft-end", sourceNodeId: "draft-email", sourceHandle: "main", targetNodeId: "end" }
+    ]
+  };
+  const workflow = store.createWorkflow(context, {
+    name: "Wait resume workflow",
+    goal: "Wait then follow up",
+    status: "active",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [],
+    actions: [],
+    graph
+  });
+  const [run] = store.runWorkflowsForEvent(context, "record.updated", { objectKey: "contacts", recordId: contact.id, updatedAt: "2026-07-08T00:00:00.000Z" });
+  assert.equal(run.status, "waiting");
+  assert.equal(run.nodeResults?.at(-1)?.nodeId, "wait-delay");
+  assert.equal(run.nodeResults?.at(-1)?.status, "waiting");
+  const [resume] = store.listWorkflowResumes(context, workflow.id);
+  assert.equal(resume.status, "pending");
+  assert.equal(resume.nodeId, "wait-reply");
+  const scan = store.runWorkflowResumeScan(context, { now: new Date(Date.now() + 5 * 60_000) });
+  assert.equal(scan.resumed, 1);
+  assert.equal(scan.runs[0].status, "completed");
+  assert.equal(scan.runs[0].nodeResults?.some((result) => result.nodeId === "draft-email"), true);
+});
+
+await run("workflow wait reply detects an inbound contact reply after the wait", () => {
+  const store = new CrmStore(seedData);
+  const context = store.getContext();
+  const contact = store.listRecords(context, "contacts")[0];
+  const account = store.createEmailAccount(context, {
+    name: "Workflow Replies",
+    emailAddress: "workflow-replies@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    syncEnabled: true,
+    sendEnabled: true
+  });
+  const graph = {
+    scope: { mode: "record", objectKey: "contacts", recordId: contact.id, recordTitle: contact.title },
+    nodes: [
+      { id: "start", type: "start", label: "Start", position: { x: 40, y: 160 }, config: {} },
+      { id: "wait-delay", type: "wait_delay", label: "Wait", position: { x: 300, y: 160 }, config: { delayAmount: 1, delayUnit: "minutes" } },
+      { id: "wait-reply", type: "wait_reply", label: "Check reply", position: { x: 560, y: 160 }, config: { lookbackDays: 7 } },
+      { id: "task", type: "create_task", label: "Handle reply", position: { x: 820, y: 80 }, config: { activityType: "task", title: "Handle reply", body: "Customer replied." } },
+      { id: "end", type: "end", label: "End", position: { x: 1080, y: 160 }, config: {} }
+    ],
+    edges: [
+      { id: "edge-start-wait", sourceNodeId: "start", sourceHandle: "main", targetNodeId: "wait-delay" },
+      { id: "edge-wait-reply", sourceNodeId: "wait-delay", sourceHandle: "after_delay", targetNodeId: "wait-reply" },
+      { id: "edge-reply-task", sourceNodeId: "wait-reply", sourceHandle: "replied", targetNodeId: "task" },
+      { id: "edge-no-reply-end", sourceNodeId: "wait-reply", sourceHandle: "not_replied", targetNodeId: "end" },
+      { id: "edge-task-end", sourceNodeId: "task", sourceHandle: "main", targetNodeId: "end" }
+    ]
+  };
+  store.createWorkflow(context, {
+    name: "Reply detection workflow",
+    goal: "Wait until reply",
+    status: "active",
+    trigger: { type: "crm_event", event: "record.updated", objectKey: "contacts" },
+    conditions: [],
+    actions: [],
+    graph
+  });
+  store.runWorkflowsForEvent(context, "record.updated", { objectKey: "contacts", recordId: contact.id, updatedAt: "2026-07-08T00:00:00.000Z" });
+  store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: String(contact.data.email),
+    to: [account.emailAddress],
+    subject: "Re: follow up",
+    bodyText: "Thanks, I am interested.",
+    recordId: contact.id,
+    receivedAt: new Date().toISOString()
+  });
+  const scan = store.runWorkflowResumeScan(context, { now: new Date(Date.now() + 5 * 60_000) });
+  assert.equal(scan.runs[0].nodeResults?.some((result) => result.nodeId === "wait-reply" && result.outputHandle === "replied"), true);
+  assert.equal(scan.runs[0].nodeResults?.some((result) => result.nodeId === "task"), true);
+});
+
+await run("workflow generator creates birthday greeting schedule drafts", () => {
+  const generated = buildWorkflowDraftFromGoal({ goal: "在此联系人生日的时候发送生日祝福邮件", objectKey: "contacts" });
+  assert.equal(generated.workflow.trigger.type, "schedule");
+  assert.equal(generated.workflow.trigger.event, "schedule.daily");
+  assert.equal(generated.workflow.trigger.config.dateField, "birthday");
+  assert(generated.workflow.graph.nodes.some((node) => node.id === "match-birthday" && node.config.dateMatch === true && node.config.field === "birthday"));
+  assert(generated.workflow.graph.nodes.some((node) => node.id === "draft-birthday-email" && node.type === "create_email_draft"));
+  const draftAction = generated.workflow.actions.find((action) => action.key === "draft-birthday-email");
+  assert.equal(draftAction?.config.mode, "draft");
 });
 
 await run("workflow generator creates a cold outreach until reply sequence", () => {
@@ -11106,6 +11228,132 @@ await run("email ai generation bounds provider output before persistence", async
   assert.equal(result.suggestedSubject.length <= MAX_EMAIL_AI_SUBJECT_CHARS, true);
   assert.match(result.suggestedSubject, /\[truncated\]$/);
   assert.equal(result.budget.outputTruncated, true);
+});
+
+await run("email draft generation parses plain text Subject header from provider output", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, draft: true };
+  const context = buildEmailPromptContext({
+    settings,
+    purpose: "draft",
+    record: {
+      id: "record-ai-plain-subject",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "George",
+      data: {},
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z"
+    }
+  });
+  const result = await generateEmailAiOutput(
+    { context, userPrompt: "询问最近是否有Nebula Titan Vaporizer的采购计划" },
+    {
+      config: { provider: "openai-compatible", apiKey: "test-key", baseUrl: "https://ai.example/v1", model: "test-model", timeoutMs: 1000 },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: [
+                    "Subject: Inquiry About Nebula Titan Vaporizer Procurement Plans",
+                    "",
+                    "Dear George,",
+                    "",
+                    "I wanted to reach out and inquire if there are any recent plans for procuring the Nebula Titan Vaporizer."
+                  ].join("\n")
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    }
+  );
+
+  assert.equal(result.suggestedSubject, "Inquiry About Nebula Titan Vaporizer Procurement Plans");
+  assert.doesNotMatch(result.text, /^Subject:/i);
+  assert.match(result.text, /^Dear George,/);
+});
+
+await run("email draft generation parses Chinese subject and body labels from provider output", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, draft: true };
+  const context = buildEmailPromptContext({
+    settings,
+    purpose: "draft",
+    record: {
+      id: "record-ai-chinese-subject",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "George",
+      data: {},
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z"
+    }
+  });
+  const result = await generateEmailAiOutput(
+    { context, userPrompt: "询问最近是否有Nebula Titan Vaporizer的采购计划" },
+    {
+      config: { provider: "openai-compatible", apiKey: "test-key", baseUrl: "https://ai.example/v1", model: "test-model", timeoutMs: 1000 },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: [
+                    "主题：Nebula Titan Vaporizer采购计划询问",
+                    "",
+                    "正文：",
+                    "",
+                    "Dear George,",
+                    "",
+                    "请问近期是否有Nebula Titan Vaporizer的采购计划？"
+                  ].join("\n")
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    }
+  );
+
+  assert.equal(result.suggestedSubject, "Nebula Titan Vaporizer采购计划询问");
+  assert.doesNotMatch(result.text, /^主题：/);
+  assert.doesNotMatch(result.text, /^正文：/);
+  assert.match(result.text, /^Dear George,/);
+});
+
+await run("email draft generation preserves JSON provider subject contract", async () => {
+  const settings = createDefaultEmailAiSettings(defaultWorkspaceId, "2026-06-20T00:00:00.000Z");
+  settings.features = { ...settings.features, draft: true };
+  const context = buildEmailPromptContext({
+    settings,
+    purpose: "draft",
+    record: {
+      id: "record-ai-json-subject",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "George",
+      data: {},
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z"
+    }
+  });
+  const result = await generateEmailAiOutput(
+    { context, userPrompt: "draft a procurement question" },
+    {
+      config: { provider: "openai-compatible", apiKey: "test-key", baseUrl: "https://ai.example/v1", model: "test-model", timeoutMs: 1000 },
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: "Dear George,\n\nDo you have any recent procurement plans?", suggestedSubject: "Procurement plan inquiry" }) } }] }), { status: 200 })
+    }
+  );
+
+  assert.equal(result.text, "Dear George,\n\nDo you have any recent procurement plans?");
+  assert.equal(result.suggestedSubject, "Procurement plan inquiry");
 });
 
 await run("email draft generation strips signatures and source footers from body", async () => {

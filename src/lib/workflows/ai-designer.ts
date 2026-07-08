@@ -165,6 +165,7 @@ function buildWorkflowDesignerSystemPrompt(agentMarkdown?: string): string {
     "- Generated workflows must be draft.",
     "- Prefer create_email_draft over send_email for outreach unless the user explicitly requests automatic sending.",
     "- For 'until reply' goals, include wait_reply branches: replied path should handle/stop, not_replied path should continue follow-up or review.",
+    "- For birthday or anniversary goals, use a schedule.daily trigger with trigger.config.dateField set to the date field, usually birthday, and trigger.config.dateMatchMode set to annual. Include an IF node with config.dateMatch=true for clarity.",
     "- Do not place two wait_delay nodes with the same duration directly after each other. One wait is enough before the next reply check or follow-up action.",
     "- For multi-touch email sequences, every create_email_draft/send_email node must have a distinct subject, body, purpose, and timing. Do not copy the same body across rounds.",
     "- Email subjects must describe the business topic or next step. Do not put recipient/customer names, {{record.title}}, {{record.data.email}}, or other recipient identity placeholders in the subject. Use personalization in the email body only.",

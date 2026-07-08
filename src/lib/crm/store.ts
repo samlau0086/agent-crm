@@ -91,6 +91,7 @@ import type {
   WorkflowAiGenerationResult,
   WorkflowCondition,
   WorkflowDefinition,
+  WorkflowResume,
   WorkflowRun,
   WorkflowTrigger
 } from "@/lib/crm/types";
@@ -148,6 +149,22 @@ function switchOutputHandle(node: { config: Record<string, unknown> }, value: un
       ? node.config.cases.split(/[,\n;]/).map((item) => item.trim()).filter(Boolean)
       : [];
   return cases.includes(actual) ? `case:${actual}` : "default";
+}
+
+function workflowGraphRunStatus(
+  actionResults: WorkflowRun["actionResults"],
+  nodeResults: NonNullable<WorkflowRun["nodeResults"]>
+): WorkflowRun["status"] {
+  if (actionResults.some((result) => result.status === "failed") || nodeResults.some((result) => result.status === "failed")) return "failed";
+  if (nodeResults.at(-1)?.status === "waiting") return "waiting";
+  if (actionResults.some((result) => result.status === "approval_required") || nodeResults.some((result) => result.status === "approval_required")) return "approval_required";
+  if (nodeResults.some((result) => result.status === "completed")) return "completed";
+  return "skipped";
+}
+
+function workflowDelayResumeAt(amount: number, unit: string, from = new Date()): string {
+  const multiplier = unit === "minutes" ? 60_000 : unit === "hours" ? 60 * 60_000 : 24 * 60 * 60_000;
+  return new Date(from.getTime() + amount * multiplier).toISOString();
 }
 
 function stamp(): string {
@@ -2251,6 +2268,55 @@ export class CrmStore {
     return clone((this.data.workflowActionApprovals ?? []).filter((approval) => approval.workspaceId === context.workspaceId));
   }
 
+  listWorkflowResumes(context: RequestContext, workflowId?: string): WorkflowResume[] {
+    requirePermission(context, "workflow.read");
+    return clone((this.data.workflowResumes ?? []).filter((resume) => resume.workspaceId === context.workspaceId && (!workflowId || resume.workflowId === workflowId)));
+  }
+
+  runWorkflowResumeScan(context: RequestContext, options: { now?: Date; limit?: number } = {}): { scanned: number; resumed: number; runs: WorkflowRun[] } {
+    requirePermission(context, "workflow.write");
+    const now = options.now ?? new Date();
+    const due = (this.data.workflowResumes ?? [])
+      .filter((resume) => resume.workspaceId === context.workspaceId && resume.status === "pending" && new Date(resume.resumeAt).getTime() <= now.getTime())
+      .slice(0, Math.min(Math.max(options.limit ?? 25, 1), 100));
+    const runs: WorkflowRun[] = [];
+    for (const resume of due) {
+      const run = this.runWorkflowResume(context, resume.id);
+      if (run) runs.push(run);
+    }
+    return { scanned: due.length, resumed: runs.length, runs };
+  }
+
+  runWorkflowResume(context: RequestContext, resumeId: string): WorkflowRun | undefined {
+    requirePermission(context, "workflow.write");
+    const resumeIndex = (this.data.workflowResumes ?? []).findIndex((resume) => resume.id === resumeId && resume.workspaceId === context.workspaceId);
+    if (resumeIndex === -1) throw new Error("Workflow resume not found");
+    const resume = this.data.workflowResumes![resumeIndex];
+    if (resume.status !== "pending") return undefined;
+    const workflow = this.getWorkflow(context, resume.workflowId);
+    const runIndex = (this.data.workflowRuns ?? []).findIndex((run) => run.id === resume.runId && run.workspaceId === context.workspaceId);
+    if (runIndex === -1) throw new Error("Workflow run not found");
+    const run = this.data.workflowRuns![runIndex];
+    const record = this.workflowRecordFromData(context, resume.triggerData);
+    const graphResults = this.runWorkflowGraph(context, workflow, resume.triggerData, record, {
+      runId: run.id,
+      startNodeId: resume.nodeId,
+      previousNodeResults: run.nodeResults ?? []
+    });
+    const status = workflowGraphRunStatus(graphResults.actionResults, graphResults.nodeResults);
+    this.data.workflowResumes![resumeIndex] = { ...resume, status: "completed", updatedAt: stamp() };
+    const updated: WorkflowRun = {
+      ...run,
+      status,
+      conditionResults: [...run.conditionResults, ...graphResults.conditionResults],
+      actionResults: [...run.actionResults, ...graphResults.actionResults],
+      nodeResults: graphResults.nodeResults,
+      completedAt: status === "waiting" ? undefined : stamp()
+    };
+    this.data.workflowRuns![runIndex] = updated;
+    return clone(updated);
+  }
+
   testWorkflow(context: RequestContext, workflowId: string, data: Record<string, unknown> = {}): WorkflowRun {
     requirePermission(context, "workflow.write");
     const workflow = this.getWorkflow(context, workflowId);
@@ -2300,18 +2366,13 @@ export class CrmStore {
       : undefined;
     if (existing) return clone(existing);
     const startedAt = stamp();
+    const runId = createId("workflow_run");
     const record = this.workflowRecordFromData(context, data);
     if (workflow.graph) {
-      const graphResults = this.runWorkflowGraph(context, workflow, data, record, options);
-      const status = graphResults.actionResults.some((result) => result.status === "failed") || graphResults.nodeResults.some((result) => result.status === "failed")
-        ? "failed"
-        : graphResults.actionResults.some((result) => result.status === "approval_required") || graphResults.nodeResults.some((result) => result.status === "approval_required")
-          ? "approval_required"
-          : graphResults.nodeResults.some((result) => result.status === "completed")
-            ? "completed"
-            : "skipped";
+      const graphResults = this.runWorkflowGraph(context, workflow, data, record, { ...options, runId });
+      const status = workflowGraphRunStatus(graphResults.actionResults, graphResults.nodeResults);
       const run: WorkflowRun = {
-        id: createId("workflow_run"),
+        id: runId,
         workspaceId: context.workspaceId,
         workflowId: workflow.id,
         status,
@@ -2322,7 +2383,7 @@ export class CrmStore {
         actionResults: graphResults.actionResults,
         nodeResults: graphResults.nodeResults,
         startedAt,
-        completedAt: stamp(),
+        completedAt: status === "waiting" ? undefined : stamp(),
         durationMs: 0
       };
       (this.data.workflowRuns ??= []).push(run);
@@ -2388,7 +2449,7 @@ export class CrmStore {
     workflow: WorkflowDefinition,
     triggerData: Record<string, unknown>,
     record: CrmRecord | undefined,
-    options: { test?: boolean } = {}
+    options: { test?: boolean; runId?: string; startNodeId?: string; previousNodeResults?: NonNullable<WorkflowRun["nodeResults"]> } = {}
   ): {
     conditionResults: WorkflowRun["conditionResults"];
     actionResults: WorkflowRun["actionResults"];
@@ -2397,10 +2458,10 @@ export class CrmStore {
     const graph = workflow.graph ? normalizeWorkflowGraph(workflow.graph, workflow) : normalizeWorkflowGraph(undefined, workflow);
     const conditionResults: WorkflowRun["conditionResults"] = [];
     const actionResults: WorkflowRun["actionResults"] = [];
-    const nodeResults: NonNullable<WorkflowRun["nodeResults"]> = [];
+    const nodeResults: NonNullable<WorkflowRun["nodeResults"]> = [...(options.previousNodeResults ?? [])];
     const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
     const visits = new Map<string, number>();
-    let current = graph.nodes.find((node) => node.type === "start")?.id ?? "start";
+    let current = options.startNodeId ?? graph.nodes.find((node) => node.type === "start")?.id ?? "start";
     for (let step = 0; step < 200 && current; step += 1) {
       const node = nodeById.get(current);
       if (!node) break;
@@ -2421,15 +2482,37 @@ export class CrmStore {
         const amount = Math.max(1, Math.min(Number(node.config.delayAmount ?? 1) || 1, 365));
         const unit = node.config.delayUnit === "hours" || node.config.delayUnit === "minutes" ? node.config.delayUnit : "days";
         outputHandle = "after_delay";
-        message = options.test
-          ? `Test run: would wait ${amount} ${unit}.`
-          : `Delay checkpoint reached immediately; scheduler support can resume after ${amount} ${unit}.`;
+        if (options.test) {
+          message = `Test run: would wait ${amount} ${unit}.`;
+        } else {
+          const nextEdge = findWorkflowEdge(graph.edges, node.id, outputHandle) ?? findWorkflowEdge(graph.edges, node.id, "main") ?? findWorkflowEdge(graph.edges, node.id, "default");
+          const resumeAt = workflowDelayResumeAt(amount, unit);
+          const runId = options.runId ?? createId("workflow_run");
+          const waitStartedAt = startedAt;
+          const resume: WorkflowResume = {
+            id: createId("workflow_resume"),
+            workspaceId: context.workspaceId,
+            workflowId: workflow.id,
+            runId,
+            nodeId: nextEdge?.targetNodeId ?? "end",
+            resumeAt,
+            triggerData: { ...triggerData, waitStartedAt, waitNodeId: node.id, waitAmount: amount, waitUnit: unit },
+            status: "pending",
+            idempotencyKey: `${runId}:${node.id}:${nextEdge?.targetNodeId ?? "end"}:${waitStartedAt}`,
+            createdAt: stamp(),
+            updatedAt: stamp()
+          };
+          (this.data.workflowResumes ??= []).push(resume);
+          status = "waiting";
+          message = `Waiting until ${resumeAt}; resume node ${resume.nodeId}.`;
+          nodeResults.push({ nodeId: node.id, status, outputHandle, message, startedAt, completedAt: stamp(), resumeAt });
+          break;
+        }
       } else if (node.type === "wait_reply") {
-        const condition = workflowNodeToCondition(node);
-        const result = evaluateWorkflowCondition(condition, triggerData, record);
-        conditionResults.push({ key: condition.key, passed: result.passed, actualValue: result.actualValue });
-        outputHandle = result.passed ? "replied" : "not_replied";
-        message = result.passed ? "Reply detected." : "No reply detected.";
+        const result = this.evaluateWorkflowReplyNode(node, triggerData, record);
+        conditionResults.push({ key: node.id, passed: result.replied, actualValue: result.actualValue });
+        outputHandle = result.replied ? "replied" : "not_replied";
+        message = result.replied ? "Reply detected." : "No reply detected.";
       } else if (node.type === "if" || node.type === "switch" || node.type === "loop") {
         const condition = workflowNodeToCondition(node);
         const result = evaluateWorkflowCondition(condition, triggerData, record);
@@ -2467,6 +2550,35 @@ export class CrmStore {
       current = nextEdge?.targetNodeId ?? "";
     }
     return { conditionResults, actionResults, nodeResults };
+  }
+
+  private evaluateWorkflowReplyNode(
+    node: { id: string; config: Record<string, unknown> },
+    triggerData: Record<string, unknown>,
+    record?: CrmRecord
+  ): { replied: boolean; actualValue?: unknown } {
+    const fallback = evaluateWorkflowCondition(workflowNodeToCondition({ id: node.id, type: "wait_reply", label: node.id, position: { x: 0, y: 0 }, config: node.config }), triggerData, record);
+    const lookbackDays = Math.max(1, Math.min(Number(node.config.lookbackDays ?? triggerData.waitAmount ?? 7) || 7, 365));
+    const since = new Date(
+      [triggerData.waitStartedAt, triggerData.sentAt, triggerData.createdAt]
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => new Date(value))
+        .find((value) => Number.isFinite(value.getTime()))
+        ?.getTime() ?? Date.now() - lookbackDays * 24 * 60 * 60_000
+    );
+    const recordId = typeof triggerData.recordId === "string" ? triggerData.recordId : record?.id;
+    const threadId = typeof triggerData.threadId === "string" ? triggerData.threadId : undefined;
+    const email = typeof record?.data.email === "string" ? record.data.email.toLowerCase() : "";
+    const threadIds = new Set((this.data.emailThreads ?? []).filter((thread) => (threadId && thread.id === threadId) || (recordId && thread.recordId === recordId)).map((thread) => thread.id));
+    const message = (this.data.emailMessages ?? []).find((candidate) => {
+      const createdAt = new Date(candidate.createdAt).getTime();
+      return candidate.workspaceId === record?.workspaceId &&
+        candidate.direction === "inbound" &&
+        candidate.status === "received" &&
+        createdAt >= since.getTime() &&
+        (threadIds.has(candidate.threadId) || (email && candidate.from.toLowerCase() === email));
+    });
+    return { replied: Boolean(message) || fallback.passed, actualValue: message ? { messageId: message.id, receivedAt: message.receivedAt ?? message.createdAt } : fallback.actualValue };
   }
 
   private workflowRecordFromData(context: RequestContext, data: Record<string, unknown>): CrmRecord | undefined {

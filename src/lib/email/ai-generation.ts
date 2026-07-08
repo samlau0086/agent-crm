@@ -196,7 +196,49 @@ function parseModelContent(content: string): EmailAiGeneratedContent {
   } catch {
     // Compatible providers sometimes ignore JSON-only instructions.
   }
-  return { text: content };
+  return parsePlainTextEmailContent(content) ?? { text: content };
+}
+
+function parsePlainTextEmailContent(content: string): EmailAiGeneratedContent | undefined {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const firstContentIndex = lines.findIndex((line) => line.trim());
+  if (firstContentIndex < 0) {
+    return undefined;
+  }
+  const subjectMatch = matchLabeledEmailLine(lines[firstContentIndex] ?? "", "subject");
+  if (!subjectMatch) {
+    return undefined;
+  }
+  const bodyLines = stripLeadingEmailBodyLabel(lines.slice(firstContentIndex + 1));
+  const text = bodyLines.join("\n").trim();
+  return text ? { text, suggestedSubject: subjectMatch.value } : undefined;
+}
+
+function stripLeadingEmailBodyLabel(lines: string[]): string[] {
+  let index = 0;
+  while (index < lines.length && !lines[index]?.trim()) {
+    index += 1;
+  }
+  const bodyMatch = index < lines.length ? matchLabeledEmailLine(lines[index] ?? "", "body") : undefined;
+  if (bodyMatch) {
+    index += 1;
+    if (bodyMatch.value) {
+      return [bodyMatch.value, ...lines.slice(index)];
+    }
+    while (index < lines.length && !lines[index]?.trim()) {
+      index += 1;
+    }
+  }
+  return lines.slice(index);
+}
+
+function matchLabeledEmailLine(line: string, label: "subject" | "body"): { value: string } | undefined {
+  const pattern = label === "subject" ? /^(?:subject|主题)\s*[:：]\s*(.+)$/i : /^(?:body|正文)\s*[:：]\s*(.*)$/i;
+  const match = line.trim().match(pattern);
+  if (!match) {
+    return undefined;
+  }
+  return { value: (match[1] ?? "").trim() };
 }
 
 function trimTrailingSlash(value: string): string {
@@ -233,8 +275,10 @@ function stripDraftOnlyArtifacts(value: string): string {
     .replace(/\r\n/g, "\n")
     .split("\n")
     .map((line) => line.trimEnd());
+  const withoutLeadingSubject = stripLeadingDraftSubjectLabel(lines);
   const sourceStartIndex = lines.findIndex((line) => /^(来源|資料來源|资料来源|source|sources|source references?|references?|citations?)\s*[:：]/i.test(line.trim()));
-  const withoutSources = sourceStartIndex >= 0 ? lines.slice(0, sourceStartIndex) : lines;
+  const sourceStartIndexAfterSubject = sourceStartIndex >= 0 ? sourceStartIndex - (lines.length - withoutLeadingSubject.length) : -1;
+  const withoutSources = sourceStartIndexAfterSubject >= 0 ? withoutLeadingSubject.slice(0, sourceStartIndexAfterSubject) : withoutLeadingSubject;
   const signatureStartIndex = findTrailingSignatureStart(withoutSources);
   const withoutSignature = signatureStartIndex >= 0 ? withoutSources.slice(0, signatureStartIndex) : withoutSources;
   return withoutSignature
@@ -242,6 +286,14 @@ function stripDraftOnlyArtifacts(value: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function stripLeadingDraftSubjectLabel(lines: string[]): string[] {
+  const firstContentIndex = lines.findIndex((line) => line.trim());
+  if (firstContentIndex < 0 || !matchLabeledEmailLine(lines[firstContentIndex] ?? "", "subject")) {
+    return lines;
+  }
+  return stripLeadingEmailBodyLabel(lines.slice(firstContentIndex + 1));
 }
 
 function findTrailingSignatureStart(lines: string[]): number {

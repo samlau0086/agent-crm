@@ -52,6 +52,7 @@ model Workspace {
   recordChangeRequests RecordChangeRequest[]
   workflowDefinitions WorkflowDefinition[]
   workflowRuns        WorkflowRun[]
+  workflowResumes     WorkflowResume[]
   workflowActionApprovals WorkflowActionApproval[]
 }
 
@@ -384,6 +385,7 @@ model WorkflowDefinition {
   updatedAt     DateTime  @updatedAt
   workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   runs          WorkflowRun[]
+  resumes       WorkflowResume[]
   approvals     WorkflowActionApproval[]
 
   @@index([workspaceId, status, updatedAt])
@@ -408,10 +410,33 @@ model WorkflowRun {
   workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   workflow      WorkflowDefinition @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   approvals     WorkflowActionApproval[]
+  resumes       WorkflowResume[]
 
   @@unique([workspaceId, workflowId, idempotencyKey])
   @@index([workspaceId, workflowId, startedAt])
   @@index([workspaceId, status, startedAt])
+}
+
+model WorkflowResume {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  workflowId     String
+  runId          String
+  nodeId         String
+  resumeAt       DateTime
+  triggerData    Json
+  status         String    @default("pending")
+  idempotencyKey String
+  errorMessage   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workflow       WorkflowDefinition @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  run            WorkflowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, status, resumeAt])
+  @@index([workspaceId, workflowId, runId])
 }
 
 model WorkflowActionApproval {
