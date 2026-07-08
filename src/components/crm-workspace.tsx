@@ -4857,6 +4857,60 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.refresh();
   }
 
+  function editSentEmailMessage(message: EmailMessage, options: { notice?: string } = {}) {
+    if (message.direction !== "outbound" || message.status !== "sent") {
+      showError("只能再次编辑已发送邮件");
+      return;
+    }
+    const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
+    const recordId = thread?.recordId || emailDraft.recordId || selectedRecord?.id || "";
+    const linkedRecordIds = uniqueEmailLinkedRecordIds([recordId, ...(emailDraft.linkedRecordIds ?? [])], records);
+    selectEmailThread(message.threadId);
+    setEmailDetailThreadId(message.threadId);
+    setEmailWorkspaceView("mail");
+    setEmailDraft((current) => ({
+      ...current,
+      clientRequestId: createEmailClientRequestId(),
+      accountId: emailAccounts.some((account) => account.id === message.accountId && canSelectEmailAccountForSending(account))
+        ? message.accountId
+        : current.accountId || emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
+      threadId: message.threadId,
+      recordId: linkedRecordIds[0] ?? "",
+      linkedRecordIds,
+      to: message.to.join(", "),
+      cc: (message.cc ?? []).join(", "),
+      bcc: (message.bcc ?? []).join(", "),
+      subject: message.subject,
+      bodyText: repairEmailMojibake(message.bodyText),
+      bodyHtml: stripInternalEmailTrackingHtml(resolveEmailInlineImageHtml(message)),
+      signatureId: noEmailSignatureId,
+      attachments: message.attachments ?? [],
+      scheduledSendAt: "",
+      trackingEnabled: message.trackingEnabled ?? current.trackingEnabled,
+      groupSendMode: message.groupSendMode ?? current.groupSendMode,
+      autoTranslateEnabled: false,
+      preferredTimeSendEnabled: false,
+      aiAssisted: false,
+      aiPurpose: undefined,
+      aiSourceMessageId: undefined,
+      aiSources: undefined,
+      aiGeneratedAt: undefined,
+      translatedBodyText: undefined,
+      translatedLocale: undefined,
+      translatedSources: undefined,
+      translatedAt: undefined,
+      replyOriginalBodyText: undefined,
+      replyOriginalBodyHtml: undefined,
+      replyOriginalFrom: undefined,
+      replyOriginalSentAt: undefined
+    }));
+    setMessage(options.notice ?? "已复制已发送邮件，可编辑后重新发送");
+  }
+
+  function resendSentEmailMessage(message: EmailMessage) {
+    editSentEmailMessage(message, { notice: "已载入原邮件内容，请确认后点击发送" });
+  }
+
   function replyToEmailMessage(message: EmailMessage) {
     const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
     const account = emailAccounts.find((candidate) => candidate.id === message.accountId);
@@ -7073,6 +7127,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onSend={sendEmailFromCompose}
             onReplyToMessage={replyToEmailMessage}
             onRetryMessage={(messageId) => runAction(() => retryEmailMessage(messageId))}
+            onEditSentMessage={editSentEmailMessage}
+            onResendSentMessage={resendSentEmailMessage}
             onGenerateAiForMessage={(message, purpose) => runAction(() => generateEmailAiForMessage(message, purpose))}
             onGenerateAi={() => runAction(generateEmailAi)}
             onGenerateAiForDraft={(prompt) => runAction(() => generateEmailAiForDraft(prompt))}
@@ -8355,6 +8411,8 @@ function EmailWorkspace({
   onSend,
   onReplyToMessage,
   onRetryMessage,
+  onEditSentMessage,
+  onResendSentMessage,
   onGenerateAiForMessage,
   onGenerateAi,
   onGenerateAiForDraft,
@@ -8459,6 +8517,8 @@ function EmailWorkspace({
   onSend: () => Promise<boolean>;
   onReplyToMessage: (message: EmailMessage) => void;
   onRetryMessage: (messageId: string) => void;
+  onEditSentMessage: (message: EmailMessage) => void;
+  onResendSentMessage: (message: EmailMessage) => void;
   onGenerateAiForMessage: (message: EmailMessage, purpose: "translate" | "context_analysis") => void;
   onGenerateAi: () => void;
   onGenerateAiForDraft: (prompt: string) => void;
@@ -10764,6 +10824,40 @@ function EmailWorkspace({
                           </div>
                         ) : null}
                         <div className="toolbar" style={{ marginTop: 8 }}>
+                          {message.direction === "outbound" && message.status === "sent" ? (
+                            <>
+                              <button
+                                className="secondary-button"
+                                data-testid={`email-message-edit-sent-${message.id}`}
+                                type="button"
+                                onClick={() => {
+                                  onEditSentMessage(message);
+                                  setComposeOpen(true);
+                                  setComposeMinimized(false);
+                                  setComposeFullSize(false);
+                                }}
+                                disabled={disabled}
+                              >
+                                <Pencil size={14} />
+                                再次编辑
+                              </button>
+                              <button
+                                className="secondary-button"
+                                data-testid={`email-message-resend-${message.id}`}
+                                type="button"
+                                onClick={() => {
+                                  onResendSentMessage(message);
+                                  setComposeOpen(true);
+                                  setComposeMinimized(false);
+                                  setComposeFullSize(false);
+                                }}
+                                disabled={disabled}
+                              >
+                                <Send size={14} />
+                                重新发送
+                              </button>
+                            </>
+                          ) : null}
                           <button
                             className="secondary-button"
                             data-testid={`email-message-reply-${message.id}`}
