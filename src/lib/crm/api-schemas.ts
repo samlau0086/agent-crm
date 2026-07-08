@@ -408,6 +408,12 @@ export const smartReminderSettingsUpdateSchema = z
   })
   .strict();
 
+export const userPreferencesUpdateSchema = z
+  .object({
+    emailListDisplayMode: z.enum(["thread", "message"]).optional()
+  })
+  .strict();
+
 export const workflowTriggerSchema = z
   .object({
     type: z.enum(["crm_event", "email_event", "task_event", "schedule", "manual"]),

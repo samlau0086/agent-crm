@@ -332,6 +332,7 @@ export class CrmStore {
       name: data.name,
       roleId: data.roleId,
       teamId: data.teamId,
+      emailListDisplayMode: "thread",
       active,
       disabledAt: active ? undefined : stamp()
     };
@@ -399,6 +400,17 @@ export class CrmStore {
         passwordChanged: Boolean(patch.password?.trim())
       }
     });
+    return clone(user);
+  }
+
+  updateCurrentUserPreferences(context: RequestContext, patch: Partial<Pick<User, "emailListDisplayMode">>): User {
+    const user = this.data.users.find((candidate) => candidate.id === context.user.id && candidate.workspaceId === context.workspaceId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    if (patch.emailListDisplayMode) {
+      user.emailListDisplayMode = patch.emailListDisplayMode;
+    }
     return clone(user);
   }
 

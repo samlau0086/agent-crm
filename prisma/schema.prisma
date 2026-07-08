@@ -62,6 +62,7 @@ model User {
   passwordHash        String
   roleId              String?
   teamId              String?
+  emailListDisplayMode String              @default("thread")
   active              Boolean              @default(true)
   disabledAt          DateTime?
   createdAt           DateTime             @default(now())

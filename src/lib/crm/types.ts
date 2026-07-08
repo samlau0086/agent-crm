@@ -49,6 +49,7 @@ export interface User {
   name: string;
   roleId: string;
   teamId?: string;
+  emailListDisplayMode: "thread" | "message";
   active: boolean;
   disabledAt?: string;
 }

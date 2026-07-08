@@ -42,6 +42,7 @@ export const seedData: CrmSnapshot = {
       name: "系统管理员",
       roleId: "role-admin",
       teamId: "team-sales",
+      emailListDisplayMode: "thread",
       active: true
     },
     {
@@ -51,6 +52,7 @@ export const seedData: CrmSnapshot = {
       name: "销售代表",
       roleId: "role-sales",
       teamId: "team-sales",
+      emailListDisplayMode: "thread",
       active: true
     }
   ],

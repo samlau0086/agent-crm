@@ -1953,7 +1953,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeEmailMailbox = normalizeEmailMailboxKey(searchParams.get("mailbox"));
   const routeEmailCategory = normalizeEmailCategoryKey(searchParams.get("category"));
   const routeEmailMode = normalizeEmailMailMode(searchParams.get("mailMode"));
-  const routeEmailListDisplayMode = normalizeEmailListDisplayMode(searchParams.get("mailListView"));
+  const [emailListDisplayModePreference, setEmailListDisplayModePreference] = useState<EmailListDisplayMode>(props.contextUser.emailListDisplayMode);
+  const routeEmailListDisplayMode = searchParams.has("mailListView") ? normalizeEmailListDisplayMode(searchParams.get("mailListView")) : emailListDisplayModePreference;
   const routeEmailView = normalizeEmailWorkspaceView(searchParams.get("emailView"));
   const routeEmailAccountId = searchParams.get("accountId") ?? allEmailAccountsKey;
   const routeEmailLabel = searchParams.get("label") ?? "";
@@ -5075,6 +5076,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setMessage("邮件后台同步设置已更新");
   }
 
+  async function updateCurrentUserPreferencesPatch(patch: Partial<Pick<User, "emailListDisplayMode">>) {
+    if (patch.emailListDisplayMode) {
+      setEmailListDisplayModePreference(patch.emailListDisplayMode);
+    }
+    const user = await fetchJson<User>("/api/users/me/preferences", {
+      method: "PATCH",
+      body: patch
+    });
+    setEmailListDisplayModePreference(user.emailListDisplayMode);
+  }
+
   async function saveEmailSignatureFromDraft() {
     const body = {
       accountId: emailSignatureDraft.accountId || null,
@@ -7075,6 +7087,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onToggleAiFeature={(feature, enabled) => runAction(() => updateEmailAiFeature(feature, enabled))}
             onUpdateAiSettings={(patch) => runAction(() => updateEmailAiSettingsPatch(patch))}
             onUpdateSyncSettings={(patch) => runAction(() => updateEmailSyncSettingsPatch(patch))}
+            onUpdateListDisplayModePreference={(mode) => { void runImmediateAction(() => updateCurrentUserPreferencesPatch({ emailListDisplayMode: mode })); }}
             onShowToast={showToast}
             onShowSuccess={showSuccess}
             onRequestConfirm={requestConfirm}
@@ -8355,6 +8368,7 @@ function EmailWorkspace({
   onToggleAiFeature,
   onUpdateAiSettings,
   onUpdateSyncSettings,
+  onUpdateListDisplayModePreference,
   onShowToast,
   onShowSuccess,
   onRequestConfirm,
@@ -8461,6 +8475,7 @@ function EmailWorkspace({
     }
   ) => void;
   onUpdateSyncSettings: (patch: Partial<Omit<EmailSyncSettings, "workspaceId" | "updatedAt">>) => void;
+  onUpdateListDisplayModePreference: (mode: EmailListDisplayMode) => void;
   onShowToast: (toast: ToastState) => void;
   onShowSuccess: (message: string) => void;
   onRequestConfirm: (options: ConfirmDialogState) => Promise<boolean>;
@@ -8834,6 +8849,12 @@ function EmailWorkspace({
       threadId: nextThreadId
     });
   }, [category, emailListDisplayMode, labelFilter, mailMode, mailbox, onRouteChange, searchQuery, selectedMailboxAccountId, selectedThreadId]);
+
+  const toggleEmailListDisplayMode = useCallback(() => {
+    const nextMode = emailListDisplayMode === "thread" ? "message" : "thread";
+    onUpdateListDisplayModePreference(nextMode);
+    applyEmailRoute({ listDisplayMode: nextMode });
+  }, [applyEmailRoute, emailListDisplayMode, onUpdateListDisplayModePreference]);
 
   function updateThreadLabels(threadId: string, labels: string[]) {
     const normalizedLabels = Array.from(new Set(labels.map((label) => label.trim()).filter(Boolean))).slice(0, 20);
@@ -10211,7 +10232,7 @@ function EmailWorkspace({
                   title={emailListDisplayMode === "thread" ? "邮件视图" : "会话视图"}
                   data-testid="email-list-display-toggle"
                   type="button"
-                  onClick={() => applyEmailRoute({ listDisplayMode: emailListDisplayMode === "thread" ? "message" : "thread" })}
+                  onClick={toggleEmailListDisplayMode}
                 >
                   {emailListDisplayMode === "thread" ? <Mail size={16} /> : <LayoutList size={16} />}
                 </button>
@@ -11575,6 +11596,7 @@ function SmartReminderPanel({
                   <p>{reminder.body}</p>
                   <div className="smart-reminder-meta">
                     {reminder.actionLabel ? <span>{reminder.actionLabel}</span> : null}
+                    <span>创建时间 {formatDateTimeSeconds(reminder.createdAt)}</span>
                     {reminder.dueAt ? <span>建议截止 {formatDateTimeSeconds(reminder.dueAt)}</span> : null}
                     {reminder.snoozedUntil && isSmartReminderSnoozed(reminder, now) ? <span>稍后至 {formatDateTimeSeconds(reminder.snoozedUntil)}</span> : null}
                     {reminder.sources.length ? <span>{reminder.sources.slice(0, 2).map((source) => source.label).join("、")}</span> : null}

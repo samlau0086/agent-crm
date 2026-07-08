@@ -433,6 +433,7 @@ function mapUser(user: {
   name: string;
   roleId: string | null;
   teamId: string | null;
+  emailListDisplayMode?: string | null;
   active: boolean;
   disabledAt?: Date | null;
 }): User {
@@ -443,6 +444,7 @@ function mapUser(user: {
     name: user.name,
     roleId: user.roleId ?? "",
     teamId: user.teamId ?? undefined,
+    emailListDisplayMode: user.emailListDisplayMode === "message" ? "message" : "thread",
     active: user.active,
     disabledAt: user.disabledAt?.toISOString()
   };
@@ -4175,6 +4177,21 @@ export class PrismaCrmRepository {
       }
     });
 
+    return mapUser(user);
+  }
+
+  async updateCurrentUserPreferences(
+    context: RequestContext,
+    patch: Partial<Pick<User, "emailListDisplayMode">>
+  ): Promise<User> {
+    const user = await this.db.user.update({
+      where: {
+        id: context.user.id
+      },
+      data: {
+        ...(patch.emailListDisplayMode ? { emailListDisplayMode: patch.emailListDisplayMode } : {})
+      }
+    });
     return mapUser(user);
   }
 

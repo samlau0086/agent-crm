@@ -3625,7 +3625,8 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /const routeEmailMailbox = normalizeEmailMailboxKey\(searchParams\.get\("mailbox"\)\)/);
   assert.match(source, /const routeEmailCategory = normalizeEmailCategoryKey\(searchParams\.get\("category"\)\)/);
   assert.match(source, /const routeEmailMode = normalizeEmailMailMode\(searchParams\.get\("mailMode"\)\)/);
-  assert.match(source, /const routeEmailListDisplayMode = normalizeEmailListDisplayMode\(searchParams\.get\("mailListView"\)\)/);
+  assert.match(source, /const \[emailListDisplayModePreference, setEmailListDisplayModePreference\] = useState<EmailListDisplayMode>\(props\.contextUser\.emailListDisplayMode\)/);
+  assert.match(source, /const routeEmailListDisplayMode = searchParams\.has\("mailListView"\) \? normalizeEmailListDisplayMode\(searchParams\.get\("mailListView"\)\) : emailListDisplayModePreference/);
   assert.match(source, /const routeEmailView = normalizeEmailWorkspaceView\(searchParams\.get\("emailView"\)\)/);
   assert.match(source, /const routeEmailAccountId = searchParams\.get\("accountId"\) \?\? allEmailAccountsKey/);
   assert.match(source, /const routeEmailSearch = searchParams\.get\("mailSearch"\) \?\? ""/);
@@ -3642,6 +3643,9 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /onViewChange=\{\(nextView\) => \{[\s\S]*emailView: nextView[\s\S]*pushEmailHistoryRoute\(nextPath\)/);
   assert.match(source, /onRouteChange=\{\(patch\) => \{[\s\S]*const nextPath = buildEmailRoutePath\(patch\)[\s\S]*pushEmailHistoryRoute\(nextPath\)/);
   assert.match(source, /const applyEmailRoute = useCallback\(\(patch: EmailRoutePatch\) => \{[\s\S]*const nextListDisplayMode = patch\.listDisplayMode \?\? emailListDisplayMode[\s\S]*onRouteChange\(\{[\s\S]*listDisplayMode: nextListDisplayMode[\s\S]*mailbox: nextMailbox[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId/);
+  assert.match(source, /async function updateCurrentUserPreferencesPatch\(patch: Partial<Pick<User, "emailListDisplayMode">>\)/);
+  assert.match(source, /fetchJson<User>\("\/api\/users\/me\/preferences", \{[\s\S]*method: "PATCH"[\s\S]*body: patch/);
+  assert.match(source, /onUpdateListDisplayModePreference=\{\(mode\) => \{ void runImmediateAction\(\(\) => updateCurrentUserPreferencesPatch\(\{ emailListDisplayMode: mode \}\)\); \}\}/);
   assert.match(source, /const pendingEmailRouteRef = useRef<\{/);
   assert.match(source, /pendingEmailRouteRef\.current = \{[\s\S]*listDisplayMode: nextListDisplayMode[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId[\s\S]*\}/);
   assert.match(source, /if \(localMatchesPending\) \{[\s\S]*return;[\s\S]*\}/);
@@ -4525,7 +4529,8 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /const visibleRows = useMemo\(\(\) => \{/);
   assert.match(workspace, /emailListDisplayMode === "message" && displayMessages\.length/);
   assert.match(workspace, /data-testid="email-list-display-toggle"/);
-  assert.match(workspace, /onClick=\{\(\) => applyEmailRoute\(\{ listDisplayMode: emailListDisplayMode === "thread" \? "message" : "thread" \}\)\}/);
+  assert.match(workspace, /const toggleEmailListDisplayMode = useCallback\(\(\) => \{[\s\S]*const nextMode = emailListDisplayMode === "thread" \? "message" : "thread"[\s\S]*onUpdateListDisplayModePreference\(nextMode\)[\s\S]*applyEmailRoute\(\{ listDisplayMode: nextMode \}\)/);
+  assert.match(workspace, /onClick=\{toggleEmailListDisplayMode\}/);
   assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
   assert.match(workspace, /for \(const delayMs of \[2500, 8000\]\)/);
