@@ -612,7 +612,7 @@ export class CrmStore {
   createEmailAccount(
     context: RequestContext,
     input: Pick<EmailAccount, "name" | "emailAddress" | "provider"> &
-      Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">> & { connectionConfig?: EmailConnectionConfig }
+      Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">> & { defaultSignatureId?: string | null; connectionConfig?: EmailConnectionConfig }
   ): EmailAccount {
     requirePermission(context, "crm.admin");
     const now = stamp();
@@ -622,6 +622,7 @@ export class CrmStore {
     });
     const emailAddress = normalizeEmailAddress(input.emailAddress);
     this.assertEmailAccountEmailAvailable(context, emailAddress);
+    const defaultSignatureId = this.normalizeEmailAccountDefaultSignatureId(context, input.defaultSignatureId);
     const account: EmailAccount = {
       id: createId("email_account"),
       workspaceId: context.workspaceId,
@@ -631,6 +632,7 @@ export class CrmStore {
       status: input.status ?? "draft",
       syncEnabled: toggles.syncEnabled,
       sendEnabled: toggles.sendEnabled,
+      defaultSignatureId: defaultSignatureId ?? undefined,
       connectionConfigured: Boolean(input.connectionConfig),
       createdById: context.user.id,
       lastSyncStatus: "idle",
@@ -652,6 +654,7 @@ export class CrmStore {
     context: RequestContext,
     accountId: string,
     input: Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "syncEnabled" | "sendEnabled" | "status">> & {
+      defaultSignatureId?: string | null;
       connectionConfig?: EmailConnectionConfig;
       clearConnectionConfig?: boolean;
     }
@@ -669,6 +672,9 @@ export class CrmStore {
     account.emailAddress = emailAddress;
     if (input.provider !== undefined) account.provider = input.provider;
     if (input.status !== undefined) account.status = input.status;
+    if (input.defaultSignatureId !== undefined) {
+      account.defaultSignatureId = this.normalizeEmailAccountDefaultSignatureId(context, input.defaultSignatureId, account.id) ?? undefined;
+    }
     account.syncEnabled = toggles.syncEnabled;
     account.sendEnabled = toggles.sendEnabled;
     if (input.connectionConfig) {
@@ -805,12 +811,26 @@ export class CrmStore {
       summary: `Updated email signature ${signature.name}`,
       details: { accountId: signature.accountId, isDefault: signature.isDefault, active: signature.active }
     });
+    if (signature.active === false) {
+      for (const account of this.data.emailAccounts ?? []) {
+        if (account.workspaceId === context.workspaceId && account.defaultSignatureId === signature.id) {
+          delete account.defaultSignatureId;
+          account.updatedAt = stamp();
+        }
+      }
+    }
     return clone(signature);
   }
 
   deleteEmailSignature(context: RequestContext, signatureId: string): void {
     requirePermission(context, "crm.admin");
     const signature = this.assertEmailSignature(context, signatureId);
+    for (const account of this.data.emailAccounts ?? []) {
+      if (account.workspaceId === context.workspaceId && account.defaultSignatureId === signature.id) {
+        delete account.defaultSignatureId;
+        account.updatedAt = stamp();
+      }
+    }
     this.data.emailSignatures = (this.data.emailSignatures ?? []).filter((candidate) => candidate.id !== signature.id);
     this.writeAuditLog(context, "delete", "email_signature", signature.id, {
       summary: `Deleted email signature ${signature.name}`,
@@ -4736,6 +4756,21 @@ export class CrmStore {
     }
     this.assertEmailAccount(context, normalized);
     return normalized;
+  }
+
+  private normalizeEmailAccountDefaultSignatureId(context: RequestContext, signatureId?: string | null, accountId?: string): string | null {
+    const normalized = signatureId?.trim();
+    if (!normalized) {
+      return null;
+    }
+    const signature = this.assertEmailSignature(context, normalized);
+    if (!signature.active) {
+      throw new Error("Default email signature must be active");
+    }
+    if (signature.accountId && signature.accountId !== accountId) {
+      throw new Error("Default email signature must be global or belong to this account");
+    }
+    return signature.id;
   }
 
   private assertEmailSignature(context: RequestContext, signatureId: string): EmailSignature {

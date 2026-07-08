@@ -187,6 +187,7 @@ export interface EmailAccount {
   status: EmailAccountStatus;
   syncEnabled: boolean;
   sendEnabled: boolean;
+  defaultSignatureId?: string;
   connectionConfigured: boolean;
   lastConnectionError?: string;
   createdById: string;

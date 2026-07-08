@@ -652,6 +652,7 @@ function mapEmailAccount(account: {
   status: string;
   syncEnabled: boolean;
   sendEnabled: boolean;
+  defaultSignatureId?: string | null;
   encryptedConnectionConfig?: string | null;
   lastConnectionError?: string | null;
   createdById: string;
@@ -675,6 +676,7 @@ function mapEmailAccount(account: {
     status: account.status as EmailAccount["status"],
     syncEnabled: account.syncEnabled,
     sendEnabled: account.sendEnabled,
+    defaultSignatureId: account.defaultSignatureId ?? undefined,
     connectionConfigured: Boolean(account.encryptedConnectionConfig),
     lastConnectionError: account.lastConnectionError ?? undefined,
     createdById: account.createdById,
@@ -2529,7 +2531,7 @@ export class PrismaCrmRepository {
   async createEmailAccount(
     context: RequestContext,
     input: Pick<EmailAccount, "name" | "emailAddress" | "provider"> &
-      Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">> & { connectionConfig?: EmailConnectionConfig }
+      Partial<Pick<EmailAccount, "syncEnabled" | "sendEnabled" | "status">> & { defaultSignatureId?: string | null; connectionConfig?: EmailConnectionConfig }
   ): Promise<EmailAccount> {
     requirePermission(context, "crm.admin");
     const toggles = normalizeEmailAccountToggles(input.provider, {
@@ -2538,6 +2540,7 @@ export class PrismaCrmRepository {
     });
     const emailAddress = normalizeEmailAddress(input.emailAddress);
     await this.assertEmailAccountEmailAvailable(context, emailAddress);
+    const defaultSignatureId = await this.normalizeEmailAccountDefaultSignatureId(context, input.defaultSignatureId);
     const account = await this.db.emailAccount.create({
       data: {
         workspaceId: context.workspaceId,
@@ -2547,6 +2550,7 @@ export class PrismaCrmRepository {
         status: input.status ?? "draft",
         syncEnabled: toggles.syncEnabled,
         sendEnabled: toggles.sendEnabled,
+        defaultSignatureId,
         encryptedConnectionConfig: input.connectionConfig ? encryptEmailConnectionConfig(input.connectionConfig) : undefined,
         lastConnectionError: null,
         createdById: context.user.id
@@ -2563,6 +2567,7 @@ export class PrismaCrmRepository {
     context: RequestContext,
     accountId: string,
     input: Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "syncEnabled" | "sendEnabled" | "status">> & {
+      defaultSignatureId?: string | null;
       connectionConfig?: EmailConnectionConfig;
       clearConnectionConfig?: boolean;
     }
@@ -2581,6 +2586,9 @@ export class PrismaCrmRepository {
     if (input.emailAddress !== undefined) data.emailAddress = emailAddress;
     if (input.provider !== undefined) data.provider = input.provider;
     if (input.status !== undefined) data.status = input.status;
+    if (input.defaultSignatureId !== undefined) {
+      data.defaultSignatureId = await this.normalizeEmailAccountDefaultSignatureId(context, input.defaultSignatureId, existing.id);
+    }
     data.syncEnabled = toggles.syncEnabled;
     data.sendEnabled = toggles.sendEnabled;
     if (input.connectionConfig) {
@@ -2708,12 +2716,22 @@ export class PrismaCrmRepository {
       summary: `Updated email signature ${signature.name}`,
       details: { accountId: signature.accountId, isDefault: signature.isDefault, active: signature.active }
     });
+    if (signature.active === false) {
+      await this.db.emailAccount.updateMany({
+        where: { workspaceId: context.workspaceId, defaultSignatureId: signature.id },
+        data: { defaultSignatureId: null }
+      });
+    }
     return mapEmailSignature(signature);
   }
 
   async deleteEmailSignature(context: RequestContext, signatureId: string): Promise<void> {
     requirePermission(context, "crm.admin");
     const existing = await this.assertEmailSignature(context, signatureId);
+    await this.db.emailAccount.updateMany({
+      where: { workspaceId: context.workspaceId, defaultSignatureId: existing.id },
+      data: { defaultSignatureId: null }
+    });
     await this.db.emailSignature.delete({ where: { id: existing.id } });
     await this.writeAuditLog(context, "delete", "email_signature", existing.id, {
       summary: `Deleted email signature ${existing.name}`,
@@ -8981,6 +8999,21 @@ export class PrismaCrmRepository {
     }
     await this.assertEmailAccount(context, normalized);
     return normalized;
+  }
+
+  private async normalizeEmailAccountDefaultSignatureId(context: RequestContext, signatureId?: string | null, accountId?: string): Promise<string | null> {
+    const normalized = signatureId?.trim();
+    if (!normalized) {
+      return null;
+    }
+    const signature = await this.assertEmailSignature(context, normalized);
+    if (!signature.active) {
+      throw new Error("Default email signature must be active");
+    }
+    if (signature.accountId && signature.accountId !== accountId) {
+      throw new Error("Default email signature must be global or belong to this account");
+    }
+    return signature.id;
   }
 
   private async assertEmailSignature(context: RequestContext, signatureId: string): Promise<EmailSignature> {

@@ -648,6 +648,7 @@ export const emailAccountCreateSchema = z
     status: emailAccountStatusSchema.optional(),
     syncEnabled: z.boolean().optional(),
     sendEnabled: z.boolean().optional(),
+    defaultSignatureId: z.union([z.string().trim().min(1).max(200), z.literal(""), z.null()]).optional(),
     connectionConfig: emailConnectionConfigSchema.optional()
   })
   .strict();
@@ -660,6 +661,7 @@ export const emailAccountUpdateSchema = z
     status: emailAccountStatusSchema.optional(),
     syncEnabled: z.boolean().optional(),
     sendEnabled: z.boolean().optional(),
+    defaultSignatureId: z.union([z.string().trim().min(1).max(200), z.literal(""), z.null()]).optional(),
     connectionConfig: emailConnectionConfigSchema.optional(),
     clearConnectionConfig: z.boolean().optional()
   })

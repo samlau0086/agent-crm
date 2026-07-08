@@ -3242,7 +3242,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /function openThreadDetail\(threadId: string, messageId = ""\)[\s\S]*patchThreadUiState\(\[threadId\], \{ read: true \}\)[\s\S]*persistThreadState\(threadId, \{ read: true \}\)/);
   assert.match(source, /action === "delete" && threadIds\.some\(\(threadId\) => Boolean\(threadUiState\[threadId\]\?\.deleted\)\)/);
   assert.match(source, /selectedThreadState\.deleted \|\| mailbox === "trash"/);
-  assert.match(source, /className=\{`gmail-thread-row \$\{selectedThreadId === thread\.id \? "selected" : ""\} \$\{isRead \? "" : "unread"\} \$\{mailbox === "trash" \? "trash-row" : ""\}`\}/);
+  assert.match(source, /className=\{`gmail-thread-row \$\{selectedThreadId === thread\.id \? "selected" : ""\} \$\{isThreadListRow \? "parent-row" : ""\} \$\{isRead \? "" : "unread"\} \$\{mailbox === "trash" \? "trash-row" : ""\}`\}/);
   assert.match(source, /aria-label="回复"[\s\S]*onReplyToMessage\(message\);[\s\S]*openComposePopup\(\)/);
   assert.match(source, /aria-label=\{selectedThreadIsRead \? "标记未读" : "标记已读"\}/);
   assert.match(source, /selectedThreadIsRead \? <Mail size=\{16\} \/> : <MailOpen size=\{16\} \/>/);
@@ -3861,7 +3861,8 @@ await run("email mailbox location is URL based and survives refresh", () => {
   assert.match(source, /pendingEmailRouteRef\.current = \{[\s\S]*listDisplayMode: nextListDisplayMode[\s\S]*mailMode: nextMode[\s\S]*threadId: nextThreadId[\s\S]*\}/);
   assert.match(source, /if \(localMatchesPending\) \{[\s\S]*return;[\s\S]*\}/);
   assert.match(source, /onClick=\{\(\) => \{ applyEmailRoute\(\{ mailbox: item\.key, mailMode: "list", threadId: "" \}\)/);
-  assert.match(source, /function openThreadDetail\(threadId: string, messageId = ""\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId, messageId: emailListDisplayMode === "message" \? messageId : "" \}\)/);
+  assert.match(source, /function openThreadDetail\(threadId: string, messageId = ""\)[\s\S]*setSelectedDetailViewMode\("thread"\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId, messageId \}\)/);
+  assert.match(source, /function openSingleMessageDetail\(threadId: string, messageId: string\)[\s\S]*setSelectedDetailViewMode\("message"\)[\s\S]*applyEmailRoute\(\{ mailMode: "detail", threadId, messageId \}\)/);
   assert.match(source, /aria-label="返回列表"[\s\S]*onClick=\{\(\) => applyEmailRoute\(\{ mailMode: "list", threadId: "" \}\)\}/);
   assert.match(source, /data-testid="email-tab-settings"[\s\S]*onClick=\{\(\) => onViewChange\("settings"\)\}/);
   assert.match(source, /data-testid="email-tab-ai"[\s\S]*onClick=\{\(\) => onViewChange\("ai"\)\}/);
@@ -4105,7 +4106,7 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /function clearEmailDraftAiProvenance\(draft: EmailComposeDraft\): EmailComposeDraft/);
   assert.match(source, /aiAssisted:\s*false/);
   assert.match(source, /aiSources:\s*undefined/);
-  assert.match(source, /data-testid="email-compose-account"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, accountId: event\.target\.value \}\)/);
+  assert.match(source, /data-testid="email-compose-account"[\s\S]*const accountId = event\.target\.value;[\s\S]*clearEmailDraftAiProvenance\(\{[\s\S]*\.\.\.emailDraft,[\s\S]*accountId,[\s\S]*signatureId: getEmailAccountDefaultComposeSignatureId\(signatures, accounts, accountId\)/);
   assert.match(source, /linkedRecordIds:\s*\[\]/);
   assert.match(source, /const emailComposeLinkableObjectKeys = new Set\(\["contacts", "companies"\]\)/);
   assert.match(source, /function updateEmailDraftLinkedRecords\(draft: EmailComposeDraft, records: CrmRecord\[\], nextRecordIds: string\[\]\): EmailComposeDraft/);
@@ -4126,9 +4127,9 @@ await run("email workspace clears ai provenance after manual draft rewrites", ()
   assert.match(source, /data-testid="email-compose-subject"[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.emailDraft, subject: event\.target\.value \}\)/);
   assert.match(source, /data-testid="email-compose-body"[\s\S]*onInput=\{updateComposeBodyFromEditor\}/);
   assert.match(source, /function updateComposeBodyFromEditor\(\)[\s\S]*clearEmailDraftAiProvenance\(\{[\s\S]*bodyHtml,[\s\S]*bodyText: stripHtmlToText\(bodyHtml\)/);
-  assert.match(source, /const accountId = current\.accountId \|\| props\.emailAccounts\[0\]\?\.id \|\| "";\s*return accountId === current\.accountId \? current : clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId \}\);/);
+  assert.match(source, /const accountId = current\.accountId \|\| props\.emailAccounts\[0\]\?\.id \|\| "";\s*return accountId === current\.accountId[\s\S]*clearEmailDraftAiProvenance\(\{[\s\S]*\.\.\.current,[\s\S]*accountId,[\s\S]*signatureId: getEmailAccountDefaultComposeSignatureId\(props\.emailSignatures, props\.emailAccounts, accountId\)/);
   assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId;\s*const nextSelectedThreadId = visibleEmailThreads\.some\(\(thread\) => thread\.id === preferredThreadId\) \? preferredThreadId : visibleEmailThreads\[0\]\?\.id \?\? "";\s*if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(nextSelectedThreadId\);/);
-  assert.match(source, /setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId: account\.id \}\)\)/);
+  assert.match(source, /setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(\{ \.\.\.current, accountId: account\.id, signatureId: getEmailAccountDefaultComposeSignatureId\(emailSignatures, \[account, \.\.\.emailAccounts\], account\.id\) \}\)\)/);
   assert.match(source, /function selectEmailThread\(threadId: string\) \{[\s\S]*setEmailDraft\(\(current\) => clearEmailDraftAiProvenance\(current\)\);[\s\S]*setSelectedEmailThreadId\(threadId\);[\s\S]*\}/);
   assert.match(source, /const linkedRecordIds = uniqueEmailLinkedRecordIds\(\[thread\.recordId, \.\.\.\(current\.linkedRecordIds \?\? \[\]\)\], records\);[\s\S]*clearEmailDraftAiProvenance\(\{ \.\.\.current, recordId: linkedRecordIds\[0\] \?\? "", linkedRecordIds \}\)/);
   assert.match(source, /onSelectThread=\{\(threadId\) => \{[\s\S]*selectEmailThread\(threadId\);/);
@@ -4140,6 +4141,10 @@ await run("email compose supports ai generation signatures rich text and attachm
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(source, /function prepareEmailDraftForSend\(draft: EmailComposeDraft, signatures: EmailSignature\[\], accounts: EmailAccount\[\]\): EmailComposeDraft/);
   assert.match(source, /function getEmailSignatureOptions\(signatures: EmailSignature\[\], accounts: EmailAccount\[\], selectedAccountId: string\): EmailSignatureOption\[\]/);
+  assert.match(source, /function getEmailAccountDefaultComposeSignatureId\(signatures: EmailSignature\[\], accounts: EmailAccount\[\], accountId: string\): string/);
+  assert.match(source, /data-testid="email-account-default-signature"/);
+  assert.match(source, /defaultSignatureId: emailAccountDraft\.defaultSignatureId \|\| null/);
+  assert.match(source, /signatureId: getEmailAccountDefaultComposeSignatureId\(signatures, accounts, accountId\)/);
   assert.match(source, /function renderEmailSignatureTemplate\(value: string, senderEmail: string\): string/);
   assert.match(source, /data-testid="email-signature-settings-panel"/);
   assert.match(source, /data-testid="email-signature-save"/);
@@ -4762,9 +4767,9 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /key=\{key\}/);
   assert.match(workspace, /emailMessageParticipantLabel\(displayMessage, thread, activeAccounts\)/);
   assert.match(workspace, /const selectedDisplayedMessages = selectedMailboxMessages\.length > 0 \? selectedMailboxMessages : selectedMessages/);
-  assert.match(workspace, /const selectedThreadDetailMessages =\s*emailListDisplayMode === "message"[\s\S]*\? selectedDetailMessage[\s\S]*\? \[selectedDetailMessage\][\s\S]*: selectedDisplayMessage[\s\S]*\? \[selectedDisplayMessage\][\s\S]*: \[\][\s\S]*: selectedMessages\.length > 0[\s\S]*\? selectedMessages[\s\S]*: selectedDisplayedMessages/);
+  assert.match(workspace, /const selectedThreadDetailMessages =\s*selectedDetailViewMode === "message"[\s\S]*\? selectedDetailMessage[\s\S]*\? \[selectedDetailMessage\][\s\S]*: selectedDisplayMessage[\s\S]*\? \[selectedDisplayMessage\][\s\S]*: \[\][\s\S]*: selectedMessages\.length > 0[\s\S]*\? selectedMessages[\s\S]*: selectedDisplayedMessages/);
   assert.match(workspace, /selectedThreadDetailMessages\.map\(\(message, messageIndex\) => \{/);
-  assert.match(workspace, /onClick=\{\(\) => openThreadDetail\(thread\.id, displayMessage\?\.id \?\? ""\)\}/);
+  assert.match(workspace, /isThreadListRow[\s\S]*openThreadDetail\(thread\.id, parentTargetMessage\?\.id \?\? ""\)[\s\S]*openSingleMessageDetail\(thread\.id, displayMessage\?\.id \?\? ""\)/);
   assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);
   assert.match(workspace, /snoozedUntil: null/);
   assert.match(workspace, /aria-label="取消稍后提醒"/);
@@ -9977,6 +9982,56 @@ await run("email accounts can be updated and safely disabled when history exists
   assert.equal(retained.status, "disabled");
   assert.equal(retained.syncEnabled, false);
   assert.equal(retained.sendEnabled, false);
+});
+
+await run("email accounts support per-sender default signature presets", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Signature Inbox",
+    emailAddress: "signature@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true
+  });
+  const otherAccount = store.createEmailAccount(context, {
+    name: "Other Signature Inbox",
+    emailAddress: "other-signature@example.com",
+    provider: "smtp_imap",
+    status: "active",
+    sendEnabled: true
+  });
+  const globalSignature = store.createEmailSignature(context, {
+    name: "Global Signature",
+    bodyText: "Regards,\n{{senderEmail}}",
+    active: true
+  });
+  const accountSignature = store.createEmailSignature(context, {
+    accountId: account.id,
+    name: "Account Signature",
+    bodyText: "Account regards",
+    active: true
+  });
+  const otherAccountSignature = store.createEmailSignature(context, {
+    accountId: otherAccount.id,
+    name: "Other Account Signature",
+    bodyText: "Other regards",
+    active: true
+  });
+
+  assert.equal(store.updateEmailAccount(context, account.id, { defaultSignatureId: globalSignature.id }).defaultSignatureId, globalSignature.id);
+  assert.equal(store.updateEmailAccount(context, account.id, { defaultSignatureId: accountSignature.id }).defaultSignatureId, accountSignature.id);
+  assert.throws(
+    () => store.updateEmailAccount(context, account.id, { defaultSignatureId: otherAccountSignature.id }),
+    /global or belong to this account/
+  );
+  assert.equal(store.updateEmailAccount(context, account.id, { defaultSignatureId: null }).defaultSignatureId, undefined);
+  store.updateEmailAccount(context, account.id, { defaultSignatureId: accountSignature.id });
+  store.updateEmailSignature(context, accountSignature.id, { active: false });
+  assert.equal(store.getEmailAccount(context, account.id).defaultSignatureId, undefined);
+  store.updateEmailAccount(context, account.id, { defaultSignatureId: globalSignature.id });
+  store.deleteEmailSignature(context, globalSignature.id);
+  assert.equal(store.getEmailAccount(context, account.id).defaultSignatureId, undefined);
 });
 
 await run("email account addresses are unique per workspace before database constraints", () => {

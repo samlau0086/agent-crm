@@ -361,6 +361,7 @@ type EmailAccountDraft = {
   provider: EmailAccount["provider"];
   syncEnabled: boolean;
   sendEnabled: boolean;
+  defaultSignatureId: string;
   defaultOutboundServiceId: string;
   outboundServices: EmailAccountDraftOutboundService[];
   syncProtocol: "imap" | "pop3";
@@ -405,6 +406,7 @@ type SanitizedEmailConnectionConfig = {
   defaultOutboundServiceId?: string;
 };
 type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "status" | "syncEnabled" | "sendEnabled">> & {
+  defaultSignatureId?: string | null;
   connectionConfig?: EmailConnectionConfig;
   clearConnectionConfig?: boolean;
 };
@@ -897,9 +899,11 @@ function sanitizeComposeHtml(value: string): string {
 function getEmailSignatureOptions(signatures: EmailSignature[], accounts: EmailAccount[], selectedAccountId: string): EmailSignatureOption[] {
   const account = accounts.find((candidate) => candidate.id === selectedAccountId) ?? accounts[0];
   const sender = account?.emailAddress || "Sales team";
+  const defaultSignatureId = account?.defaultSignatureId;
   const availableSignatures = signatures
     .filter((signature) => signature.active && (!signature.accountId || signature.accountId === selectedAccountId))
     .sort((left, right) =>
+      Number(right.id === defaultSignatureId) - Number(left.id === defaultSignatureId) ||
       Number(Boolean(right.accountId === selectedAccountId && right.isDefault)) - Number(Boolean(left.accountId === selectedAccountId && left.isDefault)) ||
       Number(right.isDefault) - Number(left.isDefault) ||
       left.name.localeCompare(right.name)
@@ -908,9 +912,31 @@ function getEmailSignatureOptions(signatures: EmailSignature[], accounts: EmailA
     { id: noEmailSignatureId, label: "不使用签名", bodyText: "", bodyHtml: "" },
     ...availableSignatures.map((signature) => ({
       id: signature.id,
-      label: `${signature.name}${signature.isDefault ? "（默认）" : ""}${signature.accountId ? "（账户）" : ""}`,
+      label: `${signature.name}${signature.id === defaultSignatureId ? "（邮箱预设）" : signature.isDefault ? "（默认）" : ""}${signature.accountId ? "（账户）" : ""}`,
       bodyText: renderEmailSignatureTemplate(signature.bodyText, sender),
       bodyHtml: renderEmailSignatureTemplate(signature.bodyHtml || emailTextToHtml(signature.bodyText), sender)
+    }))
+  ];
+}
+
+function getEmailAccountDefaultComposeSignatureId(signatures: EmailSignature[], accounts: EmailAccount[], accountId: string): string {
+  const options = getEmailSignatureOptions(signatures, accounts, accountId);
+  return options[1]?.id ?? "";
+}
+
+function getEmailAccountSignaturePresetOptions(signatures: EmailSignature[], accountId: string): Array<{ id: string; label: string }> {
+  const availableSignatures = signatures
+    .filter((signature) => signature.active && (!signature.accountId || signature.accountId === accountId))
+    .sort((left, right) =>
+      Number(Boolean(right.accountId === accountId && right.isDefault)) - Number(Boolean(left.accountId === accountId && left.isDefault)) ||
+      Number(right.isDefault) - Number(left.isDefault) ||
+      left.name.localeCompare(right.name)
+    );
+  return [
+    { id: "", label: "不预设（按签名默认）" },
+    ...availableSignatures.map((signature) => ({
+      id: signature.id,
+      label: `${signature.name}${signature.isDefault ? "（默认）" : ""}${signature.accountId ? "（账户）" : ""}`
     }))
   ];
 }
@@ -1470,6 +1496,7 @@ function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}
     provider: "smtp_imap",
     syncEnabled: true,
     sendEnabled: true,
+    defaultSignatureId: "",
     defaultOutboundServiceId: "smtp",
     outboundServices: [
       createEmailOutboundServiceDraft("smtp", { id: "smtp" }),
@@ -1519,6 +1546,7 @@ function createEmailAccountEditDraft(account: EmailAccount, config?: SanitizedEm
     provider: account.provider,
     syncEnabled: account.syncEnabled,
     sendEnabled: account.sendEnabled,
+    defaultSignatureId: account.defaultSignatureId ?? "",
     defaultOutboundServiceId: config?.defaultOutboundServiceId ?? "smtp",
     ...(outboundServices ? { outboundServices } : {}),
     syncProtocol: inbound?.syncProtocol ?? "imap",
@@ -2066,7 +2094,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     subject: "",
     bodyText: "",
     bodyHtml: "",
-    signatureId: "",
+    signatureId: getEmailAccountDefaultComposeSignatureId(props.emailSignatures, props.emailAccounts, props.emailAccounts[0]?.id ?? ""),
     productIds: [],
     attachments: [],
     scheduledSendAt: "",
@@ -2727,7 +2755,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setMediaAssets(props.mediaAssets);
     setEmailDraft((current) => {
       const accountId = current.accountId || props.emailAccounts[0]?.id || "";
-      return accountId === current.accountId ? current : clearEmailDraftAiProvenance({ ...current, accountId });
+      return accountId === current.accountId
+        ? current
+        : clearEmailDraftAiProvenance({
+            ...current,
+            accountId,
+            signatureId: getEmailAccountDefaultComposeSignatureId(props.emailSignatures, props.emailAccounts, accountId)
+          });
     });
     const preserveComposeDraft = Boolean(emailComposeOpenRequestKey && !routeEmailThreadId);
     const preferredThreadId = routeEmailThreadId || selectedEmailThreadId;
@@ -2781,10 +2815,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailDetailThreadId("");
     setEmailWorkspaceView("mail");
     setEmailAiResult(null);
-    setEmailDraft((current) =>
-      clearEmailDraftAiProvenance({
+    setEmailDraft((current) => {
+      const accountId = current.accountId || props.emailAccounts.find(canSelectEmailAccountForSending)?.id || "";
+      return clearEmailDraftAiProvenance({
         ...current,
-        accountId: current.accountId || props.emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
+        accountId,
+        signatureId: getEmailAccountDefaultComposeSignatureId(props.emailSignatures, props.emailAccounts, accountId),
         recordId: routeEmailComposeRecordId || current.recordId,
         linkedRecordIds: uniqueEmailLinkedRecordIds([routeEmailComposeRecordId, ...(current.linkedRecordIds ?? []), current.recordId], records),
         to: routeEmailComposeTo || current.to,
@@ -2795,10 +2831,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         bodyText: "",
         bodyHtml: "",
         attachments: []
-      })
-    );
+      });
+    });
     setEmailComposeOpenRequestKey(composeRouteKey);
-  }, [activeNav, props.emailAccounts, records, routeEmailCompose, routeEmailComposeKey, routeEmailComposeRecordId, routeEmailComposeTo]);
+  }, [activeNav, props.emailAccounts, props.emailSignatures, records, routeEmailCompose, routeEmailComposeKey, routeEmailComposeRecordId, routeEmailComposeTo]);
 
   useEffect(() => {
     setSelectedImportPresetId((current) => (activeImportPresets.some((preset) => preset.id === current) ? current : ""));
@@ -4211,13 +4247,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         provider: emailAccountDraft.provider,
         syncEnabled: emailAccountDraft.syncEnabled,
         sendEnabled: emailAccountDraft.sendEnabled,
-        status: "active"
-        ,
+        defaultSignatureId: emailAccountDraft.defaultSignatureId || null,
+        status: "active",
         connectionConfig: buildEmailConnectionConfig(emailAccountDraft)
       }
     });
     setEmailAccounts((current) => [account, ...current.filter((candidate) => candidate.id !== account.id)]);
-    setEmailDraft((current) => clearEmailDraftAiProvenance({ ...current, accountId: account.id }));
+    setEmailDraft((current) => clearEmailDraftAiProvenance({ ...current, accountId: account.id, signatureId: getEmailAccountDefaultComposeSignatureId(emailSignatures, [account, ...emailAccounts], account.id) }));
     setEmailAccountDraft(createEmptyEmailAccountDraft());
     setMessage(`已创建邮箱账户：${account.emailAddress}`);
   }
@@ -4324,6 +4360,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       provider: emailAccountDraft.provider,
       syncEnabled: emailAccountDraft.syncEnabled,
       sendEnabled: emailAccountDraft.sendEnabled,
+      defaultSignatureId: emailAccountDraft.defaultSignatureId || null,
       ...(connectionConfig ? { connectionConfig } : {})
     });
     setEmailAccountDraft(createEmptyEmailAccountDraft());
@@ -4406,10 +4443,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailDetailThreadId("");
     setEmailAiResult(null);
     setEmailComposeOpenRequestKey("");
-    setEmailDraft((current) =>
-      clearEmailDraftAiProvenance({
+    setEmailDraft((current) => {
+      const accountId = current.accountId || emailAccounts.find(canSelectEmailAccountForSending)?.id || "";
+      return clearEmailDraftAiProvenance({
         ...current,
-        accountId: current.accountId || emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
+        accountId,
+        signatureId: getEmailAccountDefaultComposeSignatureId(emailSignatures, emailAccounts, accountId),
         recordId: record.id,
         linkedRecordIds: uniqueEmailLinkedRecordIds([record.id, ...(current.linkedRecordIds ?? [])], [record, ...records]),
         to: emailAddress,
@@ -4420,8 +4459,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         bodyText: "",
         bodyHtml: "",
         attachments: []
-      })
-    );
+      });
+    });
     setEmailWorkspaceView("mail");
     setActiveNav("email");
     router.push(`${crmPathForNav("email")}?${composeParams.toString()}`);
@@ -4933,7 +4972,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       linkedRecordIds: [],
       bodyText: "",
       bodyHtml: "",
-      signatureId: "",
+      signatureId: getEmailAccountDefaultComposeSignatureId(emailSignatures, emailAccounts, current.accountId),
       productIds: [],
       replyOriginalBodyText: undefined,
       replyOriginalBodyHtml: undefined,
@@ -5056,6 +5095,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         accountEmail: account?.emailAddress,
         recordId: replyLinkedRecordIds[0] ?? ""
       }),
+      signatureId: getEmailAccountDefaultComposeSignatureId(emailSignatures, emailAccounts, message.accountId),
       linkedRecordIds: replyLinkedRecordIds,
       aiAssisted: false,
       productIds: current.productIds ?? [],
@@ -5313,6 +5353,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     await fetchJson(`/api/email/signatures/${signature.id}`, { method: "DELETE" });
     setEmailSignatures((current) => current.filter((candidate) => candidate.id !== signature.id));
+    setEmailAccounts((current) => current.map((account) => (account.defaultSignatureId === signature.id ? { ...account, defaultSignatureId: undefined } : account)));
+    setEmailAccountDraft((current) => (current.defaultSignatureId === signature.id ? { ...current, defaultSignatureId: "" } : current));
     setEmailSignatureDraft((current) => (current.editingSignatureId === signature.id ? createEmptyEmailSignatureDraft() : current));
     setEmailDraft((current) => (current.signatureId === signature.id ? clearEmailDraftAiProvenance({ ...current, signatureId: noEmailSignatureId }) : current));
     showSuccess(`邮件签名已删除：${signature.name}`);
@@ -8745,6 +8787,10 @@ function EmailWorkspace({
   const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
   const selectedProviderSetupVisibility = getEmailProviderSetupVisibility(accountDraft.provider);
   const editingEmailAccount = accountDraft.editingAccountId ? accounts.find((account) => account.id === accountDraft.editingAccountId) : undefined;
+  const accountSignaturePresetOptions = useMemo(
+    () => getEmailAccountSignaturePresetOptions(signatures, accountDraft.editingAccountId ?? ""),
+    [accountDraft.editingAccountId, signatures]
+  );
   const selectedEmailAiPurposeEnabled = isEmailAiPurposeEnabled(aiSettings.features, aiPurpose);
   const enabledEmailAiAutomationCount = [aiSettings.features.auto_translate, aiSettings.features.auto_context_analysis, aiSettings.features.auto_summarize].filter(Boolean).length;
   const activeKnowledgeArticleCount = knowledgeArticles.filter((article) => article.active).length;
@@ -9308,7 +9354,7 @@ function EmailWorkspace({
     const selectedAccountCanSend = selectedMailboxAccountId !== allEmailAccountsKey && activeAccounts.some((account) => account.id === selectedMailboxAccountId);
     const accountId = selectedAccountCanSend ? selectedMailboxAccountId : emailDraft.accountId || activeAccounts[0]?.id || "";
     if (accountId && accountId !== emailDraft.accountId) {
-      onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId }));
+      onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId, signatureId: getEmailAccountDefaultComposeSignatureId(signatures, accounts, accountId) }));
     }
     setComposeCcVisible(Boolean(emailDraft.cc.trim()));
     setComposeBccVisible(Boolean(emailDraft.bcc.trim()));
@@ -9749,6 +9795,21 @@ function EmailWorkspace({
             {listEmailProviderCapabilities().map((provider) => (
               <option key={provider.key} value={provider.key}>
                 {provider.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="subtle">默认签名</span>
+          <select
+            className="select"
+            data-testid="email-account-default-signature"
+            value={accountDraft.defaultSignatureId}
+            onChange={(event) => onAccountDraftChange({ ...accountDraft, defaultSignatureId: event.target.value })}
+          >
+            {accountSignaturePresetOptions.map((signature) => (
+              <option key={signature.id || "none"} value={signature.id}>
+                {signature.label}
               </option>
             ))}
           </select>
@@ -11221,7 +11282,21 @@ function EmailWorkspace({
                 <div className="email-compose-grid">
                   <label>
                     <span className="subtle">发件账户</span>
-                    <select className="select" data-testid="email-compose-account" value={emailDraft.accountId} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, accountId: event.target.value }))}>
+                    <select
+                      className="select"
+                      data-testid="email-compose-account"
+                      value={emailDraft.accountId}
+                      onChange={(event) => {
+                        const accountId = event.target.value;
+                        onEmailDraftChange(
+                          clearEmailDraftAiProvenance({
+                            ...emailDraft,
+                            accountId,
+                            signatureId: getEmailAccountDefaultComposeSignatureId(signatures, accounts, accountId)
+                          })
+                        );
+                      }}
+                    >
                       <option value="">选择账户</option>
                       {activeAccounts.map((account) => (
                         <option key={account.id} value={account.id}>{account.emailAddress}</option>

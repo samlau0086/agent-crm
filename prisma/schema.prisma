@@ -628,6 +628,7 @@ model EmailAccount {
   status        String         @default("draft")
   syncEnabled   Boolean        @default(false)
   sendEnabled   Boolean        @default(false)
+  defaultSignatureId String?
   encryptedConnectionConfig String?
   lastConnectionError String?
   createdById   String
@@ -650,6 +651,7 @@ model EmailAccount {
   @@unique([workspaceId, emailAddress])
   @@index([workspaceId, status])
   @@index([workspaceId, provider])
+  @@index([workspaceId, defaultSignatureId])
   @@index([workspaceId, createdById])
 }
 
