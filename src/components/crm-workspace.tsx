@@ -8732,12 +8732,14 @@ function EmailWorkspace({
   const [category, setCategory] = useState<EmailCategoryKey>(routeCategory);
   const [mailMode, setMailMode] = useState<EmailMailMode>(routeEmailThreadIdToMode(detailThreadId, routeMailMode));
   const [selectedDetailMessageId, setSelectedDetailMessageId] = useState(detailMessageId);
+  const [selectedDetailViewMode, setSelectedDetailViewMode] = useState<EmailListDisplayMode>(() => (routeListDisplayMode === "message" && detailMessageId ? "message" : "thread"));
   const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(routeAccountId);
   const [mailboxAccountsCollapsed, setMailboxAccountsCollapsed] = useState(true);
   const [searchQuery, setSearchQuery] = useState(routeSearch);
   const [labelFilter, setLabelFilter] = useState(routeLabel);
   const [emailListDisplayMode, setEmailListDisplayMode] = useState<EmailListDisplayMode>(routeListDisplayMode);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
+  const [expandedEmailThreadIds, setExpandedEmailThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const [trashDisplayMessageIds, setTrashDisplayMessageIds] = useState<EmailTrashDisplayMessageIds>({});
   const [externalImageThreadIds, setExternalImageThreadIds] = useState<Set<string>>(() => new Set());
@@ -8747,7 +8749,7 @@ function EmailWorkspace({
   const selectedDetailMessage = selectedDetailMessageId ? selectedMessages.find((message) => message.id === selectedDetailMessageId) : undefined;
   const selectedDetailHeadingMessage = selectedDetailMessage ?? selectedDisplayMessage;
   const selectedThreadDetailMessages =
-    emailListDisplayMode === "message"
+    selectedDetailViewMode === "message"
       ? selectedDetailMessage
         ? [selectedDetailMessage]
         : selectedDisplayMessage
@@ -9205,6 +9207,15 @@ function EmailWorkspace({
   }, [messagesByThread, selectedThreadId]);
 
   useEffect(() => {
+    if (mailMode !== "detail" || selectedDetailViewMode !== "thread" || !selectedDetailMessageId) {
+      return;
+    }
+    window.setTimeout(() => {
+      document.getElementById(`email-message-card-${selectedDetailMessageId}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, 0);
+  }, [mailMode, selectedDetailMessageId, selectedDetailViewMode]);
+
+  useEffect(() => {
     if (!detailThreadId) {
       return;
     }
@@ -9475,7 +9486,16 @@ function EmailWorkspace({
   }
 
   function openThreadDetail(threadId: string, messageId = "") {
-    applyEmailRoute({ mailMode: "detail", threadId, messageId: emailListDisplayMode === "message" ? messageId : "" });
+    setSelectedDetailViewMode("thread");
+    applyEmailRoute({ mailMode: "detail", threadId, messageId });
+    patchThreadUiState([threadId], { read: true });
+    persistThreadState(threadId, { read: true });
+    onSelectThread(threadId);
+  }
+
+  function openSingleMessageDetail(threadId: string, messageId: string) {
+    setSelectedDetailViewMode("message");
+    applyEmailRoute({ mailMode: "detail", threadId, messageId });
     patchThreadUiState([threadId], { read: true });
     persistThreadState(threadId, { read: true });
     onSelectThread(threadId);
@@ -10550,81 +10570,174 @@ function EmailWorkspace({
                   const sendStatus = getEmailThreadSendStatus(messages, displayMessage);
                   const rowSubject = displayMessage?.subject || thread.subject;
                   const rowTime = displayMessage ? emailMessageTimeValue(displayMessage) : emailThreadTimeValue(thread);
+                  const isThreadListRow = emailListDisplayMode === "thread";
+                  const threadSubMessages = [...(displayMessages.length ? displayMessages : messages)].sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)));
+                  const hasSubMessages = isThreadListRow && threadSubMessages.length > 0;
+                  const isExpanded = expandedEmailThreadIds.has(thread.id);
+                  const parentTargetMessage = displayMessage ?? threadSubMessages[0];
                   return (
-                    <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`} key={key}>
-                      <input
-                        aria-label={`选择 ${thread.subject}`}
-                        checked={selectedThreadIds.has(thread.id)}
-                        type="checkbox"
-                        onChange={(event) => toggleThreadSelection(thread.id, event.target.checked)}
-                      />
-                      <button
-                        className={`gmail-icon-toggle ${state.starred ? "active" : ""}`}
-                        aria-label="星标"
-                        type="button"
-                        onClick={() => {
-                          const starred = !state.starred;
-                          patchThreadUiState([thread.id], { starred });
-                          persistThreadState(thread.id, { starred });
-                        }}
-                      >
-                        <Star size={15} />
-                      </button>
-                      <button
-                        className={`gmail-icon-toggle ${state.important ? "active" : ""}`}
-                        aria-label="重要"
-                        type="button"
-                        onClick={() => {
-                          const important = !state.important;
-                          patchThreadUiState([thread.id], { important });
-                          persistThreadState(thread.id, { important });
-                        }}
-                      >
-                        <Flag size={15} />
-                      </button>
-                      <button className="gmail-thread-open" data-testid={`email-thread-row-${thread.id}`} type="button" onClick={() => openThreadDetail(thread.id, displayMessage?.id ?? "")}>
-                        <span className="gmail-thread-sender">{emailMessageParticipantLabel(displayMessage, thread, activeAccounts)}</span>
-                        <span className="gmail-thread-subject">{rowSubject}</span>
-                        <span className="gmail-thread-snippet">{snippet}</span>
-                        <span className="gmail-thread-labels">
-                          {labels.map((label) => <span className="badge" key={label}>{label}</span>)}
-                          {isSnoozed && state.snoozedUntil ? <span className="badge">稍后 {formatDate(state.snoozedUntil)}</span> : null}
-                          {sendStatus ? (
-                            <span className={`badge email-send-status email-send-status-${sendStatus.key}`} data-testid="email-thread-send-status" title={sendStatus.title}>
-                              {sendStatus.icon === "calendar" ? <CalendarClock size={12} /> : <Send size={12} />}
-                              {sendStatus.label}
-                            </span>
-                          ) : null}
-                        </span>
-                      </button>
-                      <span className="gmail-thread-date">{formatDate(rowTime)}</span>
-                      <div className="gmail-row-actions">
-                        {state.archived ? (
-                          <button className="icon-button" aria-label="取消归档" type="button" onClick={() => performMailboxAction("unarchive", [thread.id])}><RotateCcw size={15} /></button>
-                        ) : (
-                          <button className="icon-button" aria-label="归档" type="button" onClick={() => performMailboxAction("archive", [thread.id])}><Archive size={15} /></button>
-                        )}
-                        {state.deleted || mailbox === "trash" ? (
-                          <>
-                            <button className="icon-button" aria-label="恢复" type="button" onClick={() => performMailboxAction("restore", [thread.id])}><RotateCcw size={15} /></button>
-                            <button className="icon-button" data-testid={`email-thread-row-permanent-delete-${thread.id}`} aria-label="彻底删除" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); void permanentlyDeleteThreads([thread.id]); }}><Trash2 size={15} /></button>
-                          </>
-                        ) : (
-                          <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
-                        )}
-                        {labelFilter && getEmailThreadUserLabels(thread, state).some((label) => label.toLowerCase() === labelFilter.toLowerCase()) ? (
-                          <button className="icon-button" aria-label={`移除标签 ${labelFilter}`} title={`移除标签 ${labelFilter}`} type="button" onClick={() => removeEmailLabel(thread.id, labelFilter)}>
-                            <XCircle size={15} />
+                    <Fragment key={key}>
+                      <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isThreadListRow ? "parent-row" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`}>
+                        <input
+                          aria-label={`选择 ${thread.subject}`}
+                          checked={selectedThreadIds.has(thread.id)}
+                          type="checkbox"
+                          onChange={(event) => toggleThreadSelection(thread.id, event.target.checked)}
+                        />
+                        {isThreadListRow ? (
+                          <button
+                            className="gmail-icon-toggle gmail-accordion-toggle"
+                            aria-label={isExpanded ? "折叠子邮件" : "展开子邮件"}
+                            aria-expanded={isExpanded}
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setExpandedEmailThreadIds((current) => {
+                                const next = new Set(current);
+                                if (next.has(thread.id)) {
+                                  next.delete(thread.id);
+                                } else {
+                                  next.add(thread.id);
+                                }
+                                return next;
+                              });
+                            }}
+                            disabled={!hasSubMessages}
+                          >
+                            {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                           </button>
-                        ) : null}
-                        {isSnoozed ? (
-                          <button className="icon-button" aria-label="取消稍后提醒" title="取消稍后提醒" type="button" onClick={() => performMailboxAction("unsnooze", [thread.id])}><RotateCcw size={15} /></button>
                         ) : (
-                          <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => performMailboxAction("snooze", [thread.id])}><Clock3 size={15} /></button>
+                          <button
+                            className={`gmail-icon-toggle ${state.starred ? "active" : ""}`}
+                            aria-label="星标"
+                            type="button"
+                            onClick={() => {
+                              const starred = !state.starred;
+                              patchThreadUiState([thread.id], { starred });
+                              persistThreadState(thread.id, { starred });
+                            }}
+                          >
+                            <Star size={15} />
+                          </button>
                         )}
-                        <button className="icon-button" aria-label={isRead ? "标记未读" : "标记已读"} type="button" onClick={() => performMailboxAction(isRead ? "unread" : "read", [thread.id])}>{isRead ? <Mail size={15} /> : <MailOpen size={15} />}</button>
-                      </div>
-                    </article>
+                        <button
+                          className={`gmail-icon-toggle ${isThreadListRow ? (state.starred ? "active" : "") : (state.important ? "active" : "")}`}
+                          aria-label={isThreadListRow ? "星标" : "重要"}
+                          type="button"
+                          onClick={() => {
+                            if (isThreadListRow) {
+                              const starred = !state.starred;
+                              patchThreadUiState([thread.id], { starred });
+                              persistThreadState(thread.id, { starred });
+                            } else {
+                              const important = !state.important;
+                              patchThreadUiState([thread.id], { important });
+                              persistThreadState(thread.id, { important });
+                            }
+                          }}
+                        >
+                          {isThreadListRow ? <Star size={15} /> : <Flag size={15} />}
+                        </button>
+                        <button
+                          className="gmail-thread-open"
+                          data-testid={`email-thread-row-${thread.id}`}
+                          type="button"
+                          onClick={() => {
+                            if (isThreadListRow) {
+                              openThreadDetail(thread.id, parentTargetMessage?.id ?? "");
+                            } else {
+                              openSingleMessageDetail(thread.id, displayMessage?.id ?? "");
+                            }
+                          }}
+                        >
+                          <span className="gmail-thread-sender">{emailMessageParticipantLabel(displayMessage, thread, activeAccounts)}</span>
+                          <span className="gmail-thread-subject">{rowSubject}</span>
+                          <span className="gmail-thread-snippet">{snippet}</span>
+                          <span className="gmail-thread-labels">
+                            {isThreadListRow && threadSubMessages.length > 1 ? <span className="badge">{threadSubMessages.length} 封</span> : null}
+                            {labels.map((label) => <span className="badge" key={label}>{label}</span>)}
+                            {isSnoozed && state.snoozedUntil ? <span className="badge">稍后 {formatDate(state.snoozedUntil)}</span> : null}
+                            {sendStatus ? (
+                              <span className={`badge email-send-status email-send-status-${sendStatus.key}`} data-testid="email-thread-send-status" title={sendStatus.title}>
+                                {sendStatus.icon === "calendar" ? <CalendarClock size={12} /> : <Send size={12} />}
+                                {sendStatus.label}
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+                        <span className="gmail-thread-date">{formatDate(rowTime)}</span>
+                        <div className="gmail-row-actions">
+                          {state.archived ? (
+                            <button className="icon-button" aria-label="取消归档" type="button" onClick={() => performMailboxAction("unarchive", [thread.id])}><RotateCcw size={15} /></button>
+                          ) : (
+                            <button className="icon-button" aria-label="归档" type="button" onClick={() => performMailboxAction("archive", [thread.id])}><Archive size={15} /></button>
+                          )}
+                          {state.deleted || mailbox === "trash" ? (
+                            <>
+                              <button className="icon-button" aria-label="恢复" type="button" onClick={() => performMailboxAction("restore", [thread.id])}><RotateCcw size={15} /></button>
+                              <button className="icon-button" data-testid={`email-thread-row-permanent-delete-${thread.id}`} aria-label="彻底删除" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); void permanentlyDeleteThreads([thread.id]); }}><Trash2 size={15} /></button>
+                            </>
+                          ) : (
+                            <button className="icon-button" aria-label="删除" type="button" onClick={() => performMailboxAction("delete", [thread.id])}><Trash2 size={15} /></button>
+                          )}
+                          {labelFilter && getEmailThreadUserLabels(thread, state).some((label) => label.toLowerCase() === labelFilter.toLowerCase()) ? (
+                            <button className="icon-button" aria-label={`移除标签 ${labelFilter}`} title={`移除标签 ${labelFilter}`} type="button" onClick={() => removeEmailLabel(thread.id, labelFilter)}>
+                              <XCircle size={15} />
+                            </button>
+                          ) : null}
+                          {isSnoozed ? (
+                            <button className="icon-button" aria-label="取消稍后提醒" title="取消稍后提醒" type="button" onClick={() => performMailboxAction("unsnooze", [thread.id])}><RotateCcw size={15} /></button>
+                          ) : (
+                            <button className="icon-button" aria-label="稍后提醒" title="稍后提醒" type="button" onClick={() => performMailboxAction("snooze", [thread.id])}><Clock3 size={15} /></button>
+                          )}
+                          <button className="icon-button" aria-label={isRead ? "标记未读" : "标记已读"} type="button" onClick={() => performMailboxAction(isRead ? "unread" : "read", [thread.id])}>{isRead ? <Mail size={15} /> : <MailOpen size={15} />}</button>
+                        </div>
+                      </article>
+                      {isThreadListRow && isExpanded
+                        ? threadSubMessages.map((message) => {
+                            const subSendStatus = getEmailMessageSendStatus(message);
+                            const subLabels = getEmailThreadDisplayLabels(thread, state, [message]);
+                            return (
+                              <article className={`gmail-thread-row gmail-thread-sub-row ${selectedDetailViewMode === "message" && selectedThreadId === thread.id && selectedDetailMessageId === message.id ? "selected" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`} key={`${thread.id}:${message.id}`}>
+                                <span className="gmail-sub-row-spacer" aria-hidden="true" />
+                                <span className="gmail-sub-row-marker" aria-hidden="true" />
+                                <button
+                                  className={`gmail-icon-toggle ${state.important ? "active" : ""}`}
+                                  aria-label="重要"
+                                  type="button"
+                                  onClick={() => {
+                                    const important = !state.important;
+                                    patchThreadUiState([thread.id], { important });
+                                    persistThreadState(thread.id, { important });
+                                  }}
+                                >
+                                  <Flag size={15} />
+                                </button>
+                                <button className="gmail-thread-open" data-testid={`email-message-row-${message.id}`} type="button" onClick={() => openSingleMessageDetail(thread.id, message.id)}>
+                                  <span className="gmail-thread-sender">{emailMessageParticipantLabel(message, thread, activeAccounts)}</span>
+                                  <span className="gmail-thread-subject">{message.subject || thread.subject}</span>
+                                  <span className="gmail-thread-snippet">{repairEmailMojibake(message.bodyText || "")}</span>
+                                  <span className="gmail-thread-labels">
+                                    {subLabels.map((label) => <span className="badge" key={label}>{label}</span>)}
+                                    {subSendStatus ? (
+                                      <span className={`badge email-send-status email-send-status-${subSendStatus.key}`} data-testid="email-thread-send-status" title={subSendStatus.title}>
+                                        {subSendStatus.icon === "calendar" ? <CalendarClock size={12} /> : <Send size={12} />}
+                                        {subSendStatus.label}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </button>
+                                <span className="gmail-thread-date">{formatDate(emailMessageTimeValue(message))}</span>
+                                <div className="gmail-row-actions">
+                                  <button className="icon-button" aria-label="回复" type="button" onClick={() => { onReplyToMessage(message); openComposePopup(); }}><Send size={15} /></button>
+                                  <button className="icon-button" aria-label={isRead ? "标记未读" : "标记已读"} type="button" onClick={() => performMailboxAction(isRead ? "unread" : "read", [thread.id])}>{isRead ? <Mail size={15} /> : <MailOpen size={15} />}</button>
+                                </div>
+                              </article>
+                            );
+                          })
+                        : null}
+                    </Fragment>
                   );
                 })}
                 {visibleRows.length === 0 ? <div className="empty-state">{searchQuery ? "没有匹配的邮件" : "当前邮箱为空"}</div> : null}
@@ -10807,7 +10920,7 @@ function EmailWorkspace({
                       const messageHasExternalImages = emailHtmlHasExternalImages(message.bodyHtml ?? "");
                       const sendStatus = getEmailMessageSendStatus(message);
                       return (
-                      <article className="email-message-card gmail-message-card" key={message.id}>
+                      <article className="email-message-card gmail-message-card" id={`email-message-card-${message.id}`} key={message.id}>
                         <div className="email-message-header">
                           <div>
                             <strong>{message.from}</strong>

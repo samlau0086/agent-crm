@@ -3153,6 +3153,23 @@ body.deal-pipeline-dragging {
   font-weight: 750;
 }
 
+.gmail-thread-row.parent-row {
+  background: #ffffff;
+}
+
+.gmail-thread-row.parent-row + .gmail-thread-sub-row {
+  border-top: 0;
+}
+
+.gmail-thread-sub-row {
+  min-height: 34px;
+  background: #fbfdff;
+}
+
+.gmail-thread-sub-row .gmail-thread-open {
+  min-height: 34px;
+}
+
 .gmail-icon-toggle {
   display: inline-flex;
   align-items: center;
@@ -3173,6 +3190,29 @@ body.deal-pipeline-dragging {
 
 .gmail-icon-toggle.active {
   color: #f4b400;
+}
+
+.gmail-accordion-toggle {
+  color: #5f6368;
+}
+
+.gmail-accordion-toggle:disabled {
+  color: #cbd5e1;
+  cursor: default;
+}
+
+.gmail-sub-row-spacer {
+  width: 28px;
+  height: 28px;
+}
+
+.gmail-sub-row-marker {
+  justify-self: center;
+  width: 18px;
+  height: 18px;
+  border-left: 2px solid #dbe3ea;
+  border-bottom: 2px solid #dbe3ea;
+  border-bottom-left-radius: 6px;
 }
 
 .gmail-thread-open {
