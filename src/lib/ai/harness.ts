@@ -54,6 +54,7 @@ export function buildAgentPrompt(request: AiAgentRunRequest, agent: AiAgentSetti
     `Agent.md:\n${agent.agentMarkdown}`,
     request.context ? `Context JSON:\n${truncate(JSON.stringify(request.context), Math.max(1000, budget - agent.agentMarkdown.length - request.task.length))}` : undefined,
     `Tool policy:\n${JSON.stringify(agent.toolPolicy ?? {})}`,
+    "Default language: For internal CRM outputs such as summaries, recommendations, analyses, reminders, query answers, and smart suggestions, write Simplified Chinese by default unless the user explicitly requests another language or the output is customer-facing content with a requested locale.",
     "Return only content that matches the requested output schema. Do not claim that CRM data was changed unless a trusted tool result in context says so."
   ].filter(Boolean);
   return truncate(blocks.join("\n\n"), budget + agent.agentMarkdown.length + 1000);
@@ -75,7 +76,8 @@ async function completeAgent(prompt: string, config: AiProviderConfig, maxOutput
         messages: [
           {
             role: "system",
-            content: "You are an AI agent harness in a private CRM. Follow the supplied Agent.md, context policy, tool policy, and output schema. Do not perform side effects."
+            content:
+              "You are an AI agent harness in a private CRM. Follow the supplied Agent.md, context policy, tool policy, and output schema. Do not perform side effects. For internal CRM outputs, use Simplified Chinese by default unless explicitly requested otherwise."
           },
           { role: "user", content: prompt }
         ]
@@ -129,12 +131,12 @@ function buildAgentResult(
 function buildLocalAgentOutput(request: AiAgentRunRequest, agent: AiAgentSetting): string {
   const contextKeys = request.context ? Object.keys(request.context).slice(0, 12).join(", ") : "none";
   return [
-    `${agent.name} local fallback`,
+    `${agent.name} 本地降级输出`,
     "",
-    `Task: ${request.task}`,
-    request.userPrompt ? `User prompt: ${request.userPrompt}` : "",
-    `Context keys: ${contextKeys}`,
-    "No provider API key is configured or this was a dry run. The harness did not modify CRM data."
+    `任务：${request.task}`,
+    request.userPrompt ? `用户提示：${request.userPrompt}` : "",
+    `上下文键：${contextKeys}`,
+    "未配置 Provider API key，或本次为 dry run。AI 执行器没有修改 CRM 数据。"
   ]
     .filter(Boolean)
     .join("\n");

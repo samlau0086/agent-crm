@@ -25,7 +25,7 @@ async function postApiMetricsHandler(request: NextRequest) {
       await runAiAgent(
         {
           agentKey: recordSummaryAgentKey,
-          task: "Summarize this CRM record for a sales user. Keep it read-only and source-grounded.",
+          task: "用简体中文为销售用户总结这条 CRM 记录。保持只读、基于来源，不要编造事实。",
           context: {
             record: { id: record.id, objectKey: record.objectKey, title: record.title, stageKey: record.stageKey, ownerId: record.ownerId, data: record.data },
             fields: fields.map((field) => ({ key: field.key, label: field.label, type: field.type })),

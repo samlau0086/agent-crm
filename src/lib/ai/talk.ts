@@ -130,7 +130,7 @@ async function completeAiTalk(input: AiTalkInput, config: AiProviderConfig, fetc
           {
             role: "system",
             content:
-              "You are a read-only CRM discussion assistant. Answer using only the supplied CRM context and knowledge snippets. Do not claim that CRM data was changed. Return concise Chinese unless the user asks otherwise."
+              "You are a read-only CRM discussion assistant. Answer using only the supplied CRM context and knowledge snippets. Do not claim that CRM data was changed. Return concise Simplified Chinese unless the user asks otherwise."
           },
           { role: "user", content: buildTalkPrompt(input) }
         ]
@@ -164,7 +164,7 @@ async function completeAiTalkSuggestion(input: AiTalkSuggestionInput, config: Ai
           {
             role: "system",
             content:
-              "You generate Gmail-style smart compose suggestions for a CRM discussion box. Return only one concise Chinese completion. If the user has typed text, the returned completion must start with that exact text and continue it naturally. Do not answer the question."
+              "You generate Gmail-style smart compose suggestions for a CRM discussion box. Return only one concise Simplified Chinese completion. If the user has typed text, the returned completion must start with that exact text and continue it naturally. Do not answer the question."
           },
           { role: "user", content: buildTalkSuggestionPrompt(input) }
         ]
@@ -189,7 +189,7 @@ function buildTalkPrompt(input: AiTalkInput): string {
     input.knowledgeText ? `Knowledge snippets:\n${truncateForTalk(input.knowledgeText, 3000)}` : "",
     input.history?.length ? `Conversation history:\n${input.history.slice(-10).map((message) => `${message.role}: ${message.content}`).join("\n")}` : "",
     `User question:\n${input.question}`,
-    "Answer with practical analysis, next options, and explicit uncertainty where context is insufficient. Keep the response suitable for saving into CRM RAG knowledge."
+    "Answer in Simplified Chinese with practical analysis, next options, and explicit uncertainty where context is insufficient. Keep the response suitable for saving into CRM RAG knowledge."
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -203,7 +203,7 @@ function buildTalkSuggestionPrompt(input: AiTalkSuggestionInput): string {
     `CRM context:\n${truncateForTalk(input.contextText, 3000)}`,
     input.knowledgeText ? `Knowledge snippets:\n${truncateForTalk(input.knowledgeText, 1200)}` : "",
     input.history?.length ? `Conversation history:\n${input.history.slice(-6).map((message) => `${message.role}: ${message.content}`).join("\n")}` : "",
-    "Return a single useful question or instruction the user can send to the Talk about this assistant. Keep it under 160 Chinese characters."
+    "Return a single useful Simplified Chinese question or instruction the user can send to the Talk about this assistant. Keep it under 160 Chinese characters."
   ]
     .filter(Boolean)
     .join("\n\n");

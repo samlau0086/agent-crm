@@ -44,7 +44,7 @@ async function postApiMetricsHandler(request: NextRequest) {
       await runAiAgent(
         {
           agentKey: aiQueryPlannerAgentKey,
-          task: "Answer the user's read-only CRM question using only supplied candidate records and field definitions.",
+          task: "用简体中文回答用户的只读 CRM 问题，只能使用提供的候选记录和字段定义。",
           userPrompt: body.question,
           context: {
             question: body.question,

@@ -8263,7 +8263,7 @@ export class PrismaCrmRepository {
     const result = await runAiAgent(
       {
         agentKey: smartReminderPlannerAgentKey,
-        task: "Generate today's best portfolio, data-quality, customer-level, pipeline, and follow-up actions. Optimize overall sales output. Return JSON only.",
+        task: "生成今日最佳行动、组合运营、数据质量、客户等级、管道推进和跟进行动建议。优化整体销售产出。只返回 JSON，title、body、actionLabel 使用简体中文。",
         context: {
           user: payload.user,
           portfolioMetrics: payload.portfolioMetrics,

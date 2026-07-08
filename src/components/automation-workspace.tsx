@@ -2186,7 +2186,7 @@ function defaultGraphNodeConfig(type: WorkflowNodeType, config: Record<string, u
   if (type === "loop") return { collectionField: "items", maxIterations: 50, continueLabel: "Process current item", breakLabel: "Exit loop" };
   if (type === "wait_delay") return { delayAmount: 2, delayUnit: "days" };
   if (type === "wait_reply") return { lookbackDays: 7, replySource: "email" };
-  if (type === "ai_agent") return { goal: "Analyze context and choose the next best follow-up action.", useKnowledge: true, allowedTools: ["create_task", "create_email_draft", "notify"], autoExecuteTools: false, requireHumanReview: true };
+  if (type === "ai_agent") return { goal: "用简体中文分析上下文，并选择下一步最佳跟进行动。", useKnowledge: true, allowedTools: ["create_task", "create_email_draft", "notify"], autoExecuteTools: false, requireHumanReview: true };
   if (type === "create_email_draft") return { mode: "draft", to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "", aiAssisted: true };
   if (type === "send_email") return { mode: "queued", to: ["{{record.data.email}}"], subject: "Follow up {{record.title}}", bodyText: "" };
   if (type === "create_task") return { activityType: "task", title: "Follow up", body: "", dueInDays: 2, assigneeMode: "record_owner", priority: "normal", preventDuplicate: true };

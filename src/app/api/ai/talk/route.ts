@@ -36,8 +36,8 @@ async function postApiMetricsHandler(request: NextRequest) {
         agentKey: talkAboutThisAgentKey,
         task:
           body.mode === "suggestion"
-            ? "Generate a single Gmail-style smart compose continuation for the Talk about this input. Return only the completion text."
-            : "Answer the user's CRM discussion question with practical analysis, next options, and explicit uncertainty.",
+            ? "为 Talk about this 输入生成一条简体中文的智能补全，只返回补全文本。"
+            : "用简体中文回答用户的 CRM 讨论问题，包含实用分析、下一步选项，并在上下文不足时明确说明不确定性。",
         userPrompt: body.mode === "suggestion" ? body.question : input.question,
         context: {
           targetLabel: input.targetLabel,

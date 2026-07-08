@@ -1373,6 +1373,13 @@ function getEmailThreadDisplayMessage(messages: EmailMessage[], mailbox: EmailMa
   return [...mailboxMessages].sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))[0] ?? messages.at(-1);
 }
 
+function getEmailThreadListDisplayMessage(messages: EmailMessage[], mailbox: EmailMailboxKey, preferredMessageId?: string): EmailMessage | undefined {
+  if (mailbox === "inbox" || mailbox === "all" || mailbox === "sent") {
+    return [...messages].sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))[0];
+  }
+  return getEmailThreadDisplayMessage(messages, mailbox, preferredMessageId);
+}
+
 function emailMessageParticipantLabel(message: EmailMessage | undefined, thread: EmailThread, activeAccounts: EmailAccount[]): string {
   if (!message) {
     return emailThreadSender(thread, activeAccounts);
@@ -5033,7 +5040,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         recordId: emailDraft.recordId || selectedRecord?.id,
         sourceMessageId: selectedSourceMessageId,
         targetLocale,
-        userPrompt: `Generate a concise, actionable prompt for the email drafting agent. Include recipient/customer context, desired tone, key points, current draft intent, the next sales action, and this language requirement: ${targetLanguageInstruction} Return only the prompt text, not the email body.`,
+        userPrompt: `请用简体中文生成一段简洁、可执行的邮件撰写 Agent 提示词。需要包含收件人/客户上下文、期望语气、关键要点、当前草稿意图、下一步销售动作，以及这个语言要求：${targetLanguageInstruction} 只返回提示词文本，不要返回邮件正文。`,
         sourceText,
         productIds: emailDraft.productIds?.length ? emailDraft.productIds : undefined,
         productQuery: [currentPrompt, emailDraft.subject, sourceText].filter(Boolean).join("\n").slice(0, 500) || undefined
@@ -5073,7 +5080,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         threadId: message.threadId,
         sourceMessageId: message.id,
         recordId: thread?.recordId || selectedRecord?.id || emailDraft.recordId || undefined,
-        userPrompt: purpose === "context_analysis" ? "Analyze this email and suggest the next sales action." : undefined,
+        userPrompt: purpose === "context_analysis" ? "请用简体中文分析这封邮件，并建议下一步销售行动。" : undefined,
         sourceText: message.bodyText
       }
     });
@@ -6083,54 +6090,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         disabled={isPending || isRecordSavePending}
                       />
                     ) : null}
-                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
-                      <div className="section" style={{ marginBottom: 12 }}>
-                        <div className="stage-header">
-                          <div>
-                            <strong>自动化跟进</strong>
-                            <div className="subtle">基于当前记录生成或运行客户跟进、营销培育、交易推进流程。</div>
-                          </div>
-                          <button className="secondary-button" data-testid={`record-automation-${selectedRecord.id}`} type="button" onClick={() => openAutomationForRecord(selectedRecord)}>
-                            <WorkflowIcon size={16} />
-                            为此记录创建自动化
-                          </button>
-                        </div>
-                        {selectedRecordWorkflows.length ? (
-                          <div className="record-workflow-list">
-                            {selectedRecordWorkflows.map((workflow) => (
-                              <button className="record-workflow-card" key={workflow.id} type="button" onClick={() => openAutomationForRecord(selectedRecord, workflow.id)}>
-                                <span>
-                                  <strong>{workflow.name}</strong>
-                                  <small>{workflow.goal}</small>
-                                </span>
-                                <span className={workflow.status === "active" ? "badge" : "subtle-badge"}>{workflow.status}</span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
-                        )}
-                      </div>
-                    ) : null}
-                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
-                      <SmartReminderPanel
-                        compact
-                        generating={isGeneratingSmartReminders}
-                        reminders={selectedRecordSmartReminders}
-                        title="AI 跟进提醒"
-                        emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
-                        onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
-                        onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
-                        onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
-                        onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
-                        onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
-                        onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
-                        onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
-                        onSnooze={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
-                        pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
-                        onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
-                      />
-                    ) : null}
                     {selectedRecord.objectKey === "contacts" ? (
                       <>
                         <ContactProfileEditor
@@ -6431,6 +6390,55 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </div>
                     </>
                     )}
+
+                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
+                      <div className="section" style={{ marginBottom: 12 }}>
+                        <div className="stage-header">
+                          <div>
+                            <strong>自动化跟进</strong>
+                            <div className="subtle">基于当前记录生成或运行客户跟进、营销培育、交易推进流程。</div>
+                          </div>
+                          <button className="secondary-button" data-testid={`record-automation-${selectedRecord.id}`} type="button" onClick={() => openAutomationForRecord(selectedRecord)}>
+                            <WorkflowIcon size={16} />
+                            为此记录创建自动化
+                          </button>
+                        </div>
+                        {selectedRecordWorkflows.length ? (
+                          <div className="record-workflow-list">
+                            {selectedRecordWorkflows.map((workflow) => (
+                              <button className="record-workflow-card" key={workflow.id} type="button" onClick={() => openAutomationForRecord(selectedRecord, workflow.id)}>
+                                <span>
+                                  <strong>{workflow.name}</strong>
+                                  <small>{workflow.goal}</small>
+                                </span>
+                                <span className={workflow.status === "active" ? "badge" : "subtle-badge"}>{workflow.status}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
+                        )}
+                      </div>
+                    ) : null}
+                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
+                      <SmartReminderPanel
+                        compact
+                        generating={isGeneratingSmartReminders}
+                        reminders={selectedRecordSmartReminders}
+                        title="AI 跟进提醒"
+                        emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
+                        onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+                        onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
+                        onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
+                        onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+                        onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
+                        onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
+                        onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
+                        onSnooze={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
+                        pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+                        onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
+                      />
+                    ) : null}
 
                     {selectedRecordQuickContactMethods.length > 0 && (!selectedRecordUsesActivityTabs || showContactAllSections) ? (
                       <>
@@ -8814,8 +8822,8 @@ function EmailWorkspace({
       return [{
         key: thread.id,
         thread,
-        displayMessages,
-        displayMessage: getEmailThreadDisplayMessage(displayMessages.length ? displayMessages : messages, mailbox, trashDisplayMessageIds[thread.id])
+        displayMessages: messages.length ? messages : displayMessages,
+        displayMessage: getEmailThreadListDisplayMessage(messages.length ? messages : displayMessages, mailbox, trashDisplayMessageIds[thread.id])
       }];
     });
   }, [emailListDisplayMode, labelFilter, mailbox, messagesByThread, trashDisplayMessageIds, visibleThreads]);

@@ -124,6 +124,7 @@ async function completeEmailAi(input: EmailAiGenerateInput, config: AiProviderCo
               "Product catalog is the authoritative product source; do not invent product names, features, prices, or availability when the catalog has no match.",
               "Do not claim that CRM data has been changed. Do not modify deal stage, amount, contacts, tasks, or other business records.",
               "When facts are uncertain, state that clearly.",
+              "For internal CRM outputs such as email summaries, thread analysis, recommendations, and sales suggestions, write Simplified Chinese by default unless the user explicitly requests another language.",
               "For draft emails, return the customer-facing subject and body in the requested draft language. Do not include signatures, sign-off blocks, sender placeholders, contact blocks, citations, source labels, or source-reference footers in the body.",
               "Return only JSON in the shape {\"text\":\"...\",\"suggestedSubject\":\"...\"}; suggestedSubject is only needed for draft emails."
             ].join(" ")
@@ -284,11 +285,11 @@ function buildLocalOutput(input: EmailAiGenerateInput): EmailAiGeneratedContent 
     return {
       suggestedSubject: buildSuggestedSubject(context, prompt),
       text: [
-        "Hello,",
+        "您好，",
         "",
-        "Thank you for the recent conversation. Based on your current priorities and the latest CRM history, the recommended next step is to confirm deployment constraints, open questions, and a clear follow-up date.",
+        "感谢您近期的沟通。结合当前优先事项和最新 CRM 记录，建议下一步先确认部署约束、待解问题和明确的跟进时间。",
         "",
-        "I can share the relevant details and help align the next steps. Please let me know a suitable time for the next discussion."
+        "我可以继续补充相关细节，并协助对齐后续安排。请告知方便进一步沟通的时间。"
       ].join("\n")
     };
   }
@@ -296,9 +297,9 @@ function buildLocalOutput(input: EmailAiGenerateInput): EmailAiGeneratedContent 
   if (context.purpose === "translate") {
     return {
       text: [
-        `Target locale: ${context.instruction.match(/to ([^.]+)\./)?.[1] ?? "configured locale"}`,
-        sourceText ? `Content to translate:\n${sourceText}` : "No source text was provided.",
-        "Preserve CRM names, dates, amounts, and source references when using a model provider."
+        `目标语言：${context.instruction.match(/to ([^.]+)\./)?.[1] ?? "已配置语言"}`,
+        sourceText ? `待翻译内容：\n${sourceText}` : "未提供源文本。",
+        "使用模型 Provider 时，需要保留 CRM 名称、日期、金额和来源引用。"
       ].join("\n\n")
     };
   }
@@ -306,9 +307,9 @@ function buildLocalOutput(input: EmailAiGenerateInput): EmailAiGeneratedContent 
   if (context.purpose === "summarize") {
     return {
       text: [
-        "Compact thread memory:",
-        context.communicationSummary || "No recent email history is available.",
-        context.customerBrief ? `\nCustomer context:\n${context.customerBrief}` : ""
+        "紧凑线程记忆：",
+        context.communicationSummary || "暂无近期邮件历史。",
+        context.customerBrief ? `\n客户上下文：\n${context.customerBrief}` : ""
       ]
         .filter(Boolean)
         .join("\n")
@@ -373,7 +374,7 @@ function buildLocalAnalysisActions(context: EmailAssistantContext, prompt: strin
 function buildSuggestedSubject(context: EmailAssistantContext, prompt: string | undefined): string {
   const source = context.sources.find((item) => item.recordId)?.label ?? context.sources[0]?.label;
   if (prompt) {
-    return `Follow up: ${prompt.slice(0, 70)}`;
+    return `跟进：${prompt.slice(0, 70)}`;
   }
-  return source ? `Follow up: ${source}` : "Follow up on next steps";
+  return source ? `跟进：${source}` : "跟进下一步";
 }

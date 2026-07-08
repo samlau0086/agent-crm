@@ -35,7 +35,7 @@ export async function analyzeEmailThreadWithAi(
   });
   const result = await generateEmailAiOutput({
     context: assistantContext,
-    userPrompt: "Analyze this email thread and suggest the next sales action. Do not change CRM data."
+    userPrompt: "请用简体中文分析这条邮件线程，并建议下一步销售行动。不要修改 CRM 数据。"
   });
   await repository.recordEmailAiGeneration(context, {
     purpose: "context_analysis",

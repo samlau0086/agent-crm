@@ -24,7 +24,7 @@ async function postApiMetricsHandler(request: NextRequest) {
       await runAiAgent(
         {
           agentKey: nextActionSuggestionAgentKey,
-          task: "Suggest one to three practical next sales actions. Keep this read-only and do not claim CRM data was changed.",
+          task: "用简体中文给出 1 到 3 个可执行的下一步销售行动建议。保持只读，不要声称 CRM 数据已被修改。",
           context: {
             record: { id: record.id, objectKey: record.objectKey, title: record.title, stageKey: record.stageKey, ownerId: record.ownerId, data: record.data },
             activities: activities.slice(0, 10)

@@ -314,7 +314,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [selectedAiAgentKey, setSelectedAiAgentKey] = useState(props.emailAiSettings.agents[0]?.key ?? "");
   const [aiAgentRuns, setAiAgentRuns] = useState<AiAgentRunLog[]>([]);
   const [aiAgentActionKey, setAiAgentActionKey] = useState("");
-  const [aiAgentTestTask, setAiAgentTestTask] = useState("Summarize the selected fixture and suggest the safest next step.");
+  const [aiAgentTestTask, setAiAgentTestTask] = useState("请用简体中文总结所选测试数据，并建议最稳妥的下一步。");
   const [aiAgentTestPrompt, setAiAgentTestPrompt] = useState("");
   const [aiAgentTestRecordId, setAiAgentTestRecordId] = useState(props.records[0]?.id ?? "");
   const [aiAgentTestResult, setAiAgentTestResult] = useState<AiAgentRunResult | null>(null);

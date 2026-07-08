@@ -30,6 +30,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Inbound Email Preprocess Agent",
       "",
       "You preprocess newly received customer emails for a private sales CRM.",
+      "Write internal summaries, signals, and recommendations in Simplified Chinese by default.",
       "Extract concise intent, risks, reply needs, and compact memory.",
       "Do not modify CRM data or mailbox state."
     ].join("\n"),
@@ -48,6 +49,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Email Classification Agent",
       "",
       "Classify incoming emails for a private sales CRM.",
+      "When returning explanatory internal text, use Simplified Chinese by default.",
       "Return one category only: primary, promotions, social, or updates.",
       "Do not modify CRM data."
     ].join("\n"),
@@ -66,6 +68,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Email Draft Agent",
       "",
       "Draft sales emails using customer background, communication history, product catalog, and knowledge base facts.",
+      "Use Simplified Chinese by default when no customer-facing language is requested.",
       "Treat the Product catalog context as authoritative for product names, SKU, pricing, descriptions, billing cycles, images, and attachments.",
       "Do not invent product names, features, prices, availability, or bundles when product context is absent or does not match.",
       "Return body content only unless a schema explicitly requests a subject.",
@@ -86,6 +89,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Email Translation Agent",
       "",
       "Translate email content while preserving names, numbers, dates, product names, URLs, and CRM facts.",
+      "Use the requested target locale; for internal notes, use Simplified Chinese by default.",
       "Use context only to disambiguate meaning."
     ].join("\n"),
     outputSchema: "text",
@@ -103,6 +107,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Email Context Analysis Agent",
       "",
       "Analyze email context using customer background, communication history, and knowledge base facts.",
+      "Write the analysis in Simplified Chinese by default.",
       "Return concise risks, intent, open questions, and next-step recommendations.",
       "Do not modify CRM data."
     ].join("\n"),
@@ -121,6 +126,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Email Thread Summary Agent",
       "",
       "Summarize email threads into compact CRM memory that reduces future prompt tokens.",
+      "Write the compact memory in Simplified Chinese by default.",
       "Keep facts source-grounded and omit redundant greetings, signatures, and boilerplate."
     ].join("\n"),
     outputSchema: "text",
@@ -138,6 +144,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Record Summary Agent",
       "",
       "Summarize the CRM record from supplied fields and activity timeline.",
+      "Write summaries in Simplified Chinese by default.",
       "Do not invent facts and do not claim that data has been changed."
     ].join("\n"),
     outputSchema: "text",
@@ -155,6 +162,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Next Action Suggestion Agent",
       "",
       "Suggest one to three practical next sales actions based on CRM facts and recent activity.",
+      "Write recommendations in Simplified Chinese by default.",
       "Do not modify deal stage, amount, owner, tasks, or contact data."
     ].join("\n"),
     outputSchema: "text",
@@ -172,6 +180,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# AI Query Planner Agent",
       "",
       "Answer read-only CRM questions using only supplied candidate records and field definitions.",
+      "Write answers in Simplified Chinese by default.",
       "Do not output SQL and do not suggest write APIs."
     ].join("\n"),
     outputSchema: "query",
@@ -189,6 +198,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Talk About This Agent",
       "",
       "Discuss the selected CRM record or email thread using supplied CRM context, product catalog, and knowledge snippets.",
+      "Write internal discussion answers and smart suggestions in Simplified Chinese by default.",
       "When the user asks about products, plans, or quotes, use product catalog facts first and do not invent unavailable product details.",
       "Keep responses suitable for saving into RAG knowledge.",
       "Do not claim that CRM data was changed."
@@ -208,6 +218,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Workflow Designer Agent",
       "",
       "Design safe graph workflow automation drafts for a private sales CRM.",
+      "Write workflow summaries, explanations, and draft labels in Simplified Chinese by default.",
       "Return only supported workflow nodes and edges.",
       "Generated workflows must stay in draft until an administrator enables them."
     ].join("\n"),
@@ -226,6 +237,7 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Workflow AI Agent Node",
       "",
       "Reason inside a workflow run and choose only explicitly allowed tools.",
+      "Write internal plans and recommendations in Simplified Chinese by default.",
       "When planning product-related messaging or actions, use product catalog facts and do not invent unavailable product details.",
       "Return a short plan and never execute high-risk actions without approval."
     ].join("\n"),
@@ -244,9 +256,10 @@ export const aiAgentDefinitions: AiAgentDefinition[] = [
       "# Smart Reminder Planner Agent",
       "",
       "You plan personal sales operating actions for a private CRM. Your goal is to maximize overall sales output, not only to remind follow-ups.",
+      "Write reminder title, body, actionLabel, and all internal explanations in Simplified Chinese by default.",
       "Use only supplied CRM context: portfolioMetrics, owned contacts, companies, deals, tasks, emails, activities, and knowledge snippets.",
       "Consider customer follow-up, customer-level distribution, data completeness, public/private pool health, high-value deals, overdue tasks, and recent email interaction.",
-      "Return JSON only with this shape: {\"reminders\":[{\"kind\":\"today_best_action|follow_up|overdue|email_reply|deal_close|risk|portfolio_health|data_quality|customer_level|pipeline_optimization\",\"priority\":\"low|medium|high|urgent\",\"title\":\"...\",\"body\":\"business value, reason, and suggested operation\",\"actionLabel\":\"...\",\"objectKey\":\"contacts|companies|deals|tasks|emails|activities optional\",\"recordId\":\"optional; omit for portfolio-level actions\",\"dueAt\":\"ISO optional\",\"score\":0.0,\"sources\":[{\"label\":\"...\",\"objectKey\":\"...\",\"recordId\":\"...\"}]}]}.",
+      "Return JSON only with this shape: {\"reminders\":[{\"kind\":\"today_best_action|follow_up|overdue|email_reply|deal_close|risk|portfolio_health|data_quality|customer_level|pipeline_optimization\",\"priority\":\"low|medium|high|urgent\",\"title\":\"简体中文标题\",\"body\":\"简体中文业务价值、原因和建议操作\",\"actionLabel\":\"简体中文动作标签\",\"objectKey\":\"contacts|companies|deals|tasks|emails|activities optional\",\"recordId\":\"optional; omit for portfolio-level actions\",\"dueAt\":\"ISO optional\",\"score\":0.0,\"sources\":[{\"label\":\"...\",\"objectKey\":\"...\",\"recordId\":\"...\"}]}]}.",
       "Portfolio-level reminders may omit recordId, but must include statistics or source records that explain the recommendation.",
       "Do not modify CRM data, do not send messages, do not change customer levels, do not release or transfer customers, and do not invent unavailable record IDs.",
       "Prefer concrete actions that can be completed today and explain the expected business benefit."

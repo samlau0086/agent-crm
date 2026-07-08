@@ -3413,7 +3413,7 @@ await run("contact and company communication preferences drive compose translati
   assert.match(source, /targetLocale: preference\.language/);
   assert.match(source, /function resolveEmailDraftAiTargetLocale\(\): string \| undefined/);
   assert.match(source, /targetLocale,\s*userPrompt: prompt \|\| undefined/);
-  assert.match(source, /targetLocale,\s*userPrompt: `Generate a concise, actionable prompt/);
+  assert.match(source, /targetLocale,\s*userPrompt: `请用简体中文生成一段简洁、可执行的邮件撰写 Agent 提示词/);
   assert.match(source, /const contact = contactByEmail \?\? linkedContact/);
   assert.match(source, /主题和正文都必须使用该语言/);
   assert.match(source, /translatedBodyText: translatedText/);
@@ -4208,7 +4208,7 @@ await run("email trash permanent delete buttons use immediate confirm flow", () 
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /const \[trashDisplayMessageIds, setTrashDisplayMessageIds\] = useState<EmailTrashDisplayMessageIds>\(\{\}\)/);
   assert.match(source, /getEmailThreadDisplayMessage\(selectedDisplayedMessages, mailbox, selectedThread \? trashDisplayMessageIds\[selectedThread\.id\] : undefined\)/);
-  assert.match(source, /getEmailThreadDisplayMessage\(displayMessages\.length \? displayMessages : messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
+  assert.match(source, /getEmailThreadListDisplayMessage\(messages\.length \? messages : displayMessages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
   assert.match(source, /const trashDisplayAnchors =[\s\S]*action === "delete"[\s\S]*getEmailThreadDisplayMessage\(messagesByThread\[threadId\] \?\? \[\], mailbox\)/);
   assert.match(source, /setTrashDisplayMessageIds\(\(current\) => \{[\s\S]*next\[threadId\] = messageId/);
   assert.match(source, /async function runImmediateAction<T>\(action: \(\) => Promise<T>\): Promise<T \| undefined>/);
@@ -4540,6 +4540,8 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts", "trash"\]\.includes\(mailbox\)/);
   assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
   assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
+  assert.match(workspace, /function getEmailThreadListDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
+  assert.match(workspace, /if \(mailbox === "inbox" \|\| mailbox === "all" \|\| mailbox === "sent"\) \{[\s\S]*return \[\.\.\.messages\]\.sort\(\(left, right\) => emailMessageTimeValue\(right\)\.localeCompare\(emailMessageTimeValue\(left\)\)\)\[0\]/);
   assert.match(workspace, /if \(mailbox === "all"\) \{\s*return messages\.filter\(\(message\) => message\.direction === "inbound" && message\.status === "received"\);\s*\}/);
   assert.match(workspace, /const hasAllMailMessage = getEmailThreadMailboxMessages\(messages, "all"\)\.length > 0/);
   assert.match(workspace, /mailbox === "all"\s*\?\s*!isDeleted && hasAllMailMessage/);
@@ -4547,6 +4549,8 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /if \(mailbox === "trash"\) \{[\s\S]*const preferredMessage = preferredMessageId \? messages\.find/);
   assert.match(workspace, /const inboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)/);
   assert.match(workspace, /visibleRows\.map\(\(\{ key, thread, displayMessages, displayMessage \}\) => \{/);
+  assert.match(workspace, /displayMessages: messages\.length \? messages : displayMessages/);
+  assert.match(workspace, /displayMessage: getEmailThreadListDisplayMessage\(messages\.length \? messages : displayMessages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
   assert.match(workspace, /key=\{key\}/);
   assert.match(workspace, /emailMessageParticipantLabel\(displayMessage, thread, activeAccounts\)/);
   assert.match(workspace, /const selectedDisplayedMessages = selectedMailboxMessages\.length > 0 \? selectedMailboxMessages : selectedMessages/);
@@ -7203,7 +7207,7 @@ await run("store record email triggers enabled translate summarize and analyze a
   assert.equal(translated.translatedLocale, undefined);
   assert.equal(translated.translatedBodyText, undefined);
   assert.equal(translated.translatedSources, undefined);
-  assert.match(thread?.summary ?? "", /Compact thread memory/);
+  assert.match(thread?.summary ?? "", /紧凑线程记忆/);
   assert.match(thread?.aiAnalysis ?? "", /AI 线程分析/);
   assert.match(thread?.aiAnalysis ?? "", /建议下一步/);
   assert.equal(thread?.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
@@ -7239,9 +7243,9 @@ await run("inline background executor refreshes email thread summaries through a
   assert.equal(response.updated, true);
   assert.equal(response.result.enabled, true);
   assert.equal(thread?.id, message.threadId);
-  assert.match(thread?.summary ?? "", /Compact thread memory/);
+  assert.match(thread?.summary ?? "", /紧凑线程记忆/);
   const timelineActivity = store.listActivities(context, "contact-lin").find((activity) => activity.type === "email" && activity.title.includes("AI"));
-  assert.match(timelineActivity?.body ?? "", /Compact thread memory/);
+  assert.match(timelineActivity?.body ?? "", /紧凑线程记忆/);
   const audit = store.listAuditLogs(context, { entityType: "email_ai_generation" }).find((log) => log.details.purpose === "summarize" && log.details.threadId === message.threadId);
   assert.equal(audit?.details.enabled, true);
   assert.equal(audit?.details.recordId, "contact-lin");
@@ -7496,7 +7500,7 @@ await run("worker processes email summarize job envelopes", async () => {
   assert.equal(result.processed, true);
   assert.equal(result.jobType, "email_summarize");
   assert.equal(result.emailThread.id, message.threadId);
-  assert.match(result.emailThread.summary ?? "", /Compact thread memory/);
+  assert.match(result.emailThread.summary ?? "", /紧凑线程记忆/);
   assert.equal(formatJobWorkerResult(result), `Processed email summarize for thread ${message.threadId}`);
 });
 
@@ -11378,7 +11382,7 @@ await run("email message translation and analysis use CRM thread context and kno
   const analysis = await generateEmailAiOutput({ context: analysisContext, sourceText: message.bodyText });
 
   assert.equal(translation.enabled, true);
-  assert.match(translation.text, /Content to translate/);
+  assert.match(translation.text, /待翻译内容/);
   assert.match(translation.text, /private deployment/i);
   assert.equal(translation.sources.some((source) => source.recordId === "contact-lin"), true);
   assert.equal(translation.sources.some((source) => source.messageId === message.id), true);
@@ -11704,7 +11708,7 @@ await run("ai agent harness falls back locally without provider key", async () =
 
   assert.equal(result.agentKey, recordSummaryAgentKey);
   assert.equal(result.generationMode, "local");
-  assert.match(result.text, /local fallback/);
+  assert.match(result.text, /本地降级输出/);
   assert.equal(result.provider, "openai");
   assert.equal(result.budget.promptChars > 0, true);
 });
@@ -14328,7 +14332,7 @@ await run("email ai generation respects disabled toggles and returns sources", a
   const enabled = await generateEmailAiOutput({ context: enabledContext, userPrompt: "write a concise reply" });
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.generationMode, "local");
-  assert.match(enabled.text, /Hello/);
+  assert.match(enabled.text, /您好/);
   assert.doesNotMatch(enabled.text, /Draft goal|Sources/);
   assert.match(enabled.suggestedSubject ?? "", /write a concise reply/);
   assert.equal(enabled.sources.some((source) => source.recordId === "contact-lin"), true);
@@ -14379,7 +14383,7 @@ await run("openai-compatible email ai generation falls back locally on provider 
     }
   );
 
-  assert.match(result.text, /Hello/);
+  assert.match(result.text, /您好/);
   assert.doesNotMatch(result.text, /Draft goal|Sources/);
   assert.match(result.suggestedSubject ?? "", /write a fallback reply/);
   assert.equal(result.enabled, true);

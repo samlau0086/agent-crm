@@ -74,6 +74,7 @@ const defaultInboundEmailAgentMarkdown = [
   "# Inbound Email Preprocess Agent",
   "",
   "You preprocess newly received customer emails for a private sales CRM.",
+  "Write internal summaries, signals, and recommendations in Simplified Chinese by default.",
   "Use customer background, communication history, and the system knowledge base.",
   "Produce concise, source-grounded summaries and next-context signals.",
   "Do not modify CRM records, deal stages, amounts, contacts, tasks, or mailbox state.",
@@ -84,6 +85,7 @@ const defaultEmailClassificationAgentMarkdown = [
   "# Email Classification Agent",
   "",
   "Classify newly received emails for a private sales CRM.",
+  "When returning explanatory internal text, use Simplified Chinese by default.",
   "Use sender, subject, body, customer background, communication history, and knowledge base context.",
   "Return one category only: primary, promotions, social, or updates.",
   "Do not modify CRM records, deal stages, amounts, contacts, tasks, or mailbox state."
@@ -93,6 +95,7 @@ const defaultEmailDraftAgentMarkdown = [
   "# Email Draft Agent",
   "",
   "Draft sales emails using customer background, communication history, product catalog, and the system knowledge base.",
+  "Use Simplified Chinese by default when no customer-facing language is requested.",
   "Use Product catalog as the authoritative source for product names, SKU, pricing, descriptions, billing cycles, images, and attachments.",
   "Never invent product names, features, prices, availability, or packaging when the product catalog has no match.",
   "Keep output source-grounded and suitable for human review.",
@@ -103,6 +106,7 @@ const defaultEmailTranslationAgentMarkdown = [
   "# Email Translation Agent",
   "",
   "Translate email content while preserving names, numbers, dates, product names, URLs, and CRM facts.",
+  "Use the requested target locale; for internal notes, use Simplified Chinese by default.",
   "Use customer context and knowledge only to disambiguate meaning.",
   "Do not add new business claims."
 ].join("\n");
@@ -111,6 +115,7 @@ const defaultEmailContextAnalysisAgentMarkdown = [
   "# Email Context Analysis Agent",
   "",
   "Analyze email context using customer background, communication history, and knowledge base facts.",
+  "Write the analysis in Simplified Chinese by default.",
   "Return concise risks, intent, open questions, and next-step recommendations.",
   "Do not modify CRM data."
 ].join("\n");
@@ -119,6 +124,7 @@ const defaultEmailThreadSummaryAgentMarkdown = [
   "# Email Thread Summary Agent",
   "",
   "Summarize email threads into compact CRM memory that reduces future prompt tokens.",
+  "Write the compact memory in Simplified Chinese by default.",
   "Keep facts source-grounded and omit redundant greetings, signatures, and boilerplate.",
   "Do not modify CRM data."
 ].join("\n");
@@ -127,6 +133,7 @@ const defaultWorkflowDesignerAgentMarkdown = [
   "# Workflow Designer Agent",
   "",
   "Design safe workflow automation drafts for a private sales CRM.",
+  "Write workflow summaries, explanations, and draft labels in Simplified Chinese by default.",
   "Return only supported triggers, conditions, and actions from the CRM workflow schema.",
   "High-risk actions such as sending email, changing deal stages, transferring ownership, or bulk follow-up must default to approval_required.",
   "AI generated workflows must stay in draft until an administrator enables them.",
@@ -675,9 +682,9 @@ function buildInstruction(
     return `Translate the email content to ${locale}. Preserve names, amounts, dates, and CRM facts. ${sourceRequirement}${agentInstruction}`;
   }
   if (input.purpose === "summarize") {
-    return `Summarize the thread into a compact CRM-safe memory that can replace long history in future prompts. ${sourceRequirement}${agentInstruction}`;
+    return `用简体中文将邮件线程总结为紧凑、CRM 安全的记忆，用于替代未来提示词中的长历史。${sourceRequirement}${agentInstruction}`;
   }
-  return `Analyze the thread context and recommend next steps without modifying CRM data. ${sourceRequirement}${agentInstruction}`;
+  return `用简体中文分析线程上下文并建议下一步行动，不要修改 CRM 数据。${sourceRequirement}${agentInstruction}`;
 }
 
 function normalizeLimit(value: number, fallback: number, min: number, max: number): number {
