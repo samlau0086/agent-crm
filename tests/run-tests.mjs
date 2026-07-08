@@ -4506,9 +4506,11 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /data-testid="email-compose-tracking"/);
   assert.match(workspace, /function removeEmailLabel\(threadId: string, label: string\)/);
   assert.match(workspace, /function getEmailMessageSendStatus\(message: EmailMessage \| undefined\)/);
-  assert.match(workspace, /label: "已队列"/);
+  assert.match(workspace, /label: "已排队"/);
   assert.match(workspace, /label: "发送中"/);
   assert.match(workspace, /label: message\.sentAt \? `已发送 \$\{formatDate\(message\.sentAt\)\}` : "已发送"/);
+  assert.match(workspace, /message\.direction === "outbound" && \(message\.status === "queued" \|\| message\.status === "sending"\)/);
+  assert.match(workspace, /const resultMailbox: EmailMailboxKey = messages\.some\(\(item\) => item\.status === "queued" \|\| item\.status === "sending"\) \? "scheduled" : "sent"/);
   assert.match(workspace, /data-testid="email-thread-send-status"/);
   assert.match(workspace, /data-testid="email-message-send-status"/);
   assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);

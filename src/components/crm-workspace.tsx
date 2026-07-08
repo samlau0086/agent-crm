@@ -1125,7 +1125,7 @@ function buildEmailThreadLabels(thread: EmailThread, messages: EmailMessage[] = 
   if (messages.some((message) => message.status === "failed")) {
     labels.add("发送失败");
   }
-  if (emailThreadHasScheduledSend(messages)) {
+  if (emailThreadHasPendingSend(messages)) {
     labels.add("待发送");
   }
   return Array.from(labels);
@@ -1226,7 +1226,7 @@ function emailThreadHasOutbound(messages: EmailMessage[]): boolean {
   return messages.some((message) => isEmailMessageInMailbox(message, "sent"));
 }
 
-function emailThreadHasScheduledSend(messages: EmailMessage[]): boolean {
+function emailThreadHasPendingSend(messages: EmailMessage[]): boolean {
   return messages.some((message) => isEmailMessageInMailbox(message, "scheduled"));
 }
 
@@ -1256,7 +1256,7 @@ function getEmailMessageSendStatus(message: EmailMessage | undefined): { key: st
   if (message.status === "queued") {
     return {
       key: "queued",
-      label: "已队列",
+      label: "已排队",
       title: "邮件已进入后台发送队列，等待 worker 发送",
       icon: "send"
     };
@@ -1307,11 +1307,11 @@ function isEmailMessageInMailbox(message: EmailMessage, mailbox: EmailMailboxKey
     return (
       message.direction === "outbound" &&
       !message.scheduledSendAt &&
-      (message.status === "sent" || message.status === "sending" || message.status === "queued" || message.status === "failed")
+      (message.status === "sent" || message.status === "failed")
     );
   }
   if (mailbox === "scheduled") {
-    return message.direction === "outbound" && Boolean(message.scheduledSendAt) && (message.status === "queued" || message.status === "sending");
+    return message.direction === "outbound" && (message.status === "queued" || message.status === "sending");
   }
   if (mailbox === "drafts") {
     return message.status === "draft";
@@ -4743,6 +4743,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const messages = (await Promise.all(drafts.map((draft) => sendSingleEmailDraft(draft)))).flat();
     const message = messages[0];
     const sentThreadIds = Array.from(new Set(messages.map((item) => item.threadId).filter(Boolean)));
+    const resultMailbox: EmailMailboxKey = messages.some((item) => item.status === "queued" || item.status === "sending") ? "scheduled" : "sent";
     setEmailMessagesByThread((current) => {
       const next = { ...current };
       for (const item of messages) {
@@ -4753,6 +4754,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     await refreshEmailThreadsByIds(messages.map((item) => item.threadId));
     await Promise.all(sentThreadIds.map((threadId) => updateEmailThreadState(threadId, { read: true })));
     selectEmailThread(message.threadId);
+    setEmailDetailThreadId(message.threadId);
+    setEmailWorkspaceView("mail");
+    pushEmailHistoryRoute(buildEmailRoutePath({ mailbox: resultMailbox, mailMode: "detail", threadId: message.threadId }));
     setEmailDraft((current) => ({
       ...current,
       clientRequestId: createEmailClientRequestId(),
@@ -8636,7 +8640,7 @@ function EmailWorkspace({
       const isDeleted = Boolean(state.deleted);
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
-      const hasScheduled = emailThreadHasScheduledSend(messages);
+      const hasScheduled = emailThreadHasPendingSend(messages);
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
       const hasAllMailMessage = getEmailThreadMailboxMessages(messages, "all").length > 0;
       const matchesMailbox =
@@ -8675,7 +8679,7 @@ function EmailWorkspace({
       const isDeleted = Boolean(state.deleted);
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
-      const hasScheduled = emailThreadHasScheduledSend(messages);
+      const hasScheduled = emailThreadHasPendingSend(messages);
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
       const hasAllMailMessage = getEmailThreadMailboxMessages(messages, "all").length > 0;
       if (!isDeleted && !isArchived && !isSnoozed && hasInboxMessage) counts.inbox += 1;
