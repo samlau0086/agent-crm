@@ -243,6 +243,7 @@ type EmailSettingsStep = "identity" | "inbound" | "outbound" | "review";
 type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "scheduled" | "drafts" | "archived" | "trash" | "all";
 type EmailCategoryKey = "primary" | "promotions" | "social" | "updates";
 type EmailMailMode = "list" | "detail";
+type EmailListDisplayMode = "thread" | "message";
 type EmailRoutePatch = {
   accountId?: string;
   category?: EmailCategoryKey;
@@ -8496,6 +8497,7 @@ function EmailWorkspace({
   const [mailboxAccountsCollapsed, setMailboxAccountsCollapsed] = useState(true);
   const [searchQuery, setSearchQuery] = useState(routeSearch);
   const [labelFilter, setLabelFilter] = useState(routeLabel);
+  const [emailListDisplayMode, setEmailListDisplayMode] = useState<EmailListDisplayMode>("thread");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const [trashDisplayMessageIds, setTrashDisplayMessageIds] = useState<EmailTrashDisplayMessageIds>({});
@@ -8683,7 +8685,30 @@ function EmailWorkspace({
       return matchesMailbox && matchesCategory && matchesLabel && emailThreadMatchesSearch(thread, messages, searchQuery);
     });
   }, [accountFilteredThreads, category, labelFilter, mailbox, messagesByThread, searchQuery, threadUiState]);
+  const visibleRows = useMemo(() => {
+    return visibleThreads.flatMap((thread) => {
+      const messages = messagesByThread[thread.id] ?? [];
+      const displayMessages = getEmailThreadMailboxDisplayMessages(messages, mailbox, labelFilter);
+      if (emailListDisplayMode === "message" && displayMessages.length) {
+        return [...displayMessages]
+          .sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))
+          .map((message) => ({
+            key: `${thread.id}:${message.id}`,
+            thread,
+            displayMessages: [message],
+            displayMessage: message
+          }));
+      }
+      return [{
+        key: thread.id,
+        thread,
+        displayMessages,
+        displayMessage: getEmailThreadDisplayMessage(displayMessages.length ? displayMessages : messages, mailbox, trashDisplayMessageIds[thread.id])
+      }];
+    });
+  }, [emailListDisplayMode, labelFilter, mailbox, messagesByThread, trashDisplayMessageIds, visibleThreads]);
   const visibleThreadIds = visibleThreads.map((thread) => thread.id);
+  const visibleRowCount = emailListDisplayMode === "message" ? visibleRows.length : visibleThreads.length;
   const allVisibleThreadsSelected = visibleThreadIds.length > 0 && visibleThreadIds.every((threadId) => selectedThreadIds.has(threadId));
   const mailboxCounts = useMemo(() => {
     const counts = Object.fromEntries(emailMailboxMeta.map((item) => [item.key, 0])) as Record<EmailMailboxKey, number>;
@@ -10157,8 +10182,18 @@ function EmailWorkspace({
                     type="checkbox"
                     onChange={(event) => setSelectedThreadIds(event.target.checked ? new Set(visibleThreadIds) : new Set())}
                   />
-                  <span>{selectedThreadIds.size ? `已选择 ${selectedThreadIds.size}` : `${visibleThreads.length} 封`}</span>
+                  <span>{selectedThreadIds.size ? `已选择 ${selectedThreadIds.size}` : `${visibleRowCount} 封`}</span>
                 </label>
+                <button
+                  className="icon-button"
+                  aria-label={emailListDisplayMode === "thread" ? "切换到邮件视图" : "切换到会话视图"}
+                  title={emailListDisplayMode === "thread" ? "邮件视图" : "会话视图"}
+                  data-testid="email-list-display-toggle"
+                  type="button"
+                  onClick={() => setEmailListDisplayMode((current) => (current === "thread" ? "message" : "thread"))}
+                >
+                  {emailListDisplayMode === "thread" ? <Mail size={16} /> : <LayoutList size={16} />}
+                </button>
                 <button
                   className="icon-button"
                   aria-label="刷新邮件"
@@ -10231,11 +10266,9 @@ function EmailWorkspace({
               ) : null}
 
               <div className="gmail-thread-list">
-                {visibleThreads.map((thread) => {
+                {visibleRows.map(({ key, thread, displayMessages, displayMessage }) => {
                   const messages = messagesByThread[thread.id] ?? [];
                   const state = threadUiState[thread.id] ?? {};
-                  const displayMessages = getEmailThreadMailboxDisplayMessages(messages, mailbox, labelFilter);
-                  const displayMessage = getEmailThreadDisplayMessage(displayMessages.length ? displayMessages : messages, mailbox, trashDisplayMessageIds[thread.id]);
                   const labels = getEmailThreadDisplayLabels(thread, state, displayMessage ? [displayMessage] : displayMessages);
                   const snippet = repairEmailMojibake(displayMessage?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
@@ -10244,7 +10277,7 @@ function EmailWorkspace({
                   const rowSubject = displayMessage?.subject || thread.subject;
                   const rowTime = displayMessage ? emailMessageTimeValue(displayMessage) : emailThreadTimeValue(thread);
                   return (
-                    <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`} key={thread.id}>
+                    <article className={`gmail-thread-row ${selectedThreadId === thread.id ? "selected" : ""} ${isRead ? "" : "unread"} ${mailbox === "trash" ? "trash-row" : ""}`} key={key}>
                       <input
                         aria-label={`选择 ${thread.subject}`}
                         checked={selectedThreadIds.has(thread.id)}
@@ -10320,7 +10353,7 @@ function EmailWorkspace({
                     </article>
                   );
                 })}
-                {visibleThreads.length === 0 ? <div className="empty-state">{searchQuery ? "没有匹配的邮件" : "当前邮箱为空"}</div> : null}
+                {visibleRows.length === 0 ? <div className="empty-state">{searchQuery ? "没有匹配的邮件" : "当前邮箱为空"}</div> : null}
               </div>
             </section>
           ) : (

@@ -4517,6 +4517,12 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /const resultMailbox: EmailMailboxKey = messages\.some\(\(item\) => item\.status === "queued" \|\| item\.status === "sending"\) \? "scheduled" : "sent"/);
   assert.match(workspace, /data-testid="email-thread-send-status"/);
   assert.match(workspace, /data-testid="email-message-send-status"/);
+  assert.match(workspace, /type EmailListDisplayMode = "thread" \| "message"/);
+  assert.match(workspace, /const \[emailListDisplayMode, setEmailListDisplayMode\] = useState<EmailListDisplayMode>\("thread"\)/);
+  assert.match(workspace, /const visibleRows = useMemo\(\(\) => \{/);
+  assert.match(workspace, /emailListDisplayMode === "message" && displayMessages\.length/);
+  assert.match(workspace, /data-testid="email-list-display-toggle"/);
+  assert.match(workspace, /setEmailListDisplayMode\(\(current\) => \(current === "thread" \? "message" : "thread"\)\)/);
   assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
   assert.match(workspace, /for \(const delayMs of \[2500, 8000\]\)/);
@@ -4529,8 +4535,8 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /if \(!isDeleted && hasAllMailMessage\) counts\.all \+= 1/);
   assert.match(workspace, /if \(mailbox === "trash"\) \{[\s\S]*const preferredMessage = preferredMessageId \? messages\.find/);
   assert.match(workspace, /const inboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)/);
-  assert.match(workspace, /const displayMessages = getEmailThreadMailboxDisplayMessages\(messages, mailbox, labelFilter\)/);
-  assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(displayMessages\.length \? displayMessages : messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
+  assert.match(workspace, /visibleRows\.map\(\(\{ key, thread, displayMessages, displayMessage \}\) => \{/);
+  assert.match(workspace, /key=\{key\}/);
   assert.match(workspace, /emailMessageParticipantLabel\(displayMessage, thread, activeAccounts\)/);
   assert.match(workspace, /const selectedDisplayedMessages = selectedMailboxMessages\.length > 0 \? selectedMailboxMessages : selectedMessages/);
   assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);
