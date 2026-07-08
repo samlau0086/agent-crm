@@ -13117,7 +13117,7 @@ function TaskEditDialog({
           onSave();
         }}
       >
-        <div className="drawer-header">
+        <div className="task-edit-header">
           <div>
             <h2 className="page-title" style={{ fontSize: 18 }}>编辑任务</h2>
             <p className="subtle">修改标题、截止时间、备注，并添加附件。</p>
@@ -13126,30 +13126,30 @@ function TaskEditDialog({
             <XCircle size={18} />
           </button>
         </div>
-        <div className="form-grid">
-          <label className="wide">
-            <span className="subtle">标题</span>
-            <input className="input" data-testid="task-edit-title" value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
-          </label>
-          <label>
-            <span className="subtle">截止时间</span>
-            <input
-              className="input"
-              data-testid="task-edit-due-at"
-              type="datetime-local"
-              value={draft.dueAt}
-              onChange={(event) => onChange({ ...draft, dueAt: event.target.value })}
-            />
-          </label>
-          <label className="wide">
-            <span className="subtle">备注</span>
-            <textarea className="textarea" data-testid="task-edit-body" value={draft.text} onChange={(event) => onChange({ ...draft, text: event.target.value })} />
-          </label>
-        </div>
-        <div className="task-attachment-panel">
-          <div className="toolbar between">
-            <strong>附件</strong>
-            <div className="toolbar">
+        <div className="task-edit-body">
+          <div className="form-grid task-edit-fields">
+            <label className="wide">
+              <span className="subtle">标题</span>
+              <input className="input" data-testid="task-edit-title" value={draft.title} onChange={(event) => onChange({ ...draft, title: event.target.value })} />
+            </label>
+            <label>
+              <span className="subtle">截止时间</span>
+              <input
+                className="input"
+                data-testid="task-edit-due-at"
+                type="datetime-local"
+                value={draft.dueAt}
+                onChange={(event) => onChange({ ...draft, dueAt: event.target.value })}
+              />
+            </label>
+            <label className="wide">
+              <span className="subtle">备注</span>
+              <textarea className="textarea" data-testid="task-edit-body" value={draft.text} onChange={(event) => onChange({ ...draft, text: event.target.value })} />
+            </label>
+          </div>
+          <div className="task-attachment-panel">
+            <div className="task-attachment-panel-header">
+              <strong>附件</strong>
               <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
                 <Upload size={16} />
                 {isUploading ? "上传中" : "上传附件"}
@@ -13165,21 +13165,21 @@ function TaskEditDialog({
                 }}
               />
             </div>
+            <TaskAttachmentPreview attachments={draft.attachments} mediaAssets={mediaAssets} onRemove={onRemoveAttachment} />
+            {mediaAssets.length ? (
+              <div className="media-picker-strip task-media-picker" data-testid="task-edit-media-library">
+                {mediaAssets.slice(0, 16).map((asset) => (
+                  <button key={asset.id} type="button" onClick={() => onAddMediaAsset(asset)} title={asset.name}>
+                    <MediaAssetPreview asset={asset} />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="subtle">媒体库暂无文件，可先上传。</div>
+            )}
           </div>
-          <TaskAttachmentPreview attachments={draft.attachments} mediaAssets={mediaAssets} onRemove={onRemoveAttachment} />
-          {mediaAssets.length ? (
-            <div className="media-picker-strip task-media-picker" data-testid="task-edit-media-library">
-              {mediaAssets.slice(0, 16).map((asset) => (
-                <button key={asset.id} type="button" onClick={() => onAddMediaAsset(asset)} title={asset.name}>
-                  <MediaAssetPreview asset={asset} />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="subtle">媒体库暂无文件，可先上传。</div>
-          )}
         </div>
-        <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+        <div className="task-edit-actions">
           <button className="secondary-button" type="button" onClick={onCancel}>取消</button>
           <button className="primary-button" data-testid="task-edit-save" type="submit" disabled={!draft.title.trim()}>
             <Save size={16} />

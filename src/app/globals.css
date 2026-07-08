@@ -2209,24 +2209,88 @@ button {
 .task-edit-dialog {
   width: min(760px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.task-edit-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.task-edit-header > div {
+  min-width: 0;
+}
+
+.task-edit-header .page-title {
+  margin: 0;
+}
+
+.task-edit-header .subtle {
+  margin-top: 6px;
+}
+
+.task-edit-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
   overflow-y: auto;
+  padding: 16px 18px;
+}
+
+.task-edit-fields label {
+  min-width: 0;
+}
+
+.task-edit-fields .input,
+.task-edit-fields .textarea {
+  width: 100%;
+}
+
+.task-edit-fields .textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.task-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .task-attachment-panel {
   display: grid;
   gap: 10px;
-  margin-top: 14px;
+  min-width: 0;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-strong);
 }
 
+.task-attachment-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
 .task-attachment-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 8px;
-  margin-top: 10px;
+  min-width: 0;
 }
 
 .task-attachment-item {
@@ -2269,6 +2333,26 @@ button {
 
 .task-media-picker {
   margin-top: 0;
+  max-width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 520px) {
+  .task-edit-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .task-edit-header,
+  .task-edit-body,
+  .task-edit-actions {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .task-edit-actions {
+    flex-wrap: wrap;
+  }
 }
 
 .pipeline-board {
