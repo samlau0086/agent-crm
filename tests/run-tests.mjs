@@ -3372,6 +3372,8 @@ await run("contact and company editing refinements are guarded", () => {
   assert.match(source, /saveDisabled=\{selectedRecordApprovalSaveDisabled\}/);
   assert.match(source, /saveDisabled\?: boolean/);
   assert.match(source, /disabled=\{isPending \|\| !title\.trim\(\) \|\| Boolean\(saveDisabled\)\}/);
+  assert.match(source, /!hasRecordUpdatePatchChanges\(approvalBaselineRecord, updatePatch\)/);
+  assert.match(source, /未检测到修改，无需提交审批/);
   assert.match(source, /function TimezoneSearchInput/);
   assert.match(source, /<TimezoneSearchInput/);
   assert.match(source, /function AddressAiParserButton/);

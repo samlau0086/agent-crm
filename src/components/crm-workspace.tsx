@@ -3320,6 +3320,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
 
     const approvalBaselineRecord = await loadRecordForApprovalDecision(selectedRecord);
+    if (editApprovalObjectKeys.has(selectedRecord.objectKey) && !hasRecordUpdatePatchChanges(approvalBaselineRecord, updatePatch)) {
+      setMessage("未检测到修改，无需提交审批");
+      return;
+    }
     const needsApproval =
       editApprovalObjectKeys.has(selectedRecord.objectKey) &&
       hasRecordPatchChanges(splitRecordApprovalPatch(approvalBaselineRecord, updatePatch).approvalPatch);
