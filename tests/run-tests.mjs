@@ -4197,8 +4197,8 @@ await run("email workspace repairs list snippets after opening a thread", () => 
 await run("email trash permanent delete buttons use immediate confirm flow", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /const \[trashDisplayMessageIds, setTrashDisplayMessageIds\] = useState<EmailTrashDisplayMessageIds>\(\{\}\)/);
-  assert.match(source, /getEmailThreadDisplayMessage\(selectedMessages, mailbox, selectedThread \? trashDisplayMessageIds\[selectedThread\.id\] : undefined\)/);
-  assert.match(source, /getEmailThreadDisplayMessage\(messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
+  assert.match(source, /getEmailThreadDisplayMessage\(selectedDisplayedMessages, mailbox, selectedThread \? trashDisplayMessageIds\[selectedThread\.id\] : undefined\)/);
+  assert.match(source, /getEmailThreadDisplayMessage\(displayMessages\.length \? displayMessages : messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
   assert.match(source, /const trashDisplayAnchors =[\s\S]*action === "delete"[\s\S]*getEmailThreadDisplayMessage\(messagesByThread\[threadId\] \?\? \[\], mailbox\)/);
   assert.match(source, /setTrashDisplayMessageIds\(\(current\) => \{[\s\S]*next\[threadId\] = messageId/);
   assert.match(source, /async function runImmediateAction<T>\(action: \(\) => Promise<T>\): Promise<T \| undefined>/);
@@ -4226,6 +4226,10 @@ await run("email workspace supports labels minimized compose restore and record 
   assert.match(source, /updateThreadLabels\(threadId, getEmailThreadUserLabels\(thread, state\)\.filter/);
   assert.match(source, /data-testid="email-add-label"/);
   assert.match(source, /getEmailThreadDisplayLabels\(thread, state, messages\)/);
+  assert.match(source, /function isEmailFailureLabelFilter\(label: string\): boolean/);
+  assert.match(source, /function getEmailThreadMailboxDisplayMessages\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, labelFilter = ""\): EmailMessage\[\]/);
+  assert.match(source, /const failedMessages = mailboxMessages\.filter\(\(message\) => message\.direction === "outbound" && message\.status === "failed"\)/);
+  assert.match(source, /const labels = getEmailThreadDisplayLabels\(thread, state, displayMessage \? \[displayMessage\] : displayMessages\)/);
   assert.match(source, /buildEmailThreadLabels\(selectedThread, selectedMessages\)\.map/);
   assert.match(source, /getEmailThreadUserLabels\(selectedThread, threadUiState\[selectedThread\.id\] \?\? \{\}\)\.map/);
   assert.match(source, /recordEmailActivityFilter/);
@@ -4525,7 +4529,8 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /if \(!isDeleted && hasAllMailMessage\) counts\.all \+= 1/);
   assert.match(workspace, /if \(mailbox === "trash"\) \{[\s\S]*const preferredMessage = preferredMessageId \? messages\.find/);
   assert.match(workspace, /const inboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)/);
-  assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
+  assert.match(workspace, /const displayMessages = getEmailThreadMailboxDisplayMessages\(messages, mailbox, labelFilter\)/);
+  assert.match(workspace, /const displayMessage = getEmailThreadDisplayMessage\(displayMessages\.length \? displayMessages : messages, mailbox, trashDisplayMessageIds\[thread\.id\]\)/);
   assert.match(workspace, /emailMessageParticipantLabel\(displayMessage, thread, activeAccounts\)/);
   assert.match(workspace, /const selectedDisplayedMessages = selectedMailboxMessages\.length > 0 \? selectedMailboxMessages : selectedMessages/);
   assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);

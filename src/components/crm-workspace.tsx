@@ -1135,6 +1135,10 @@ function getEmailThreadDisplayLabels(thread: EmailThread, state: EmailThreadUiSt
   return Array.from(new Set([...(state.labels ?? thread.labels ?? []), ...buildEmailThreadLabels(thread, messages)]));
 }
 
+function isEmailFailureLabelFilter(label: string): boolean {
+  return label.trim().toLowerCase() === "发送失败";
+}
+
 function getEmailThreadUserLabels(thread: EmailThread, state: EmailThreadUiState = {}): string[] {
   return Array.from(new Set((state.labels ?? thread.labels ?? []).map((label) => label.trim()).filter(Boolean)));
 }
@@ -1327,6 +1331,17 @@ function getEmailThreadMailboxMessages(messages: EmailMessage[], mailbox: EmailM
     return messages.filter((message) => isEmailMessageInMailbox(message, mailbox));
   }
   return messages;
+}
+
+function getEmailThreadMailboxDisplayMessages(messages: EmailMessage[], mailbox: EmailMailboxKey, labelFilter = ""): EmailMessage[] {
+  const mailboxMessages = getEmailThreadMailboxMessages(messages, mailbox);
+  if (isEmailFailureLabelFilter(labelFilter)) {
+    const failedMessages = mailboxMessages.filter((message) => message.direction === "outbound" && message.status === "failed");
+    if (failedMessages.length) {
+      return failedMessages;
+    }
+  }
+  return mailboxMessages;
 }
 
 function getEmailThreadDisplayMessage(messages: EmailMessage[], mailbox: EmailMailboxKey, preferredMessageId?: string): EmailMessage | undefined {
@@ -8485,9 +8500,9 @@ function EmailWorkspace({
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const [trashDisplayMessageIds, setTrashDisplayMessageIds] = useState<EmailTrashDisplayMessageIds>({});
   const [externalImageThreadIds, setExternalImageThreadIds] = useState<Set<string>>(() => new Set());
-  const selectedMailboxMessages = selectedThread ? getEmailThreadMailboxMessages(selectedMessages, mailbox) : [];
+  const selectedMailboxMessages = selectedThread ? getEmailThreadMailboxDisplayMessages(selectedMessages, mailbox, labelFilter) : [];
   const selectedDisplayedMessages = selectedMailboxMessages.length > 0 ? selectedMailboxMessages : selectedMessages;
-  const selectedDisplayMessage = getEmailThreadDisplayMessage(selectedMessages, mailbox, selectedThread ? trashDisplayMessageIds[selectedThread.id] : undefined);
+  const selectedDisplayMessage = getEmailThreadDisplayMessage(selectedDisplayedMessages, mailbox, selectedThread ? trashDisplayMessageIds[selectedThread.id] : undefined);
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const selectedThreadIsRead = Boolean(selectedThreadState.read);
   const selectedThreadIsSnoozed = Boolean(selectedThreadState.snoozedUntil && new Date(selectedThreadState.snoozedUntil).getTime() > Date.now());
@@ -10219,8 +10234,9 @@ function EmailWorkspace({
                 {visibleThreads.map((thread) => {
                   const messages = messagesByThread[thread.id] ?? [];
                   const state = threadUiState[thread.id] ?? {};
-                  const labels = getEmailThreadDisplayLabels(thread, state, messages);
-                  const displayMessage = getEmailThreadDisplayMessage(messages, mailbox, trashDisplayMessageIds[thread.id]);
+                  const displayMessages = getEmailThreadMailboxDisplayMessages(messages, mailbox, labelFilter);
+                  const displayMessage = getEmailThreadDisplayMessage(displayMessages.length ? displayMessages : messages, mailbox, trashDisplayMessageIds[thread.id]);
+                  const labels = getEmailThreadDisplayLabels(thread, state, displayMessage ? [displayMessage] : displayMessages);
                   const snippet = repairEmailMojibake(displayMessage?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
                   const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
