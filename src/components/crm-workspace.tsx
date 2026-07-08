@@ -5525,6 +5525,61 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
+  function renderSelectedRecordEngagementPanels() {
+    if (!selectedRecord || !selectedRecordUsesActivityTabs) {
+      return null;
+    }
+
+    return (
+      <>
+        <div className="section record-engagement-panel">
+          <div className="stage-header">
+            <div>
+              <strong>自动化跟进</strong>
+              <div className="subtle">基于当前记录生成或运行客户跟进、营销培育、交易推进流程。</div>
+            </div>
+            <button className="secondary-button" data-testid={`record-automation-${selectedRecord.id}`} type="button" onClick={() => openAutomationForRecord(selectedRecord)}>
+              <WorkflowIcon size={16} />
+              为此记录创建自动化
+            </button>
+          </div>
+          {selectedRecordWorkflows.length ? (
+            <div className="record-workflow-list">
+              {selectedRecordWorkflows.map((workflow) => (
+                <button className="record-workflow-card" key={workflow.id} type="button" onClick={() => openAutomationForRecord(selectedRecord, workflow.id)}>
+                  <span>
+                    <strong>{workflow.name}</strong>
+                    <small>{workflow.goal}</small>
+                  </span>
+                  <span className={workflow.status === "active" ? "badge" : "subtle-badge"}>{workflow.status}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
+          )}
+        </div>
+        <SmartReminderPanel
+          compact
+          generating={isGeneratingSmartReminders}
+          reminders={selectedRecordSmartReminders}
+          title="AI 跟进提醒"
+          emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
+          onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+          onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
+          onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
+          onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+          onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
+          onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
+          onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
+          onSnooze={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
+          pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+          onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
+        />
+      </>
+    );
+  }
+
   async function runImmediateAction<T>(action: () => Promise<T>): Promise<T | undefined> {
     setMessage(null);
     setError(null);
@@ -6127,6 +6182,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
                           showContactMethodEditor={selectedRecordQuickContactMethods.length === 0}
                         />
+                        {renderSelectedRecordEngagementPanels()}
                         <ContactDetailActivityTabs
                           activeTab={contactDetailActivityTab}
                           activityCount={selectedActivities.length}
@@ -6197,6 +6253,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onUploadMediaAssets={uploadMediaAssets}
                           onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
                         />
+                        {renderSelectedRecordEngagementPanels()}
                         <ContactDetailActivityTabs
                           activeTab={contactDetailActivityTab}
                           activityCount={selectedActivities.length}
@@ -6239,6 +6296,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
                           onUploadMediaAssets={uploadMediaAssets}
                         />
+                        {renderSelectedRecordEngagementPanels()}
                         <ContactDetailActivityTabs
                           activeTab={contactDetailActivityTab}
                           activityCount={selectedActivities.length}
@@ -6390,55 +6448,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </div>
                     </>
                     )}
-
-                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
-                      <div className="section" style={{ marginBottom: 12 }}>
-                        <div className="stage-header">
-                          <div>
-                            <strong>自动化跟进</strong>
-                            <div className="subtle">基于当前记录生成或运行客户跟进、营销培育、交易推进流程。</div>
-                          </div>
-                          <button className="secondary-button" data-testid={`record-automation-${selectedRecord.id}`} type="button" onClick={() => openAutomationForRecord(selectedRecord)}>
-                            <WorkflowIcon size={16} />
-                            为此记录创建自动化
-                          </button>
-                        </div>
-                        {selectedRecordWorkflows.length ? (
-                          <div className="record-workflow-list">
-                            {selectedRecordWorkflows.map((workflow) => (
-                              <button className="record-workflow-card" key={workflow.id} type="button" onClick={() => openAutomationForRecord(selectedRecord, workflow.id)}>
-                                <span>
-                                  <strong>{workflow.name}</strong>
-                                  <small>{workflow.goal}</small>
-                                </span>
-                                <span className={workflow.status === "active" ? "badge" : "subtle-badge"}>{workflow.status}</span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
-                        )}
-                      </div>
-                    ) : null}
-                    {selectedRecord.objectKey === "contacts" || selectedRecord.objectKey === "companies" || selectedRecord.objectKey === "deals" ? (
-                      <SmartReminderPanel
-                        compact
-                        generating={isGeneratingSmartReminders}
-                        reminders={selectedRecordSmartReminders}
-                        title="AI 跟进提醒"
-                        emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
-                        onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
-                        onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
-                        onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
-                        onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
-                        onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
-                        onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
-                        onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
-                        onSnooze={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
-                        pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
-                        onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
-                      />
-                    ) : null}
 
                     {selectedRecordQuickContactMethods.length > 0 && (!selectedRecordUsesActivityTabs || showContactAllSections) ? (
                       <>

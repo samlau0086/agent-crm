@@ -1516,6 +1516,11 @@ button {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
 }
 
+.record-engagement-panel {
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
 .contact-detail-activity-tab {
   display: inline-flex;
   min-height: 44px;
