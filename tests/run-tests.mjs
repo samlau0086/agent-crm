@@ -1295,7 +1295,10 @@ await run("record approval patch splits empty-value additions from non-empty cha
       address: "China",
       birthday: "",
       sameValue: "same",
-      emptyList: []
+      emptyList: [],
+      tags: ["vip"],
+      profile: { source: "expo" },
+      preferences: { language: "en" }
     },
     createdAt: "2026-06-30T00:00:00.000Z",
     updatedAt: "2026-06-30T00:00:00.000Z"
@@ -1308,13 +1311,23 @@ await run("record approval patch splits empty-value additions from non-empty cha
       address: "Shenzhen, China",
       birthday: "2026-06-09",
       sameValue: "same",
-      emptyList: ["new"]
+      emptyList: ["new"],
+      tags: ["vip", "priority"],
+      profile: { source: "expo", region: "south" },
+      preferences: { language: "zh" }
     }
   });
 
-  assert.deepEqual(approvalPatch, { data: { address: "Shenzhen, China" } });
-  assert.deepEqual(previousPatch, { data: { address: "China" } });
-  assert.deepEqual(immediatePatch, { data: { birthday: "2026-06-09", emptyList: ["new"] } });
+  assert.deepEqual(approvalPatch, { data: { address: "Shenzhen, China", preferences: { language: "zh" } } });
+  assert.deepEqual(previousPatch, { data: { address: "China", preferences: { language: "en" } } });
+  assert.deepEqual(immediatePatch, {
+    data: {
+      birthday: "2026-06-09",
+      emptyList: ["new"],
+      tags: ["vip", "priority"],
+      profile: { source: "expo", region: "south" }
+    }
+  });
   assert.equal(hasRecordPatchChanges(approvalPatch), true);
   assert.equal(hasRecordPatchChanges({}), false);
 
@@ -1374,6 +1387,55 @@ await run("record approval patch treats new contact methods as immediate additio
     }
   });
 
+  const nextMethodsWithNewPrimaryEmail = [
+    { id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: false },
+    { id: "method-alt-email", type: "email", value: "sales@example.com", label: "Work Email", primary: true }
+  ];
+  const addedPrimaryEmail = splitRecordApprovalPatch(record, {
+    data: {
+      contactMethods: nextMethodsWithNewPrimaryEmail,
+      email: "sales@example.com"
+    }
+  });
+
+  assert.deepEqual(addedPrimaryEmail.approvalPatch, {});
+  assert.deepEqual(addedPrimaryEmail.previousPatch, {});
+  assert.deepEqual(addedPrimaryEmail.immediatePatch, {
+    data: {
+      contactMethods: nextMethodsWithNewPrimaryEmail,
+      email: "sales@example.com"
+    }
+  });
+
+  const recordWithSecondaryEmail = {
+    ...record,
+    data: {
+      ...record.data,
+      contactMethods: [
+        { id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: true },
+        { id: "method-alt-email", type: "email", value: "sales@example.com", label: "Work Email", primary: false }
+      ]
+    }
+  };
+  const switchedToExistingPrimary = [
+    { id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: false },
+    { id: "method-alt-email", type: "email", value: "sales@example.com", label: "Work Email", primary: true },
+    { id: "method-wechat", type: "wechat", value: "sales-wechat", label: "WeChat", primary: false }
+  ];
+  assert.equal(isContactMethodsAdditionOnly(recordWithSecondaryEmail.data.contactMethods, switchedToExistingPrimary), false);
+  const switchedExisting = splitRecordApprovalPatch(recordWithSecondaryEmail, {
+    data: {
+      contactMethods: switchedToExistingPrimary,
+      email: "sales@example.com"
+    }
+  });
+  assert.deepEqual(switchedExisting.approvalPatch, {
+    data: {
+      contactMethods: switchedToExistingPrimary,
+      email: "sales@example.com"
+    }
+  });
+
   const changedExisting = splitRecordApprovalPatch(record, {
     data: {
       contactMethods: [{ id: "method-email", type: "email", value: "sales@example.com", label: "Email", primary: true }],
@@ -1393,6 +1455,25 @@ await run("record approval patch treats new contact methods as immediate additio
     }
   });
   assert.equal(isContactMethodsAdditionOnly(record.data.contactMethods, changedExisting.approvalPatch.data.contactMethods), false);
+
+  const removedExisting = splitRecordApprovalPatch(record, {
+    data: {
+      contactMethods: [],
+      email: ""
+    }
+  });
+  assert.deepEqual(removedExisting.approvalPatch, {
+    data: {
+      contactMethods: [],
+      email: ""
+    }
+  });
+  assert.deepEqual(removedExisting.previousPatch, {
+    data: {
+      contactMethods: [{ id: "method-email", type: "email", value: "no-reply@mail.instagram.com", label: "Email", primary: true }],
+      email: "no-reply@mail.instagram.com"
+    }
+  });
 });
 
 await run("api json helper rejects oversized request bodies", async () => {

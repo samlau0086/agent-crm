@@ -19,6 +19,9 @@ export function splitRecordApprovalPatch(record: CrmRecord, patch: RecordApprova
   const immediateData: Record<string, unknown> = {};
   const previousData: Record<string, unknown> = {};
   const patchData = isApprovalRecord(patch.data) ? patch.data : {};
+  const contactMethodsAdditionOnly =
+    Object.prototype.hasOwnProperty.call(patchData, "contactMethods") &&
+    isContactMethodsAdditionOnly(record.data.contactMethods, patchData.contactMethods);
   for (const [key, nextValue] of Object.entries(patchData)) {
     const previousValue = record.data[key];
     if (approvalValueKey(previousValue) === approvalValueKey(nextValue)) {
@@ -35,7 +38,12 @@ export function splitRecordApprovalPatch(record: CrmRecord, patch: RecordApprova
       }
       continue;
     }
-    if (isEmptyApprovalValue(previousValue)) {
+    if (
+      isEmptyApprovalValue(previousValue) ||
+      isAdditiveApprovalValue(previousValue, nextValue) ||
+      (contactMethodsAdditionOnly &&
+        isContactMethodDerivedAddition(key, previousValue, nextValue, record.data.contactMethods, patchData.contactMethods))
+    ) {
       immediateData[key] = nextValue;
     } else {
       approvalData[key] = nextValue;
@@ -87,9 +95,17 @@ export function isContactMethodsAdditionOnly(previousValue: unknown, nextValue: 
     return false;
   }
   const previousById = new Map(previousMethods.map((method) => [method.id, method]));
+  const addedMethods = nextMethods.filter((method) => !previousById.has(method.id));
+  const hasAddedPrimaryMethod = addedMethods.some((method) => method.primary === true);
   return previousMethods.every((method) => {
     const nextMethod = previousById.has(method.id) ? nextMethods.find((candidate) => candidate.id === method.id) : undefined;
-    return Boolean(nextMethod && contactMethodStableValueKey(nextMethod) === contactMethodStableValueKey(method));
+    if (!nextMethod || contactMethodStableValueKey(nextMethod) !== contactMethodStableValueKey(method)) {
+      return false;
+    }
+    if (method.primary !== nextMethod.primary) {
+      return method.primary === true && nextMethod.primary !== true && hasAddedPrimaryMethod;
+    }
+    return true;
   });
 }
 
@@ -116,6 +132,34 @@ function approvalValueKey(value: unknown): string {
   if (isEmptyApprovalValue(value)) return "";
   if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function isAdditiveApprovalValue(previousValue: unknown, nextValue: unknown): boolean {
+  if (Array.isArray(previousValue) && Array.isArray(nextValue)) {
+    return isArrayAppendOnly(previousValue, nextValue);
+  }
+  if (isApprovalRecord(previousValue) && isApprovalRecord(nextValue)) {
+    return isObjectSupplementOnly(previousValue, nextValue);
+  }
+  return false;
+}
+
+function isArrayAppendOnly(previousValue: unknown[], nextValue: unknown[]): boolean {
+  if (nextValue.length <= previousValue.length) {
+    return false;
+  }
+  return previousValue.every((item, index) => approvalValueKey(item) === approvalValueKey(nextValue[index]));
+}
+
+function isObjectSupplementOnly(previousValue: Record<string, unknown>, nextValue: Record<string, unknown>): boolean {
+  const previousKeys = Object.keys(previousValue);
+  const nextKeys = Object.keys(nextValue);
+  if (nextKeys.length <= previousKeys.length) {
+    return false;
+  }
+  return previousKeys.every((key) =>
+    Object.prototype.hasOwnProperty.call(nextValue, key) && approvalValueKey(previousValue[key]) === approvalValueKey(nextValue[key])
+  );
 }
 
 function contactMethodStableValueKey(method: Record<string, unknown>): string {
@@ -155,6 +199,46 @@ function splitContactMethodsApprovalValue(
     return { approvalValue: nextValue, previousValue };
   }
   return { immediateValue: nextValue };
+}
+
+function isContactMethodDerivedAddition(
+  key: string,
+  previousValue: unknown,
+  nextValue: unknown,
+  previousContactMethodsValue: unknown,
+  nextContactMethodsValue: unknown
+): boolean {
+  if (key !== "email" && key !== "phone") {
+    return false;
+  }
+  if (typeof nextValue !== "string" || approvalValueKey(previousValue) === approvalValueKey(nextValue)) {
+    return false;
+  }
+  const normalizedNextValue = normalizeContactMethodComparableValue(key, nextValue);
+  if (!normalizedNextValue) {
+    return false;
+  }
+  const previousMethodIds = new Set(normalizeApprovalContactMethods(previousContactMethodsValue).map((method) => method.id));
+  return normalizeApprovalContactMethods(nextContactMethodsValue).some((method) => {
+    if (previousMethodIds.has(method.id)) {
+      return false;
+    }
+    if (key === "email" && method.type !== "email") {
+      return false;
+    }
+    if (key === "phone" && method.type !== "tel" && method.type !== "mob") {
+      return false;
+    }
+    return normalizeContactMethodComparableValue(key, method.value) === normalizedNextValue;
+  });
+}
+
+function normalizeContactMethodComparableValue(key: "email" | "phone", value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  return key === "email" ? trimmed.toLowerCase() : trimmed;
 }
 
 function normalizeApprovalContactMethods(value: unknown): Array<Record<string, unknown> & { id: string }> {
