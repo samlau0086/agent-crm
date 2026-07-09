@@ -3216,7 +3216,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   function pushEmailHistoryRoute(nextPath: string) {
     const currentPath = typeof window === "undefined" ? `${pathname}?${searchParams.toString()}` : `${window.location.pathname}${window.location.search}`;
     if (currentPath !== nextPath) {
-      window.history.pushState(window.history.state, "", nextPath);
+      router.push(nextPath);
     }
   }
 
