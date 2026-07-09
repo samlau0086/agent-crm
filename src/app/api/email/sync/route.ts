@@ -25,6 +25,26 @@ async function postApiMetricsHandler(request: NextRequest) {
     }
     const executor = getBackgroundJobExecutor(repository);
     try {
+      if (body.fullResync && process.env.JOB_EXECUTOR !== "redis") {
+        const queuedAccount = await repository.markEmailAccountSyncQueued(context, body.accountId);
+        setTimeout(() => {
+          void executor.runEmailSyncJob(context, { accountId: body.accountId, limit: body.limit, fullResync: true }).catch((syncError) => {
+            void getFailedEmailSyncResultOrThrow(context, repository, body.accountId, syncError).catch(() => undefined);
+          });
+        }, 0);
+        return ok(
+          {
+            account: queuedAccount,
+            importedCount: 0,
+            scannedCount: 0,
+            skippedDuplicateCount: 0,
+            hasMore: false,
+            syncMode: "full",
+            status: "queued"
+          },
+          { status: 202 }
+        );
+      }
       const result = await executor.runEmailSyncJob(context, { accountId: body.accountId, limit: body.limit, fullResync: body.fullResync });
       return ok(result, { status: result.status === "queued" ? 202 : 200 });
     } catch (syncError) {

@@ -2553,6 +2553,9 @@ await run("email sync route uses configured background executor and forwards bou
   const source = readFileSync("src/app/api/email/sync/route.ts", "utf8");
   assert.match(source, /getBackgroundJobExecutor\(repository\)/);
   assert.doesNotMatch(source, /new InlineBackgroundJobExecutor/);
+  assert.match(source, /body\.fullResync && process\.env\.JOB_EXECUTOR !== "redis"/);
+  assert.match(source, /markEmailAccountSyncQueued\(context, body\.accountId\)/);
+  assert.match(source, /setTimeout\(\(\) => \{/);
   assert.match(source, /runEmailSyncJob\(context,\s*\{\s*accountId:\s*body\.accountId,\s*limit:\s*body\.limit,\s*fullResync:\s*body\.fullResync\s*\}\)/);
   assert.match(source, /result\.status === "queued" \? 202 : 200/);
 });
