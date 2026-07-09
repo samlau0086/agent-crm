@@ -175,7 +175,8 @@ export function formatJobWorkerResult(result: JobWorkerResult): string | undefin
     return `Moved ${result.jobType ?? "job"} to dead letter queue: ${result.error ?? "unknown error"}`;
   }
   if (result.emailSync) {
-    return `Processed email sync for ${result.emailSync.account.emailAddress} with status ${result.emailSync.status}`;
+    const action = result.emailSync.syncMode === "full" ? "full email resync" : "email sync";
+    return `Processed ${action} for ${result.emailSync.account.emailAddress} with status ${result.emailSync.status}`;
   }
   if (result.emailMessage) {
     const action = result.jobType === "email_translate" ? "translate" : "send";

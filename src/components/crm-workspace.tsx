@@ -394,6 +394,7 @@ type EmailSyncRun = {
   skippedDuplicateCount?: number;
   pageCount?: number;
   hasMore?: boolean;
+  syncMode?: "incremental" | "full";
   status: string;
   error?: string;
 };
@@ -4409,7 +4410,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     await refreshEmailThreads({ reloadSelectedMessages: true });
     if (result.status === "queued") {
-      scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true, accountIds: [result.account.id] });
+      scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true, accountIds: [result.account.id], fullResync: options.fullResync });
       if (options.fullResync) {
         setMessage(`邮箱全量同步已提交后台：${result.account.emailAddress}。可以在左侧发件账户或邮箱设置页查看排队、拉取进度和最终扫描结果。`);
       } else {
@@ -4732,7 +4733,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
   }
 
-  function summarizeEmailSyncCompletion(accounts: EmailAccount[]): { type: "message" | "error"; text: string } | undefined {
+  function summarizeEmailSyncCompletion(accounts: EmailAccount[], options: { fullResync?: boolean } = {}): { type: "message" | "error"; text: string } | undefined {
     if (!accounts.length) {
       return undefined;
     }
@@ -4740,7 +4741,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (failed.length) {
       return {
         type: "error",
-        text: `邮箱后台同步结束，但 ${failed.length} 个账号失败：${failed
+        text: `${options.fullResync ? "邮箱后台全量同步" : "邮箱后台同步"}结束，但 ${failed.length} 个账号失败：${failed
           .map((account) => `${account.emailAddress}${account.lastSyncError || account.lastConnectionError ? `（${account.lastSyncError ?? account.lastConnectionError}）` : ""}`)
           .join("；")}`
       };
@@ -4749,7 +4750,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (!synced.length) {
       return {
         type: "message",
-        text: "邮箱后台同步结束，但没有账号返回扫描结果。请在邮箱设置页查看账号状态和连接日志。"
+        text: `${options.fullResync ? "邮箱后台全量同步" : "邮箱后台同步"}结束，但没有账号返回扫描结果。请在邮箱设置页查看账号状态和连接日志。`
       };
     }
     const scannedTotal = synced.reduce((sum, account) => sum + (account.lastSyncScannedCount ?? 0), 0);
@@ -4757,16 +4758,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const duplicateTotal = synced.reduce((sum, account) => sum + (account.lastSyncSkippedDuplicateCount ?? 0), 0);
     return {
       type: "message",
-      text: `邮箱后台同步完成：同步 ${synced.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封`
+      text: `${options.fullResync ? "邮箱后台全量同步" : "邮箱后台同步"}完成：同步 ${synced.length} 个账号，扫描 ${scannedTotal} 封，新增 ${importedTotal} 封，跳过重复 ${duplicateTotal} 封`
     };
   }
 
-  function scheduleEmailThreadsRefreshPolling(options: { reloadSelectedMessages?: boolean; accountIds?: string[] } = {}) {
+  function scheduleEmailThreadsRefreshPolling(options: { reloadSelectedMessages?: boolean; accountIds?: string[]; fullResync?: boolean } = {}) {
     const intervals = [1500, 2500, 5000, 7500, 10000, 15000, 20000, 30000, 45000];
     const pickTrackedAccounts = (accounts: EmailAccount[]) =>
       options.accountIds?.length ? accounts.filter((account) => options.accountIds?.includes(account.id)) : accounts;
     const applyCompletionSummary = (accounts: EmailAccount[]) => {
-      const summary = summarizeEmailSyncCompletion(pickTrackedAccounts(accounts));
+      const summary = summarizeEmailSyncCompletion(pickTrackedAccounts(accounts), { fullResync: options.fullResync });
       if (!summary) {
         return;
       }

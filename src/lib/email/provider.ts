@@ -44,6 +44,7 @@ export interface EmailSyncResult {
   skippedDuplicateCount: number;
   pageCount?: number;
   hasMore?: boolean;
+  syncMode?: "incremental" | "full";
   status: string;
 }
 
@@ -78,10 +79,11 @@ export function createEmailProviderAdapter(repository: PrismaCrmRepository, opti
 }
 
 type EmailSyncCounters = Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount"> & Pick<EmailAccount, "imapUidValidity" | "imapLastSeenUid">;
+type EmailSyncCompletion = EmailSyncCounters & Pick<EmailSyncResult, "syncMode">;
 
 type RepositoryEmailSyncStatusMethods = {
   markEmailAccountSyncRunning?: (context: RequestContext, accountId: string) => Promise<EmailAccount> | EmailAccount;
-  markEmailAccountSyncCompleted?: (context: RequestContext, accountId: string, result: EmailSyncCounters) => Promise<EmailAccount> | EmailAccount;
+  markEmailAccountSyncCompleted?: (context: RequestContext, accountId: string, result: EmailSyncCompletion) => Promise<EmailAccount> | EmailAccount;
   markEmailAccountSyncFailed?: (context: RequestContext, accountId: string, errorMessage: string) => Promise<EmailAccount> | EmailAccount;
   syncEmailAccount?: (context: RequestContext, accountId: string) => Promise<{ account: EmailAccount; importedCount: number; status: string }> | { account: EmailAccount; importedCount: number; status: string };
 };
@@ -180,6 +182,9 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
     assertProviderSupports(account, "sync");
     const syncOptions = normalizeEmailSyncOptions(options, this.options.oauth?.limit);
+    if (syncOptions.fullResync && isOAuthProvider(account.provider)) {
+      throw new Error("Full mailbox resync is only supported for SMTP/IMAP accounts");
+    }
     const syncLimit = syncOptions.limit;
     const syncDeadlineAt = Date.now() + getEmailSyncJobTimeoutMs();
     await this.markSyncRunning(context, accountId);
@@ -196,6 +201,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
           ...importResult,
           pageCount: result.pageCount,
           hasMore: result.hasMore,
+          syncMode: "incremental",
           status: "synced"
         };
       } catch (error) {
@@ -226,13 +232,15 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       const syncedAccount = await this.markSyncCompleted(context, accountId, {
         ...importResult,
         imapUidValidity: syncState.imapUidValidity,
-        imapLastSeenUid: syncState.imapLastSeenUid
+        imapLastSeenUid: syncState.imapLastSeenUid,
+        syncMode: syncOptions.fullResync ? "full" : "incremental"
       });
       return {
         account: syncedAccount,
         ...importResult,
         pageCount: inbound?.pageCount,
         hasMore: syncState.hasMore ?? (!inbound && recentInbound!.messages.length >= syncLimit),
+        syncMode: syncOptions.fullResync ? "full" : "incremental",
         status: "synced"
       };
     } catch (error) {
@@ -319,7 +327,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
   }
 
-  private async markSyncCompleted(context: RequestContext, accountId: string, result: EmailSyncCounters): Promise<EmailAccount> {
+  private async markSyncCompleted(context: RequestContext, accountId: string, result: EmailSyncCompletion): Promise<EmailAccount> {
     const repository = this.repository as PrismaCrmRepository & RepositoryEmailSyncStatusMethods;
     if (repository.markEmailAccountSyncCompleted) {
       return repository.markEmailAccountSyncCompleted(context, accountId, result);

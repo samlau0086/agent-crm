@@ -955,7 +955,7 @@ export class CrmStore {
   markEmailAccountSyncCompleted(
     context: RequestContext,
     accountId: string,
-    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number; imapUidValidity?: string; imapLastSeenUid?: string }
+    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number; imapUidValidity?: string; imapLastSeenUid?: string; syncMode?: "incremental" | "full" }
   ): EmailAccount {
     requirePermission(context, "crm.admin");
     const account = this.assertEmailAccount(context, accountId);
@@ -974,9 +974,10 @@ export class CrmStore {
     delete account.lastSyncError;
     account.updatedAt = now;
     this.writeAuditLog(context, "update", "email_account", account.id, {
-      summary: `Synced email account ${account.emailAddress}`,
+      summary: `${result.syncMode === "full" ? "Full resynced" : "Synced"} email account ${account.emailAddress}`,
       details: {
         provider: account.provider,
+        syncMode: result.syncMode ?? "incremental",
         scannedCount: account.lastSyncScannedCount,
         importedCount: account.lastSyncImportedCount,
         skippedDuplicateCount: account.lastSyncSkippedDuplicateCount
