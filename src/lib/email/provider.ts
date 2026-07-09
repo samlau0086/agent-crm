@@ -282,7 +282,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         imapLastSeenUid
       });
       pageCount += 1;
-      const pageImportResult = await this.importInboundMessages(context, account, inbound.messages);
+      const pageImportResult = await this.importInboundMessages(context, account, inbound.messages, { fullResync: true });
       importResult = {
         importedCount: importResult.importedCount + pageImportResult.importedCount,
         scannedCount: importResult.scannedCount + pageImportResult.scannedCount,
@@ -467,12 +467,17 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     };
   }
 
-  private async importInboundMessages(context: RequestContext, account: EmailAccount, messages: Awaited<ReturnType<typeof fetchRecentOAuthEmails>>["messages"]): Promise<Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount">> {
+  private async importInboundMessages(
+    context: RequestContext,
+    account: EmailAccount,
+    messages: Awaited<ReturnType<typeof fetchRecentOAuthEmails>>["messages"],
+    options: { fullResync?: boolean } = {}
+  ): Promise<Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount">> {
     let importedCount = 0;
     let skippedDuplicateCount = 0;
     for (const message of messages) {
       try {
-        const isDeletedExternalMessage = this.repository.isEmailExternalMessageDeleted
+        const isDeletedExternalMessage = !options.fullResync && this.repository.isEmailExternalMessageDeleted
           ? message.externalMessageId
             ? await this.repository.isEmailExternalMessageDeleted(context, account.id, message.externalMessageId)
             : false
@@ -481,9 +486,15 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
           skippedDuplicateCount += 1;
           continue;
         }
-        if (message.externalMessageId && (await this.repository.findEmailMessageByExternalId(context, account.id, message.externalMessageId))) {
-          skippedDuplicateCount += 1;
-          continue;
+        if (message.externalMessageId) {
+          const existing = await this.repository.findEmailMessageByExternalId(context, account.id, message.externalMessageId);
+          if (existing) {
+            if (options.fullResync) {
+              await this.restoreThreadVisibilityForFullResync(context, existing.threadId);
+            }
+            skippedDuplicateCount += 1;
+            continue;
+          }
         }
         await this.repository.recordEmailMessage(context, {
           accountId: account.id,
@@ -509,6 +520,20 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       }
     }
     return { importedCount, scannedCount: messages.length, skippedDuplicateCount };
+  }
+
+  private async restoreThreadVisibilityForFullResync(context: RequestContext, threadId: string): Promise<void> {
+    const repository = this.repository as PrismaCrmRepository & {
+      updateEmailThreadState?: PrismaCrmRepository["updateEmailThreadState"];
+    };
+    if (!repository.updateEmailThreadState) {
+      return;
+    }
+    await repository.updateEmailThreadState(context, threadId, {
+      archived: false,
+      deleted: false,
+      snoozedUntil: null
+    });
   }
 }
 

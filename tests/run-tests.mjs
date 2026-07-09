@@ -10368,6 +10368,98 @@ await run("email sync skips externally deleted messages after local thread delet
   assert.equal(store.listEmailThreads(context).some((thread) => thread.subject === "Do not reimport"), false);
 });
 
+await run("email full resync reimports locally deleted provider messages", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Full Deleted Sync Inbox",
+    emailAddress: "full-deleted-sync@example.com",
+    provider: "custom",
+    status: "active",
+    syncEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Reimport on full sync",
+    bodyText: "This was deleted locally.",
+    externalMessageId: "provider-full-deleted-message-id"
+  });
+
+  store.deleteEmailThread(context, message.threadId);
+  assert.equal(store.isEmailExternalMessageDeleted(context, account.id, "provider-full-deleted-message-id"), true);
+
+  const adapter = createEmailProviderAdapter(store);
+  const result = await adapter.importInboundMessages(
+    context,
+    account,
+    [
+      {
+        from: "buyer@example.com",
+        to: [account.emailAddress],
+        cc: [],
+        subject: "Reimport on full sync",
+        bodyText: "The provider still has this message.",
+        externalMessageId: "provider-full-deleted-message-id",
+        receivedAt: "2026-07-08T07:30:00.000Z"
+      }
+    ],
+    { fullResync: true }
+  );
+
+  assert.equal(result.importedCount, 1);
+  assert.equal(result.skippedDuplicateCount, 0);
+  assert.equal(store.listEmailThreads(context).some((thread) => thread.subject === "Reimport on full sync" && !thread.deleted), true);
+});
+
+await run("email full resync restores hidden duplicate threads to the inbox", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Full Hidden Duplicate Inbox",
+    emailAddress: "full-hidden-duplicate@example.com",
+    provider: "custom",
+    status: "active",
+    syncEnabled: true
+  });
+  const message = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "buyer@example.com",
+    to: [account.emailAddress],
+    subject: "Restore hidden duplicate",
+    bodyText: "Already imported.",
+    externalMessageId: "provider-hidden-duplicate-message-id"
+  });
+  store.updateEmailThreadState(context, message.threadId, { archived: true, deleted: true });
+
+  const adapter = createEmailProviderAdapter(store);
+  const result = await adapter.importInboundMessages(
+    context,
+    account,
+    [
+      {
+        from: "buyer@example.com",
+        to: [account.emailAddress],
+        cc: [],
+        subject: "Restore hidden duplicate",
+        bodyText: "Already imported.",
+        externalMessageId: "provider-hidden-duplicate-message-id",
+        receivedAt: "2026-07-08T07:30:00.000Z"
+      }
+    ],
+    { fullResync: true }
+  );
+
+  const restored = store.listEmailThreads(context).find((thread) => thread.id === message.threadId);
+  assert.equal(result.importedCount, 0);
+  assert.equal(result.skippedDuplicateCount, 1);
+  assert.equal(restored?.archived, false);
+  assert.equal(restored?.deleted, false);
+});
+
 await run("email messages auto-link to contacts by participant email unless explicitly linked", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
