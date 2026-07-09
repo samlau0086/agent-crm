@@ -1659,7 +1659,9 @@ function normalizeEmailInboundMetadata(value: unknown): EmailMessage["inboundMet
     ...(typeof input.country === "string" && input.country.trim() ? { country: input.country.trim() } : {}),
     ...(typeof input.timezone === "string" && input.timezone.trim() ? { timezone: input.timezone.trim() } : {}),
     ...(typeof input.userAgent === "string" && input.userAgent.trim() ? { userAgent: input.userAgent.trim() } : {}),
-    ...(typeof input.receivedHeader === "string" && input.receivedHeader.trim() ? { receivedHeader: input.receivedHeader.trim().slice(0, 2000) } : {})
+    ...(typeof input.receivedHeader === "string" && input.receivedHeader.trim() ? { receivedHeader: input.receivedHeader.trim().slice(0, 2000) } : {}),
+    ...(typeof input.sourceMailbox === "string" && input.sourceMailbox.trim() ? { sourceMailbox: input.sourceMailbox.trim().slice(0, 200) } : {}),
+    ...(input.sourceMailboxRole === "inbox" || input.sourceMailboxRole === "spam" ? { sourceMailboxRole: input.sourceMailboxRole } : {})
   };
 }
 

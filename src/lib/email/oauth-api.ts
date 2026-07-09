@@ -1,7 +1,7 @@
 import type { EmailAttachment, EmailConnectionConfig } from "@/lib/crm/types";
 import { normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
 import type { EmailSendInput } from "@/lib/email/provider";
-import type { InboundEmail } from "@/lib/email/smtp-imap";
+import { withInboundMailboxSource, type InboundEmail } from "@/lib/email/smtp-imap";
 import { assertOAuthConfig, refreshOAuthAccessToken, type OAuthProviderConfig } from "@/lib/email/oauth";
 
 export interface OAuthMailApiResult {
@@ -33,11 +33,13 @@ export interface OAuthMailApiOptions {
   now?: Date;
   providerConfig?: Partial<OAuthProviderConfig>;
   limit?: number;
+  includeSpam?: boolean;
 }
 
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
 const OUTLOOK_API_BASE = "https://graph.microsoft.com/v1.0";
 const GMAIL_INBOX_QUERY = "in:inbox";
+const GMAIL_SPAM_QUERY = "in:spam";
 
 export async function testOAuthConnection(
   provider: "gmail" | "outlook",
@@ -160,13 +162,15 @@ export async function fetchRecentOAuthEmails(
   const limit = normalizeSyncLimit(options.limit);
   if (provider === "gmail") {
     const messages: InboundEmail[] = [];
-    let pageToken: string | undefined;
+    const seenExternalIds = new Set<string>();
     let pageCount = 0;
     let hasMore = false;
-    do {
+    for (const source of buildGmailSyncSources(options.includeSpam === true)) {
+      let pageToken: string | undefined;
+      do {
       const url = new URL(`${GMAIL_API_BASE}/users/me/messages`);
       url.searchParams.set("maxResults", String(Math.min(25, limit - messages.length)));
-      url.searchParams.set("q", GMAIL_INBOX_QUERY);
+      url.searchParams.set("q", source.query);
       if (pageToken) {
         url.searchParams.set("pageToken", pageToken);
       }
@@ -188,35 +192,45 @@ export async function fetchRecentOAuthEmails(
         await assertOk(messageResponse, "Gmail get message");
         const parsed = parseGmailMessage(await messageResponse.json());
         if (parsed) {
-          messages.push(parsed);
+          pushUniqueInboundMessage(messages, seenExternalIds, withInboundMailboxSource(parsed, source.mailbox, source.role));
         }
       }
-    } while (pageToken && messages.length < limit);
+      } while (pageToken && messages.length < limit);
+      if (messages.length >= limit) {
+        break;
+      }
+    }
     return { config: refreshed, messages, fetchedCount: messages.length, pageCount, hasMore: hasMore && messages.length >= limit };
   }
 
   const messages: InboundEmail[] = [];
-  let url: string | undefined = buildOutlookMessagesUrl(Math.min(25, limit));
+  const seenExternalIds = new Set<string>();
   let pageCount = 0;
   let hasMore = false;
-  while (url && messages.length < limit) {
-    const response = await fetchImpl(url, {
-      headers: oauthJsonHeaders(refreshed)
-    });
-    await assertOk(response, "Outlook list messages");
-    const payload = (await response.json()) as { value?: unknown[]; "@odata.nextLink"?: string };
-    pageCount += 1;
-    for (const item of payload.value ?? []) {
-      if (messages.length >= limit) {
-        break;
+  for (const source of buildOutlookSyncSources(options.includeSpam === true)) {
+    let url: string | undefined = buildOutlookMessagesUrl(source.folder, Math.min(25, limit - messages.length));
+    while (url && messages.length < limit) {
+      const response = await fetchImpl(url, {
+        headers: oauthJsonHeaders(refreshed)
+      });
+      await assertOk(response, "Outlook list messages");
+      const payload = (await response.json()) as { value?: unknown[]; "@odata.nextLink"?: string };
+      pageCount += 1;
+      for (const item of payload.value ?? []) {
+        if (messages.length >= limit) {
+          break;
+        }
+        const parsed = parseOutlookMessage(item);
+        if (parsed) {
+          pushUniqueInboundMessage(messages, seenExternalIds, withInboundMailboxSource(parsed, source.folder, source.role));
+        }
       }
-      const parsed = parseOutlookMessage(item);
-      if (parsed) {
-        messages.push(parsed);
-      }
+      url = payload["@odata.nextLink"];
+      hasMore = Boolean(url);
     }
-    url = payload["@odata.nextLink"];
-    hasMore = Boolean(url);
+    if (messages.length >= limit) {
+      break;
+    }
   }
   return {
     config: refreshed,
@@ -231,13 +245,38 @@ function normalizeSyncLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(100, Math.floor(limit ?? 10)));
 }
 
-function buildOutlookMessagesUrl(top: number): string {
+function pushUniqueInboundMessage(messages: InboundEmail[], seenExternalIds: Set<string>, message: InboundEmail): void {
+  const externalId = message.externalMessageId?.trim();
+  if (externalId) {
+    if (seenExternalIds.has(externalId)) {
+      return;
+    }
+    seenExternalIds.add(externalId);
+  }
+  messages.push(message);
+}
+
+function buildGmailSyncSources(includeSpam: boolean): Array<{ query: string; mailbox: string; role: "inbox" | "spam" }> {
+  return [
+    { query: GMAIL_INBOX_QUERY, mailbox: "INBOX", role: "inbox" },
+    ...(includeSpam ? [{ query: GMAIL_SPAM_QUERY, mailbox: "SPAM", role: "spam" } as const] : [])
+  ];
+}
+
+function buildOutlookSyncSources(includeSpam: boolean): Array<{ folder: string; role: "inbox" | "spam" }> {
+  return [
+    { folder: "inbox", role: "inbox" },
+    ...(includeSpam ? [{ folder: "junkemail", role: "spam" } as const] : [])
+  ];
+}
+
+function buildOutlookMessagesUrl(folder: string, top: number): string {
   const params = new URLSearchParams({
     $top: String(top),
     $orderby: "receivedDateTime desc",
     $expand: "attachments"
   });
-  return `${OUTLOOK_API_BASE}/me/mailFolders/inbox/messages?${params.toString()}`;
+  return `${OUTLOOK_API_BASE}/me/mailFolders/${encodeURIComponent(folder)}/messages?${params.toString()}`;
 }
 
 async function ensureOAuthAccess(

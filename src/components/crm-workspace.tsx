@@ -48,6 +48,7 @@ import {
   Search,
   Send,
   Settings,
+  ShieldAlert,
   Star,
   Sun,
   Tag,
@@ -268,7 +269,7 @@ type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type DealWorkspaceView = "pipeline" | "list";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
 type EmailSettingsStep = "identity" | "inbound" | "outbound" | "review";
-type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "scheduled" | "drafts" | "archived" | "trash" | "all";
+type EmailMailboxKey = "inbox" | "starred" | "snoozed" | "important" | "sent" | "scheduled" | "drafts" | "spam" | "archived" | "trash" | "all";
 type EmailCategoryKey = "primary" | "promotions" | "social" | "updates";
 type EmailMailMode = "list" | "detail";
 type EmailListDisplayMode = "thread" | "message";
@@ -324,6 +325,10 @@ type TalkSuggestionResponse = {
   generationMode?: "local" | "provider" | "provider_fallback";
 };
 type EmailAiSource = EmailAiSourceRef;
+type EmailSearchCommandKey = "company" | "contact" | "deal";
+type EmailSearchSuggestion =
+  | { kind: "command"; command: EmailSearchCommandKey; label: string; meta: string; value: string }
+  | { kind: "record"; command: EmailSearchCommandKey; label: string; meta: string; value: string; record: CrmRecord };
 const defaultEmailSyncSettings: EmailSyncSettings = {
   workspaceId: "",
   enabled: true,
@@ -380,6 +385,16 @@ type EmailSyncAllRun = {
     skipReason?: string;
     error?: string;
   }>;
+};
+type EmailSyncRun = {
+  account: EmailAccount;
+  importedCount: number;
+  scannedCount?: number;
+  skippedDuplicateCount?: number;
+  pageCount?: number;
+  hasMore?: boolean;
+  status: string;
+  error?: string;
 };
 type EmailAccountDraft = {
   editingAccountId?: string;
@@ -598,6 +613,7 @@ const emailMailboxMeta: Array<{ key: EmailMailboxKey; label: string; icon: Lucid
   { key: "sent", label: "已发送", icon: Send },
   { key: "scheduled", label: "待发送", icon: CalendarClock },
   { key: "drafts", label: "草稿", icon: Mail },
+  { key: "spam", label: "垃圾邮件", icon: ShieldAlert },
   { key: "archived", label: "归档", icon: Archive },
   { key: "trash", label: "已删除", icon: Trash2 },
   { key: "all", label: "全部邮件", icon: MailOpen }
@@ -609,6 +625,11 @@ const emailCategoryMeta: Array<{ key: EmailCategoryKey; label: string; icon: Luc
   { key: "updates", label: "更新", icon: CalendarClock, keywords: ["update", "notification", "report", "receipt", "invoice", "ticket", "github", "alert", "提醒", "账单", "报告"] }
 ];
 const allEmailAccountsKey = "all";
+const emailSearchCommandMeta: Array<{ command: EmailSearchCommandKey; label: string; meta: string; objectKey: "companies" | "contacts" | "deals" }> = [
+  { command: "company", label: "/company:", meta: "按公司筛选相关邮件", objectKey: "companies" },
+  { command: "contact", label: "/contact:", meta: "按联系人筛选相关邮件", objectKey: "contacts" },
+  { command: "deal", label: "/deal:", meta: "按交易所属公司筛选相关邮件", objectKey: "deals" }
+];
 
 function normalizeEmailMailboxKey(value: string | null): EmailMailboxKey {
   return emailMailboxMeta.some((item) => item.key === value) ? (value as EmailMailboxKey) : "inbox";
@@ -624,6 +645,27 @@ function normalizeEmailMailMode(value: string | null): EmailMailMode {
 
 function normalizeEmailListDisplayMode(value: string | null): EmailListDisplayMode {
   return value === "message" ? "message" : "thread";
+}
+
+function parseEmailSearchAutocompleteInput(value: string): { mode: "none" } | { mode: "command"; prefix: string } | { mode: "record"; command: EmailSearchCommandKey; query: string } {
+  const trimmed = value.trimStart();
+  if (!trimmed.startsWith("/")) {
+    return { mode: "none" };
+  }
+  const commandMatch = trimmed.match(/^\/(company|contact|deal)\s*:\s*(.*)$/i);
+  if (commandMatch?.[1] && commandMatch[2] !== undefined) {
+    return { mode: "record", command: commandMatch[1].toLowerCase() as EmailSearchCommandKey, query: commandMatch[2] };
+  }
+  const prefix = trimmed.slice(1).toLowerCase();
+  return { mode: "command", prefix };
+}
+
+function emailSearchCommandObjectKey(command: EmailSearchCommandKey): "companies" | "contacts" | "deals" {
+  return emailSearchCommandMeta.find((item) => item.command === command)?.objectKey ?? "contacts";
+}
+
+function emailSearchCommandLabel(command: EmailSearchCommandKey): string {
+  return emailSearchCommandMeta.find((item) => item.command === command)?.label ?? `/${command}:`;
 }
 
 function normalizeEmailWorkspaceView(value: string | null): EmailWorkspaceView {
@@ -1371,7 +1413,10 @@ function getEmailThreadSendStatus(messages: EmailMessage[], displayMessage: Emai
 
 function isEmailMessageInMailbox(message: EmailMessage, mailbox: EmailMailboxKey): boolean {
   if (mailbox === "inbox") {
-    return message.direction === "inbound" && message.status === "received";
+    return message.direction === "inbound" && message.status === "received" && message.inboundMetadata?.sourceMailboxRole !== "spam";
+  }
+  if (mailbox === "spam") {
+    return message.direction === "inbound" && message.status === "received" && message.inboundMetadata?.sourceMailboxRole === "spam";
   }
   if (mailbox === "sent") {
     return (
@@ -1393,7 +1438,7 @@ function getEmailThreadMailboxMessages(messages: EmailMessage[], mailbox: EmailM
   if (mailbox === "all") {
     return messages.filter((message) => message.direction === "inbound" && message.status === "received");
   }
-  if (mailbox === "inbox" || mailbox === "sent" || mailbox === "scheduled" || mailbox === "drafts") {
+  if (mailbox === "inbox" || mailbox === "sent" || mailbox === "scheduled" || mailbox === "drafts" || mailbox === "spam") {
     return messages.filter((message) => isEmailMessageInMailbox(message, mailbox));
   }
   return messages;
@@ -4332,10 +4377,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setMessage(`已创建邮箱账户：${account.emailAddress}`);
   }
 
-  async function syncEmailAccount(accountId: string) {
-    const result = await fetchJson<{ account: EmailAccount; importedCount: number; scannedCount?: number; skippedDuplicateCount?: number; hasMore?: boolean; status: string; error?: string }>("/api/email/sync", {
+  async function syncEmailAccount(accountId: string, options: { fullResync?: boolean } = {}) {
+    const result = await fetchJson<EmailSyncRun>("/api/email/sync", {
       method: "POST",
-      body: { accountId }
+      body: { accountId, ...(options.fullResync ? { fullResync: true, limit: 100 } : {}) }
     });
     setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
     if (result.status === "failed") {
@@ -4346,12 +4391,29 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     await refreshEmailThreads({ reloadSelectedMessages: true });
     if (result.status === "queued") {
       scheduleEmailThreadsRefreshPolling({ reloadSelectedMessages: true, accountIds: [result.account.id] });
-      setMessage(`邮箱同步已提交后台：${result.account.emailAddress}。可以在左侧发件账户或邮箱设置页查看排队、拉取进度和最终扫描结果。`);
+      if (options.fullResync) {
+        setMessage(`邮箱全量同步已提交后台：${result.account.emailAddress}。可以在左侧发件账户或邮箱设置页查看排队、拉取进度和最终扫描结果。`);
+      } else {
+        setMessage(`邮箱同步已提交后台：${result.account.emailAddress}。可以在左侧发件账户或邮箱设置页查看排队、拉取进度和最终扫描结果。`);
+      }
       router.refresh();
       return;
     }
-    setMessage(`邮箱同步完成：扫描 ${result.scannedCount ?? result.importedCount} 封，新增 ${result.importedCount} 封，跳过重复 ${result.skippedDuplicateCount ?? 0} 封${result.hasMore ? "，仍有更多历史邮件" : ""}`);
+    setMessage(`${options.fullResync ? "邮箱全量同步" : "邮箱同步"}完成：扫描 ${result.scannedCount ?? result.importedCount} 封，新增 ${result.importedCount} 封，跳过重复 ${result.skippedDuplicateCount ?? 0} 封${result.pageCount ? `，分页 ${result.pageCount} 次` : ""}${result.hasMore ? "，仍有更多历史邮件" : ""}`);
     router.refresh();
+  }
+
+  async function fullResyncEmailAccount(accountId: string) {
+    const account = emailAccounts.find((candidate) => candidate.id === accountId);
+    const confirmed = await requestConfirm({
+      title: "全量同步邮箱",
+      message: `确定重新同步${account ? `“${account.emailAddress}”` : "此邮箱"}的所有邮件？系统会从邮箱历史邮件开始扫描，已存在邮件会自动跳过。`,
+      confirmLabel: "全量同步"
+    });
+    if (!confirmed) {
+      return;
+    }
+    await syncEmailAccount(accountId, { fullResync: true });
   }
 
   async function syncAllEmailAccounts() {
@@ -7391,6 +7453,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onCreateAccount={() => runAction(createEmailAccount)}
             onStartOAuth={() => runAction(startEmailOAuth)}
             onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
+            onFullResyncAccount={(accountId) => runAction(() => fullResyncEmailAccount(accountId))}
             onSyncAllAccounts={() => runAction(syncAllEmailAccounts)}
             onTestConnection={testEmailConnection}
             onEditAccount={(account) => {
@@ -8677,6 +8740,7 @@ function EmailWorkspace({
   onCreateAccount,
   onStartOAuth,
   onSyncAccount,
+  onFullResyncAccount,
   onSyncAllAccounts,
   onTestConnection,
   onEditAccount,
@@ -8783,6 +8847,7 @@ function EmailWorkspace({
   onCreateAccount: () => void;
   onStartOAuth: () => void;
   onSyncAccount: (accountId: string) => void;
+  onFullResyncAccount: (accountId: string) => void;
   onSyncAllAccounts: () => void;
   onTestConnection: (accountId: string, options?: { scope?: EmailConnectionTestScope; outboundServiceId?: string }) => Promise<void>;
   onEditAccount: (account: EmailAccount) => void;
@@ -8878,6 +8943,12 @@ function EmailWorkspace({
   const [selectedMailboxAccountId, setSelectedMailboxAccountId] = useState<string>(routeAccountId);
   const [mailboxAccountsCollapsed, setMailboxAccountsCollapsed] = useState(true);
   const [searchQuery, setSearchQuery] = useState(routeSearch);
+  const [emailSearchAutocompleteOpen, setEmailSearchAutocompleteOpen] = useState(false);
+  const [emailSearchRemoteRecords, setEmailSearchRemoteRecords] = useState<CrmRecord[]>([]);
+  const [emailSearchAutocompleteLoading, setEmailSearchAutocompleteLoading] = useState(false);
+  const [emailSearchAutocompleteError, setEmailSearchAutocompleteError] = useState<string | null>(null);
+  const [activeEmailSearchSuggestionIndex, setActiveEmailSearchSuggestionIndex] = useState(0);
+  const [emailSearchMenuStyle, setEmailSearchMenuStyle] = useState<CSSProperties>({});
   const [labelFilter, setLabelFilter] = useState(routeLabel);
   const [emailListDisplayMode, setEmailListDisplayMode] = useState<EmailListDisplayMode>(routeListDisplayMode);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
@@ -8925,6 +8996,7 @@ function EmailWorkspace({
   const handledComposeOpenRequestRef = useRef("");
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const emailSearchInputRef = useRef<HTMLInputElement>(null);
   const pendingEmailRouteRef = useRef<{
     accountId: string;
     category: EmailCategoryKey;
@@ -9015,7 +9087,7 @@ function EmailWorkspace({
     [selectedMailboxAccountId, threads]
   );
   useEffect(() => {
-    if (!["inbox", "all", "sent", "scheduled", "drafts", "trash"].includes(mailbox)) {
+    if (!["inbox", "all", "sent", "scheduled", "drafts", "spam", "trash"].includes(mailbox)) {
       return;
     }
     accountFilteredThreads
@@ -9047,12 +9119,15 @@ function EmailWorkspace({
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasPendingSend(messages);
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
+      const hasSpamMessage = getEmailThreadMailboxMessages(messages, "spam").length > 0;
       const hasAllMailMessage = getEmailThreadMailboxMessages(messages, "all").length > 0;
       const matchesMailbox =
         mailbox === "trash"
           ? isDeleted
           : mailbox === "archived"
             ? isArchived && !isDeleted
+            : mailbox === "spam"
+              ? hasSpamMessage && !isDeleted
             : mailbox === "starred"
               ? Boolean(state.starred) && !isDeleted
               : mailbox === "important"
@@ -9109,6 +9184,7 @@ function EmailWorkspace({
       const hasDraft = messages.some((message) => message.status === "draft");
       const hasScheduled = emailThreadHasPendingSend(messages);
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
+      const hasSpamMessage = getEmailThreadMailboxMessages(messages, "spam").length > 0;
       const hasAllMailMessage = getEmailThreadMailboxMessages(messages, "all").length > 0;
       if (!isDeleted && !isArchived && !isSnoozed && hasInboxMessage) counts.inbox += 1;
       if (state.starred && !isDeleted) counts.starred += 1;
@@ -9117,6 +9193,7 @@ function EmailWorkspace({
       if (emailThreadHasOutbound(messages) && !isDeleted) counts.sent += 1;
       if (hasScheduled && !isDeleted) counts.scheduled += 1;
       if (hasDraft && !isDeleted) counts.drafts += 1;
+      if (hasSpamMessage && !isDeleted) counts.spam += 1;
       if (isArchived && !isDeleted) counts.archived += 1;
       if (isDeleted) counts.trash += 1;
       if (!isDeleted && hasAllMailMessage) counts.all += 1;
@@ -9128,7 +9205,8 @@ function EmailWorkspace({
     for (const thread of accountFilteredThreads) {
       const messages = messagesByThread[thread.id] ?? [];
       const state = threadUiState[thread.id] ?? {};
-      if (state.deleted || state.archived || (state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now())) {
+      const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
+      if (state.deleted || state.archived || !hasInboxMessage || (state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now())) {
         continue;
       }
       counts[state.category ?? inferEmailThreadCategory(thread, messages)] += 1;
@@ -9152,6 +9230,125 @@ function EmailWorkspace({
     }
     return Array.from(labels).sort((left, right) => left.localeCompare(right));
   }, [accountFilteredThreads, messagesByThread, threadUiState]);
+  const emailSearchAutocompleteInput = useMemo(() => parseEmailSearchAutocompleteInput(searchQuery), [searchQuery]);
+  const emailSearchSuggestions = useMemo<EmailSearchSuggestion[]>(() => {
+    if (emailSearchAutocompleteInput.mode === "command") {
+      return emailSearchCommandMeta
+        .filter((item) => !emailSearchAutocompleteInput.prefix || item.command.startsWith(emailSearchAutocompleteInput.prefix))
+        .map((item) => ({
+          kind: "command",
+          command: item.command,
+          label: item.label,
+          meta: item.meta,
+          value: item.label
+        }));
+    }
+    if (emailSearchAutocompleteInput.mode !== "record") {
+      return [];
+    }
+    const objectKey = emailSearchCommandObjectKey(emailSearchAutocompleteInput.command);
+    const normalizedQuery = emailSearchAutocompleteInput.query.trim().toLowerCase();
+    return mergeRecords(records, emailSearchRemoteRecords)
+      .filter((record) => record.objectKey === objectKey)
+      .filter((record) => {
+        if (!normalizedQuery) {
+          return true;
+        }
+        const emailText = record.objectKey === "contacts" ? getRecordEmailAddressesFromData(record).join(" ") : "";
+        return `${record.title} ${emailText}`.toLowerCase().includes(normalizedQuery);
+      })
+      .slice(0, 12)
+      .map((record) => ({
+        kind: "record",
+        command: emailSearchAutocompleteInput.command,
+        label: record.title,
+        meta: objectKey === "contacts" ? getRecordEmailAddressesFromData(record).join(", ") || "联系人" : objectKey === "companies" ? "公司" : "交易",
+        value: `${emailSearchCommandLabel(emailSearchAutocompleteInput.command)}${record.title}`,
+        record
+      }));
+  }, [emailSearchAutocompleteInput, emailSearchRemoteRecords, records]);
+
+  const updateEmailSearchMenuPosition = useCallback(() => {
+    const input = emailSearchInputRef.current;
+    if (!input) return;
+    const rect = input.getBoundingClientRect();
+    setEmailSearchMenuStyle({
+      left: rect.left,
+      maxHeight: Math.max(160, Math.min(280, window.innerHeight - rect.bottom - 12)),
+      top: rect.bottom + 8,
+      width: rect.width
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!emailSearchAutocompleteOpen) return undefined;
+    updateEmailSearchMenuPosition();
+    window.addEventListener("resize", updateEmailSearchMenuPosition);
+    window.addEventListener("scroll", updateEmailSearchMenuPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateEmailSearchMenuPosition);
+      window.removeEventListener("scroll", updateEmailSearchMenuPosition, true);
+    };
+  }, [emailSearchAutocompleteOpen, updateEmailSearchMenuPosition]);
+
+  useEffect(() => {
+    setActiveEmailSearchSuggestionIndex(0);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (emailSearchAutocompleteInput.mode !== "record") {
+      setEmailSearchRemoteRecords([]);
+      setEmailSearchAutocompleteLoading(false);
+      setEmailSearchAutocompleteError(null);
+      return undefined;
+    }
+    const trimmedQuery = emailSearchAutocompleteInput.query.trim();
+    if (!trimmedQuery) {
+      setEmailSearchRemoteRecords([]);
+      setEmailSearchAutocompleteLoading(false);
+      setEmailSearchAutocompleteError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      setEmailSearchAutocompleteLoading(true);
+      setEmailSearchAutocompleteError(null);
+      const objectKey = emailSearchCommandObjectKey(emailSearchAutocompleteInput.command);
+      fetchJson<RecordListResult>(
+        buildRecordListUrl(objectKey, emptySavedView(objectKey), trimmedQuery, 1, `/api/records/${objectKey}`, 8, {
+          fields: ["title"],
+          keyset: true
+        }),
+        { method: "GET", signal: controller.signal }
+      )
+        .then((result) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setEmailSearchRemoteRecords(result.records);
+          if (result.records.length) {
+            onRecordsLoaded(result.records);
+          }
+        })
+        .catch((searchError) => {
+          if (searchError instanceof DOMException && searchError.name === "AbortError") {
+            return;
+          }
+          setEmailSearchAutocompleteError(searchError instanceof Error ? searchError.message : "搜索联想失败");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setEmailSearchAutocompleteLoading(false);
+          }
+        });
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [emailSearchAutocompleteInput, onRecordsLoaded]);
 
   const patchThreadUiState = useCallback((threadIds: string[], patch: Partial<EmailThreadUiState> | ((state: EmailThreadUiState) => EmailThreadUiState)) => {
     setThreadUiState((current) => {
@@ -9212,6 +9409,35 @@ function EmailWorkspace({
       threadId: nextThreadId
     });
   }, [category, emailListDisplayMode, labelFilter, mailMode, mailbox, onRouteChange, searchQuery, selectedDetailMessageId, selectedMailboxAccountId, selectedThreadId]);
+
+  function openEmailSearchAutocomplete() {
+    updateEmailSearchMenuPosition();
+    setEmailSearchAutocompleteOpen(parseEmailSearchAutocompleteInput(searchQuery).mode !== "none");
+  }
+
+  function applyEmailSearchSuggestion(suggestion: EmailSearchSuggestion) {
+    const nextSearch = suggestion.value;
+    if (suggestion.kind === "record") {
+      onRecordsLoaded([suggestion.record]);
+      setEmailSearchAutocompleteOpen(false);
+    } else {
+      setEmailSearchAutocompleteOpen(true);
+      window.setTimeout(() => {
+        emailSearchInputRef.current?.focus();
+        updateEmailSearchMenuPosition();
+      }, 0);
+    }
+    applyEmailRoute({ search: nextSearch, mailMode: "list", threadId: "" });
+  }
+
+  function commitActiveEmailSearchSuggestion(): boolean {
+    const suggestion = emailSearchSuggestions[activeEmailSearchSuggestionIndex];
+    if (!emailSearchAutocompleteOpen || !suggestion) {
+      return false;
+    }
+    applyEmailSearchSuggestion(suggestion);
+    return true;
+  }
 
   const toggleEmailListDisplayMode = useCallback(() => {
     const nextMode = emailListDisplayMode === "thread" ? "message" : "thread";
@@ -10159,6 +10385,7 @@ function EmailWorkspace({
             const testState = accountConnectionTests[emailConnectionTestStateKey(account.id)];
             const isTesting = testState?.status === "testing";
             const syncStatus = getEmailAccountSyncStatus(account);
+            const canFullResyncAccount = account.syncEnabled && account.connectionConfigured && capability.supportsSync && (account.status === "active" || account.status === "error") && account.provider === "smtp_imap";
             return (
               <div className="settings-item" key={account.id}>
                 <strong>{account.name}</strong>
@@ -10212,6 +10439,10 @@ function EmailWorkspace({
                     <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || (account.status !== "active" && account.status !== "error")}>
                       <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
                       同步
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => onFullResyncAccount(account.id)} disabled={disabled || !canFullResyncAccount} title={account.provider === "smtp_imap" ? "从 IMAP 历史邮件开始重新扫描，已存在邮件会跳过" : "当前仅 SMTP/IMAP 邮箱支持全量同步"}>
+                      <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
+                      全量同步
                     </button>
                   </div>
                 ) : null}
@@ -10468,9 +10699,68 @@ function EmailWorkspace({
         </div>
         <label className="gmail-search">
           <Search size={18} />
-          <input data-testid="email-search" value={searchQuery} onChange={(event) => applyEmailRoute({ search: event.target.value, mailMode: "list", threadId: "" })} placeholder="搜索邮件，或 /company:公司 /contact:联系人 /deal:交易" />
+          <input
+            data-testid="email-search"
+            ref={emailSearchInputRef}
+            value={searchQuery}
+            onBlur={() => window.setTimeout(() => setEmailSearchAutocompleteOpen(false), 120)}
+            onChange={(event) => {
+              const nextSearch = event.target.value;
+              applyEmailRoute({ search: nextSearch, mailMode: "list", threadId: "" });
+              const nextAutocompleteInput = parseEmailSearchAutocompleteInput(nextSearch);
+              setEmailSearchAutocompleteOpen(nextAutocompleteInput.mode !== "none");
+              if (nextAutocompleteInput.mode !== "none") {
+                updateEmailSearchMenuPosition();
+              }
+            }}
+            onFocus={openEmailSearchAutocomplete}
+            onKeyDown={(event) => {
+              if (!emailSearchAutocompleteOpen || !emailSearchSuggestions.length) {
+                return;
+              }
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setActiveEmailSearchSuggestionIndex((current) => Math.min(emailSearchSuggestions.length - 1, current + 1));
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setActiveEmailSearchSuggestionIndex((current) => Math.max(0, current - 1));
+              } else if (event.key === "Enter" || event.key === "Tab") {
+                if (commitActiveEmailSearchSuggestion()) {
+                  event.preventDefault();
+                }
+              } else if (event.key === "Escape") {
+                setEmailSearchAutocompleteOpen(false);
+              }
+            }}
+            placeholder="搜索邮件，或 /company:公司 /contact:联系人 /deal:交易"
+          />
           <Filter size={16} />
         </label>
+        {emailSearchAutocompleteOpen && emailSearchAutocompleteInput.mode !== "none" ? (
+          <div className="search-dropdown-menu floating email-search-command-menu" data-testid="email-search-command-dropdown" style={emailSearchMenuStyle}>
+            {emailSearchAutocompleteInput.mode === "record" && emailSearchAutocompleteLoading ? <div className="search-dropdown-empty">搜索中...</div> : null}
+            {emailSearchAutocompleteError ? <div className="search-dropdown-empty">{emailSearchAutocompleteError}</div> : null}
+            {!emailSearchAutocompleteLoading && !emailSearchAutocompleteError && emailSearchSuggestions.length === 0 ? (
+              <div className="search-dropdown-empty">
+                {emailSearchAutocompleteInput.mode === "record" && !emailSearchAutocompleteInput.query.trim() ? "输入关键词获取联想" : "没有匹配结果"}
+              </div>
+            ) : null}
+            {emailSearchSuggestions.map((suggestion, index) => (
+              <button
+                className={`search-dropdown-option ${index === activeEmailSearchSuggestionIndex ? "selected" : ""}`}
+                data-testid={`email-search-suggestion-${suggestion.kind}-${suggestion.command}`}
+                key={`${suggestion.kind}-${suggestion.command}-${suggestion.value}`}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActiveEmailSearchSuggestionIndex(index)}
+                onClick={() => applyEmailSearchSuggestion(suggestion)}
+              >
+                <span>{suggestion.label}</span>
+                <span className="subtle">{suggestion.meta}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <button className="icon-button" aria-label="邮箱设置" type="button" onClick={() => onViewChange("settings")}>
           <Settings size={18} />
         </button>

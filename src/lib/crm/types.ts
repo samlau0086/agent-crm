@@ -366,6 +366,8 @@ export interface EmailInboundMetadata {
   timezone?: string;
   userAgent?: string;
   receivedHeader?: string;
+  sourceMailbox?: string;
+  sourceMailboxRole?: "inbox" | "spam";
 }
 
 export interface EmailMessage {

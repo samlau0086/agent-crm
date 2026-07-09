@@ -119,7 +119,7 @@ export async function processQueuedJobEnvelope(
   }
 
   if (envelope.type === "email_sync") {
-    const emailSync = await createEmailProviderAdapter(repository).sync(context, envelope.payload.accountId, envelope.payload.limit);
+    const emailSync = await createEmailProviderAdapter(repository).sync(context, envelope.payload.accountId, { limit: envelope.payload.limit, fullResync: envelope.payload.fullResync });
     return { processed: true, jobType: envelope.type, emailSync };
   }
 

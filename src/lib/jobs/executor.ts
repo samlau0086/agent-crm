@@ -34,6 +34,7 @@ export interface WebhookEventJobPayload {
 export interface EmailSyncJobPayload {
   accountId: string;
   limit?: number;
+  fullResync?: boolean;
 }
 
 export interface EmailSendJobPayload {
@@ -197,7 +198,7 @@ export class InlineBackgroundJobExecutor implements BackgroundJobExecutor {
   }
 
   async runEmailSyncJob(context: RequestContext, payload: EmailSyncJobPayload): Promise<EmailSyncResult> {
-    return createEmailProviderAdapter(this.repository).sync(context, payload.accountId, payload.limit);
+    return createEmailProviderAdapter(this.repository).sync(context, payload.accountId, { limit: payload.limit, fullResync: payload.fullResync });
   }
 
   async runEmailSendJob(context: RequestContext, payload: EmailSendJobPayload): Promise<EmailMessage> {

@@ -3,7 +3,7 @@ import type { EmailAccount, EmailAttachment, EmailConnectionConfig, EmailMessage
 import type { PrismaCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { assertEmailDeliveryModeAllowed, getEmailDeliveryMode } from "@/lib/email/delivery-mode";
-import { fetchRecentMailboxEmailBatch, sendSmtpEmail, testMailConnection, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
+import { fetchRecentMailboxEmailBatch, sendSmtpEmail, testMailConnection, withInboundMailboxSource, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import { sendResendEmail } from "@/lib/email/resend";
 import { assertOAuthConfig, isOAuthProvider } from "@/lib/email/oauth";
@@ -47,6 +47,11 @@ export interface EmailSyncResult {
   status: string;
 }
 
+export interface EmailSyncOptions {
+  limit?: number;
+  fullResync?: boolean;
+}
+
 export interface EmailConnectionTestSummary {
   account: EmailAccount;
   result: MailConnectionTestResult;
@@ -60,7 +65,7 @@ export interface EmailConnectionTestOptions {
 export interface EmailProviderAdapter {
   send(context: RequestContext, input: EmailSendInput): Promise<EmailMessage>;
   sendQueued(context: RequestContext, messageId: string): Promise<EmailMessage>;
-  sync(context: RequestContext, accountId: string, limit?: number): Promise<EmailSyncResult>;
+  sync(context: RequestContext, accountId: string, options?: number | EmailSyncOptions): Promise<EmailSyncResult>;
   testConnection(context: RequestContext, accountId: string, options?: EmailConnectionTestOptions): Promise<EmailConnectionTestSummary>;
 }
 
@@ -167,20 +172,21 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     return repository.claimEmailMessageForSending ? repository.claimEmailMessageForSending(context, message.id) : { message: { ...message, status: "sending" }, claimed: true };
   }
 
-  async sync(context: RequestContext, accountId: string, limit?: number): Promise<EmailSyncResult> {
+  async sync(context: RequestContext, accountId: string, options?: number | EmailSyncOptions): Promise<EmailSyncResult> {
     requirePermission(context, "crm.admin");
     const account = await this.repository.getEmailAccount(context, accountId);
     if (!account.syncEnabled || (account.status !== "active" && account.status !== "error")) {
       throw new Error("Email account is not enabled for sync");
     }
     assertProviderSupports(account, "sync");
-    const syncLimit = normalizeEmailSyncLimit(limit ?? this.options.oauth?.limit);
+    const syncOptions = normalizeEmailSyncOptions(options, this.options.oauth?.limit);
+    const syncLimit = syncOptions.limit;
     const syncDeadlineAt = Date.now() + getEmailSyncJobTimeoutMs();
     await this.markSyncRunning(context, accountId);
     if (isOAuthProvider(account.provider)) {
       const config = await this.getOAuthProviderConfig(context, account);
       try {
-        const result = await fetchRecentOAuthEmails(account.provider, config, { ...this.options.oauth, limit: syncLimit });
+        const result = await fetchRecentOAuthEmails(account.provider, config, { ...this.options.oauth, includeSpam: true, limit: syncLimit });
         await this.repository.updateEmailAccountConnectionConfig(context, accountId, result.config);
         const importResult = await this.importInboundMessages(context, account, result.messages);
         await this.repository.markEmailAccountConnectionError(context, accountId, null);
@@ -208,19 +214,27 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
 
     try {
-      const inbound = await fetchRecentMailboxEmailBatch(config, syncLimit, {
-        deadlineAt: syncDeadlineAt,
-        imapUidValidity: account.imapUidValidity,
-        imapLastSeenUid: account.imapLastSeenUid
-      });
-      const importResult = await this.importInboundMessages(context, account, inbound.messages);
+      const inbound = syncOptions.fullResync
+        ? await this.fetchFullMailboxEmailBatches(context, account, config, syncLimit, syncDeadlineAt)
+        : undefined;
+      const recentInbound = inbound
+        ? undefined
+        : await this.fetchRecentMailboxAndSpamEmailBatch(config, syncLimit, syncDeadlineAt, account.imapUidValidity, account.imapLastSeenUid);
+      const syncState = inbound ?? recentInbound!;
+      const importResult = inbound ? inbound.importResult : await this.importInboundMessages(context, account, recentInbound!.messages);
       await this.repository.markEmailAccountConnectionError(context, accountId, null);
       const syncedAccount = await this.markSyncCompleted(context, accountId, {
         ...importResult,
-        imapUidValidity: inbound.imapUidValidity,
-        imapLastSeenUid: inbound.imapLastSeenUid
+        imapUidValidity: syncState.imapUidValidity,
+        imapLastSeenUid: syncState.imapLastSeenUid
       });
-      return { account: syncedAccount, ...importResult, hasMore: inbound.hasMore ?? inbound.messages.length >= syncLimit, status: "synced" };
+      return {
+        account: syncedAccount,
+        ...importResult,
+        pageCount: inbound?.pageCount,
+        hasMore: syncState.hasMore ?? (!inbound && recentInbound!.messages.length >= syncLimit),
+        status: "synced"
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Mailbox sync failed";
       const statusMessage = withInboundEndpointContext(message, config);
@@ -228,6 +242,68 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       await this.markSyncFailed(context, accountId, statusMessage);
       throw new Error(message);
     }
+  }
+
+  private async fetchFullMailboxEmailBatches(
+    context: RequestContext,
+    account: EmailAccount,
+    config: EmailConnectionConfig,
+    syncLimit: number,
+    syncDeadlineAt: number
+  ): Promise<Awaited<ReturnType<typeof fetchRecentMailboxEmailBatch>> & { importResult: Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount">; pageCount: number }> {
+    let pageCount = 0;
+    let hasMore = true;
+    let imapUidValidity: string | undefined;
+    let imapLastSeenUid: string | undefined;
+    let importResult: Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount"> = {
+      importedCount: 0,
+      scannedCount: 0,
+      skippedDuplicateCount: 0
+    };
+    while (hasMore) {
+      const previousLastSeenUid = imapLastSeenUid;
+      const inbound = await fetchRecentMailboxEmailBatch(config, syncLimit, {
+        deadlineAt: syncDeadlineAt,
+        fullResync: true,
+        imapUidValidity,
+        imapLastSeenUid
+      });
+      pageCount += 1;
+      const pageImportResult = await this.importInboundMessages(context, account, inbound.messages);
+      importResult = {
+        importedCount: importResult.importedCount + pageImportResult.importedCount,
+        scannedCount: importResult.scannedCount + pageImportResult.scannedCount,
+        skippedDuplicateCount: importResult.skippedDuplicateCount + pageImportResult.skippedDuplicateCount
+      };
+      imapUidValidity = inbound.imapUidValidity ?? imapUidValidity;
+      imapLastSeenUid = inbound.imapLastSeenUid ?? imapLastSeenUid;
+      hasMore = Boolean(inbound.hasMore && inbound.imapLastSeenUid && inbound.imapLastSeenUid !== previousLastSeenUid);
+    }
+    return { messages: [], importResult, pageCount, hasMore: false, imapUidValidity, imapLastSeenUid };
+  }
+
+  private async fetchRecentMailboxAndSpamEmailBatch(
+    config: EmailConnectionConfig,
+    syncLimit: number,
+    syncDeadlineAt: number,
+    imapUidValidity?: string,
+    imapLastSeenUid?: string
+  ): Promise<Awaited<ReturnType<typeof fetchRecentMailboxEmailBatch>>> {
+    const inbox = await fetchRecentMailboxEmailBatch(config, syncLimit, {
+      deadlineAt: syncDeadlineAt,
+      imapUidValidity,
+      imapLastSeenUid
+    });
+    const remaining = Math.max(0, syncLimit - inbox.messages.length);
+    if (!remaining) {
+      return inbox;
+    }
+    const spamMessages = await fetchRecentImapSpamMessages(config, remaining, syncDeadlineAt);
+    return {
+      ...inbox,
+      messages: [...inbox.messages, ...spamMessages],
+      hasMore: inbox.hasMore
+    };
   }
 
   private async markSyncRunning(context: RequestContext, accountId: string): Promise<void> {
@@ -423,6 +499,16 @@ function normalizeEmailSyncLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(100, Math.floor(limit ?? 10)));
 }
 
+function normalizeEmailSyncOptions(options: number | EmailSyncOptions | undefined, fallbackLimit: number | undefined): Required<EmailSyncOptions> {
+  if (typeof options === "number") {
+    return { limit: normalizeEmailSyncLimit(options), fullResync: false };
+  }
+  return {
+    limit: normalizeEmailSyncLimit(options?.limit ?? fallbackLimit),
+    fullResync: options?.fullResync === true
+  };
+}
+
 function getEmailSyncJobTimeoutMs(): number {
   const parsed = Number.parseInt(process.env.EMAIL_SYNC_JOB_TIMEOUT_MS ?? "", 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -452,6 +538,21 @@ function describeInboundEndpoint(config: EmailConnectionConfig): string | undefi
   const securityText = secure === false ? "plain" : "TLS";
   const mailboxText = inbound.mailbox ? ` mailbox=${inbound.mailbox}` : "";
   return `IMAP ${hostText}${portText} ${securityText}${mailboxText}`;
+}
+
+async function fetchRecentImapSpamMessages(config: EmailConnectionConfig, limit: number, syncDeadlineAt: number): Promise<Awaited<ReturnType<typeof fetchRecentMailboxEmailBatch>>["messages"]> {
+  const inbound = getInboundConnectionConfig(config);
+  const configuredMailbox = inbound.mailbox?.trim() || "INBOX";
+  const candidates = ["Junk", "Spam", "Junk Email", "[Gmail]/Spam", "[Google Mail]/Spam"].filter((mailbox) => mailbox.toLowerCase() !== configuredMailbox.toLowerCase());
+  for (const mailbox of candidates) {
+    try {
+      const result = await fetchRecentMailboxEmailBatch({ ...config, ...inbound, mailbox }, limit, { deadlineAt: syncDeadlineAt });
+      return result.messages.map((message) => withInboundMailboxSource(message, mailbox, "spam"));
+    } catch {
+      continue;
+    }
+  }
+  return [];
 }
 
 function ensureEmailSendMessageId(input: EmailSendInput): EmailSendInput {

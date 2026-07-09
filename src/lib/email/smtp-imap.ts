@@ -36,6 +36,7 @@ export interface MailSendResult {
 
 export interface MailboxFetchOptions {
   deadlineAt?: number;
+  fullResync?: boolean;
   imapUidValidity?: string;
   imapLastSeenUid?: string;
 }
@@ -173,7 +174,7 @@ export async function fetchRecentImapEmailBatch(config: EmailConnectionConfig, l
       const fetchedUid = uid;
       const parsed = source ? parseRawEmailMessage(source.toString("utf8")) : undefined;
       if (parsed) {
-        messages.push(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", fetchedUid));
+        messages.push(withInboundMailboxSource(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", fetchedUid), config.mailbox ?? "INBOX"));
       }
       lastSeenUid = maxImapUid(lastSeenUid, fetchedUid);
     }
@@ -204,6 +205,22 @@ export function buildImapFallbackExternalMessageId(mailbox: string, uid: string)
 
 export function withImapFallbackExternalMessageId(message: InboundEmail, mailbox: string, uid: string): InboundEmail {
   return message.externalMessageId ? message : { ...message, externalMessageId: buildImapFallbackExternalMessageId(mailbox, uid) };
+}
+
+export function withInboundMailboxSource(message: InboundEmail, mailbox: string, role: "inbox" | "spam" = inferInboundMailboxRole(mailbox)): InboundEmail {
+  return {
+    ...message,
+    inboundMetadata: {
+      ...message.inboundMetadata,
+      sourceMailbox: mailbox,
+      sourceMailboxRole: role
+    }
+  };
+}
+
+function inferInboundMailboxRole(mailbox: string): "inbox" | "spam" {
+  const normalized = mailbox.toLowerCase();
+  return normalized.includes("spam") || normalized.includes("junk") || normalized.includes("bulk") ? "spam" : "inbox";
 }
 
 class SmtpClient {
@@ -480,6 +497,11 @@ async function resolveImapFetchUids(
     return { fetchUids: [], hasMore: false };
   }
   const previousUid = normalizeImapUid(options.imapLastSeenUid);
+  if (options.fullResync) {
+    const nextUid = previousUid ? (BigInt(previousUid) + 1n).toString() : "1";
+    const uids = await searchImapUids(client, { uid: `${nextUid}:*` }, options);
+    return { fetchUids: uids.slice(0, limit), hasMore: uids.length > limit };
+  }
   if (uidValidity && options.imapUidValidity === uidValidity && previousUid) {
     const nextUid = (BigInt(previousUid) + 1n).toString();
     const uids = await searchImapUids(client, { uid: `${nextUid}:*` }, options);

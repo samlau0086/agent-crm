@@ -3710,7 +3710,10 @@ await run("email workspace supports multiple mailbox account filters", () => {
   assert.match(source, /onSyncAccount\(selectedMailboxAccountId\)/);
   assert.match(source, /selectedAccountCanSend \? selectedMailboxAccountId : emailDraft\.accountId \|\| activeAccounts\[0\]\?\.id \|\| ""/);
   assert.match(source, /if \(mailbox === "inbox"\) \{[\s\S]*message\.direction === "inbound" && message\.status === "received"/);
-  assert.match(source, /\["inbox", "all", "sent", "scheduled", "drafts", "trash"\]\.includes\(mailbox\)/);
+  assert.match(source, /\["inbox", "all", "sent", "scheduled", "drafts", "spam", "trash"\]\.includes\(mailbox\)/);
+  assert.match(source, /\{ key: "spam", label: "垃圾邮件", icon: ShieldAlert \}/);
+  assert.match(source, /message\.inboundMetadata\?\.sourceMailboxRole !== "spam"/);
+  assert.match(source, /message\.inboundMetadata\?\.sourceMailboxRole === "spam"/);
   assert.match(source, /const hasInboxMessage = getEmailThreadMailboxMessages\(messages, "inbox"\)\.length > 0/);
   assert.match(source, /!isDeleted && !isArchived && !isSnoozed && hasInboxMessage/);
   assert.doesNotMatch(source, /!hasLoadedMessages \|\| hasInboxMessage/);
@@ -3822,6 +3825,19 @@ await run("email workspace exposes background sync schedule settings", () => {
   assert.match(schema, /mode: z\.enum\(\["interval", "daily"\]\)\.optional\(\)/);
   assert.match(schema, /dailyAt: z\.string\(\)\.trim\(\)\.regex/);
   assert.match(migration, /CREATE TABLE "EmailSyncSettings"/);
+});
+
+await run("email workspace search supports command autocomplete dropdown", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /parseEmailSearchAutocompleteInput/);
+  assert.match(source, /emailSearchCommandMeta/);
+  assert.match(source, /data-testid="email-search-command-dropdown"/);
+  assert.match(source, /data-testid=\{`email-search-suggestion-\$\{suggestion\.kind\}-\$\{suggestion\.command\}`\}/);
+  assert.match(source, /buildRecordListUrl\(objectKey, emptySavedView\(objectKey\), trimmedQuery, 1, `\/api\/records\/\$\{objectKey\}`/);
+  assert.match(source, /setEmailSearchAutocompleteOpen\(nextAutocompleteInput\.mode !== "none"\)/);
+  assert.match(source, /applyEmailSearchSuggestion\(suggestion\)/);
+  assert.match(source, /event\.key === "ArrowDown"/);
+  assert.match(source, /event\.key === "Enter" \|\| event\.key === "Tab"/);
 });
 
 await run("email workspace diagnostics display ai automation eligibility policy", () => {
@@ -4641,7 +4657,7 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /async function refreshEmailThreadsByIds\(threadIds: string\[\]\): Promise<EmailThread\[]>/);
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
   assert.match(workspace, /for \(const delayMs of \[2500, 8000\]\)/);
-  assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts", "trash"\]\.includes\(mailbox\)/);
+  assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts", "spam", "trash"\]\.includes\(mailbox\)/);
   assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
   assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
   assert.match(workspace, /function getEmailThreadListDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
@@ -13726,6 +13742,8 @@ await run("queued oauth email send derives threading headers from CRM thread his
 });
 
 await run("oauth email provider syncs gmail messages with rfc822 message ids", async () => {
+  const providerSource = readFileSync("src/lib/email/provider.ts", "utf8");
+  assert.match(providerSource, /fetchRecentOAuthEmails\(account\.provider, config, \{ \.\.\.this\.options\.oauth, includeSpam: true, limit: syncLimit \}\)/);
   const account = {
     id: "gmail-sync-account",
     workspaceId: defaultWorkspaceId,
@@ -13858,6 +13876,46 @@ await run("oauth email api paginates gmail sync within the configured limit", as
   assert.equal(new URL(listUrls[1]).searchParams.get("maxResults"), "1");
   assert.equal(new URL(listUrls[1]).searchParams.get("q"), "in:inbox");
   assert.equal(new URL(listUrls[1]).searchParams.get("pageToken"), "page-2");
+});
+
+await run("oauth email api can include gmail spam messages with source metadata", async () => {
+  const requestedQueries = [];
+  const result = await fetchRecentOAuthEmails(
+    "gmail",
+    { oauthProvider: "gmail", accessToken: "access-token", refreshToken: "refresh-token", expiresAt: "2099-06-20T12:00:00.000Z" },
+    {
+      includeSpam: true,
+      limit: 2,
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/messages?")) {
+          const query = new URL(requestUrl).searchParams.get("q");
+          requestedQueries.push(query);
+          return new Response(JSON.stringify({ messages: query === "in:spam" ? [{ id: "gmail-spam-message" }] : [] }), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({
+            id: "gmail-spam-message",
+            payload: {
+              headers: [
+                { name: "Message-ID", value: "<gmail-spam@example.com>" },
+                { name: "From", value: "Spam <spam@example.com>" },
+                { name: "To", value: "Sales <sales@example.com>" },
+                { name: "Subject", value: "Spam inbound" }
+              ],
+              parts: [{ mimeType: "text/plain", body: { data: Buffer.from("Spam body", "utf8").toString("base64url") } }]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+    }
+  );
+
+  assert.deepEqual(requestedQueries, ["in:inbox", "in:spam"]);
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.messages[0].inboundMetadata.sourceMailbox, "SPAM");
+  assert.equal(result.messages[0].inboundMetadata.sourceMailboxRole, "spam");
 });
 
 await run("oauth email api ignores malformed gmail internal dates", async () => {
@@ -14118,7 +14176,10 @@ await run("oauth email provider syncs outlook messages through the api adapter",
   const adapter = createEmailProviderAdapter(fakeRepository, {
     oauth: {
       fetchImpl: async (url) => {
-        assert.equal(String(url).startsWith("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"), true);
+        assert.match(String(url), /^https:\/\/graph\.microsoft\.com\/v1\.0\/me\/mailFolders\/(?:inbox|junkemail)\/messages/);
+        if (String(url).includes("/mailFolders/junkemail/messages")) {
+          return new Response(JSON.stringify({ value: [] }), { status: 200 });
+        }
         return new Response(
           JSON.stringify({
             value: [

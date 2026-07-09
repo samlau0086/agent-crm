@@ -793,7 +793,8 @@ export const emailSendSchema = z
 export const emailSyncSchema = z
   .object({
     accountId: z.string().trim().min(1),
-    limit: z.number().int().min(1).max(100).optional()
+    limit: z.number().int().min(1).max(100).optional(),
+    fullResync: z.boolean().optional()
   })
   .strict();
 
