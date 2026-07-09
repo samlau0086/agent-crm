@@ -2644,7 +2644,7 @@ export class PrismaCrmRepository {
         data.imapUidValidity = null;
         data.imapLastSeenUid = null;
       }
-      data.encryptedConnectionConfig = encryptEmailConnectionConfig(mergedConfig);
+      data.encryptedConnectionConfig = encryptEmailConnectionConfig(mergeEmailConnectionConfigSecrets(existingConfig, input.connectionConfig));
       data.lastConnectionError = null;
       if (input.status === undefined && existing.status === "draft") {
         data.status = "active";
@@ -10869,6 +10869,7 @@ function shouldResetImapSyncCursor(provider: EmailAccount["provider"], currentCo
     current.imapPort ?? "",
     current.imapSecure === false ? "plain" : "tls",
     current.mailbox ?? "INBOX",
+    JSON.stringify(current.mailboxMapping ?? {}),
     current.username ?? ""
   ].join("|");
   const nextEndpoint = [
@@ -10877,6 +10878,7 @@ function shouldResetImapSyncCursor(provider: EmailAccount["provider"], currentCo
     next.imapPort ?? "",
     next.imapSecure === false ? "plain" : "tls",
     next.mailbox ?? "INBOX",
+    JSON.stringify(next.mailboxMapping ?? {}),
     next.username ?? ""
   ].join("|");
   return currentEndpoint !== nextEndpoint;

@@ -2,7 +2,7 @@ import net from "node:net";
 import tls from "node:tls";
 import type { Readable } from "node:stream";
 import { ImapFlow } from "imapflow";
-import type { EmailAttachment, EmailConnectionConfig, EmailOutboundServiceConfig } from "@/lib/crm/types";
+import type { EmailAttachment, EmailConnectionConfig, EmailMailboxMapping, EmailOutboundServiceConfig } from "@/lib/crm/types";
 import { MAX_EMAIL_ATTACHMENT_BYTES, normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import { repairEmailMojibake } from "@/lib/email/mojibake";
@@ -46,6 +46,14 @@ export interface MailboxFetchResult {
   hasMore?: boolean;
   imapUidValidity?: string;
   imapLastSeenUid?: string;
+}
+
+export interface ImapMailboxInfo {
+  path: string;
+  name: string;
+  delimiter?: string;
+  flags: string[];
+  specialUse?: string;
 }
 
 export interface SmtpTransportOptions {
@@ -190,6 +198,35 @@ export async function fetchRecentImapEmailBatch(config: EmailConnectionConfig, l
   }
 }
 
+export async function listImapMailboxes(config: EmailConnectionConfig): Promise<{ mailboxes: ImapMailboxInfo[]; suggestedMapping: EmailMailboxMapping }> {
+  assertImapConfig(config);
+  const client = createImapFlowClient(config);
+  try {
+    await client.connect();
+    const listed = (await client.list()) as Array<{ path?: string; name?: string; delimiter?: string; flags?: Set<string> | string[]; specialUse?: string }>;
+    const mailboxes: ImapMailboxInfo[] = listed
+      .map((mailbox): ImapMailboxInfo | undefined => {
+        const path = mailbox.path?.trim() || mailbox.name?.trim() || "";
+        const flags = Array.isArray(mailbox.flags) ? mailbox.flags : Array.from(mailbox.flags ?? []);
+        return path
+          ? {
+              path,
+              name: mailbox.name?.trim() || path,
+              delimiter: mailbox.delimiter,
+              flags,
+              specialUse: mailbox.specialUse
+            }
+          : undefined;
+      })
+      .filter((mailbox): mailbox is ImapMailboxInfo => Boolean(mailbox))
+      .sort((left, right) => left.path.localeCompare(right.path));
+    await client.logout().catch(() => undefined);
+    return { mailboxes, suggestedMapping: suggestMailboxMapping(mailboxes, config.mailbox) };
+  } finally {
+    client.close();
+  }
+}
+
 export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, limit = 10, options: MailboxFetchOptions = {}): Promise<InboundEmail[]> {
   return (await fetchRecentMailboxEmailBatch(config, limit, options)).messages;
 }
@@ -216,6 +253,31 @@ export function withInboundMailboxSource(message: InboundEmail, mailbox: string,
       sourceMailboxRole: role
     }
   };
+}
+
+export function getMappedMailbox(mapping: EmailMailboxMapping | undefined, role: keyof EmailMailboxMapping, fallback: string): string {
+  return mapping?.[role]?.trim() || fallback;
+}
+
+function suggestMailboxMapping(mailboxes: ImapMailboxInfo[], configuredMailbox?: string): EmailMailboxMapping {
+  return {
+    inbox: findMailboxByRole(mailboxes, "\\Inbox", ["inbox"]) ?? configuredMailbox?.trim() ?? "INBOX",
+    sent: findMailboxByRole(mailboxes, "\\Sent", ["sent", "sent mail", "sent messages"]),
+    spam: findMailboxByRole(mailboxes, "\\Junk", ["spam", "junk", "bulk"]),
+    trash: findMailboxByRole(mailboxes, "\\Trash", ["trash", "deleted", "deleted items", "bin"]),
+    archive: findMailboxByRole(mailboxes, "\\Archive", ["archive", "all mail"])
+  };
+}
+
+function findMailboxByRole(mailboxes: ImapMailboxInfo[], specialUse: string, keywords: string[]): string | undefined {
+  const special = mailboxes.find((mailbox) => mailbox.specialUse === specialUse || mailbox.flags.includes(specialUse));
+  if (special) {
+    return special.path;
+  }
+  return mailboxes.find((mailbox) => {
+    const normalized = mailbox.path.toLowerCase();
+    return keywords.some((keyword) => normalized === keyword || normalized.endsWith(`/${keyword}`) || normalized.endsWith(`]/${keyword}`));
+  })?.path;
 }
 
 function inferInboundMailboxRole(mailbox: string): "inbox" | "spam" {

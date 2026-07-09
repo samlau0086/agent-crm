@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import type { EmailConnectionConfig, EmailInboundConnectionConfig, EmailOutboundServiceConfig } from "@/lib/crm/types";
+import type { EmailConnectionConfig, EmailInboundConnectionConfig, EmailMailboxMapping, EmailOutboundServiceConfig } from "@/lib/crm/types";
 
 const CIPHER = "aes-256-gcm";
 const VERSION = "v1";
@@ -48,6 +48,7 @@ export function normalizeEmailConnectionConfig(config: EmailConnectionConfig): E
     username: config.username?.trim() || undefined,
     password: config.password ?? undefined,
     mailbox: config.mailbox?.trim() || "INBOX",
+    mailboxMapping: normalizeMailboxMapping(config.mailboxMapping, config.mailbox),
     oauthProvider: normalizeOAuthProvider(config.oauthProvider),
     accessToken: config.accessToken?.trim() || undefined,
     refreshToken: config.refreshToken?.trim() || undefined,
@@ -69,6 +70,7 @@ export function getInboundConnectionConfig(config: EmailConnectionConfig): Email
     username: inbound?.username,
     password: inbound?.password,
     mailbox: inbound?.mailbox,
+    mailboxMapping: inbound?.mailboxMapping,
     oauthProvider: inbound?.oauthProvider,
     accessToken: inbound?.accessToken,
     refreshToken: inbound?.refreshToken,
@@ -113,6 +115,7 @@ function normalizeInboundConnectionConfig(config?: EmailInboundConnectionConfig)
     username: config.username?.trim() || undefined,
     password: config.password ?? undefined,
     mailbox: config.mailbox?.trim() || "INBOX",
+    mailboxMapping: normalizeMailboxMapping(config.mailboxMapping, config.mailbox),
     oauthProvider: normalizeOAuthProvider(config.oauthProvider),
     accessToken: config.accessToken?.trim() || undefined,
     refreshToken: config.refreshToken?.trim() || undefined,
@@ -164,6 +167,7 @@ function legacyInboundConfig(config: EmailConnectionConfig): EmailInboundConnect
     username: config.username,
     password: config.password,
     mailbox: config.mailbox,
+    mailboxMapping: config.mailboxMapping,
     oauthProvider: config.oauthProvider,
     accessToken: config.accessToken,
     refreshToken: config.refreshToken,
@@ -194,6 +198,22 @@ function legacyOutboundServices(config: EmailConnectionConfig): EmailOutboundSer
 
 function hasInboundConfig(config: EmailInboundConnectionConfig): boolean {
   return Boolean(config.imapHost || config.username || config.password || config.accessToken || config.refreshToken);
+}
+
+function normalizeMailboxMapping(mapping?: EmailMailboxMapping, fallbackMailbox?: string): EmailMailboxMapping | undefined {
+  const normalized: EmailMailboxMapping = {
+    inbox: normalizeMailboxPath(mapping?.inbox) ?? normalizeMailboxPath(fallbackMailbox) ?? "INBOX",
+    sent: normalizeMailboxPath(mapping?.sent),
+    spam: normalizeMailboxPath(mapping?.spam),
+    trash: normalizeMailboxPath(mapping?.trash),
+    archive: normalizeMailboxPath(mapping?.archive)
+  };
+  return Object.values(normalized).some(Boolean) ? normalized : undefined;
+}
+
+function normalizeMailboxPath(value?: string): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
 }
 
 function deriveKey(secret: string): Buffer {

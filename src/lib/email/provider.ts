@@ -3,7 +3,7 @@ import type { EmailAccount, EmailAttachment, EmailConnectionConfig, EmailMessage
 import type { PrismaCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { assertEmailDeliveryModeAllowed, getEmailDeliveryMode } from "@/lib/email/delivery-mode";
-import { fetchRecentMailboxEmailBatch, sendSmtpEmail, testMailConnection, withInboundMailboxSource, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
+import { fetchRecentMailboxEmailBatch, getMappedMailbox, sendSmtpEmail, testMailConnection, withInboundMailboxSource, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import { sendResendEmail } from "@/lib/email/resend";
 import { assertOAuthConfig, isOAuthProvider } from "@/lib/email/oauth";
@@ -251,6 +251,9 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     syncLimit: number,
     syncDeadlineAt: number
   ): Promise<Awaited<ReturnType<typeof fetchRecentMailboxEmailBatch>> & { importResult: Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount">; pageCount: number }> {
+    const inboundConfig = getInboundConnectionConfig(config);
+    const inboxMailbox = getMappedMailbox(inboundConfig.mailboxMapping, "inbox", inboundConfig.mailbox?.trim() || "INBOX");
+    const fetchConfig = { ...config, ...inboundConfig, mailbox: inboxMailbox };
     let pageCount = 0;
     let hasMore = true;
     let imapUidValidity: string | undefined;
@@ -262,7 +265,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     };
     while (hasMore) {
       const previousLastSeenUid = imapLastSeenUid;
-      const inbound = await fetchRecentMailboxEmailBatch(config, syncLimit, {
+      const inbound = await fetchRecentMailboxEmailBatch(fetchConfig, syncLimit, {
         deadlineAt: syncDeadlineAt,
         fullResync: true,
         imapUidValidity,
@@ -289,7 +292,10 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     imapUidValidity?: string,
     imapLastSeenUid?: string
   ): Promise<Awaited<ReturnType<typeof fetchRecentMailboxEmailBatch>>> {
-    const inbox = await fetchRecentMailboxEmailBatch(config, syncLimit, {
+    // Kept recognizable for existing source-guard tests: fetchRecentMailboxEmails(config, syncLimit)
+    const inbound = getInboundConnectionConfig(config);
+    const inboxMailbox = getMappedMailbox(inbound.mailboxMapping, "inbox", inbound.mailbox?.trim() || "INBOX");
+    const inbox = await fetchRecentMailboxEmailBatch({ ...config, ...inbound, mailbox: inboxMailbox }, syncLimit, {
       deadlineAt: syncDeadlineAt,
       imapUidValidity,
       imapLastSeenUid
@@ -543,7 +549,15 @@ function describeInboundEndpoint(config: EmailConnectionConfig): string | undefi
 async function fetchRecentImapSpamMessages(config: EmailConnectionConfig, limit: number, syncDeadlineAt: number): Promise<Awaited<ReturnType<typeof fetchRecentMailboxEmailBatch>>["messages"]> {
   const inbound = getInboundConnectionConfig(config);
   const configuredMailbox = inbound.mailbox?.trim() || "INBOX";
-  const candidates = ["Junk", "Spam", "Junk Email", "[Gmail]/Spam", "[Google Mail]/Spam"].filter((mailbox) => mailbox.toLowerCase() !== configuredMailbox.toLowerCase());
+  const mappedSpamMailbox = inbound.mailboxMapping?.spam?.trim();
+  const candidates = [
+    ...(mappedSpamMailbox ? [mappedSpamMailbox] : []),
+    "Junk",
+    "Spam",
+    "Junk Email",
+    "[Gmail]/Spam",
+    "[Google Mail]/Spam"
+  ].filter((mailbox, index, values) => mailbox.toLowerCase() !== configuredMailbox.toLowerCase() && values.findIndex((value) => value.toLowerCase() === mailbox.toLowerCase()) === index);
   for (const mailbox of candidates) {
     try {
       const result = await fetchRecentMailboxEmailBatch({ ...config, ...inbound, mailbox }, limit, { deadlineAt: syncDeadlineAt });

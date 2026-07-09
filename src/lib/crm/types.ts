@@ -234,6 +234,7 @@ export interface EmailConnectionConfig {
   username?: string;
   password?: string;
   mailbox?: string;
+  mailboxMapping?: EmailMailboxMapping;
   oauthProvider?: "gmail" | "outlook" | "custom";
   accessToken?: string;
   refreshToken?: string;
@@ -250,12 +251,21 @@ export interface EmailInboundConnectionConfig {
   username?: string;
   password?: string;
   mailbox?: string;
+  mailboxMapping?: EmailMailboxMapping;
   oauthProvider?: "gmail" | "outlook" | "custom";
   accessToken?: string;
   refreshToken?: string;
   tokenType?: string;
   expiresAt?: string;
   scope?: string;
+}
+
+export interface EmailMailboxMapping {
+  inbox?: string;
+  sent?: string;
+  spam?: string;
+  trash?: string;
+  archive?: string;
 }
 
 export interface EmailOutboundServiceConfig {

@@ -585,6 +585,16 @@ const emailInboundConnectionConfigSchema = z
     username: z.string().trim().min(1).optional(),
     password: z.string().min(1).optional(),
     mailbox: z.string().trim().min(1).optional(),
+    mailboxMapping: z
+      .object({
+        inbox: z.string().trim().min(1).optional(),
+        sent: z.string().trim().min(1).optional(),
+        spam: z.string().trim().min(1).optional(),
+        trash: z.string().trim().min(1).optional(),
+        archive: z.string().trim().min(1).optional()
+      })
+      .strict()
+      .optional(),
     oauthProvider: z.enum(["gmail", "outlook", "custom"]).optional(),
     accessToken: z.string().trim().min(1).optional(),
     refreshToken: z.string().trim().min(1).optional(),
@@ -625,6 +635,16 @@ const emailConnectionConfigSchema = z
     username: z.string().trim().min(1).optional(),
     password: z.string().min(1).optional(),
     mailbox: z.string().trim().min(1).optional(),
+    mailboxMapping: z
+      .object({
+        inbox: z.string().trim().min(1).optional(),
+        sent: z.string().trim().min(1).optional(),
+        spam: z.string().trim().min(1).optional(),
+        trash: z.string().trim().min(1).optional(),
+        archive: z.string().trim().min(1).optional()
+      })
+      .strict()
+      .optional(),
     oauthProvider: z.enum(["gmail", "outlook", "custom"]).optional(),
     accessToken: z.string().trim().min(1).optional(),
     refreshToken: z.string().trim().min(1).optional(),

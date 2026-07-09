@@ -44,6 +44,7 @@ function sanitizeEmailConnectionConfig(config: EmailConnectionConfig): Sanitized
           imapSecure: normalized.inbound.imapSecure,
           username: normalized.inbound.username,
           mailbox: normalized.inbound.mailbox,
+          mailboxMapping: normalized.inbound.mailboxMapping,
           oauthProvider: normalized.inbound.oauthProvider,
           tokenType: normalized.inbound.tokenType,
           expiresAt: normalized.inbound.expiresAt,

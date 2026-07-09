@@ -111,6 +111,7 @@ import type {
   EmailSyncSettings,
   EmailConnectionConfig,
   EmailInboundConnectionConfig,
+  EmailMailboxMapping,
   EmailMessage,
   EmailOutboundServiceConfig,
   EmailSignature,
@@ -413,6 +414,7 @@ type EmailAccountDraft = {
   username: string;
   password: string;
   mailbox: string;
+  mailboxMapping: EmailMailboxMapping;
   oauthAccessToken: string;
   oauthRefreshToken: string;
   oauthExpiresAt: string;
@@ -443,6 +445,10 @@ type SanitizedEmailConnectionConfig = {
     hasResendApiKey?: boolean;
   }>;
   defaultOutboundServiceId?: string;
+};
+type ImapMailboxListResult = {
+  mailboxes: Array<{ path: string; name: string; delimiter?: string; flags: string[]; specialUse?: string }>;
+  suggestedMapping: EmailMailboxMapping;
 };
 type EmailAccountUpdatePatch = Partial<Pick<EmailAccount, "name" | "emailAddress" | "provider" | "status" | "syncEnabled" | "sendEnabled">> & {
   defaultSignatureId?: string | null;
@@ -1581,6 +1587,7 @@ function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}
     username: "",
     password: "",
     mailbox: "INBOX",
+    mailboxMapping: { inbox: "INBOX" },
     oauthAccessToken: "",
     oauthRefreshToken: "",
     oauthExpiresAt: "",
@@ -1625,9 +1632,21 @@ function createEmailAccountEditDraft(account: EmailAccount, config?: SanitizedEm
     username: inbound?.username ?? "",
     password: "",
     mailbox: inbound?.mailbox ?? "INBOX",
+    mailboxMapping: inbound?.mailboxMapping ?? { inbox: inbound?.mailbox ?? "INBOX" },
     oauthExpiresAt: inbound?.expiresAt ? inbound.expiresAt.slice(0, 16) : "",
     oauthScope: inbound?.scope ?? ""
   });
+}
+
+function getEmailMailboxMappingRoleLabel(role: keyof EmailMailboxMapping): string {
+  const labels: Record<keyof EmailMailboxMapping, string> = {
+    inbox: "收件箱",
+    sent: "已发送",
+    spam: "垃圾邮件",
+    trash: "已删除",
+    archive: "归档"
+  };
+  return labels[role];
 }
 
 function createEmptyEmailSignatureDraft(overrides: Partial<EmailSignatureDraft> = {}): EmailSignatureDraft {
@@ -4459,13 +4478,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function testEmailConnection(accountId: string, options: { scope?: EmailConnectionTestScope; outboundServiceId?: string } = {}) {
-    const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
+    const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
       method: "POST",
       body: { accountId, ...options }
     });
     setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
     const scopeLabel = options.scope === "inbound" ? "收件连接" : options.scope === "outbound" ? "发件服务" : "邮箱连接";
-    setMessage(`${scopeLabel}测试完成：SMTP ${result.result.smtp ?? "skipped"}，Resend ${result.result.resend ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
+    setMessage(`${scopeLabel}测试完成：SMTP ${result.result.smtp ?? "skipped"}，Resend ${result.result.resend ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，POP3 ${result.result.pop3 ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
   }
 
   async function testAllEmailConnections() {
@@ -8928,6 +8947,9 @@ function EmailWorkspace({
   const selectedProviderCapability = getEmailProviderCapability(accountDraft.provider);
   const selectedProviderSetupVisibility = getEmailProviderSetupVisibility(accountDraft.provider);
   const editingEmailAccount = accountDraft.editingAccountId ? accounts.find((account) => account.id === accountDraft.editingAccountId) : undefined;
+  const [imapMailboxOptions, setImapMailboxOptions] = useState<string[]>([]);
+  const [imapMailboxLoading, setImapMailboxLoading] = useState(false);
+  const [imapMailboxError, setImapMailboxError] = useState("");
   const accountSignaturePresetOptions = useMemo(
     () => getEmailAccountSignaturePresetOptions(signatures, accountDraft.editingAccountId ?? ""),
     [accountDraft.editingAccountId, signatures]
@@ -9881,7 +9903,8 @@ function EmailWorkspace({
             imapSecure: true,
             username: "",
             password: "",
-            mailbox: "INBOX"
+            mailbox: "INBOX",
+            mailboxMapping: { inbox: "INBOX" }
           }),
       ...(capability.supportsOAuth
         ? {}
@@ -10029,6 +10052,35 @@ function EmailWorkspace({
     }
   }
 
+  async function loadImapMailboxOptions() {
+    if (!editingEmailAccount) {
+      setImapMailboxError("需要先保存账户连接配置");
+      return;
+    }
+    setImapMailboxLoading(true);
+    setImapMailboxError("");
+    try {
+      const result = await fetchJson<ImapMailboxListResult>(`/api/email/accounts/${editingEmailAccount.id}/mailboxes`, { method: "GET" });
+      const paths = result.mailboxes.map((mailbox) => mailbox.path);
+      setImapMailboxOptions(paths);
+      onAccountDraftChange({
+        ...accountDraft,
+        mailbox: accountDraft.mailbox.trim() || result.suggestedMapping.inbox || "INBOX",
+        mailboxMapping: {
+          inbox: accountDraft.mailboxMapping.inbox || result.suggestedMapping.inbox || "INBOX",
+          sent: accountDraft.mailboxMapping.sent || result.suggestedMapping.sent,
+          spam: accountDraft.mailboxMapping.spam || result.suggestedMapping.spam,
+          trash: accountDraft.mailboxMapping.trash || result.suggestedMapping.trash,
+          archive: accountDraft.mailboxMapping.archive || result.suggestedMapping.archive
+        }
+      });
+    } catch (error) {
+      setImapMailboxError(error instanceof Error ? error.message : "邮件夹获取失败");
+    } finally {
+      setImapMailboxLoading(false);
+    }
+  }
+
   function emailConnectionTestStateKey(accountId: string, options: { scope?: EmailConnectionTestScope; outboundServiceId?: string } = {}) {
     return [accountId, options.scope ?? "all", options.outboundServiceId ?? ""].join(":");
   }
@@ -10150,6 +10202,7 @@ function EmailWorkspace({
                 ) : null}
               </div>
             </div>
+            <input type="hidden" data-testid="email-account-sync-protocol" value={accountDraft.syncProtocol} readOnly />
             <label>
               <span className="subtle">IMAP Host</span>
               <input className="input" data-testid="email-account-imap-host" value={accountDraft.imapHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapHost: event.target.value })} />
@@ -10170,10 +10223,59 @@ function EmailWorkspace({
               <span className="subtle">收件密码/应用密码</span>
               <input className="input" data-testid="email-account-inbound-password" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} placeholder={accountDraft.editingAccountId ? "留空保留已保存密码" : undefined} />
             </label>
-            <label>
-              <span className="subtle">邮箱文件夹</span>
-              <input className="input" value={accountDraft.mailbox} onChange={(event) => onAccountDraftChange({ ...accountDraft, mailbox: event.target.value })} />
-            </label>
+            <div className="settings-item wide">
+              <div className="toolbar between">
+                <div>
+                  <strong>邮件夹映射</strong>
+                  <div className="subtle">从 IMAP 服务器获取可用邮件夹，并映射到系统收件、垃圾箱等角色。</div>
+                </div>
+                <button className="secondary-button" type="button" onClick={loadImapMailboxOptions} disabled={disabled || imapMailboxLoading || !editingEmailAccount}>
+                  <RefreshCw className={imapMailboxLoading ? "spin-icon" : undefined} size={16} />
+                  获取邮件夹
+                </button>
+              </div>
+              {imapMailboxError ? <div className="danger-text" style={{ marginTop: 8 }}>{imapMailboxError}</div> : null}
+            </div>
+            {(["inbox", "sent", "spam", "trash", "archive"] as Array<keyof EmailMailboxMapping>).map((role) => (
+              <label key={role}>
+                <span className="subtle">{getEmailMailboxMappingRoleLabel(role)}</span>
+                {imapMailboxOptions.length ? (
+                  <select
+                    className="select"
+                    value={accountDraft.mailboxMapping[role] ?? ""}
+                    onChange={(event) => {
+                      const nextMapping = { ...accountDraft.mailboxMapping, [role]: event.target.value || undefined };
+                      onAccountDraftChange({
+                        ...accountDraft,
+                        mailbox: role === "inbox" ? event.target.value || "INBOX" : accountDraft.mailbox,
+                        mailboxMapping: nextMapping
+                      });
+                    }}
+                  >
+                    <option value="">未映射</option>
+                    {imapMailboxOptions.map((mailbox) => (
+                      <option key={mailbox} value={mailbox}>
+                        {mailbox}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="input"
+                    value={accountDraft.mailboxMapping[role] ?? ""}
+                    onChange={(event) => {
+                      const nextMapping = { ...accountDraft.mailboxMapping, [role]: event.target.value || undefined };
+                      onAccountDraftChange({
+                        ...accountDraft,
+                        mailbox: role === "inbox" ? event.target.value || "INBOX" : accountDraft.mailbox,
+                        mailboxMapping: nextMapping
+                      });
+                    }}
+                    placeholder={role === "inbox" ? "INBOX" : undefined}
+                  />
+                )}
+              </label>
+            ))}
           </>
         ) : null}
         {selectedProviderSetupVisibility.showOAuthFields ? (
@@ -21237,6 +21339,13 @@ function buildEmailConnectionConfig(draft: EmailAccountDraft) {
       username: draft.username.trim() || undefined,
       password: draft.password || undefined,
       mailbox: draft.mailbox.trim() || "INBOX",
+      mailboxMapping: {
+        inbox: draft.mailboxMapping.inbox?.trim() || draft.mailbox.trim() || "INBOX",
+        sent: draft.mailboxMapping.sent?.trim() || undefined,
+        spam: draft.mailboxMapping.spam?.trim() || undefined,
+        trash: draft.mailboxMapping.trash?.trim() || undefined,
+        archive: draft.mailboxMapping.archive?.trim() || undefined
+      },
       oauthProvider,
       accessToken: draft.oauthAccessToken.trim() || undefined,
       refreshToken: draft.oauthRefreshToken.trim() || undefined,
