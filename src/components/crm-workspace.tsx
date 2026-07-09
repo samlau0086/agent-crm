@@ -89,6 +89,7 @@ import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
 import { calculateQuoteTotals, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
 import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, type RecordApprovalPatch } from "@/lib/crm/record-approval";
+import { parseEmailThreadSearchCommand } from "@/lib/email/search-command";
 import type {
   Activity,
   ApiKey,
@@ -1422,6 +1423,9 @@ function emailMessageParticipantLabel(message: EmailMessage | undefined, thread:
 }
 
 function emailThreadMatchesSearch(thread: EmailThread, messages: EmailMessage[], query: string): boolean {
+  if (parseEmailThreadSearchCommand(query)) {
+    return true;
+  }
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
     return true;
@@ -2140,6 +2144,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const pendingRecordOpenRef = useRef<{ objectKey: string; recordId: string; returnEmailThreadId: string } | null>(null);
   const pendingRecordCreateRef = useRef<{ objectKey: string; values: Record<string, string> } | null>(null);
   const handledRouteEmailComposeRef = useRef("");
+  const previousCommandEmailSearchRef = useRef("");
   const locallyDeletedEmailThreadIdsRef = useRef<Set<string>>(new Set());
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const promptResolverRef = useRef<((value: string | null) => void) | null>(null);
@@ -2772,6 +2777,43 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setSelectedEmailThreadId(nextSelectedThreadId);
     }
   }, [emailComposeOpenRequestKey, props.emailAccounts, props.emailAiSettings, props.emailSignatures, props.emailSyncSettings, props.emailThreads, props.knowledgeArticles, props.knowledgeVectorSettings, props.mediaAssets, routeEmailThreadId, selectedEmailThreadId]);
+
+  useEffect(() => {
+    const command = parseEmailThreadSearchCommand(routeEmailSearch);
+    const previousCommandSearch = previousCommandEmailSearchRef.current;
+    if (!command && !previousCommandSearch) {
+      return undefined;
+    }
+
+    previousCommandEmailSearchRef.current = command ? routeEmailSearch : "";
+    const controller = new AbortController();
+    const params = new URLSearchParams();
+    if (command) {
+      params.set("mailSearch", routeEmailSearch);
+    }
+    fetchJson<EmailThread[]>(`/api/email/threads${params.size ? `?${params.toString()}` : ""}`, {
+      method: "GET",
+      signal: controller.signal
+    })
+      .then((threads) => {
+        const visibleEmailThreads = threads.filter((thread) => !locallyDeletedEmailThreadIdsRef.current.has(thread.id));
+        setEmailThreads(visibleEmailThreads);
+        const preferredThreadId = routeEmailThreadId || selectedEmailThreadId;
+        const nextSelectedThreadId = visibleEmailThreads.some((thread) => thread.id === preferredThreadId) ? preferredThreadId : visibleEmailThreads[0]?.id ?? "";
+        if (nextSelectedThreadId !== selectedEmailThreadId) {
+          setEmailDraft((current) => clearEmailDraftAiProvenance(current));
+          setSelectedEmailThreadId(nextSelectedThreadId);
+        }
+      })
+      .catch((emailThreadError) => {
+        if (emailThreadError instanceof DOMException && emailThreadError.name === "AbortError") {
+          return;
+        }
+        setError(emailThreadError instanceof Error ? emailThreadError.message : "邮件搜索失败");
+      });
+
+    return () => controller.abort();
+  }, [routeEmailSearch, routeEmailThreadId, selectedEmailThreadId]);
 
   useEffect(() => {
     if (!routeEmailThreadId) {
@@ -4581,7 +4623,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function refreshEmailThreads(options: { reloadSelectedMessages?: boolean } = {}) {
-    const threads = await fetchJson<EmailThread[]>("/api/email/threads", { method: "GET" });
+    const command = parseEmailThreadSearchCommand(routeEmailSearch);
+    const threads = command
+      ? await fetchJson<EmailThread[]>(`/api/email/threads?mailSearch=${encodeURIComponent(routeEmailSearch)}`, { method: "GET" })
+      : await fetchJson<EmailThread[]>("/api/email/threads", { method: "GET" });
     const visibleThreads = threads.filter((thread) => !locallyDeletedEmailThreadIdsRef.current.has(thread.id));
     const threadId = selectedEmailThreadId && visibleThreads.some((thread) => thread.id === selectedEmailThreadId) ? selectedEmailThreadId : visibleThreads[0]?.id ?? "";
     setEmailThreads(visibleThreads);
@@ -10443,7 +10488,7 @@ function EmailWorkspace({
         </div>
         <label className="gmail-search">
           <Search size={18} />
-          <input data-testid="email-search" value={searchQuery} onChange={(event) => applyEmailRoute({ search: event.target.value, mailMode: "list", threadId: "" })} placeholder="搜索邮件" />
+          <input data-testid="email-search" value={searchQuery} onChange={(event) => applyEmailRoute({ search: event.target.value, mailMode: "list", threadId: "" })} placeholder="搜索邮件，或 /company:公司 /contact:联系人 /deal:交易" />
           <Filter size={16} />
         </label>
         <button className="icon-button" aria-label="邮箱设置" type="button" onClick={() => onViewChange("settings")}>

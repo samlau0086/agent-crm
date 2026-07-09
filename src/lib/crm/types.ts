@@ -302,6 +302,18 @@ export interface EmailThread {
   updatedAt: string;
 }
 
+export type EmailThreadSearchCommandType = "company" | "contact" | "deal";
+
+export interface EmailThreadSearchCommand {
+  type: EmailThreadSearchCommandType;
+  value: string;
+}
+
+export interface EmailThreadListQuery {
+  recordId?: string;
+  command?: EmailThreadSearchCommand;
+}
+
 export interface EmailThreadState {
   id: string;
   workspaceId: string;

@@ -81,6 +81,7 @@ import type {
   EmailSignature,
   EmailThreadState,
   EmailThread,
+  EmailThreadListQuery,
   FieldDefinition,
   ImportPreset,
   ImportJobQueueSummary,
@@ -145,6 +146,7 @@ import { generateWorkflowWithAiDesigner } from "@/lib/workflows/ai-designer";
 
 type PrismaContext = typeof prisma;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
+type EmailThreadCommandScope = { recordIds: Set<string>; emails: Set<string> };
 const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
 const EDIT_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals"] as const;
 const DELETE_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals", "products", "quotes"] as const;
@@ -2773,11 +2775,14 @@ export class PrismaCrmRepository {
     });
   }
 
-  async listEmailThreads(context: RequestContext, recordId?: string): Promise<EmailThread[]> {
+  async listEmailThreads(context: RequestContext, input?: string | EmailThreadListQuery): Promise<EmailThread[]> {
     requirePermission(context, "crm.read");
+    const query = normalizeEmailThreadListQuery(input);
+    const recordId = query.recordId;
     if (recordId) {
       await this.assertVisibleRecord(context, recordId);
     }
+    const commandScope = query.command ? await this.resolveEmailThreadCommandScope(context, query.command) : undefined;
     const threads = await this.db.emailThread.findMany({
       where: {
         workspaceId: context.workspaceId,
@@ -2785,11 +2790,12 @@ export class PrismaCrmRepository {
       },
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }]
     });
+    const filteredThreads = commandScope ? threads.filter((thread) => emailThreadMatchesCommandScope(mapEmailThread(thread), commandScope)) : threads;
     const states = await this.db.emailThreadState.findMany({
-      where: { workspaceId: context.workspaceId, userId: context.user.id, threadId: { in: threads.map((thread) => thread.id) } }
+      where: { workspaceId: context.workspaceId, userId: context.user.id, threadId: { in: filteredThreads.map((thread) => thread.id) } }
     });
     const stateByThreadId = new Map(states.map((state) => [state.threadId, state]));
-    return threads.map((thread) => mapEmailThread(thread, stateByThreadId.get(thread.id)));
+    return filteredThreads.map((thread) => mapEmailThread(thread, stateByThreadId.get(thread.id)));
   }
 
   async getEmailThread(context: RequestContext, threadId: string): Promise<EmailThread> {
@@ -9286,6 +9292,57 @@ export class PrismaCrmRepository {
     return mapRecord(record);
   }
 
+  private async resolveEmailThreadCommandScope(context: RequestContext, command: NonNullable<EmailThreadListQuery["command"]>): Promise<EmailThreadCommandScope> {
+    const value = command.value.trim().toLowerCase();
+    if (!value) {
+      return { recordIds: new Set(), emails: new Set() };
+    }
+    const rows = await this.db.crmRecord.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        objectKey: { in: ["contacts", "companies", "deals"] },
+        ...(await this.recordAccessWhere(context))
+      }
+    });
+    const visibleRecords = rows.map(mapRecord);
+    const recordIds = new Set<string>();
+    const emails = new Set<string>();
+    const addContact = (contact: CrmRecord) => {
+      recordIds.add(contact.id);
+      getRecordEmailAddresses(contact).forEach((email) => emails.add(email));
+    };
+    const addCompany = (company: CrmRecord) => {
+      recordIds.add(company.id);
+      visibleRecords
+        .filter((record) => record.objectKey === "contacts" && recordReferencesId(record.data.companyId, company.id))
+        .forEach(addContact);
+    };
+
+    if (command.type === "contact") {
+      visibleRecords
+        .filter((record) => record.objectKey === "contacts" && `${record.title} ${getRecordEmailAddresses(record).join(" ")}`.toLowerCase().includes(value))
+        .forEach(addContact);
+      return { recordIds, emails };
+    }
+
+    if (command.type === "company") {
+      visibleRecords.filter((record) => record.objectKey === "companies" && record.title.toLowerCase().includes(value)).forEach(addCompany);
+      return { recordIds, emails };
+    }
+
+    visibleRecords
+      .filter((record) => record.objectKey === "deals" && record.title.toLowerCase().includes(value))
+      .forEach((deal) => {
+        recordIds.add(deal.id);
+        const companyId = typeof deal.data.companyId === "string" ? deal.data.companyId : "";
+        const company = companyId ? visibleRecords.find((record) => record.objectKey === "companies" && record.id === companyId) : undefined;
+        if (company) {
+          addCompany(company);
+        }
+      });
+    return { recordIds, emails };
+  }
+
   private async assertVisibleEmailAiSources(context: RequestContext, sources: unknown): Promise<NonNullable<EmailThread["aiAnalysisSources"]>> {
     const normalizedSources = normalizeEmailAiSources(sources);
     for (const source of normalizedSources) {
@@ -10316,6 +10373,10 @@ function normalizeEmailAddress(value: string): string {
   return email;
 }
 
+function normalizeEmailThreadListQuery(input?: string | EmailThreadListQuery): EmailThreadListQuery {
+  return typeof input === "string" ? { recordId: input } : input ?? {};
+}
+
 function uniqueEmails(values: string[]): string[] {
   return Array.from(new Set(values.map(normalizeEmailAddress)));
 }
@@ -10549,6 +10610,31 @@ function normalizeEmailCandidates(value: string): string[] {
   return uniqueValidEmails(value.split(/[,\s;<>]+/).filter(Boolean));
 }
 
+function getRecordEmailAddresses(record: Pick<CrmRecord, "data">): string[] {
+  if (!record.data || typeof record.data !== "object" || Array.isArray(record.data)) {
+    return [];
+  }
+  const data = record.data as Record<string, unknown>;
+  const contactMethods = Array.isArray(data.contactMethods) ? data.contactMethods : [];
+  const methodEmails = contactMethods.flatMap((method) => {
+    if (!method || typeof method !== "object" || Array.isArray(method)) {
+      return [];
+    }
+    const methodRecord = method as Record<string, unknown>;
+    return typeof methodRecord.value === "string" && (methodRecord.type === "email" || methodRecord.value.includes("@")) ? [methodRecord.value] : [];
+  });
+  const fieldEmails = Object.entries(data).flatMap(([key, value]) => {
+    if (typeof value !== "string") {
+      return [];
+    }
+    if (!key.toLowerCase().includes("email") && !value.includes("@")) {
+      return [];
+    }
+    return [value];
+  });
+  return Array.from(new Set([...methodEmails, ...fieldEmails].flatMap(normalizeEmailCandidates)));
+}
+
 function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return false;
@@ -10576,6 +10662,33 @@ function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
     return [value];
   });
   return [...methodEmails, ...fieldEmails].some((value) => normalizeEmailCandidates(value).includes(normalizedEmail));
+}
+
+function recordReferencesId(value: unknown, recordId: string): boolean {
+  if (!recordId) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim() === recordId;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => recordReferencesId(item, recordId));
+  }
+  if (value && typeof value === "object") {
+    const candidate = value as { id?: unknown; recordId?: unknown; value?: unknown };
+    return [candidate.id, candidate.recordId, candidate.value].some((item) => recordReferencesId(item, recordId));
+  }
+  return false;
+}
+
+function emailThreadMatchesCommandScope(thread: EmailThread, scope: EmailThreadCommandScope): boolean {
+  if (thread.recordId && scope.recordIds.has(thread.recordId)) {
+    return true;
+  }
+  return thread.participantEmails.some((email) => {
+    const normalized = tryNormalizeEmailAddress(email);
+    return normalized !== undefined && scope.emails.has(normalized);
+  });
 }
 
 function emailMessageTime(message: EmailMessage): string {

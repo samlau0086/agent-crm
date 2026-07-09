@@ -60,6 +60,7 @@ import type {
   EmailMessage,
   EmailSignature,
   EmailThread,
+  EmailThreadListQuery,
   EmailThreadState,
   FieldDefinition,
   ImportPreset,
@@ -116,6 +117,7 @@ import {
 } from "@/lib/workflows/core";
 
 type GlobalStore = typeof globalThis & { __crmStore?: CrmStore };
+type EmailThreadCommandScope = { recordIds: Set<string>; emails: Set<string> };
 type StoredCsvImportJob = CsvImportJob & { sourcePayload?: CsvImportJobSourcePayload };
 type StoredApiKey = ApiKey & { tokenHash: string };
 type StoredWebhookEndpoint = WebhookEndpoint & { secret: string };
@@ -985,14 +987,23 @@ export class CrmStore {
     return clone(account);
   }
 
-  listEmailThreads(context: RequestContext, recordId?: string): EmailThread[] {
+  listEmailThreads(context: RequestContext, input?: string | EmailThreadListQuery): EmailThread[] {
     requirePermission(context, "crm.read");
+    const query = normalizeEmailThreadListQuery(input);
+    const recordId = query.recordId;
     if (recordId) {
       this.assertVisibleRecordById(context, recordId);
     }
+    const commandScope = query.command ? this.resolveEmailThreadCommandScope(context, query.command) : undefined;
     return clone(
       (this.data.emailThreads ?? [])
-        .filter((thread) => thread.workspaceId === context.workspaceId && (!recordId || thread.recordId === recordId) && this.canAccessEmailThread(context, thread))
+        .filter(
+          (thread) =>
+            thread.workspaceId === context.workspaceId &&
+            (!recordId || thread.recordId === recordId) &&
+            (!commandScope || emailThreadMatchesCommandScope(thread, commandScope)) &&
+            this.canAccessEmailThread(context, thread)
+        )
         .map((thread) => this.mergeEmailThreadState(context, thread))
         .sort((left, right) => (right.lastMessageAt ?? right.updatedAt).localeCompare(left.lastMessageAt ?? left.updatedAt))
     );
@@ -4958,6 +4969,52 @@ export class CrmStore {
       .find((record) => emails.some((email) => recordDataHasEmail(record.data, email)))?.id;
   }
 
+  private resolveEmailThreadCommandScope(context: RequestContext, command: NonNullable<EmailThreadListQuery["command"]>): EmailThreadCommandScope {
+    const value = command.value.trim().toLowerCase();
+    if (!value) {
+      return { recordIds: new Set(), emails: new Set() };
+    }
+    const visibleRecords = this.data.records.filter((record) => record.workspaceId === context.workspaceId && this.canAccessRecord(context, record));
+    const recordIds = new Set<string>();
+    const emails = new Set<string>();
+    const addContact = (contact: CrmRecord) => {
+      recordIds.add(contact.id);
+      getRecordEmailAddresses(contact).forEach((email) => emails.add(email));
+    };
+    const addCompany = (company: CrmRecord) => {
+      recordIds.add(company.id);
+      visibleRecords
+        .filter((record) => record.objectKey === "contacts" && recordReferencesId(record.data.companyId, company.id))
+        .forEach(addContact);
+    };
+
+    if (command.type === "contact") {
+      visibleRecords
+        .filter((record) => record.objectKey === "contacts" && (`${record.title} ${getRecordEmailAddresses(record).join(" ")}`.toLowerCase().includes(value)))
+        .forEach(addContact);
+      return { recordIds, emails };
+    }
+
+    if (command.type === "company") {
+      visibleRecords
+        .filter((record) => record.objectKey === "companies" && record.title.toLowerCase().includes(value))
+        .forEach(addCompany);
+      return { recordIds, emails };
+    }
+
+    visibleRecords
+      .filter((record) => record.objectKey === "deals" && record.title.toLowerCase().includes(value))
+      .forEach((deal) => {
+        recordIds.add(deal.id);
+        const companyId = typeof deal.data.companyId === "string" ? deal.data.companyId : "";
+        const company = companyId ? visibleRecords.find((record) => record.objectKey === "companies" && record.id === companyId) : undefined;
+        if (company) {
+          addCompany(company);
+        }
+      });
+    return { recordIds, emails };
+  }
+
   private createEmailThreadForMessage(
     context: RequestContext,
     accountId: string,
@@ -5147,6 +5204,35 @@ function normalizeEmailCandidates(value: string): string[] {
   return uniqueValidEmails(value.split(/[,\s;<>]+/).filter(Boolean));
 }
 
+function normalizeEmailThreadListQuery(input?: string | EmailThreadListQuery): EmailThreadListQuery {
+  return typeof input === "string" ? { recordId: input } : input ?? {};
+}
+
+function getRecordEmailAddresses(record: Pick<CrmRecord, "data">): string[] {
+  if (!record.data || typeof record.data !== "object" || Array.isArray(record.data)) {
+    return [];
+  }
+  const data = record.data as Record<string, unknown>;
+  const contactMethods = Array.isArray(data.contactMethods) ? data.contactMethods : [];
+  const methodEmails = contactMethods.flatMap((method) => {
+    if (!method || typeof method !== "object" || Array.isArray(method)) {
+      return [];
+    }
+    const methodRecord = method as Record<string, unknown>;
+    return typeof methodRecord.value === "string" && (methodRecord.type === "email" || methodRecord.value.includes("@")) ? [methodRecord.value] : [];
+  });
+  const fieldEmails = Object.entries(data).flatMap(([key, value]) => {
+    if (typeof value !== "string") {
+      return [];
+    }
+    if (!key.toLowerCase().includes("email") && !value.includes("@")) {
+      return [];
+    }
+    return [value];
+  });
+  return Array.from(new Set([...methodEmails, ...fieldEmails].flatMap(normalizeEmailCandidates)));
+}
+
 function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return false;
@@ -5174,6 +5260,33 @@ function recordDataHasEmail(data: unknown, emailAddress: string): boolean {
     return [value];
   });
   return [...methodEmails, ...fieldEmails].some((value) => normalizeEmailCandidates(value).includes(normalizedEmail));
+}
+
+function recordReferencesId(value: unknown, recordId: string): boolean {
+  if (!recordId) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim() === recordId;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => recordReferencesId(item, recordId));
+  }
+  if (value && typeof value === "object") {
+    const candidate = value as { id?: unknown; recordId?: unknown; value?: unknown };
+    return [candidate.id, candidate.recordId, candidate.value].some((item) => recordReferencesId(item, recordId));
+  }
+  return false;
+}
+
+function emailThreadMatchesCommandScope(thread: EmailThread, scope: EmailThreadCommandScope): boolean {
+  if (thread.recordId && scope.recordIds.has(thread.recordId)) {
+    return true;
+  }
+  return thread.participantEmails.some((email) => {
+    const normalized = tryNormalizeEmailAddress(email);
+    return normalized !== undefined && scope.emails.has(normalized);
+  });
 }
 
 function normalizeEmailSubject(value: string): string {

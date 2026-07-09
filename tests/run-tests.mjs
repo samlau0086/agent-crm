@@ -70,6 +70,7 @@ import { createEmailProviderAdapter } from "../src/lib/email/provider.ts";
 import { sendResendEmail } from "../src/lib/email/resend.ts";
 import { getEmailProviderCapability, getEmailProviderSetupVisibility, getOAuthEmailProviderCapability, isOAuthEmailProvider, listEmailProviderCapabilities, oauthEmailProviderKeys } from "../src/lib/email/providers.ts";
 import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
+import { parseEmailThreadSearchCommand } from "../src/lib/email/search-command.ts";
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
 import { repairEmailMojibake } from "../src/lib/email/mojibake.ts";
 import { buildImapFallbackExternalMessageId, buildPop3FallbackExternalMessageId, fetchRecentImapEmails, fetchRecentPop3Emails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId, withPop3FallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
@@ -10392,6 +10393,81 @@ await run("email messages auto-link to contacts by participant email unless expl
     skipAutoLink: true
   });
   assert.equal(store.listEmailThreads(context, "contact-lin").some((thread) => thread.id === unlinked.threadId), false);
+});
+
+await run("email thread search command parser recognizes supported filters", () => {
+  assert.deepEqual(parseEmailThreadSearchCommand("/company:Acme China"), { type: "company", value: "Acme China" });
+  assert.deepEqual(parseEmailThreadSearchCommand("/contact:lin@example.com"), { type: "contact", value: "lin@example.com" });
+  assert.deepEqual(parseEmailThreadSearchCommand("/deal:平台私有化"), { type: "deal", value: "平台私有化" });
+  assert.equal(parseEmailThreadSearchCommand(""), undefined);
+  assert.equal(parseEmailThreadSearchCommand("/unknown:Acme"), undefined);
+  assert.equal(parseEmailThreadSearchCommand("ordinary email search"), undefined);
+});
+
+await run("email thread command search filters by contact company and deal company", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const account = store.createEmailAccount(context, {
+    name: "Command Search Inbox",
+    emailAddress: "command-search@example.com",
+    provider: "smtp_imap",
+    syncEnabled: true,
+    sendEnabled: true,
+    status: "active"
+  });
+
+  const contactMessage = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "lin@example.com",
+    to: [account.emailAddress],
+    subject: "Contact command match",
+    bodyText: "This should match the Lin contact by participant email."
+  });
+  const companyMessage = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "unknown-company@example.com",
+    to: [account.emailAddress],
+    subject: "Company direct record match",
+    bodyText: "This should match the Acme company by record id.",
+    recordId: "company-acme"
+  });
+  const dealMessage = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "unknown-deal@example.com",
+    to: [account.emailAddress],
+    subject: "Deal direct record match",
+    bodyText: "This should match the deal by record id.",
+    recordId: "deal-platform"
+  });
+  const unrelatedMessage = store.recordEmailMessage(context, {
+    accountId: account.id,
+    direction: "inbound",
+    from: "unrelated@example.com",
+    to: [account.emailAddress],
+    subject: "Unrelated command miss",
+    bodyText: "This should not match command searches.",
+    skipAutoLink: true
+  });
+
+  const contactThreadIds = new Set(store.listEmailThreads(context, { command: { type: "contact", value: "lin@example.com" } }).map((thread) => thread.id));
+  assert.equal(contactThreadIds.has(contactMessage.threadId), true);
+  assert.equal(contactThreadIds.has(unrelatedMessage.threadId), false);
+
+  const companyThreadIds = new Set(store.listEmailThreads(context, { command: { type: "company", value: "Acme" } }).map((thread) => thread.id));
+  assert.equal(companyThreadIds.has(contactMessage.threadId), true);
+  assert.equal(companyThreadIds.has(companyMessage.threadId), true);
+  assert.equal(companyThreadIds.has(unrelatedMessage.threadId), false);
+
+  const dealThreadIds = new Set(store.listEmailThreads(context, { command: { type: "deal", value: "平台" } }).map((thread) => thread.id));
+  assert.equal(dealThreadIds.has(contactMessage.threadId), true);
+  assert.equal(dealThreadIds.has(companyMessage.threadId), true);
+  assert.equal(dealThreadIds.has(dealMessage.threadId), true);
+  assert.equal(dealThreadIds.has(unrelatedMessage.threadId), false);
+
+  assert.equal(store.listEmailThreads(context, { command: { type: "company", value: "No Such Company" } }).length, 0);
 });
 
 await run("email messages without explicit thread id join matching conversation threads conservatively", () => {
