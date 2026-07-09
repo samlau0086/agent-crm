@@ -56,7 +56,8 @@ export function normalizeAiProviderProfile(profile: Partial<AiProviderProfile> |
     key,
     name: normalizeProfileName(profile?.name ?? fallback?.name, provider),
     enabled: profile?.enabled ?? fallback?.enabled ?? true,
-    hasApiKey: Boolean(config.apiKey)
+    hasApiKey: Boolean(config.apiKey),
+    isDefault: Boolean(profile?.isDefault ?? fallback?.isDefault)
   };
 }
 
@@ -73,7 +74,7 @@ export function normalizeAiProviderProfiles(profiles: unknown, defaultConfig?: P
     const normalized = normalizeAiProviderProfile(partial, fallbackByKey.get(String(partial.key ?? "")));
     byKey.set(normalized.key, normalized);
   }
-  return Array.from(byKey.values()).slice(0, 20);
+  return normalizeDefaultProviderProfile(Array.from(byKey.values()).slice(0, 20));
 }
 
 export function createDefaultAiProviderProfiles(defaultConfig?: Partial<AiProviderConfig>): AiProviderProfile[] {
@@ -105,6 +106,10 @@ export function publicAiProviderProfile(profile: Partial<AiProviderProfile>): Ai
 
 export function publicAiProviderProfiles(profiles: AiProviderProfile[]): AiProviderProfile[] {
   return profiles.map(publicAiProviderProfile);
+}
+
+export function resolveDefaultAiProviderProfile(providerProfiles: AiProviderProfile[] | undefined): AiProviderProfile | undefined {
+  return providerProfiles?.find((candidate) => candidate.enabled && candidate.isDefault);
 }
 
 export function encryptAiProviderConfig(config: Partial<AiProviderConfig>, secret = process.env.EMAIL_CONFIG_SECRET ?? process.env.APP_SECRET ?? ""): string {
@@ -204,7 +209,9 @@ export function resolveAiProviderConfigForAgent(
   agent: { providerProfileKey?: string; provider?: AiProviderType; baseUrl?: string; model?: string }
 ): AiProviderConfig {
   const base = normalizeAiProviderConfig(providerConfig);
-  const profile = agent.providerProfileKey ? providerProfiles?.find((candidate) => candidate.key === agent.providerProfileKey && candidate.enabled) : undefined;
+  const profile = agent.providerProfileKey
+    ? providerProfiles?.find((candidate) => candidate.key === agent.providerProfileKey && candidate.enabled)
+    : resolveDefaultAiProviderProfile(providerProfiles);
   return normalizeAiProviderConfig({
     ...base,
     ...profile,
@@ -213,6 +220,16 @@ export function resolveAiProviderConfigForAgent(
     apiKey: profile?.apiKey ?? base.apiKey,
     model: agent.model || profile?.model || base.model
   });
+}
+
+function normalizeDefaultProviderProfile(profiles: AiProviderProfile[]): AiProviderProfile[] {
+  let defaultKey: string | undefined;
+  for (const profile of profiles) {
+    if (profile.enabled && profile.isDefault) {
+      defaultKey = profile.key;
+    }
+  }
+  return profiles.map((profile) => ({ ...profile, isDefault: profile.enabled && profile.key === defaultKey }));
 }
 
 function normalizeTimeout(value: number | undefined): number {

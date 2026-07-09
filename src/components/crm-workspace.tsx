@@ -8856,7 +8856,6 @@ function EmailWorkspace({
   const [composeCcVisible, setComposeCcVisible] = useState(false);
   const [composeBccVisible, setComposeBccVisible] = useState(false);
   const [composeRecordPickerEditing, setComposeRecordPickerEditing] = useState(false);
-  const [aiProviderApiKeyDraft, setAiProviderApiKeyDraft] = useState("");
   const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
@@ -8891,15 +8890,6 @@ function EmailWorkspace({
   const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
     onUpdateAiSettings({
       agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
-    });
-  };
-  const updateAiProviderConfig = (patch: Partial<EmailAiSettings["providerConfig"]>) => {
-    const nextProviderConfig = sanitizeAiProviderConfigForPatch({
-      ...aiSettings.providerConfig,
-      ...patch
-    });
-    onUpdateAiSettings({
-      providerConfig: nextProviderConfig
     });
   };
   const linkEmailThreadRecord = (threadId: string, recordId: string) => {
@@ -11687,59 +11677,14 @@ function EmailWorkspace({
           ) : null}
           {canManageAiSettings ? (
             <>
-          <div className="settings-item" data-testid="email-ai-provider-panel" style={{ marginTop: 12 }}>
+          <div className="settings-item" data-testid="email-ai-provider-profile-notice" style={{ marginTop: 12 }}>
             <div className="stage-header">
               <strong>AI Provider</strong>
-              <span className={aiSettings.providerConfig.hasApiKey ? "badge" : "danger-badge"}>{aiSettings.providerConfig.hasApiKey ? "API Key 已保存" : "未配置 API Key"}</span>
+              <span className={aiSettings.providerProfiles.some((profile) => profile.enabled && profile.isDefault) ? "badge" : "danger-badge"}>
+                {aiSettings.providerProfiles.some((profile) => profile.enabled && profile.isDefault) ? "已选择默认 Provider profile" : "未选择默认 Provider profile"}
+              </span>
             </div>
-            <div className="subtle">支持 OpenAI、Gemini、OpenRouter 和 OpenAI-compatible 自定义服务；API Key 不会回传到前端，留空保存时会保留已保存密钥。</div>
-            <div className="form-grid" style={{ marginTop: 10 }}>
-              <label>
-                <span className="subtle">Provider</span>
-                <select
-                  className="select"
-                  data-testid="email-ai-provider"
-                  value={aiSettings.providerConfig.provider}
-                  onChange={(event) => updateAiProviderConfig(defaultAiProviderConfigForUi(event.target.value as EmailAiSettings["providerConfig"]["provider"], aiSettings.providerConfig))}
-                >
-                  <option value="openai">OpenAI</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="custom">Custom Provider</option>
-                </select>
-              </label>
-              <label>
-                <span className="subtle">Base URL</span>
-                <input className="input" data-testid="email-ai-provider-base-url" value={aiSettings.providerConfig.baseUrl} onChange={(event) => updateAiProviderConfig({ baseUrl: event.target.value })} />
-              </label>
-              <label>
-                <span className="subtle">模型</span>
-                <input className="input" data-testid="email-ai-provider-model" value={aiSettings.providerConfig.model} onChange={(event) => updateAiProviderConfig({ model: event.target.value })} />
-              </label>
-              <label>
-                <span className="subtle">API Key</span>
-                <input className="input" data-testid="email-ai-provider-api-key" type="password" value={aiProviderApiKeyDraft} onChange={(event) => setAiProviderApiKeyDraft(event.target.value)} placeholder={aiSettings.providerConfig.hasApiKey ? "留空保留已保存 API Key" : "输入 API Key"} />
-              </label>
-              <div className="toolbar" style={{ alignSelf: "end" }}>
-                <button
-                  className="secondary-button"
-                  data-testid="email-ai-provider-api-key-save"
-                  type="button"
-                  onClick={() => {
-                    updateAiProviderConfig({ apiKey: aiProviderApiKeyDraft });
-                    setAiProviderApiKeyDraft("");
-                  }}
-                  disabled={!aiProviderApiKeyDraft.trim()}
-                >
-                  <Pencil size={16} />
-                  保存 API Key
-                </button>
-              </div>
-              <label>
-                <span className="subtle">超时 ms</span>
-                <input className="input" data-testid="email-ai-provider-timeout" max={60000} min={1000} step={1000} type="number" value={aiSettings.providerConfig.timeoutMs} onChange={(event) => updateAiProviderConfig({ timeoutMs: numberInputValue(event.target.value, aiSettings.providerConfig.timeoutMs) })} />
-              </label>
-            </div>
+            <div className="subtle">邮件 AI 使用 设置 / AI Agents / Providers 中配置的默认 Provider profile。请在那里维护 Base URL、模型、API Key 和兜底默认项。</div>
           </div>
           <div className="view-column-grid">
             {Object.entries(aiSettings.features).map(([feature, enabled]) => {
@@ -20830,36 +20775,6 @@ function formatEmailAiGenerationMode(mode: NonNullable<EmailAiGenerateResult["ge
     return "已关闭";
   }
   return "本地";
-}
-
-function defaultAiProviderConfigForUi(
-  provider: EmailAiSettings["providerConfig"]["provider"],
-  current: EmailAiSettings["providerConfig"]
-): EmailAiSettings["providerConfig"] {
-  const defaults: Record<EmailAiSettings["providerConfig"]["provider"], Pick<EmailAiSettings["providerConfig"], "baseUrl" | "model">> = {
-    openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
-    gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-1.5-flash" },
-    openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-4.1-mini" },
-    custom: { baseUrl: current.baseUrl || "https://api.openai.com/v1", model: current.model || "gpt-4.1-mini" },
-    "openai-compatible": { baseUrl: current.baseUrl || "https://api.openai.com/v1", model: current.model || "gpt-4.1-mini" }
-  };
-  return {
-    ...current,
-    provider,
-    baseUrl: defaults[provider].baseUrl,
-    model: defaults[provider].model,
-    apiKey: ""
-  };
-}
-
-function sanitizeAiProviderConfigForPatch(config: Partial<EmailAiSettings["providerConfig"]>): Partial<EmailAiSettings["providerConfig"]> {
-  return {
-    provider: config.provider,
-    baseUrl: config.baseUrl,
-    ...(config.apiKey?.trim() ? { apiKey: config.apiKey.trim() } : {}),
-    model: config.model,
-    timeoutMs: config.timeoutMs
-  };
 }
 
 function formatEmailConnectionTestResult(entry: EmailConnectionTestRun["results"][number]): string {

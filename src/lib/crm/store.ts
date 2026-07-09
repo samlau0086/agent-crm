@@ -1902,7 +1902,8 @@ export class CrmStore {
 
   getEmailAiProviderConfig(context: RequestContext): AiProviderConfig {
     requirePermission(context, "ai.use");
-    return normalizeAiProviderConfig(this.ensureEmailAiSettings(context.workspaceId).providerConfig);
+    const settings = this.ensureEmailAiSettings(context.workspaceId);
+    return resolveAiProviderConfigForAgent(settings.providerConfig, settings.providerProfiles, {});
   }
 
   private buildAiAgentHarnessContext(

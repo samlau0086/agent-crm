@@ -1,6 +1,7 @@
-import type { EmailAiGenerationAuditInput, EmailThread, RequestContext } from "@/lib/crm/types";
+import type { AiAgentSetting, AiProviderConfig, EmailAiGenerationAuditInput, EmailAiSettings, EmailThread, RequestContext } from "@/lib/crm/types";
 import type { EmailAssistantContext } from "@/lib/email/assistant";
 import { generateEmailAiOutput, type EmailAiGenerateResult } from "@/lib/email/ai-generation";
+import { getGlobalAiAgentSetting } from "@/lib/ai/agents";
 
 export interface EmailAnalyzeJobPayload {
   threadId: string;
@@ -15,6 +16,9 @@ export interface EmailAnalyzeResult {
 }
 
 interface EmailAnalyzeRepository {
+  getEmailAiSettings(context: RequestContext): EmailAiSettings | Promise<EmailAiSettings>;
+  getEmailAiProviderConfig(context: RequestContext): AiProviderConfig | Promise<AiProviderConfig>;
+  getAiProviderConfigForAgent(context: RequestContext, agent: AiAgentSetting): AiProviderConfig | Promise<AiProviderConfig>;
   buildEmailAssistantContext(
     context: RequestContext,
     input: { purpose: "context_analysis"; threadId: string; sourceMessageId?: string }
@@ -33,10 +37,13 @@ export async function analyzeEmailThreadWithAi(
     threadId: payload.threadId,
     sourceMessageId: payload.sourceMessageId
   });
+  const settings = await repository.getEmailAiSettings(context);
+  const agent = assistantContext.agentKey ? getGlobalAiAgentSetting(settings, assistantContext.agentKey) : undefined;
+  const providerConfig = agent ? await repository.getAiProviderConfigForAgent(context, agent) : await repository.getEmailAiProviderConfig(context);
   const result = await generateEmailAiOutput({
     context: assistantContext,
     userPrompt: "请用简体中文分析这条邮件线程，并建议下一步销售行动。不要修改 CRM 数据。"
-  });
+  }, { config: providerConfig });
   await repository.recordEmailAiGeneration(context, {
     purpose: "context_analysis",
     enabled: result.enabled,

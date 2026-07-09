@@ -1,4 +1,4 @@
-import { normalizeAiProviderConfig } from "@/lib/ai/provider-config";
+import { resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
 import type { AiAgentRunRequest, AiAgentRunResult, AiAgentSetting, AiProviderConfig, AiProviderProfile } from "@/lib/crm/types";
 
 type AiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -13,15 +13,7 @@ export interface RunAiAgentOptions {
 
 export async function runAiAgent(request: AiAgentRunRequest, options: RunAiAgentOptions): Promise<AiAgentRunResult> {
   const agent = options.agent;
-  const providerProfile = agent.providerProfileKey ? options.providerProfiles?.find((profile) => profile.key === agent.providerProfileKey && profile.enabled) : undefined;
-  const providerConfig = normalizeAiProviderConfig({
-    ...options.providerConfig,
-    ...providerProfile,
-    provider: agent.provider ?? providerProfile?.provider ?? options.providerConfig?.provider,
-    baseUrl: agent.baseUrl ?? providerProfile?.baseUrl ?? options.providerConfig?.baseUrl,
-    apiKey: providerProfile?.apiKey ?? options.providerConfig?.apiKey,
-    model: agent.model || providerProfile?.model || options.providerConfig?.model
-  });
+  const providerConfig = resolveAiProviderConfigForAgent(options.providerConfig, options.providerProfiles, agent);
   const prompt = buildAgentPrompt(request, agent);
   const maxOutputChars = normalizeLimit(agent.maxOutputChars, 4000, 500, 12000);
   const localText = buildLocalAgentOutput(request, agent);

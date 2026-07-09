@@ -572,6 +572,7 @@ export interface AiProviderProfile extends AiProviderConfig {
   key: string;
   name: string;
   enabled: boolean;
+  isDefault?: boolean;
 }
 
 export interface AiAgentContextPolicy {

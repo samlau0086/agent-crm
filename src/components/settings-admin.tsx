@@ -859,7 +859,14 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }
 
   function updateAiProviderProfile(key: string, patch: Partial<AiProviderProfile>) {
-    setAiProviderProfiles((current) => current.map((profile) => (profile.key === key ? { ...profile, ...patch } : profile)));
+    setAiProviderProfiles((current) =>
+      current.map((profile) => {
+        if (profile.key === key) {
+          return { ...profile, ...patch, isDefault: patch.enabled === false ? false : patch.isDefault ?? profile.isDefault };
+        }
+        return patch.isDefault ? { ...profile, isDefault: false } : profile;
+      })
+    );
   }
 
   function addAiProviderProfile(provider: AiProviderProfile["provider"] = "custom") {
@@ -882,7 +889,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         baseUrl: defaults.baseUrl,
         model: defaults.model,
         timeoutMs: 10000,
-        hasApiKey: false
+        hasApiKey: false,
+        isDefault: false
       }
     ]);
   }
@@ -2208,7 +2216,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               <div className="settings-panel-header">
                 <div>
                   <h3>AI Providers</h3>
-                  <p className="subtle">Configure OpenAI, OpenRouter, Gemini, OpenAI-compatible, or custom providers, then assign them to individual AI agents.</p>
+                  <p className="subtle">Configure OpenAI, OpenRouter, Gemini, OpenAI-compatible, or custom providers. Mark one enabled provider as the default fallback for email AI and agents without a provider profile.</p>
                 </div>
                 <div className="button-row">
                   <button className="secondary-button" type="button" onClick={() => addAiProviderProfile("openai")} disabled={Boolean(aiAgentActionKey)}>
@@ -2277,7 +2285,12 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                         <input type="checkbox" checked={profile.enabled} onChange={(event) => updateAiProviderProfile(profile.key, { enabled: event.target.checked })} />
                         Enabled
                       </label>
+                      <label className="settings-toggle">
+                        <input data-testid={`ai-provider-default-${profile.key}`} type="checkbox" checked={Boolean(profile.enabled && profile.isDefault)} onChange={(event) => updateAiProviderProfile(profile.key, { isDefault: event.target.checked, enabled: event.target.checked ? true : profile.enabled })} />
+                        默认
+                      </label>
                       <div className="form-actions">
+                        {profile.isDefault ? <span className="badge">Default fallback</span> : null}
                         <span className={profile.hasApiKey || profile.apiKey ? "badge" : "danger-badge"}>{profile.hasApiKey || profile.apiKey ? "API key set" : "missing API key"}</span>
                         <button className="danger-button" type="button" onClick={() => removeAiProviderProfile(profile.key)} disabled={Boolean(aiAgentActionKey)}>
                           <Trash2 size={14} />
@@ -2363,7 +2376,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                         value={selectedAiAgent.provider ?? ""}
                         onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, provider: event.target.value ? event.target.value as AiAgentSetting["provider"] : undefined } : agent)))}
                       >
-                        <option value="">使用全局 Provider</option>
+                        <option value="">使用默认 Provider profile</option>
                         <option value="openai">OpenAI</option>
                         <option value="gemini">Gemini</option>
                         <option value="openrouter">OpenRouter</option>

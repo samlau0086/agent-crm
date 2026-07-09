@@ -8879,7 +8879,8 @@ export class PrismaCrmRepository {
 
   private async getEmailAiProviderConfigForWorkspace(workspaceId: string): Promise<AiProviderConfig> {
     const settings = await this.db.emailAiSettings.findUnique({ where: { workspaceId } });
-    return readAiProviderSettingsBundleFromEncrypted(settings?.encryptedProviderConfig).providerConfig;
+    const bundle = readAiProviderSettingsBundleFromEncrypted(settings?.encryptedProviderConfig);
+    return resolveAiProviderConfigForAgent(bundle.providerConfig, bundle.providerProfiles, {});
   }
 
   private async getEmailAiProviderProfilesForWorkspace(workspaceId: string): Promise<AiProviderProfile[]> {

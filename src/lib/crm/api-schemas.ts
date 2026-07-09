@@ -903,6 +903,7 @@ const aiProviderProfileSchema = z
     baseUrl: z.string().trim().url().max(500),
     apiKey: z.string().trim().max(500).optional(),
     hasApiKey: z.boolean().optional(),
+    isDefault: z.boolean().optional(),
     model: z.string().trim().min(1).max(120),
     timeoutMs: z.number().int().min(1000).max(60000)
   })

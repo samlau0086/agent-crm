@@ -1,6 +1,7 @@
-import type { EmailAiGenerationAuditInput, EmailAiSettings, EmailMessage, RequestContext } from "@/lib/crm/types";
+import type { AiAgentSetting, AiProviderConfig, EmailAiGenerationAuditInput, EmailAiSettings, EmailMessage, RequestContext } from "@/lib/crm/types";
 import type { EmailAssistantContext } from "@/lib/email/assistant";
 import { generateEmailAiOutput } from "@/lib/email/ai-generation";
+import { getGlobalAiAgentSetting } from "@/lib/ai/agents";
 
 export interface EmailTranslateJobPayload {
   messageId: string;
@@ -10,6 +11,8 @@ export interface EmailTranslateJobPayload {
 interface EmailTranslateRepository {
   getEmailMessage(context: RequestContext, messageId: string): EmailMessage | Promise<EmailMessage>;
   getEmailAiSettings(context: RequestContext): EmailAiSettings | Promise<EmailAiSettings>;
+  getEmailAiProviderConfig(context: RequestContext): AiProviderConfig | Promise<AiProviderConfig>;
+  getAiProviderConfigForAgent(context: RequestContext, agent: AiAgentSetting): AiProviderConfig | Promise<AiProviderConfig>;
   buildEmailAssistantContext(
     context: RequestContext,
     input: { purpose: "translate"; threadId: string; sourceMessageId: string; targetLocale: string }
@@ -36,7 +39,9 @@ export async function translateEmailMessage(
     sourceMessageId: message.id,
     targetLocale
   });
-  const result = await generateEmailAiOutput({ context: assistantContext, sourceText: message.bodyText });
+  const agent = assistantContext.agentKey ? getGlobalAiAgentSetting(settings, assistantContext.agentKey) : undefined;
+  const providerConfig = agent ? await repository.getAiProviderConfigForAgent(context, agent) : await repository.getEmailAiProviderConfig(context);
+  const result = await generateEmailAiOutput({ context: assistantContext, sourceText: message.bodyText }, { config: providerConfig });
   const persisted = result.enabled && result.generationMode === "provider";
   await repository.recordEmailAiGeneration(context, {
     purpose: "translate",

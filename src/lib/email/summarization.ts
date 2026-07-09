@@ -1,6 +1,7 @@
-import type { Activity, EmailAiGenerationAuditInput, EmailThread, RequestContext } from "@/lib/crm/types";
+import type { Activity, AiAgentSetting, AiProviderConfig, EmailAiGenerationAuditInput, EmailAiSettings, EmailThread, RequestContext } from "@/lib/crm/types";
 import type { EmailAssistantContext } from "@/lib/email/assistant";
 import { generateEmailAiOutput, type EmailAiGenerateResult } from "@/lib/email/ai-generation";
+import { getGlobalAiAgentSetting } from "@/lib/ai/agents";
 
 export interface EmailSummarizeJobPayload {
   threadId: string;
@@ -14,6 +15,9 @@ export interface EmailSummarizeResult {
 }
 
 interface EmailSummarizeRepository {
+  getEmailAiSettings(context: RequestContext): EmailAiSettings | Promise<EmailAiSettings>;
+  getEmailAiProviderConfig(context: RequestContext): AiProviderConfig | Promise<AiProviderConfig>;
+  getAiProviderConfigForAgent(context: RequestContext, agent: AiAgentSetting): AiProviderConfig | Promise<AiProviderConfig>;
   buildEmailAssistantContext(
     context: RequestContext,
     input: { purpose: "summarize"; threadId: string }
@@ -35,7 +39,10 @@ export async function summarizeEmailThreadWithAi(
     purpose: "summarize",
     threadId: payload.threadId
   });
-  const result = await generateEmailAiOutput({ context: assistantContext });
+  const settings = await repository.getEmailAiSettings(context);
+  const agent = assistantContext.agentKey ? getGlobalAiAgentSetting(settings, assistantContext.agentKey) : undefined;
+  const providerConfig = agent ? await repository.getAiProviderConfigForAgent(context, agent) : await repository.getEmailAiProviderConfig(context);
+  const result = await generateEmailAiOutput({ context: assistantContext }, { config: providerConfig });
   await repository.recordEmailAiGeneration(context, {
     purpose: "summarize",
     enabled: result.enabled,
