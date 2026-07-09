@@ -217,7 +217,32 @@ function normalizeComparableRecordValue(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
   }
+  if (Array.isArray(value)) {
+    return value.length ? JSON.stringify(value.map((item) => normalizeComparableRecordJsonValue(item))) : "";
+  }
+  if (typeof value === "object") {
+    const normalized = normalizeComparableRecordJsonValue(value);
+    return isEmptyComparableRecordObject(normalized) ? "" : JSON.stringify(normalized);
+  }
   return JSON.stringify(value);
+}
+
+function normalizeComparableRecordJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeComparableRecordJsonValue(item));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, normalizeComparableRecordJsonValue(item)])
+  );
+}
+
+function isEmptyComparableRecordObject(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0);
 }
 
 function hasRecordUpdatePatchChanges(record: CrmRecord, patch: RecordApprovalPatch): boolean {

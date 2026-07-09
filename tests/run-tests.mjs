@@ -3372,6 +3372,9 @@ await run("contact and company editing refinements are guarded", () => {
   assert.match(source, /function contactMethodTypePatch/);
   assert.match(source, /contactMethodTypePatch\(method, event\.target\.value as ContactMethodType\)/);
   assert.match(source, /function hasRecordUpdatePatchChanges/);
+  assert.match(source, /function normalizeComparableRecordJsonValue/);
+  assert.match(source, /function isEmptyComparableRecordObject/);
+  assert.match(source, /value\.length \? JSON\.stringify\(value\.map\(\(item\) => normalizeComparableRecordJsonValue\(item\)\)\) : ""/);
   assert.match(source, /selectedRecordApprovalSaveDisabled/);
   assert.match(source, /saveDisabled=\{selectedRecordApprovalSaveDisabled\}/);
   assert.match(source, /saveDisabled\?: boolean/);
