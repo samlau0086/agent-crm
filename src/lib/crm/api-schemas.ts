@@ -820,7 +820,8 @@ export const emailSyncSchema = z
 
 export const emailSyncAllSchema = z
   .object({
-    limit: z.number().int().min(1).max(100).optional()
+    limit: z.number().int().min(1).max(100).optional(),
+    fullResync: z.boolean().optional()
   })
   .strict();
 

@@ -23,12 +23,13 @@ export interface ScheduledEmailSyncSummary {
   scheduledCount: number;
   skippedCount: number;
   limit?: number;
+  fullResync?: boolean;
   accounts: ScheduledEmailSyncAccount[];
 }
 
 export async function scheduleEmailSyncForActiveAccounts(
   context: RequestContext,
-  options: { repository?: PrismaCrmRepository; executor?: BackgroundJobExecutor; limit?: number } = {}
+  options: { repository?: PrismaCrmRepository; executor?: BackgroundJobExecutor; limit?: number; fullResync?: boolean } = {}
 ): Promise<ScheduledEmailSyncSummary> {
   requirePermission(context, "crm.admin");
   const repository = options.repository ?? getCrmRepository();
@@ -70,7 +71,7 @@ export async function scheduleEmailSyncForActiveAccounts(
     }
 
     try {
-      const result = await executor.runEmailSyncJob(context, { accountId: currentAccount.id, limit: options.limit });
+      const result = await executor.runEmailSyncJob(context, { accountId: currentAccount.id, limit: options.limit, fullResync: options.fullResync });
       results.push({
         accountId: currentAccount.id,
         emailAddress: currentAccount.emailAddress,
@@ -100,6 +101,9 @@ export async function scheduleEmailSyncForActiveAccounts(
   };
   if (options.limit !== undefined) {
     summary.limit = options.limit;
+  }
+  if (options.fullResync !== undefined) {
+    summary.fullResync = options.fullResync;
   }
   return summary;
 }

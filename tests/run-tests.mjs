@@ -2553,7 +2553,7 @@ await run("email sync route uses configured background executor and forwards bou
   const source = readFileSync("src/app/api/email/sync/route.ts", "utf8");
   assert.match(source, /getBackgroundJobExecutor\(repository\)/);
   assert.doesNotMatch(source, /new InlineBackgroundJobExecutor/);
-  assert.match(source, /runEmailSyncJob\(context,\s*\{\s*accountId:\s*body\.accountId,\s*limit:\s*body\.limit\s*\}\)/);
+  assert.match(source, /runEmailSyncJob\(context,\s*\{\s*accountId:\s*body\.accountId,\s*limit:\s*body\.limit,\s*fullResync:\s*body\.fullResync\s*\}\)/);
   assert.match(source, /result\.status === "queued" \? 202 : 200/);
 });
 
@@ -2561,7 +2561,7 @@ await run("email sync-all route keeps empty body support and uses configured bac
   const source = readFileSync("src/app/api/email/sync-all/route.ts", "utf8");
   assert.match(source, /parseOptionalJson\(request,\s*emailSyncAllSchema,\s*\{\s*\}\)/);
   assert.doesNotMatch(source, /new InlineBackgroundJobExecutor/);
-  assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*repository,\s*limit:\s*body\.limit\s*\}\)/);
+  assert.match(source, /scheduleEmailSyncForActiveAccounts\(context,\s*\{\s*repository,\s*limit:\s*body\.limit,\s*fullResync:\s*body\.fullResync\s*\}\)/);
   assert.match(source, /account\.status === "queued"\) \? 202 : 200/);
 });
 
@@ -7908,6 +7908,7 @@ await run("email sync scheduler queues active or retryable sync-enabled accounts
     async runEmailSyncJob(syncContext, payload) {
       assert.equal(syncContext.user.id, "user-admin");
       assert.equal(payload.limit, 20);
+      assert.equal(payload.fullResync, undefined);
       if (payload.accountId === "email-active-b") {
         throw new Error("mailbox temporarily unavailable");
       }
@@ -7939,6 +7940,71 @@ await run("email sync scheduler queues active or retryable sync-enabled accounts
   assert.match(summary.accounts[4].skipReason, /未开启收件同步/);
   assert.match(summary.accounts[5].skipReason, /未配置收件连接/);
   assert.match(summary.accounts[6].skipReason, /不支持收件同步/);
+});
+
+await run("email sync scheduler forwards full resync requests to each scheduled account", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const now = new Date().toISOString();
+  const accounts = [
+    {
+      id: "email-full-a",
+      workspaceId: defaultWorkspaceId,
+      name: "Full A",
+      emailAddress: "full-a@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "email-full-b",
+      workspaceId: defaultWorkspaceId,
+      name: "Full B",
+      emailAddress: "full-b@example.com",
+      provider: "smtp_imap",
+      status: "error",
+      syncEnabled: true,
+      sendEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: now,
+      updatedAt: now
+    }
+  ];
+  const payloads = [];
+  const repository = {
+    async listEmailAccounts() {
+      return accounts;
+    }
+  };
+  const executor = {
+    async runEmailSyncJob(_context, payload) {
+      payloads.push(payload);
+      const account = accounts.find((candidate) => candidate.id === payload.accountId);
+      return {
+        account,
+        importedCount: 0,
+        scannedCount: 0,
+        skippedDuplicateCount: 0,
+        hasMore: false,
+        status: "queued"
+      };
+    }
+  };
+
+  const summary = await scheduleEmailSyncForActiveAccounts(context, { repository, executor, limit: 100, fullResync: true });
+
+  assert.equal(summary.scheduledCount, 2);
+  assert.equal(summary.fullResync, true);
+  assert.deepEqual(payloads, [
+    { accountId: "email-full-a", limit: 100, fullResync: true },
+    { accountId: "email-full-b", limit: 100, fullResync: true }
+  ]);
 });
 
 await run("email sync scheduler does not enqueue accounts that are already syncing", async () => {
