@@ -4420,7 +4420,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
     setEmailAccounts((current) => [account, ...current.filter((candidate) => candidate.id !== account.id)]);
     setMessage(`邮箱账户已更新：${account.emailAddress}`);
-    router.refresh();
   }
 
   async function updateEmailAccountFromDraft() {
@@ -7368,7 +7367,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 search: routeEmailSearch,
                 threadId: routeEmailThreadId
               });
-              pushEmailHistoryRoute(nextPath);
+              router.push(nextPath);
             }}
             onRouteChange={(patch) => {
               const nextPath = buildEmailRoutePath(patch);
