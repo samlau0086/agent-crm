@@ -13417,7 +13417,7 @@ await run("imap provider fetches a bounded recent sequence range without scannin
           socket.write(`* FLAGS (\\Seen)\r\n* 4 EXISTS\r\n* OK [UIDVALIDITY 20260709] UIDs valid\r\n* OK [UIDNEXT 1005] Predicted next UID\r\n${tag} OK [READ-ONLY] ${openCommand} completed\r\n`);
           continue;
         }
-        const searchMatch = command.match(/^UID SEARCH\s+(\d+):\*$/i);
+        const searchMatch = command.match(/^UID SEARCH\s+(?:UID\s+)?(\d+):\*$/i);
         if (searchMatch) {
           const startSequenceNumber = Number(searchMatch[1]);
           const uids = [1, 2, 3, 4].filter((sequenceNumber) => sequenceNumber >= startSequenceNumber).map((sequenceNumber) => String(1000 + sequenceNumber));
@@ -13455,10 +13455,113 @@ await run("imap provider fetches a bounded recent sequence range without scannin
     );
     assert.deepEqual(messages.map((message) => message.subject), ["Test 2", "Test 3", "Test 4"]);
     assert.equal(messages[0].externalMessageId, "imap:inbox:1002");
-    assert.equal(commands.some((command) => /UID SEARCH 2:\*/i.test(command)), true);
+    assert.equal(commands.some((command) => /UID SEARCH (?:UID )?2:\*/i.test(command)), true);
     assert.equal(commands.some((command) => /^UID FETCH 1001\b/i.test(command)), false);
     assert.equal(commands.some((command) => /^UID FETCH 1002\b/i.test(command)), true);
     assert.equal(commands.some((command) => /^UID FETCH 1004\b/i.test(command)), true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await run("imap full resync paginates backward through historical messages", async () => {
+  const net = await import("node:net");
+  const commands = [];
+  const messageForUid = (uid) => {
+    const sequenceNumber = uid - 1000;
+    return [
+      `From: Buyer ${sequenceNumber} <buyer${sequenceNumber}@example.com>`,
+      "To: Sales <sales@example.com>",
+      `Subject: Full ${sequenceNumber}`,
+      `Date: Wed, 01 Jul 2026 00:0${sequenceNumber}:00 +0000`,
+      "",
+      `Message ${sequenceNumber}`
+    ].join("\r\n");
+  };
+  const writeFetch = (socket, tag, uid) => {
+    const raw = messageForUid(uid);
+    const sequenceNumber = uid - 1000;
+    socket.write(`* ${sequenceNumber} FETCH (UID ${uid} BODY[] {${Buffer.byteLength(raw, "utf8")}}\r\n${raw}\r\n)\r\n${tag} OK FETCH completed\r\n`);
+  };
+  const server = net.createServer((socket) => {
+    socket.setEncoding("utf8");
+    socket.write("* OK fake imap ready\r\n");
+    socket.on("data", (chunk) => {
+      for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
+        const match = line.match(/^(\S+)\s+(.+)$/);
+        if (!match) {
+          continue;
+        }
+        const [, tag, command] = match;
+        commands.push(command);
+        if (/^CAPABILITY\b/i.test(command)) {
+          socket.write(`* CAPABILITY IMAP4rev1 UIDPLUS\r\n${tag} OK CAPABILITY completed\r\n`);
+          continue;
+        }
+        if (/^LOGIN\b/i.test(command)) {
+          socket.write(`${tag} OK LOGIN completed\r\n`);
+          continue;
+        }
+        if (/^(LIST|LSUB)\b/i.test(command)) {
+          const listCommand = command.toUpperCase().startsWith("LSUB") ? "LSUB" : "LIST";
+          socket.write(`* ${listCommand} (\\HasNoChildren) "/" "INBOX"\r\n${tag} OK ${listCommand} completed\r\n`);
+          continue;
+        }
+        if (/^(SELECT|EXAMINE)\b/i.test(command)) {
+          const openCommand = command.split(/\s+/)[0].toUpperCase();
+          socket.write(`* FLAGS (\\Seen)\r\n* 4 EXISTS\r\n* OK [UIDVALIDITY 20260709] UIDs valid\r\n* OK [UIDNEXT 1005] Predicted next UID\r\n${tag} OK [READ-ONLY] ${openCommand} completed\r\n`);
+          continue;
+        }
+        const searchMatch = command.match(/^UID SEARCH\s+(?:UID\s+)?(\d+):(\*|\d+)$/i);
+        if (searchMatch) {
+          const startUid = Number(searchMatch[1]);
+          const endUid = searchMatch[2] === "*" ? Number.MAX_SAFE_INTEGER : Number(searchMatch[2]);
+          const uids = [1001, 1002, 1003, 1004].filter((uid) => uid >= startUid && uid <= endUid);
+          socket.write(`* SEARCH ${uids.join(" ")}\r\n${tag} OK SEARCH completed\r\n`);
+          continue;
+        }
+        const fetchMatch = command.match(/^UID FETCH\s+(\d+)\s+\(UID (?:RFC822\.SIZE )?BODY\.PEEK\[\]<0\.(\d+)>\)$/i);
+        if (fetchMatch) {
+          writeFetch(socket, tag, Number(fetchMatch[1]));
+          continue;
+        }
+        if (/^LOGOUT\b/i.test(command)) {
+          socket.write(`* BYE logging out\r\n${tag} OK LOGOUT completed\r\n`);
+          continue;
+        }
+        socket.write(`${tag} BAD unsupported command\r\n`);
+      }
+    });
+  });
+  await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));
+  try {
+    const address = server.address();
+    const config = {
+      imapHost: "127.0.0.1",
+      imapPort: address.port,
+      imapSecure: false,
+      username: "user",
+      password: "pass",
+      mailbox: "INBOX"
+    };
+    const firstPage = await fetchRecentImapEmailBatch(config, 2, { fullResync: true });
+    const secondPage = await fetchRecentImapEmailBatch(config, 2, {
+      fullResync: true,
+      fullResyncBeforeUid: firstPage.fullResyncBeforeUid
+    });
+
+    assert.equal(firstPage.hasMore, true);
+    assert.equal(firstPage.fullResyncBeforeUid, "1003");
+    assert.equal(firstPage.imapLastSeenUid, "1004");
+    assert.equal(secondPage.hasMore, false);
+    assert.equal(secondPage.fullResyncBeforeUid, "1001");
+    assert.equal(secondPage.imapLastSeenUid, "1002");
+    assert.equal(commands.some((command) => /UID SEARCH (?:UID )?1:\*/i.test(command)), true);
+    assert.equal(commands.some((command) => /UID SEARCH (?:UID )?1:1002/i.test(command)), true);
+    assert.deepEqual(
+      commands.filter((command) => /^UID FETCH\b/i.test(command)).map((command) => command.match(/^UID FETCH\s+(\d+)/i)?.[1]),
+      ["1003", "1004", "1001", "1002"]
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

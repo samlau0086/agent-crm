@@ -37,6 +37,7 @@ export interface MailSendResult {
 export interface MailboxFetchOptions {
   deadlineAt?: number;
   fullResync?: boolean;
+  fullResyncBeforeUid?: string;
   imapUidValidity?: string;
   imapLastSeenUid?: string;
 }
@@ -44,6 +45,7 @@ export interface MailboxFetchOptions {
 export interface MailboxFetchResult {
   messages: InboundEmail[];
   hasMore?: boolean;
+  fullResyncBeforeUid?: string;
   imapUidValidity?: string;
   imapLastSeenUid?: string;
 }
@@ -176,6 +178,7 @@ export async function fetchRecentImapEmailBatch(config: EmailConnectionConfig, l
     const uidSearch = await resolveImapFetchUids(client, messageCount, safeLimit, uidValidity, options);
     const messages: InboundEmail[] = [];
     let lastSeenUid = options.imapUidValidity === uidValidity ? normalizeImapUid(options.imapLastSeenUid) : undefined;
+    let fullResyncBeforeUid: string | undefined;
     for (const uid of uidSearch.fetchUids) {
       assertMailSyncDeadline(options);
       const source = await downloadImapSource(client, uid, fetchBytes, options);
@@ -185,11 +188,15 @@ export async function fetchRecentImapEmailBatch(config: EmailConnectionConfig, l
         messages.push(withInboundMailboxSource(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", fetchedUid), config.mailbox ?? "INBOX"));
       }
       lastSeenUid = maxImapUid(lastSeenUid, fetchedUid);
+      if (options.fullResync) {
+        fullResyncBeforeUid = minImapUid(fullResyncBeforeUid, fetchedUid);
+      }
     }
     await client.logout().catch(() => undefined);
     return {
       messages,
       hasMore: uidSearch.hasMore,
+      ...(fullResyncBeforeUid ? { fullResyncBeforeUid } : {}),
       ...(uidValidity ? { imapUidValidity: uidValidity } : {}),
       ...(lastSeenUid ? { imapLastSeenUid: lastSeenUid } : {})
     };
@@ -560,9 +567,13 @@ async function resolveImapFetchUids(
   }
   const previousUid = normalizeImapUid(options.imapLastSeenUid);
   if (options.fullResync) {
-    const nextUid = previousUid ? (BigInt(previousUid) + 1n).toString() : "1";
-    const uids = await searchImapUids(client, { uid: `${nextUid}:*` }, options);
-    return { fetchUids: uids.slice(0, limit), hasMore: uids.length > limit };
+    const beforeUid = normalizeImapUid(options.fullResyncBeforeUid);
+    if (beforeUid && BigInt(beforeUid) <= 1n) {
+      return { fetchUids: [], hasMore: false };
+    }
+    const uidRange = beforeUid ? `1:${BigInt(beforeUid) - 1n}` : "1:*";
+    const uids = await searchImapUids(client, { uid: uidRange }, options);
+    return { fetchUids: uids.slice(-limit), hasMore: uids.length > limit };
   }
   if (uidValidity && options.imapUidValidity === uidValidity && previousUid) {
     const nextUid = (BigInt(previousUid) + 1n).toString();
@@ -649,6 +660,18 @@ function maxImapUid(left: string | undefined, right: string | undefined): string
     return normalizedRight;
   }
   return BigInt(normalizedRight) > BigInt(normalizedLeft) ? normalizedRight : normalizedLeft;
+}
+
+function minImapUid(left: string | undefined, right: string | undefined): string | undefined {
+  const normalizedRight = normalizeImapUid(right);
+  if (!normalizedRight) {
+    return normalizeImapUid(left);
+  }
+  const normalizedLeft = normalizeImapUid(left);
+  if (!normalizedLeft) {
+    return normalizedRight;
+  }
+  return BigInt(normalizedRight) < BigInt(normalizedLeft) ? normalizedRight : normalizedLeft;
 }
 
 function normalizeMailboxFetchLimit(limit: number): number {

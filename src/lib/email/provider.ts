@@ -266,16 +266,18 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     let hasMore = true;
     let imapUidValidity: string | undefined;
     let imapLastSeenUid: string | undefined;
+    let fullResyncBeforeUid: string | undefined;
     let importResult: Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount"> = {
       importedCount: 0,
       scannedCount: 0,
       skippedDuplicateCount: 0
     };
     while (hasMore) {
-      const previousLastSeenUid = imapLastSeenUid;
+      const previousFullResyncBeforeUid = fullResyncBeforeUid;
       const inbound = await fetchRecentMailboxEmailBatch(fetchConfig, syncLimit, {
         deadlineAt: syncDeadlineAt,
         fullResync: true,
+        fullResyncBeforeUid,
         imapUidValidity,
         imapLastSeenUid
       });
@@ -287,8 +289,9 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         skippedDuplicateCount: importResult.skippedDuplicateCount + pageImportResult.skippedDuplicateCount
       };
       imapUidValidity = inbound.imapUidValidity ?? imapUidValidity;
-      imapLastSeenUid = inbound.imapLastSeenUid ?? imapLastSeenUid;
-      hasMore = Boolean(inbound.hasMore && inbound.imapLastSeenUid && inbound.imapLastSeenUid !== previousLastSeenUid);
+      imapLastSeenUid = maxImapUid(imapLastSeenUid, inbound.imapLastSeenUid);
+      fullResyncBeforeUid = inbound.fullResyncBeforeUid ?? fullResyncBeforeUid;
+      hasMore = Boolean(inbound.hasMore && inbound.fullResyncBeforeUid && inbound.fullResyncBeforeUid !== previousFullResyncBeforeUid);
     }
     return { messages: [], importResult, pageCount, hasMore: false, imapUidValidity, imapLastSeenUid };
   }
@@ -521,6 +524,25 @@ function normalizeEmailSyncOptions(options: number | EmailSyncOptions | undefine
     limit: normalizeEmailSyncLimit(options?.limit ?? fallbackLimit),
     fullResync: options?.fullResync === true
   };
+}
+
+function maxImapUid(left: string | undefined, right: string | undefined): string | undefined {
+  const normalizedLeft = normalizeImapUid(left);
+  const normalizedRight = normalizeImapUid(right);
+  if (!normalizedLeft) {
+    return normalizedRight;
+  }
+  if (!normalizedRight) {
+    return normalizedLeft;
+  }
+  return BigInt(normalizedRight) > BigInt(normalizedLeft) ? normalizedRight : normalizedLeft;
+}
+
+function normalizeImapUid(value: string | undefined): string | undefined {
+  if (!value || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+  return BigInt(value).toString();
 }
 
 function getEmailSyncJobTimeoutMs(): number {
