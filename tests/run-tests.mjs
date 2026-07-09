@@ -12349,7 +12349,11 @@ await run("email ai settings expose encrypted provider profiles", () => {
   assert.equal(defaultAgentConfig.provider, "custom");
   assert.equal(defaultAgentConfig.baseUrl, "https://custom-default.example/v1");
   assert.equal(defaultAgentConfig.apiKey, "secret-default-key");
-  const profileAgent = store.updateAiAgent(context, emailDraftAgentKey, { providerProfileKey: "openrouter-sales" });
+  const profileAgent = store.updateAiAgent(context, emailDraftAgentKey, {
+    providerProfileKey: "openrouter-sales",
+    provider: "gemini",
+    baseUrl: "https://legacy-override.example/v1"
+  });
   const profileConfig = store.getAiProviderConfigForAgent(context, profileAgent);
   assert.equal(profileConfig.provider, "openrouter");
   assert.equal(profileConfig.baseUrl, "https://openrouter.ai/api/v1");
@@ -12361,6 +12365,7 @@ await run("email ai settings expose encrypted provider profiles", () => {
   const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
   const providerConfig = readFileSync("src/lib/ai/provider-config.ts", "utf8");
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const settingsSource = readFileSync("src/components/settings-admin.tsx", "utf8");
   const emailGenerateRoute = readFileSync("src/app/api/email/ai-generate/route.ts", "utf8");
   assert.match(schema, /encryptedProviderConfig String\?/);
   assert.match(migration, /ADD COLUMN "encryptedProviderConfig" TEXT/);
@@ -12377,12 +12382,20 @@ await run("email ai settings expose encrypted provider profiles", () => {
   assert.match(providerConfig, /gemini: \{ baseUrl: "https:\/\/generativelanguage\.googleapis\.com\/v1beta\/openai"/);
   assert.match(providerConfig, /resolveAiProviderConfigForAgent/);
   assert.match(providerConfig, /resolveDefaultAiProviderProfile/);
+  assert.doesNotMatch(providerConfig, /agent\.provider\s*\?\?/);
+  assert.doesNotMatch(providerConfig, /provider:\s*agent\.provider/);
+  assert.doesNotMatch(providerConfig, /agent\.baseUrl/);
   assert.match(source, /data-testid="email-ai-provider-profile-notice"/);
+  assert.match(source, /data-testid=\{`email-ai-agent-provider-profile-\$\{agent\.key\}`\}/);
   assert.match(source, /默认 Provider profile/);
+  assert.match(source, /不限制知识库文章语言/);
   assert.doesNotMatch(source, /data-testid="email-ai-provider-panel"/);
   assert.doesNotMatch(source, /data-testid="email-ai-provider-api-key-save"/);
   assert.doesNotMatch(source, /sanitizeAiProviderConfigForPatch/);
   assert.doesNotMatch(source, /providerConfig:\s*\{\s*\.\.\.aiSettings\.providerConfig,\s*\.\.\.patch\s*\}/);
+  assert.doesNotMatch(settingsSource, /Legacy provider override/);
+  assert.doesNotMatch(settingsSource, /Provider Base URL override/);
+  assert.doesNotMatch(settingsSource, /Use global provider base URL/);
   assert.match(emailGenerateRoute, /getGlobalAiAgentSetting\(settings, assistantContext\.agentKey\)/);
   assert.match(emailGenerateRoute, /getAiProviderConfigForAgent\(context, agent\)/);
   assert.match(emailGenerateRoute, /getEmailAiProviderConfig\(context\)/);

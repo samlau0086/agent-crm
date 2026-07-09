@@ -206,7 +206,7 @@ export function mergeAiProviderProfilesSecrets(existing: AiProviderProfile[] | u
 export function resolveAiProviderConfigForAgent(
   providerConfig: Partial<AiProviderConfig> | undefined,
   providerProfiles: AiProviderProfile[] | undefined,
-  agent: { providerProfileKey?: string; provider?: AiProviderType; baseUrl?: string; model?: string }
+  agent: { providerProfileKey?: string; model?: string }
 ): AiProviderConfig {
   const base = normalizeAiProviderConfig(providerConfig);
   const profile = agent.providerProfileKey
@@ -215,8 +215,8 @@ export function resolveAiProviderConfigForAgent(
   return normalizeAiProviderConfig({
     ...base,
     ...profile,
-    provider: agent.provider ?? profile?.provider ?? base.provider,
-    baseUrl: agent.baseUrl ?? profile?.baseUrl ?? base.baseUrl,
+    provider: profile?.provider ?? base.provider,
+    baseUrl: profile?.baseUrl ?? base.baseUrl,
     apiKey: profile?.apiKey ?? base.apiKey,
     model: agent.model || profile?.model || base.model
   });

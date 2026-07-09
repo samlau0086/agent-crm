@@ -8962,6 +8962,7 @@ function EmailWorkspace({
       agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
     });
   };
+  const enabledProviderProfiles = aiSettings.providerProfiles.filter((profile) => profile.enabled);
   const linkEmailThreadRecord = (threadId: string, recordId: string) => {
     setManuallyUnlinkedThreadIds((current) => {
       const next = new Set(current);
@@ -11779,6 +11780,7 @@ function EmailWorkspace({
             <label>
               <span className="subtle">默认语言</span>
               <input className="input" value={aiSettings.defaultLocale} onChange={(event) => onUpdateAiSettings({ defaultLocale: event.target.value })} />
+              <small className="subtle">用于未指定目标语言时的邮件草稿/翻译/内部分析兜底输出语言；不限制知识库文章语言。</small>
             </label>
             <label className="settings-toggle">
               <input type="checkbox" checked={aiSettings.requireSourceLinks} onChange={(event) => onUpdateAiSettings({ requireSourceLinks: event.target.checked })} />
@@ -11829,6 +11831,22 @@ function EmailWorkspace({
                         onChange={(event) => updateAiAgent(agent.key, { model: event.target.value })}
                         placeholder="gpt-4.1-mini"
                       />
+                    </label>
+                    <label>
+                      <span className="subtle">Provider profile</span>
+                      <select
+                        className="select"
+                        data-testid={`email-ai-agent-provider-profile-${agent.key}`}
+                        value={agent.providerProfileKey ?? ""}
+                        onChange={(event) => updateAiAgent(agent.key, { providerProfileKey: event.target.value || undefined, provider: undefined, baseUrl: undefined })}
+                      >
+                        <option value="">使用默认 Provider profile</option>
+                        {enabledProviderProfiles.map((profile) => (
+                          <option key={profile.key} value={profile.key}>
+                            {profile.name}{profile.isDefault ? "（默认）" : ""} · {profile.model}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <label>
                       <span className="subtle">最大输出字符</span>

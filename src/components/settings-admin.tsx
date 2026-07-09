@@ -818,8 +818,6 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         enabled: agent.enabled,
         model: agent.model,
         providerProfileKey: agent.providerProfileKey,
-        provider: agent.provider,
-        baseUrl: agent.baseUrl,
         agentMarkdown: agent.agentMarkdown,
         maxOutputChars: agent.maxOutputChars,
         contextPolicy: agent.contextPolicy,
@@ -2366,23 +2364,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                         label="Provider profile"
                         options={aiProviderProfileOptions}
                         values={selectedAiAgent.providerProfileKey ? [selectedAiAgent.providerProfileKey] : []}
-                        onChange={(values) => updateAiAgentDraft(selectedAiAgent.key, { providerProfileKey: values.at(-1), provider: undefined, baseUrl: undefined })}
+                        onChange={(values) => updateAiAgentDraft(selectedAiAgent.key, { providerProfileKey: values.at(-1) })}
                         placeholder="Search provider profile"
                         testId="ai-agent-provider-profile"
                       />
-                      <span className="subtle">Legacy provider override</span>
-                      <select
-                        className="select"
-                        value={selectedAiAgent.provider ?? ""}
-                        onChange={(event) => setAiAgents((current) => current.map((agent) => (agent.key === selectedAiAgent.key ? { ...agent, provider: event.target.value ? event.target.value as AiAgentSetting["provider"] : undefined } : agent)))}
-                      >
-                        <option value="">使用默认 Provider profile</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="gemini">Gemini</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="openai-compatible">OpenAI Compatible</option>
-                        <option value="custom">Custom</option>
-                      </select>
                     </label>
                     <label>
                       <span className="subtle">模型</span>
@@ -2414,20 +2399,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                       <div className="settings-panel-header">
                         <div>
                           <h3>Harness config</h3>
-                          <p className="subtle">Per-agent runtime options for context injection, tool access, output shape, and provider override.</p>
+                          <p className="subtle">Per-agent runtime options for context injection, tool access, and output shape.</p>
                         </div>
                         <span className="badge">{selectedAiAgent.outputSchema ?? selectedAiAgentDefinition?.outputSchema ?? "text"}</span>
                       </div>
                       <div className="form-grid">
-                        <label>
-                          <span className="subtle">Provider Base URL override</span>
-                          <input
-                            className="input"
-                            placeholder="Use global provider base URL"
-                            value={selectedAiAgent.baseUrl ?? ""}
-                            onChange={(event) => updateAiAgentDraft(selectedAiAgent.key, { baseUrl: event.target.value.trim() || undefined })}
-                          />
-                        </label>
                         <label>
                           <span className="subtle">Output schema</span>
                           <select
