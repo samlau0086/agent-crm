@@ -9802,9 +9802,61 @@ await run("email threads support restore unarchive permanent delete and contact 
   assert.equal(store.updateEmailThreadState(context, message.threadId, { archived: true }).archived, true);
   assert.equal(store.updateEmailThreadState(context, message.threadId, { archived: false }).archived, false);
 
-  store.deleteEmailThread(context, message.threadId);
-  assert.throws(() => store.getEmailThread(context, message.threadId), /Email thread not found/);
-  assert.throws(() => store.listEmailMessages(context, message.threadId), /Email thread not found/);
+  const snapshotWithReminders = store.snapshot();
+  snapshotWithReminders.smartReminders ??= [];
+  snapshotWithReminders.smartReminders.push(
+    {
+      id: "reminder-email-thread-source",
+      workspaceId: defaultWorkspaceId,
+      userId: "user-admin",
+      kind: "email_reply",
+      priority: "high",
+      title: "Reply to deleted thread",
+      status: "open",
+      sources: [{ label: "Thread", threadId: message.threadId }],
+      score: 90,
+      idempotencyKey: "reminder-email-thread-source",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z"
+    },
+    {
+      id: "reminder-email-message-source",
+      workspaceId: defaultWorkspaceId,
+      userId: "user-admin",
+      kind: "follow_up",
+      priority: "medium",
+      title: "Follow up deleted message",
+      status: "open",
+      sources: [{ label: "Message", messageId: message.id }],
+      score: 80,
+      idempotencyKey: "reminder-email-message-source",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z"
+    },
+    {
+      id: "reminder-unrelated-email-source",
+      workspaceId: defaultWorkspaceId,
+      userId: "user-admin",
+      kind: "follow_up",
+      priority: "medium",
+      title: "Keep unrelated reminder",
+      status: "open",
+      sources: [{ label: "Other thread", threadId: promo.threadId }],
+      score: 70,
+      idempotencyKey: "reminder-unrelated-email-source",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      updatedAt: "2026-07-09T00:00:00.000Z"
+    }
+  );
+  const reminderStore = new CrmStore(snapshotWithReminders);
+  const reminderContext = reminderStore.getContext("user-admin");
+  reminderStore.deleteEmailThread(reminderContext, message.threadId);
+  assert.throws(() => reminderStore.getEmailThread(reminderContext, message.threadId), /Email thread not found/);
+  assert.throws(() => reminderStore.listEmailMessages(reminderContext, message.threadId), /Email thread not found/);
+  const remainingReminderIds = new Set((reminderStore.snapshot().smartReminders ?? []).map((reminder) => reminder.id));
+  assert.equal(remainingReminderIds.has("reminder-email-thread-source"), false);
+  assert.equal(remainingReminderIds.has("reminder-email-message-source"), false);
+  assert.equal(remainingReminderIds.has("reminder-unrelated-email-source"), true);
 });
 
 await run("email threads respect record visibility and unlinked ownership", () => {

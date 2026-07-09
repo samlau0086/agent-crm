@@ -2890,16 +2890,24 @@ export class PrismaCrmRepository {
     const deletedMessages = await this.db.emailMessage.findMany({
       where: {
         workspaceId: context.workspaceId,
-        threadId: thread.id,
-        externalMessageId: { not: null }
+        threadId: thread.id
       },
-      select: { accountId: true, externalMessageId: true }
+      select: { id: true, accountId: true, externalMessageId: true }
     });
+    const deletedMessageIds = new Set(deletedMessages.map((message) => message.id));
+    const relatedReminders = await this.db.smartReminder.findMany({
+      where: { workspaceId: context.workspaceId },
+      select: { id: true, objectKey: true, recordId: true, sources: true }
+    });
+    const relatedReminderIds = relatedReminders
+      .filter((reminder) => smartReminderReferencesDeletedEmailThread(reminder, thread.id, deletedMessageIds))
+      .map((reminder) => reminder.id);
+    const deletedExternalMessages = deletedMessages.filter((message) => message.externalMessageId);
     await this.db.$transaction([
-      ...(deletedMessages.length
+      ...(deletedExternalMessages.length
         ? [
             this.db.emailDeletedMessage.createMany({
-              data: deletedMessages.map((message) => ({
+              data: deletedExternalMessages.map((message) => ({
                 workspaceId: context.workspaceId,
                 accountId: message.accountId,
                 externalMessageId: message.externalMessageId!,
@@ -2907,6 +2915,13 @@ export class PrismaCrmRepository {
                 deletedById: context.user.id
               })),
               skipDuplicates: true
+            })
+          ]
+        : []),
+      ...(relatedReminderIds.length
+        ? [
+            this.db.smartReminder.deleteMany({
+              where: { workspaceId: context.workspaceId, id: { in: relatedReminderIds } }
             })
           ]
         : []),
@@ -10517,6 +10532,26 @@ function mapSmartReminderSettings(settings: {
     notifyDailyDigest: settings.notifyDailyDigest,
     updatedAt: settings.updatedAt.toISOString()
   };
+}
+
+function smartReminderReferencesDeletedEmailThread(
+  reminder: { objectKey?: string | null; recordId?: string | null; sources?: Prisma.JsonValue | null },
+  threadId: string,
+  messageIds: Set<string>
+): boolean {
+  const directlyLinkedId = reminder.recordId ?? "";
+  if ((reminder.objectKey === "emails" || reminder.objectKey === "emailThreads") && (directlyLinkedId === threadId || messageIds.has(directlyLinkedId))) {
+    return true;
+  }
+  if (!Array.isArray(reminder.sources)) {
+    return false;
+  }
+  return reminder.sources.some((source) => {
+    if (!isJsonRecord(source)) return false;
+    const sourceThreadId = typeof source.threadId === "string" ? source.threadId : "";
+    const sourceMessageId = typeof source.messageId === "string" ? source.messageId : "";
+    return sourceThreadId === threadId || Boolean(sourceMessageId && messageIds.has(sourceMessageId));
+  });
 }
 
 function mapSmartReminder(reminder: {

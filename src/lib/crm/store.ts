@@ -1055,6 +1055,9 @@ export class CrmStore {
     const deletedMessages = (this.data.emailMessages ?? []).filter(
       (message) => message.workspaceId === context.workspaceId && message.threadId === thread.id && message.externalMessageId
     );
+    const deletedMessageIds = new Set(
+      (this.data.emailMessages ?? []).filter((message) => message.workspaceId === context.workspaceId && message.threadId === thread.id).map((message) => message.id)
+    );
     const deletedMessageKeys = new Set((this.data.emailDeletedMessages ?? []).map((message) => `${message.workspaceId}:${message.accountId}:${message.externalMessageId}`));
     for (const message of deletedMessages) {
       const key = `${context.workspaceId}:${message.accountId}:${message.externalMessageId}`;
@@ -1073,6 +1076,15 @@ export class CrmStore {
       (this.data.emailDeletedMessages ??= []).push(deletedMessage);
       deletedMessageKeys.add(key);
     }
+    this.data.smartReminders = (this.data.smartReminders ?? []).filter(
+      (reminder) =>
+        reminder.workspaceId !== context.workspaceId ||
+        !smartReminderReferencesDeletedEmailThread(
+          { objectKey: reminder.objectKey ?? null, recordId: reminder.recordId ?? null, sources: reminder.sources },
+          thread.id,
+          deletedMessageIds
+        )
+    );
     this.data.emailMessages = (this.data.emailMessages ?? []).filter((message) => message.threadId !== thread.id);
     this.data.emailThreadStates = (this.data.emailThreadStates ?? []).filter((state) => state.threadId !== thread.id);
     this.data.emailThreads = (this.data.emailThreads ?? []).filter((candidate) => candidate.id !== thread.id);
@@ -5419,6 +5431,26 @@ function normalizeEmailAiSources(value: unknown): NonNullable<EmailThread["aiAna
     })
     .filter((source): source is NonNullable<EmailThread["aiAnalysisSources"]>[number] => Boolean(source))
     .slice(0, 20);
+}
+
+function smartReminderReferencesDeletedEmailThread(
+  reminder: { objectKey?: string | null; recordId?: string | null; sources?: unknown },
+  threadId: string,
+  messageIds: Set<string>
+): boolean {
+  const directlyLinkedId = reminder.recordId ?? "";
+  if ((reminder.objectKey === "emails" || reminder.objectKey === "emailThreads") && (directlyLinkedId === threadId || messageIds.has(directlyLinkedId))) {
+    return true;
+  }
+  if (!Array.isArray(reminder.sources)) {
+    return false;
+  }
+  return reminder.sources.some((source) => {
+    if (!isJsonRecord(source)) return false;
+    const sourceThreadId = typeof source.threadId === "string" ? source.threadId : "";
+    const sourceMessageId = typeof source.messageId === "string" ? source.messageId : "";
+    return sourceThreadId === threadId || Boolean(sourceMessageId && messageIds.has(sourceMessageId));
+  });
 }
 
 function normalizeEmailThreadCategory(value: unknown): EmailThread["category"] {
