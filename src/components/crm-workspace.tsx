@@ -369,6 +369,7 @@ type EmailConnectionTestRun = {
   }>;
 };
 type EmailConnectionTestScope = "all" | "inbound" | "outbound";
+type EmailAccountActionKey = `test:${string}` | `sync:${string}` | `full-sync:${string}` | null;
 type EmailSyncAllRun = {
   scheduledCount: number;
   skippedCount: number;
@@ -2156,6 +2157,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [importPresetName, setImportPresetName] = useState("");
   const [aiQuestion, setAiQuestion] = useState("本周有哪些高价值交易需要继续推进？");
   const [emailAccounts, setEmailAccounts] = useState<EmailAccount[]>(props.emailAccounts);
+  const [emailAccountActionKey, setEmailAccountActionKey] = useState<EmailAccountActionKey>(null);
   const [emailSignatures, setEmailSignatures] = useState<EmailSignature[]>(props.emailSignatures);
   const [emailThreads, setEmailThreads] = useState<EmailThread[]>(props.emailThreads);
   const [emailMessagesByThread, setEmailMessagesByThread] = useState<Record<string, EmailMessage[]>>({});
@@ -4398,10 +4400,45 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function syncEmailAccount(accountId: string, options: { fullResync?: boolean } = {}) {
-    const result = await fetchJson<EmailSyncRun>("/api/email/sync", {
-      method: "POST",
-      body: { accountId, ...(options.fullResync ? { fullResync: true, limit: 100 } : {}) }
-    });
+    const syncStartedAt = new Date().toISOString();
+    setEmailAccounts((current) =>
+      current.map((account) =>
+        account.id === accountId
+          ? {
+              ...account,
+              lastSyncStatus: "running",
+              lastSyncStartedAt: syncStartedAt,
+              lastSyncFinishedAt: undefined,
+              lastSyncError: undefined,
+              updatedAt: syncStartedAt
+            }
+          : account
+      )
+    );
+    let result: EmailSyncRun;
+    try {
+      result = await fetchJson<EmailSyncRun>("/api/email/sync", {
+        method: "POST",
+        body: { accountId, ...(options.fullResync ? { fullResync: true, limit: 100 } : {}) }
+      });
+    } catch (syncError) {
+      const failedAt = new Date().toISOString();
+      const errorMessage = syncError instanceof Error ? syncError.message : "邮箱同步失败";
+      setEmailAccounts((current) =>
+        current.map((account) =>
+          account.id === accountId
+            ? {
+                ...account,
+                lastSyncStatus: "failed",
+                lastSyncFinishedAt: failedAt,
+                lastSyncError: errorMessage,
+                updatedAt: failedAt
+              }
+            : account
+        )
+      );
+      throw syncError;
+    }
     setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
     if (result.status === "failed") {
       setError(result.error ?? result.account.lastConnectionError ?? "邮箱同步失败");
@@ -5815,6 +5852,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         await action();
       } catch (actionError) {
         showError(actionError instanceof Error ? actionError.message : "操作失败");
+      }
+    });
+  }
+
+  function runEmailAccountAction(actionKey: Exclude<EmailAccountActionKey, null>, action: () => Promise<void>) {
+    setEmailAccountActionKey(actionKey);
+    runAction(async () => {
+      try {
+        await action();
+      } finally {
+        setEmailAccountActionKey((current) => (current === actionKey ? null : current));
       }
     });
   }
@@ -7390,6 +7438,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         {activeNav === "email" && (
           <EmailWorkspace
             accounts={emailAccounts}
+            accountActionKey={emailAccountActionKey}
             signatures={emailSignatures}
             threads={emailThreads}
             messagesByThread={emailMessagesByThread}
@@ -7472,8 +7521,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onOpenTalkSourceRecord={(source) => runAction(() => openTalkSourceRecord(source))}
             onCreateAccount={() => runAction(createEmailAccount)}
             onStartOAuth={() => runAction(startEmailOAuth)}
-            onSyncAccount={(accountId) => runAction(() => syncEmailAccount(accountId))}
-            onFullResyncAccount={(accountId) => runAction(() => fullResyncEmailAccount(accountId))}
+            onSyncAccount={(accountId) =>
+              runEmailAccountAction(`sync:${accountId}`, () => syncEmailAccount(accountId))
+            }
+            onFullResyncAccount={(accountId) =>
+              runEmailAccountAction(`full-sync:${accountId}`, () => fullResyncEmailAccount(accountId))
+            }
             onSyncAllAccounts={() => runAction(syncAllEmailAccounts)}
             onTestConnection={testEmailConnection}
             onEditAccount={(account) => {
@@ -8699,6 +8752,7 @@ function Dashboard({
 
 function EmailWorkspace({
   accounts,
+  accountActionKey,
   signatures,
   threads,
   messagesByThread,
@@ -8806,6 +8860,7 @@ function EmailWorkspace({
   onToggleAppSidebar
 }: {
   accounts: EmailAccount[];
+  accountActionKey: EmailAccountActionKey;
   signatures: EmailSignature[];
   threads: EmailThread[];
   messagesByThread: Record<string, EmailMessage[]>;
@@ -10488,6 +10543,9 @@ function EmailWorkspace({
             const testState = accountConnectionTests[emailConnectionTestStateKey(account.id)];
             const isTesting = testState?.status === "testing";
             const syncStatus = getEmailAccountSyncStatus(account);
+            const syncIsPending = accountActionKey === `sync:${account.id}`;
+            const fullSyncIsPending = accountActionKey === `full-sync:${account.id}`;
+            const accountSyncInProgress = (syncStatus === "queued" || syncStatus === "running") && !isEmailAccountSyncStale(account);
             const canFullResyncAccount = account.syncEnabled && account.connectionConfigured && capability.supportsSync && (account.status === "active" || account.status === "error") && account.provider === "smtp_imap";
             return (
               <div className="settings-item" key={account.id}>
@@ -10505,7 +10563,7 @@ function EmailWorkspace({
                 {canManageEmailSettings ? (
                   <div className="toolbar email-account-actions">
                     <button className="secondary-button" type="button" onClick={() => runAccountConnectionTest(account)} disabled={disabled || isTesting}>
-                      <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
+                      <RefreshCw className={isTesting ? "spin-icon" : undefined} size={16} />
                       {isTesting ? "测试中" : "测试连接"}
                     </button>
                     <button
@@ -10540,12 +10598,12 @@ function EmailWorkspace({
                       {account.status === "disabled" ? "启用" : "停用"}
                     </button>
                     <button className="secondary-button" type="button" onClick={() => onSyncAccount(account.id)} disabled={disabled || !account.syncEnabled || !account.connectionConfigured || !capability.supportsSync || (account.status !== "active" && account.status !== "error")}>
-                      <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
-                      同步
+                      <RefreshCw className={syncIsPending || (accountSyncInProgress && !fullSyncIsPending) ? "spin-icon" : undefined} size={16} />
+                      {syncIsPending ? "提交中" : accountSyncInProgress && !fullSyncIsPending ? "同步中" : "同步"}
                     </button>
                     <button className="secondary-button" type="button" onClick={() => onFullResyncAccount(account.id)} disabled={disabled || !canFullResyncAccount} title={account.provider === "smtp_imap" ? "从 IMAP 历史邮件开始重新扫描，已存在邮件会跳过" : "当前仅 SMTP/IMAP 邮箱支持全量同步"}>
-                      <RefreshCw className={disabled ? "spin-icon" : undefined} size={16} />
-                      全量同步
+                      <RefreshCw className={fullSyncIsPending ? "spin-icon" : undefined} size={16} />
+                      {fullSyncIsPending ? "提交中" : "全量同步"}
                     </button>
                   </div>
                 ) : null}

@@ -2593,6 +2593,11 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
 await run("email workspace treats queued sync as background work and polls for imported mail", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /result\.status === "queued"/);
+  assert.match(source, /lastSyncStatus:\s*"running"/);
+  assert.match(source, /accountActionKey === `sync:\$\{account\.id\}`/);
+  assert.match(source, /accountActionKey === `full-sync:\$\{account\.id\}`/);
+  assert.match(source, /className=\{isTesting \? "spin-icon" : undefined\}/);
+  assert.doesNotMatch(source, /测试中" : "测试连接"[\s\S]{0,120}<RefreshCw className=\{disabled \? "spin-icon" : undefined\}/);
   assert.match(source, /const queued = result\.accounts\.filter\(\(account\) => account\.status === "queued"\)/);
   assert.match(source, /scheduleEmailThreadsRefreshPolling\(\{[\s\S]*reloadSelectedMessages: true[\s\S]*accountIds:/);
   assert.match(source, /summarizeEmailSyncCompletion/);
