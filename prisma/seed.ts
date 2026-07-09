@@ -164,6 +164,8 @@ async function main() {
         sendEnabled: account.sendEnabled,
         createdById: account.createdById,
         lastSyncedAt: account.lastSyncedAt ? new Date(account.lastSyncedAt) : undefined,
+        imapUidValidity: account.imapUidValidity,
+        imapLastSeenUid: account.imapLastSeenUid,
         createdAt: new Date(account.createdAt),
         updatedAt: new Date(account.updatedAt)
       }

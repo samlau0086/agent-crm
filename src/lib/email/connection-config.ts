@@ -41,13 +41,10 @@ export function normalizeEmailConnectionConfig(config: EmailConnectionConfig): E
     smtpPort: normalizePort(config.smtpPort),
     smtpSecure: config.smtpSecure ?? true,
     smtpStartTls: config.smtpStartTls === true,
-    syncProtocol: config.syncProtocol === "pop3" ? "pop3" : "imap",
+    syncProtocol: "imap",
     imapHost: normalizeHost(config.imapHost),
     imapPort: normalizePort(config.imapPort),
     imapSecure: config.imapSecure ?? true,
-    pop3Host: normalizeHost(config.pop3Host),
-    pop3Port: normalizePort(config.pop3Port),
-    pop3Secure: config.pop3Secure ?? true,
     username: config.username?.trim() || undefined,
     password: config.password ?? undefined,
     mailbox: config.mailbox?.trim() || "INBOX",
@@ -69,9 +66,6 @@ export function getInboundConnectionConfig(config: EmailConnectionConfig): Email
     imapHost: inbound?.imapHost,
     imapPort: inbound?.imapPort,
     imapSecure: inbound?.imapSecure,
-    pop3Host: inbound?.pop3Host,
-    pop3Port: inbound?.pop3Port,
-    pop3Secure: inbound?.pop3Secure,
     username: inbound?.username,
     password: inbound?.password,
     mailbox: inbound?.mailbox,
@@ -112,13 +106,10 @@ function normalizeInboundConnectionConfig(config?: EmailInboundConnectionConfig)
     return undefined;
   }
   const normalized: EmailInboundConnectionConfig = {
-    syncProtocol: config.syncProtocol === "pop3" ? "pop3" : "imap",
+    syncProtocol: "imap",
     imapHost: normalizeHost(config.imapHost),
     imapPort: normalizePort(config.imapPort),
     imapSecure: config.imapSecure ?? true,
-    pop3Host: normalizeHost(config.pop3Host),
-    pop3Port: normalizePort(config.pop3Port),
-    pop3Secure: config.pop3Secure ?? true,
     username: config.username?.trim() || undefined,
     password: config.password ?? undefined,
     mailbox: config.mailbox?.trim() || "INBOX",
@@ -162,7 +153,7 @@ function normalizeOutboundService(service: EmailOutboundServiceConfig): EmailOut
 }
 
 function legacyInboundConfig(config: EmailConnectionConfig): EmailInboundConnectionConfig | undefined {
-  if (!config.imapHost && !config.pop3Host && !config.accessToken && !config.refreshToken && !config.username && !config.password) {
+  if (!config.imapHost && !config.accessToken && !config.refreshToken && !config.username && !config.password) {
     return undefined;
   }
   return {
@@ -170,9 +161,6 @@ function legacyInboundConfig(config: EmailConnectionConfig): EmailInboundConnect
     imapHost: config.imapHost,
     imapPort: config.imapPort,
     imapSecure: config.imapSecure,
-    pop3Host: config.pop3Host,
-    pop3Port: config.pop3Port,
-    pop3Secure: config.pop3Secure,
     username: config.username,
     password: config.password,
     mailbox: config.mailbox,
@@ -205,7 +193,7 @@ function legacyOutboundServices(config: EmailConnectionConfig): EmailOutboundSer
 }
 
 function hasInboundConfig(config: EmailInboundConnectionConfig): boolean {
-  return Boolean(config.imapHost || config.pop3Host || config.username || config.password || config.accessToken || config.refreshToken);
+  return Boolean(config.imapHost || config.username || config.password || config.accessToken || config.refreshToken);
 }
 
 function deriveKey(secret: string): Buffer {

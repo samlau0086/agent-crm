@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -73,7 +73,7 @@ import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
 import { parseEmailThreadSearchCommand } from "../src/lib/email/search-command.ts";
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
 import { repairEmailMojibake } from "../src/lib/email/mojibake.ts";
-import { buildImapFallbackExternalMessageId, buildPop3FallbackExternalMessageId, fetchRecentImapEmails, fetchRecentPop3Emails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId, withPop3FallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
+import { buildImapFallbackExternalMessageId, fetchRecentImapEmailBatch, fetchRecentImapEmails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
 import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
 import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
 import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.ts";
@@ -198,128 +198,6 @@ function startFakeSmtpServer() {
       });
     });
   });
-}
-
-function startFakePop3Server(messages, options = {}) {
-  const commands = [];
-  const server = createServer((socket) => {
-    let commandBuffer = "";
-    socket.setEncoding("utf8");
-    const scheduledWrites = new Set();
-    const writeSafely = (value) => {
-      if (socket.destroyed || !socket.writable) return;
-      try {
-        socket.write(value);
-      } catch {
-        // The client may close the socket while this fake server is streaming a slow response.
-      }
-    };
-    const scheduleWrite = (value, delayMs) => {
-      const timer = setTimeout(() => {
-        scheduledWrites.delete(timer);
-        writeSafely(value);
-      }, delayMs);
-      scheduledWrites.add(timer);
-    };
-    const clearScheduledWrites = () => {
-      for (const timer of scheduledWrites) {
-        clearTimeout(timer);
-      }
-      scheduledWrites.clear();
-    };
-    socket.once("close", clearScheduledWrites);
-    socket.on("error", () => undefined);
-    writeSafely("+OK fake-pop3.local ready\r\n");
-    socket.on("data", (chunk) => {
-      commandBuffer += chunk;
-      const lines = commandBuffer.split(/\r\n/);
-      commandBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        const command = parts[0];
-        const arg = parts[1];
-        commands.push(line);
-        if (!command) continue;
-        if (/^(USER|PASS)$/i.test(command)) {
-          socket.write("+OK\r\n");
-        } else if (/^STAT$/i.test(command)) {
-          const size = messages.reduce((sum, message) => sum + message.raw.length, 0);
-          socket.write(`+OK ${messages.length} ${size}\r\n`);
-        } else if (/^LIST$/i.test(command)) {
-          socket.write(["+OK scan listing", ...messages.map((message, index) => `${index + 1} ${message.raw.length}`), "."].join("\r\n") + "\r\n");
-        } else if (/^UIDL$/i.test(command)) {
-          socket.write(["+OK unique-id listing", ...messages.map((message, index) => `${index + 1} ${message.uid}`), "."].join("\r\n") + "\r\n");
-        } else if (/^RETR$/i.test(command)) {
-          const shouldHangRetr =
-            options.hangRetr === true || (Array.isArray(options.hangRetrMessages) && options.hangRetrMessages.includes(String(arg)));
-          if (shouldHangRetr) {
-            continue;
-          }
-          const message = messages[Number(arg) - 1];
-          if (!message) {
-            socket.write("-ERR no such message\r\n");
-          } else {
-            const response = `+OK ${message.raw.length} octets\r\n${dotStuffPop3Message(message.raw)}\r\n.\r\n`;
-            if (options.slowRetr) {
-              const chunkSize = options.slowRetr.chunkSize ?? 12;
-              const chunkDelayMs = options.slowRetr.chunkDelayMs ?? 10;
-              for (let offset = 0, index = 0; offset < response.length; offset += chunkSize, index += 1) {
-                scheduleWrite(response.slice(offset, offset + chunkSize), index * chunkDelayMs);
-              }
-            } else {
-              socket.write(response);
-            }
-          }
-        } else if (/^TOP$/i.test(command)) {
-          const shouldHangTop =
-            options.hangTop === true || (Array.isArray(options.hangTopMessages) && options.hangTopMessages.includes(String(arg)));
-          if (shouldHangTop) {
-            continue;
-          }
-          const message = messages[Number(arg) - 1];
-          if (!message) {
-            socket.write("-ERR no such message\r\n");
-          } else {
-            const lineLimit = Number.parseInt(parts[2] ?? "0", 10);
-            const raw = buildPop3TopMessage(message.raw, Number.isFinite(lineLimit) ? lineLimit : 0);
-            socket.write(`+OK top of message follows\r\n${dotStuffPop3Message(raw)}\r\n.\r\n`);
-          }
-        } else if (/^QUIT$/i.test(command)) {
-          socket.write("+OK bye\r\n");
-          socket.end();
-        } else {
-          socket.write("-ERR unsupported\r\n");
-        }
-      }
-    });
-  });
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      resolve({
-        port: address.port,
-        commands: () => [...commands],
-        close: () => new Promise((closeResolve, closeReject) => server.close((error) => (error ? closeReject(error) : closeResolve())))
-      });
-    });
-  });
-}
-
-function buildPop3TopMessage(raw, lineLimit) {
-  const normalized = raw.replace(/\r?\n/g, "\r\n");
-  const separator = normalized.indexOf("\r\n\r\n");
-  if (separator < 0) {
-    return normalized;
-  }
-  const headers = normalized.slice(0, separator);
-  const body = normalized.slice(separator + 4).split("\r\n").slice(0, Math.max(0, lineLimit)).join("\r\n");
-  return `${headers}\r\n\r\n${body}`;
-}
-
-function dotStuffPop3Message(raw) {
-  return raw.replace(/\r?\n/g, "\r\n").replace(/(^|\r\n)\./g, "$1..");
 }
 
 await run("field definition rejects invalid key", () => {
@@ -2702,7 +2580,6 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
   assert.match(source, /\/api\/email\/sync-all/);
   assert.match(source, /data-testid="email-sync-all"/);
   assert.match(source, /data-testid="email-account-sync-protocol"/);
-  assert.match(source, /data-testid="email-account-pop3-host"/);
   assert.match(source, /POP3 \$\{result\.result\.pop3 \?\? "skipped"\}/);
   assert.match(source, /onSyncAllAccounts/);
   assert.match(source, /\(account\.status === "active" \|\| account\.status === "error"\) && account\.syncEnabled && account\.connectionConfigured && capability\.supportsSync/);
@@ -4603,7 +4480,6 @@ await run("email verification dry run describes diagnostics and manual mailbox c
   assert.match(script, /sk-\[redacted\]/);
   assert.match(script, /value\.smtp === "ok" \|\| value\.smtp === "skipped"/);
   assert.match(script, /value\.imap === "ok" \|\| value\.imap === "skipped"/);
-  assert.match(script, /value\.pop3 === "ok" \|\| value\.pop3 === "skipped"/);
   assert.match(script, /value\.oauth === "ok" \|\| value\.oauth === "skipped"/);
   assert.match(script, /oauthAccountEmail\.trim\(\)/);
   assert.doesNotMatch(script, /result:\s*result\.result/);
@@ -11967,7 +11843,7 @@ await run("email context analysis repairs mojibake and hides prompt internals", 
     from: "no-reply@mail.instagram.com",
     to: [account.emailAddress],
     subject: "Instagram notification",
-    bodyText: "ã nugplugger åå¶ä»ç¨æ·åå¸äºæ°åå®¹ã"
+    bodyText: "? nugplugger ????????????"
   });
   const assistantContext = store.buildEmailAssistantContext(context, { purpose: "context_analysis", threadId: message.threadId, sourceMessageId: message.id });
   const analysis = await generateEmailAiOutput({ context: assistantContext });
@@ -12852,122 +12728,6 @@ await run("email send sync and ai schemas validate bounded payloads", () => {
     }).connectionConfig?.smtpStartTls,
     true
   );
-  const pop3Connection = emailAccountUpdateSchema.parse({
-    connectionConfig: {
-      smtpHost: "smtp.example.com",
-      smtpPort: 587,
-      syncProtocol: "pop3",
-      pop3Host: "pop.example.com",
-      pop3Port: 995,
-      pop3Secure: true,
-      username: "sales@example.com",
-      password: "app-password"
-    }
-  }).connectionConfig;
-  assert.equal(pop3Connection?.syncProtocol, "pop3");
-  assert.equal(pop3Connection?.pop3Host, "pop.example.com");
-  assert.equal(
-    emailSendSchema.parse({
-      accountId: "email-account",
-      to: ["buyer@example.com"],
-      subject: "Attachment metadata",
-      bodyText: "See attached.",
-      attachments: [{ fileName: "proposal.txt", size: 11, contentBase64: Buffer.from("hello world").toString("base64"), providerMessageId: "provider-message-id", providerAttachmentId: "provider-attachment-id" }]
-    }).attachments?.[0]?.providerMessageId,
-    "provider-message-id"
-  );
-  const translatedSend = emailSendSchema.parse({
-    accountId: "email-account",
-    to: ["buyer@example.com"],
-    subject: "Translated follow-up",
-    bodyText: "Original body",
-    translatedBodyText: "Translated body",
-    translatedLocale: "zh-CN",
-    translatedSources: [{ label: "Recipient preference", recordId: "contact-lin" }],
-    translatedAt: "2026-07-04T09:00:00.000Z"
-  });
-  assert.equal(translatedSend.translatedBodyText, "Translated body");
-  assert.equal(translatedSend.translatedLocale, "zh-CN");
-  assert.equal(translatedSend.translatedSources?.[0]?.recordId, "contact-lin");
-  const aiProvenance = emailSendSchema.parse({
-    accountId: "email-account",
-    to: ["buyer@example.com"],
-    subject: "AI draft",
-    bodyText: "AI assisted but user reviewed.",
-    aiAssisted: true,
-    aiPurpose: "draft",
-    aiSourceMessageId: "message-source",
-    aiSources: [{ label: "Source message", messageId: "message-source" }],
-    aiGeneratedAt: "2026-06-20T12:00:00.000Z"
-  });
-  assert.equal(aiProvenance.aiAssisted, true);
-  assert.equal(aiProvenance.aiPurpose, "draft");
-  assert.equal(aiProvenance.aiSources?.[0]?.messageId, "message-source");
-  assert.throws(() => emailAccountUpdateSchema.parse({ connectionConfig: { smtpHost: "smtp.example.com" }, clearConnectionConfig: true }), /cannot be used together/);
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: [], subject: "No recipient", bodyText: "Missing recipient" }),
-    /Array must contain/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "Attachment", bodyText: "Missing bytes", attachments: [{ fileName: "proposal.txt", size: 11 }] }),
-    /contentBase64/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "Attachment", bodyText: "Corrupt bytes", attachments: [{ fileName: "proposal.txt", size: 11, contentBase64: "AA=A" }] }),
-    /valid base64/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], cc: ["BUYER@example.com"], subject: "Duplicate", bodyText: "Duplicate recipient" }),
-    /must be unique/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "Bad request id", bodyText: "Body", clientRequestId: "bad key" }),
-    z.ZodError
-  );
-  assert.throws(
-    () =>
-      emailSendSchema.parse({
-        accountId: "email-account",
-        to: Array.from({ length: MAX_OUTBOUND_EMAIL_RECIPIENTS + 1 }, (_item, index) => `buyer-${index}@example.com`),
-        subject: "Too many",
-        bodyText: "Too many recipients"
-      }),
-    /limited to 100/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI missing purpose", bodyText: "Body", aiAssisted: true }),
-    /aiPurpose is required/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI missing generated timestamp", bodyText: "Body", aiAssisted: true, aiPurpose: "draft" }),
-    /aiGeneratedAt is required/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI analysis purpose", bodyText: "Body", aiAssisted: true, aiPurpose: "context_analysis" }),
-    z.ZodError
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI orphan metadata", bodyText: "Body", aiPurpose: "draft" }),
-    /AI provenance fields/
-  );
-  assert.throws(
-    () => emailSendSchema.parse({ accountId: "email-account", to: ["buyer@example.com"], subject: "AI orphan sources", bodyText: "Body", aiSources: [{ label: "Source message", messageId: "message-source" }] }),
-    /AI provenance fields/
-  );
-  assert.throws(
-    () =>
-      emailSendSchema.parse({
-        accountId: "email-account",
-        to: ["buyer@example.com"],
-        subject: "AI bad source",
-        bodyText: "Body",
-        aiAssisted: true,
-        aiPurpose: "draft",
-        aiSources: [{ label: "" }],
-        aiGeneratedAt: "2026-06-20T12:00:00.000Z"
-      }),
-    z.ZodError
-  );
 });
 
 await run("email provider test connection requires encrypted config", async () => {
@@ -13206,10 +12966,6 @@ await run("email connection config is encrypted and requires a stable secret", (
       imapHost: "imap.example.com",
       imapPort: 993,
       imapSecure: true,
-      syncProtocol: "pop3",
-      pop3Host: "pop.example.com",
-      pop3Port: 995,
-      pop3Secure: true,
       username: "sales@example.com",
       password: "app-password",
       mailbox: "INBOX"
@@ -13220,9 +12976,6 @@ await run("email connection config is encrypted and requires a stable secret", (
   assert.equal(encrypted.includes("app-password"), false);
   const decrypted = decryptEmailConnectionConfig(encrypted, secret);
   assert.equal(decrypted.smtpHost, "smtp.example.com");
-  assert.equal(decrypted.syncProtocol, "pop3");
-  assert.equal(decrypted.pop3Host, "pop.example.com");
-  assert.equal(decrypted.pop3Port, 995);
   assert.equal(decrypted.password, "app-password");
   assert.throws(() => encryptEmailConnectionConfig({ username: "sales@example.com", password: "secret" }, "short"), /at least 16 characters/);
 });
@@ -13230,8 +12983,8 @@ await run("email connection config is encrypted and requires a stable secret", (
 await run("email connection config separates inbound mailbox and outbound services", () => {
   const normalized = normalizeEmailConnectionConfig({
     inbound: {
-      syncProtocol: "pop3",
-      pop3Host: "pop.example.com",
+      syncProtocol: "imap",
+      imapHost: "imap.example.com",
       username: "inbound-user",
       password: "inbound-password"
     },
@@ -13501,23 +13254,40 @@ await run("imap provider fetches a bounded recent sequence range without scannin
     socket.write("* OK fake imap ready\r\n");
     socket.on("data", (chunk) => {
       for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-        const match = line.match(/^(A\d+)\s+(.+)$/);
+        const match = line.match(/^(\S+)\s+(.+)$/);
         if (!match) {
           continue;
         }
         const [, tag, command] = match;
         commands.push(command);
+        if (/^CAPABILITY\b/i.test(command)) {
+          socket.write(`* CAPABILITY IMAP4rev1 UIDPLUS\r\n${tag} OK CAPABILITY completed\r\n`);
+          continue;
+        }
         if (/^LOGIN\b/i.test(command)) {
           socket.write(`${tag} OK LOGIN completed\r\n`);
           continue;
         }
-        if (/^SELECT\b/i.test(command)) {
-          socket.write(`* FLAGS (\\Seen)\r\n* 4 EXISTS\r\n${tag} OK [READ-WRITE] SELECT completed\r\n`);
+        if (/^(LIST|LSUB)\b/i.test(command)) {
+          const listCommand = command.toUpperCase().startsWith("LSUB") ? "LSUB" : "LIST";
+          socket.write(`* ${listCommand} (\\HasNoChildren) "/" "INBOX"\r\n${tag} OK ${listCommand} completed\r\n`);
           continue;
         }
-        const fetchMatch = command.match(/^FETCH\s+(\d+)\s+\(UID BODY\.PEEK\[\]<0\.(\d+)>\)$/i);
+        if (/^(SELECT|EXAMINE)\b/i.test(command)) {
+          const openCommand = command.split(/\s+/)[0].toUpperCase();
+          socket.write(`* FLAGS (\\Seen)\r\n* 4 EXISTS\r\n* OK [UIDVALIDITY 20260709] UIDs valid\r\n* OK [UIDNEXT 1005] Predicted next UID\r\n${tag} OK [READ-ONLY] ${openCommand} completed\r\n`);
+          continue;
+        }
+        const searchMatch = command.match(/^UID SEARCH\s+(\d+):\*$/i);
+        if (searchMatch) {
+          const startSequenceNumber = Number(searchMatch[1]);
+          const uids = [1, 2, 3, 4].filter((sequenceNumber) => sequenceNumber >= startSequenceNumber).map((sequenceNumber) => String(1000 + sequenceNumber));
+          socket.write(`* SEARCH ${uids.join(" ")}\r\n${tag} OK SEARCH completed\r\n`);
+          continue;
+        }
+        const fetchMatch = command.match(/^UID FETCH\s+(\d+)\s+\(UID (?:RFC822\.SIZE )?BODY\.PEEK\[\]<0\.(\d+)>\)$/i);
         if (fetchMatch) {
-          const sequenceNumber = Number(fetchMatch[1]);
+          const sequenceNumber = Number(fetchMatch[1]) - 1000;
           const raw = messageForSequence(sequenceNumber);
           socket.write(`* ${sequenceNumber} FETCH (UID ${1000 + sequenceNumber} BODY[] {${Buffer.byteLength(raw, "utf8")}}\r\n${raw}\r\n)\r\n${tag} OK FETCH completed\r\n`);
           continue;
@@ -13546,366 +13316,12 @@ await run("imap provider fetches a bounded recent sequence range without scannin
     );
     assert.deepEqual(messages.map((message) => message.subject), ["Test 2", "Test 3", "Test 4"]);
     assert.equal(messages[0].externalMessageId, "imap:inbox:1002");
-    assert.equal(commands.some((command) => /UID SEARCH ALL/i.test(command)), false);
-    assert.equal(commands.some((command) => /^FETCH 1\b/i.test(command)), false);
-    assert.equal(commands.some((command) => /^FETCH 2\b/i.test(command)), true);
-    assert.equal(commands.some((command) => /^FETCH 4\b/i.test(command)), true);
+    assert.equal(commands.some((command) => /UID SEARCH 2:\*/i.test(command)), true);
+    assert.equal(commands.some((command) => /^UID FETCH 1001\b/i.test(command)), false);
+    assert.equal(commands.some((command) => /^UID FETCH 1002\b/i.test(command)), true);
+    assert.equal(commands.some((command) => /^UID FETCH 1004\b/i.test(command)), true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-await run("pop3 sync fallback message ids prevent duplicate imports without message-id headers", () => {
-  const parsed = parseRawEmailMessage(
-    [
-      "From: Buyer <buyer@example.com>",
-      "To: Sales <sales@example.com>",
-      "Subject: POP3 missing message id",
-      "",
-      "This POP3 provider omitted Message-ID."
-    ].join("\r\n")
-  );
-  assert.ok(parsed);
-  assert.equal(buildPop3FallbackExternalMessageId("UID 42/ABC"), "pop3:uid_42_abc");
-  assert.equal(withPop3FallbackExternalMessageId(parsed, "UID 42/ABC").externalMessageId, "pop3:uid_42_abc");
-  assert.equal(withPop3FallbackExternalMessageId({ ...parsed, externalMessageId: "<provider@example.com>" }, "UID 43").externalMessageId, "<provider@example.com>");
-});
-
-await run("pop3 provider fetches recent raw messages through RETR by default", async () => {
-  const rawMessages = [
-    {
-      uid: "pop3-uid-1",
-      raw: [
-        "From: Buyer <buyer@example.com>",
-        "To: Sales <sales@example.com>",
-        "Subject: Older POP3",
-        "",
-        "Older message."
-      ].join("\r\n")
-    },
-    {
-      uid: "pop3-uid-2",
-      raw: [
-        "Message-ID: <pop3-message@example.com>",
-        "From: Buyer <buyer@example.com>",
-        "To: Sales <sales@example.com>",
-        "Subject: Newer POP3",
-        "Date: Sat, 20 Jun 2026 10:30:00 +0000",
-        "",
-        ".Newer message with a leading dot."
-      ].join("\r\n")
-    }
-  ];
-  const pop3 = await startFakePop3Server(rawMessages);
-  try {
-    const messages = await fetchRecentPop3Emails({
-      syncProtocol: "pop3",
-      pop3Host: "127.0.0.1",
-      pop3Port: pop3.port,
-      pop3Secure: false,
-      username: "sales@example.com",
-      password: "password"
-    }, 1);
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0].externalMessageId, "<pop3-message@example.com>");
-    assert.equal(messages[0].subject, "Newer POP3");
-    assert.equal(messages[0].bodyText, ".Newer message with a leading dot.");
-    assert.ok(pop3.commands().some((command) => /^RETR 2$/i.test(command)));
-    assert.ok(!pop3.commands().some((command) => /^TOP /i.test(command)));
-    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 2);
-  } finally {
-    await pop3.close();
-  }
-});
-
-await run("pop3 provider allows slow streaming RETR responses while data is still arriving", async () => {
-  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
-  const pop3 = await startFakePop3Server(
-    [
-      {
-        uid: "pop3-slow-retr-uid",
-        raw: [
-          "Message-ID: <pop3-slow-retr@example.com>",
-          "From: Buyer <buyer@example.com>",
-          "To: Sales <sales@example.com>",
-          "Subject: Slow POP3 RETR",
-          "",
-          "This message is intentionally streamed in small chunks so the fetch takes longer than the configured timeout."
-        ].join("\r\n")
-      }
-    ],
-    { slowRetr: { chunkSize: 8, chunkDelayMs: 10 } }
-  );
-  try {
-    const messages = await fetchRecentPop3Emails({
-      syncProtocol: "pop3",
-      pop3Host: "127.0.0.1",
-      pop3Port: pop3.port,
-      pop3Secure: false,
-      username: "sales@example.com",
-      password: "password"
-    }, 1);
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0].subject, "Slow POP3 RETR");
-    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
-  } finally {
-    if (previousTimeout === undefined) {
-      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-    } else {
-      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
-    }
-    await pop3.close();
-  }
-});
-
-await run("pop3 provider falls back to TOP on a fresh connection when RETR times out", async () => {
-  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-  const previousFetchMode = process.env.MAIL_POP3_FETCH_MODE;
-  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
-  delete process.env.MAIL_POP3_FETCH_MODE;
-  const pop3 = await startFakePop3Server(
-    [
-      {
-        uid: "pop3-retr-timeout-top-fallback-uid",
-        raw: [
-          "Message-ID: <pop3-retr-timeout-top-fallback@example.com>",
-          "From: Buyer <buyer@example.com>",
-          "To: Sales <sales@example.com>",
-          "Subject: RETR Timeout TOP Fallback",
-          "",
-          "This server hangs on RETR but returns TOP."
-        ].join("\r\n")
-      }
-    ],
-    { hangRetr: true }
-  );
-  try {
-    const messages = await fetchRecentPop3Emails({
-      syncProtocol: "pop3",
-      pop3Host: "127.0.0.1",
-      pop3Port: pop3.port,
-      pop3Secure: false,
-      username: "sales@example.com",
-      password: "password"
-    }, 1);
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0].subject, "RETR Timeout TOP Fallback");
-    assert.equal(messages[0].bodyText, "This server hangs on RETR but returns TOP.");
-    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
-    assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
-    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 3);
-  } finally {
-    if (previousTimeout === undefined) {
-      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-    } else {
-      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
-    }
-    if (previousFetchMode === undefined) {
-      delete process.env.MAIL_POP3_FETCH_MODE;
-    } else {
-      process.env.MAIL_POP3_FETCH_MODE = previousFetchMode;
-    }
-    await pop3.close();
-  }
-});
-
-await run("pop3 provider falls back to RETR on a fresh connection when TOP times out", async () => {
-  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-  const previousFetchMode = process.env.MAIL_POP3_FETCH_MODE;
-  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
-  process.env.MAIL_POP3_FETCH_MODE = "top";
-  const pop3 = await startFakePop3Server(
-    [
-      {
-        uid: "pop3-timeout-uid",
-        raw: [
-          "Message-ID: <pop3-timeout@example.com>",
-          "From: Buyer <buyer@example.com>",
-          "To: Sales <sales@example.com>",
-          "Subject: Timeout POP3",
-          "",
-          "Large message body."
-        ].join("\r\n")
-      }
-    ],
-    { hangTop: true }
-  );
-  try {
-    const messages = await fetchRecentPop3Emails({
-      syncProtocol: "pop3",
-      pop3Host: "127.0.0.1",
-      pop3Port: pop3.port,
-      pop3Secure: false,
-      username: "sales@example.com",
-      password: "password"
-    }, 1);
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0].subject, "Timeout POP3");
-    assert.equal(messages[0].bodyText, "Large message body.");
-    assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
-    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
-    assert.ok(pop3.commands().some((command) => /^STAT$/i.test(command)));
-    assert.equal(pop3.commands().filter((command) => /^USER\b/i.test(command)).length, 3);
-  } finally {
-    if (previousTimeout === undefined) {
-      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-    } else {
-      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
-    }
-    if (previousFetchMode === undefined) {
-      delete process.env.MAIL_POP3_FETCH_MODE;
-    } else {
-      process.env.MAIL_POP3_FETCH_MODE = previousFetchMode;
-    }
-    await pop3.close();
-  }
-});
-
-await run("pop3 provider skips one timed-out message and continues with later messages", async () => {
-  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-  const previousFetchMode = process.env.MAIL_POP3_FETCH_MODE;
-  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
-  delete process.env.MAIL_POP3_FETCH_MODE;
-  const pop3 = await startFakePop3Server(
-    [
-      {
-        uid: "pop3-skipped-timeout-uid",
-        raw: [
-          "Message-ID: <pop3-skipped-timeout@example.com>",
-          "From: Buyer <buyer@example.com>",
-          "To: Sales <sales@example.com>",
-          "Subject: Timeout POP3 skipped",
-          "",
-          "This message never finishes."
-        ].join("\r\n")
-      },
-      {
-        uid: "pop3-after-skipped-timeout-uid",
-        raw: [
-          "Message-ID: <pop3-after-skipped-timeout@example.com>",
-          "From: Buyer <buyer@example.com>",
-          "To: Sales <sales@example.com>",
-          "Subject: POP3 after skipped timeout",
-          "",
-          "This message should still be imported."
-        ].join("\r\n")
-      }
-    ],
-    { hangRetrMessages: ["1"], hangTopMessages: ["1"] }
-  );
-  try {
-    const messages = await fetchRecentPop3Emails({
-      syncProtocol: "pop3",
-      pop3Host: "127.0.0.1",
-      pop3Port: pop3.port,
-      pop3Secure: false,
-      username: "sales@example.com",
-      password: "password"
-    }, 2);
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0].subject, "POP3 after skipped timeout");
-    assert.ok(pop3.commands().some((command) => /^RETR 1$/i.test(command)));
-    assert.ok(pop3.commands().some((command) => /^TOP 1 \d+$/i.test(command)));
-    assert.ok(pop3.commands().some((command) => /^RETR 2$/i.test(command)));
-  } finally {
-    if (previousTimeout === undefined) {
-      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-    } else {
-      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
-    }
-    if (previousFetchMode === undefined) {
-      delete process.env.MAIL_POP3_FETCH_MODE;
-    } else {
-      process.env.MAIL_POP3_FETCH_MODE = previousFetchMode;
-    }
-    await pop3.close();
-  }
-});
-
-await run("email provider records inbound POP3 endpoint on sync timeout", async () => {
-  const previousTimeout = process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-  process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = "25";
-  const pop3 = await startFakePop3Server(
-    [
-      {
-        uid: "pop3-status-timeout-uid",
-        raw: [
-          "Message-ID: <pop3-status-timeout@example.com>",
-          "From: Buyer <buyer@example.com>",
-          "To: Sales <sales@example.com>",
-          "Subject: Timeout POP3 status",
-          "",
-          "Large message body."
-        ].join("\r\n")
-      }
-    ],
-    { hangTop: true, hangRetr: true }
-  );
-  const account = {
-    id: "pop3-status-timeout-account",
-    workspaceId: defaultWorkspaceId,
-    name: "POP3 Status Timeout",
-    emailAddress: "sales@example.com",
-    provider: "smtp_imap",
-    status: "active",
-    syncEnabled: true,
-    sendEnabled: false,
-    connectionConfigured: true,
-    createdById: "user-admin",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-  let connectionError;
-  let syncError;
-  const fakeRepository = {
-    async getEmailAccount() {
-      return account;
-    },
-    async getEmailAccountConnectionConfig() {
-      return {
-        inbound: {
-          syncProtocol: "pop3",
-          pop3Host: "127.0.0.1",
-          pop3Port: pop3.port,
-          pop3Secure: false,
-          username: "sales@example.com",
-          password: "password"
-        }
-      };
-    },
-    async markEmailAccountSyncRunning() {},
-    async markEmailAccountSyncFailed(_context, accountId, errorMessage) {
-      assert.equal(accountId, account.id);
-      syncError = errorMessage;
-    },
-    async markEmailAccountConnectionError(_context, accountId, errorMessage) {
-      assert.equal(accountId, account.id);
-      connectionError = errorMessage;
-      return { ...account, status: errorMessage ? "error" : "active", lastConnectionError: errorMessage ?? undefined };
-    },
-    async findEmailMessageByExternalId() {
-      return undefined;
-    },
-    async recordEmailMessage() {
-      throw new Error("POP3 timeout should happen before import");
-    }
-  };
-  const adapter = createEmailProviderAdapter(fakeRepository);
-  const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
-  try {
-    await assert.rejects(() => adapter.sync(context, account.id), /POP3 RETR failed: Mail server response timed out/);
-    assert.match(connectionError, new RegExp(`POP3 RETR failed: Mail server response timed out.*\\[inbound POP3 127\\.0\\.0\\.1:${pop3.port} plain\\]`));
-    assert.equal(syncError, connectionError);
-    assert.equal(connectionError.includes("password"), false);
-    assert.equal(connectionError.includes("sales@example.com"), false);
-  } finally {
-    if (previousTimeout === undefined) {
-      delete process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS;
-    } else {
-      process.env.MAIL_FETCH_RESPONSE_TIMEOUT_MS = previousTimeout;
-    }
-    await pop3.close();
   }
 });
 

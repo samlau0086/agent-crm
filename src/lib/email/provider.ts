@@ -3,13 +3,16 @@ import type { EmailAccount, EmailAttachment, EmailConnectionConfig, EmailMessage
 import type { PrismaCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { assertEmailDeliveryModeAllowed, getEmailDeliveryMode } from "@/lib/email/delivery-mode";
-import { fetchRecentMailboxEmails, sendSmtpEmail, testMailConnection, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
+import { fetchRecentMailboxEmailBatch, sendSmtpEmail, testMailConnection, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import { sendResendEmail } from "@/lib/email/resend";
 import { assertOAuthConfig, isOAuthProvider } from "@/lib/email/oauth";
 import { fetchRecentOAuthEmails, sendOAuthEmail, testOAuthConnection, type OAuthMailApiOptions } from "@/lib/email/oauth-api";
 import { assertOutboundEmailRecipientPolicy } from "@/lib/email/outbound-policy";
 import { getEmailProviderCapability } from "@/lib/email/providers";
+
+const DEFAULT_EMAIL_SYNC_JOB_TIMEOUT_MS = 9 * 60 * 1000;
+const MAX_EMAIL_SYNC_JOB_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface EmailSendInput {
   accountId: string;
@@ -69,7 +72,7 @@ export function createEmailProviderAdapter(repository: PrismaCrmRepository, opti
   return new RepositoryEmailProviderAdapter(repository, options);
 }
 
-type EmailSyncCounters = Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount">;
+type EmailSyncCounters = Pick<EmailSyncResult, "importedCount" | "scannedCount" | "skippedDuplicateCount"> & Pick<EmailAccount, "imapUidValidity" | "imapLastSeenUid">;
 
 type RepositoryEmailSyncStatusMethods = {
   markEmailAccountSyncRunning?: (context: RequestContext, accountId: string) => Promise<EmailAccount> | EmailAccount;
@@ -172,6 +175,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
     assertProviderSupports(account, "sync");
     const syncLimit = normalizeEmailSyncLimit(limit ?? this.options.oauth?.limit);
+    const syncDeadlineAt = Date.now() + getEmailSyncJobTimeoutMs();
     await this.markSyncRunning(context, accountId);
     if (isOAuthProvider(account.provider)) {
       const config = await this.getOAuthProviderConfig(context, account);
@@ -204,11 +208,19 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
 
     try {
-      const inbound = await fetchRecentMailboxEmails(config, syncLimit);
-      const importResult = await this.importInboundMessages(context, account, inbound);
+      const inbound = await fetchRecentMailboxEmailBatch(config, syncLimit, {
+        deadlineAt: syncDeadlineAt,
+        imapUidValidity: account.imapUidValidity,
+        imapLastSeenUid: account.imapLastSeenUid
+      });
+      const importResult = await this.importInboundMessages(context, account, inbound.messages);
       await this.repository.markEmailAccountConnectionError(context, accountId, null);
-      const syncedAccount = await this.markSyncCompleted(context, accountId, importResult);
-      return { account: syncedAccount, ...importResult, hasMore: inbound.length >= syncLimit, status: "synced" };
+      const syncedAccount = await this.markSyncCompleted(context, accountId, {
+        ...importResult,
+        imapUidValidity: inbound.imapUidValidity,
+        imapLastSeenUid: inbound.imapLastSeenUid
+      });
+      return { account: syncedAccount, ...importResult, hasMore: inbound.hasMore ?? inbound.messages.length >= syncLimit, status: "synced" };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Mailbox sync failed";
       const statusMessage = withInboundEndpointContext(message, config);
@@ -260,7 +272,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         const result = await testOAuthConnection(account.provider, config, this.options.oauth);
         await this.repository.updateEmailAccountConnectionConfig(context, accountId, result.config);
         const updated = await this.repository.markEmailAccountConnectionError(context, accountId, null);
-        return { account: updated, result: { oauth: "ok", smtp: "skipped", imap: "skipped", pop3: "skipped", oauthAccountEmail: result.accountEmail } };
+        return { account: updated, result: { oauth: "ok", smtp: "skipped", imap: "skipped", oauthAccountEmail: result.accountEmail } };
       } catch (error) {
         const message = error instanceof Error ? error.message : "OAuth connection test failed";
         const updated = await this.repository.markEmailAccountConnectionError(context, accountId, message);
@@ -411,6 +423,14 @@ function normalizeEmailSyncLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(100, Math.floor(limit ?? 10)));
 }
 
+function getEmailSyncJobTimeoutMs(): number {
+  const parsed = Number.parseInt(process.env.EMAIL_SYNC_JOB_TIMEOUT_MS ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_EMAIL_SYNC_JOB_TIMEOUT_MS;
+  }
+  return Math.min(parsed, MAX_EMAIL_SYNC_JOB_TIMEOUT_MS);
+}
+
 function withInboundEndpointContext(message: string, config: EmailConnectionConfig): string {
   const endpoint = describeInboundEndpoint(config);
   if (!endpoint || message.includes(endpoint)) {
@@ -421,18 +441,17 @@ function withInboundEndpointContext(message: string, config: EmailConnectionConf
 
 function describeInboundEndpoint(config: EmailConnectionConfig): string | undefined {
   const inbound = getInboundConnectionConfig(config);
-  const protocol = inbound.syncProtocol === "pop3" ? "POP3" : "IMAP";
-  const host = protocol === "POP3" ? inbound.pop3Host : inbound.imapHost;
-  const port = protocol === "POP3" ? inbound.pop3Port : inbound.imapPort;
-  const secure = protocol === "POP3" ? inbound.pop3Secure : inbound.imapSecure;
+  const host = inbound.imapHost;
+  const port = inbound.imapPort;
+  const secure = inbound.imapSecure;
   if (!host && !port) {
-    return `${protocol} host not configured`;
+    return "IMAP host not configured";
   }
   const hostText = host ?? "host not configured";
   const portText = port ? `:${port}` : "";
   const securityText = secure === false ? "plain" : "TLS";
-  const mailboxText = protocol === "IMAP" && inbound.mailbox ? ` mailbox=${inbound.mailbox}` : "";
-  return `${protocol} ${hostText}${portText} ${securityText}${mailboxText}`;
+  const mailboxText = inbound.mailbox ? ` mailbox=${inbound.mailbox}` : "";
+  return `IMAP ${hostText}${portText} ${securityText}${mailboxText}`;
 }
 
 function ensureEmailSendMessageId(input: EmailSendInput): EmailSendInput {

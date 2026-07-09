@@ -199,6 +199,8 @@ export interface EmailAccount {
   lastSyncImportedCount?: number;
   lastSyncSkippedDuplicateCount?: number;
   lastSyncError?: string;
+  imapUidValidity?: string;
+  imapLastSeenUid?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -225,13 +227,10 @@ export interface EmailConnectionConfig {
   smtpPort?: number;
   smtpSecure?: boolean;
   smtpStartTls?: boolean;
-  syncProtocol?: "imap" | "pop3";
+  syncProtocol?: "imap";
   imapHost?: string;
   imapPort?: number;
   imapSecure?: boolean;
-  pop3Host?: string;
-  pop3Port?: number;
-  pop3Secure?: boolean;
   username?: string;
   password?: string;
   mailbox?: string;
@@ -244,13 +243,10 @@ export interface EmailConnectionConfig {
 }
 
 export interface EmailInboundConnectionConfig {
-  syncProtocol?: "imap" | "pop3";
+  syncProtocol?: "imap";
   imapHost?: string;
   imapPort?: number;
   imapSecure?: boolean;
-  pop3Host?: string;
-  pop3Port?: number;
-  pop3Secure?: boolean;
   username?: string;
   password?: string;
   mailbox?: string;

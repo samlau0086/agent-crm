@@ -57,6 +57,9 @@ function validateEnv(values) {
   if (values.EMAIL_SYNC_LIMIT?.trim() && !isIntegerInRange(values.EMAIL_SYNC_LIMIT, 1, 100)) {
     errors.push("EMAIL_SYNC_LIMIT must be an integer between 1 and 100.");
   }
+  if (values.EMAIL_SYNC_JOB_TIMEOUT_MS?.trim() && !isPositiveInteger(values.EMAIL_SYNC_JOB_TIMEOUT_MS)) {
+    errors.push("EMAIL_SYNC_JOB_TIMEOUT_MS must be a positive integer.");
+  }
   if (values.EMAIL_SEND_CLAIM_TIMEOUT_MS?.trim() && !isPositiveInteger(values.EMAIL_SEND_CLAIM_TIMEOUT_MS)) {
     errors.push("EMAIL_SEND_CLAIM_TIMEOUT_MS must be a positive integer.");
   }

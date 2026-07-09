@@ -34,13 +34,13 @@ export type OAuthEmailProviderCapability = EmailProviderCapability & {
 export const emailProviderCapabilities = {
   smtp_imap: {
     key: "smtp_imap",
-    label: "SMTP/IMAP/POP3",
+    label: "SMTP/IMAP",
     connectionKind: "smtp_imap",
     supportsSend: true,
     supportsSync: true,
     supportsAttachments: true,
     supportsOAuth: false,
-    description: "Standards-based mailbox adapter using SMTP for sending and IMAP or POP3 for sync."
+    description: "Standards-based mailbox adapter using SMTP for sending and IMAP for sync."
   },
   gmail: {
     key: "gmail",

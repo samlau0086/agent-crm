@@ -142,11 +142,10 @@ GitHub Actions Variables：
 - `POSTGRES_USER`：默认 `crm`。
 - `POSTGRES_DB`：默认 `ai_agent_crm`。
 - `ALLOW_INSECURE_APP_BASE_URL`：直接用 `http://ip:port` 部署时可设为 `true`；HTTPS 域名部署建议为 `false`。
-- `SEED_ON_EMPTY`、`EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SYNC_USER_ID`、`EMAIL_VERIFY_USER_ID`、`EMAIL_SEND_CLAIM_TIMEOUT_MS`、`MAIL_CONNECT_TIMEOUT_MS`、`MAIL_RESPONSE_TIMEOUT_MS`、`MAIL_FETCH_RESPONSE_TIMEOUT_MS`、`MAIL_IMAP_FETCH_BYTES`、`MAIL_POP3_FETCH_MODE`、`MAIL_POP3_TOP_LINES`、`AI_PROVIDER`、`AI_BASE_URL`、`AI_MODEL`、`AI_TIMEOUT_MS`、`GMAIL_OAUTH_SCOPE`、`OUTLOOK_OAUTH_SCOPE`：按需覆盖默认值。
+- `SEED_ON_EMPTY`、`EMAIL_DELIVERY_MODE`、`EMAIL_SYNC_INTERVAL_MS`、`EMAIL_SYNC_LIMIT`、`EMAIL_SYNC_USER_ID`、`EMAIL_SYNC_JOB_TIMEOUT_MS`、`EMAIL_VERIFY_USER_ID`、`EMAIL_SEND_CLAIM_TIMEOUT_MS`、`MAIL_CONNECT_TIMEOUT_MS`、`MAIL_RESPONSE_TIMEOUT_MS`、`MAIL_FETCH_RESPONSE_TIMEOUT_MS`、`MAIL_IMAP_FETCH_BYTES`、`AI_PROVIDER`、`AI_BASE_URL`、`AI_MODEL`、`AI_TIMEOUT_MS`、`GMAIL_OAUTH_SCOPE`、`OUTLOOK_OAUTH_SCOPE`：按需覆盖默认值。
 - `MAIL_IMAP_FETCH_BYTES`：IMAP 同步时单封邮件最多拉取的原始字节数，默认 `262144`，最大 `5000000`。邮箱服务响应慢或邮件附件较大导致同步超时时，可以先保持较小值让列表和正文先同步；需要更完整正文时再适当调大。
-- `MAIL_FETCH_RESPONSE_TIMEOUT_MS`：IMAP `FETCH` 和 POP3 `TOP/RETR` 拉取正文的空闲超时，默认 `60000`；只要服务器持续返回数据就不会中断，如果超过该时间没有任何数据才会失败。
-- `MAIL_POP3_FETCH_MODE`：POP3 同步默认使用 `retr` 拉取完整邮件；可设置为 `top` 先尝试 `TOP` 预览，再在服务端不支持 `TOP` 或超时时回退 `RETR`。
-- `MAIL_POP3_TOP_LINES`：仅在 `MAIL_POP3_FETCH_MODE=top` 时生效，控制 `TOP` 拉取每封邮件 headers 和前 N 行正文，默认 `500`，最大 `10000`。
+- `MAIL_FETCH_RESPONSE_TIMEOUT_MS`：IMAP `FETCH` 拉取正文的空闲超时，默认 `60000`；只要服务器持续返回数据就不会中断，如果超过该时间没有任何数据才会失败。
+- `EMAIL_SYNC_JOB_TIMEOUT_MS`：单个邮箱账号一轮同步的总时限，默认 `540000`（9 分钟），最大 `1800000`。该值应小于前端/调度器的 stale 判定窗口，避免慢邮箱把状态长期卡在 running。
 - `EMAIL_VERIFY_USER_ID`：部署后 `email:verify` 优先使用的管理员用户 ID，默认跟随 `EMAIL_SYNC_USER_ID`，再尝试 `user-admin`；如果该用户不存在，脚本会自动回退到第一个 active `crm.admin` 用户。全新空库可临时设置 `SEED_ON_EMPTY=true` 初始化演示管理员，随后改回 `false`。
 - `RUN_EMAIL_CONNECTION_TESTS`、`RUN_EMAIL_AI_PROVIDER_TEST`、`RUN_EMAIL_SMOKE_TEST`：设为 `true` 时，每次自动部署都会在 VPS 的 `web` 容器内运行对应的 `email:verify` 真实邮箱、AI provider 或应用 smoke 检查。手动运行 workflow 时，也可以用 `run_email_connections`、`run_email_ai_provider`、`run_email_smoke` 输入临时开启。
 - `REQUIRE_LIVE_EMAIL_READINESS`：设为 `true` 时，自动部署会追加 `email:verify --require-live-readiness`，并自动运行真实邮箱连接、AI provider 生成和 smoke 检查；只有 `readiness.liveTrafficReady=true` 才算成功。启用它后不需要再单独设置上面三个 `RUN_EMAIL_*` 变量。

@@ -357,7 +357,7 @@ type EmailConnectionTestRun = {
     account: EmailAccount;
     ok: boolean;
     skipped: boolean;
-    result?: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string };
+    result?: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string };
     reason?: string;
     error?: string;
   }>;
@@ -391,13 +391,10 @@ type EmailAccountDraft = {
   defaultSignatureId: string;
   defaultOutboundServiceId: string;
   outboundServices: EmailAccountDraftOutboundService[];
-  syncProtocol: "imap" | "pop3";
+  syncProtocol: "imap";
   imapHost: string;
   imapPort: string;
   imapSecure: boolean;
-  pop3Host: string;
-  pop3Port: string;
-  pop3Secure: boolean;
   username: string;
   password: string;
   mailbox: string;
@@ -1536,9 +1533,6 @@ function createEmptyEmailAccountDraft(overrides: Partial<EmailAccountDraft> = {}
     imapHost: "",
     imapPort: "993",
     imapSecure: true,
-    pop3Host: "",
-    pop3Port: "995",
-    pop3Secure: true,
     username: "",
     password: "",
     mailbox: "INBOX",
@@ -1583,9 +1577,6 @@ function createEmailAccountEditDraft(account: EmailAccount, config?: SanitizedEm
     imapHost: inbound?.imapHost ?? "",
     imapPort: inbound?.imapPort ? String(inbound.imapPort) : "993",
     imapSecure: inbound?.imapSecure ?? true,
-    pop3Host: inbound?.pop3Host ?? "",
-    pop3Port: inbound?.pop3Port ? String(inbound.pop3Port) : "995",
-    pop3Secure: inbound?.pop3Secure ?? true,
     username: inbound?.username ?? "",
     password: "",
     mailbox: inbound?.mailbox ?? "INBOX",
@@ -4406,13 +4397,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function testEmailConnection(accountId: string, options: { scope?: EmailConnectionTestScope; outboundServiceId?: string } = {}) {
-    const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; pop3?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
+    const result = await fetchJson<{ account: EmailAccount; result: { smtp?: "ok" | "skipped"; imap?: "ok" | "skipped"; resend?: "ok" | "skipped"; oauth?: "ok" | "skipped"; oauthAccountEmail?: string } }>("/api/email/test-connection", {
       method: "POST",
       body: { accountId, ...options }
     });
     setEmailAccounts((current) => [result.account, ...current.filter((candidate) => candidate.id !== result.account.id)]);
     const scopeLabel = options.scope === "inbound" ? "收件连接" : options.scope === "outbound" ? "发件服务" : "邮箱连接";
-    setMessage(`${scopeLabel}测试完成：SMTP ${result.result.smtp ?? "skipped"}，Resend ${result.result.resend ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，POP3 ${result.result.pop3 ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
+    setMessage(`${scopeLabel}测试完成：SMTP ${result.result.smtp ?? "skipped"}，Resend ${result.result.resend ?? "skipped"}，IMAP ${result.result.imap ?? "skipped"}，OAuth ${result.result.oauth ?? "skipped"}${result.result.oauthAccountEmail ? `（${result.result.oauthAccountEmail}）` : ""}`);
   }
 
   async function testAllEmailConnections() {
@@ -9663,9 +9654,6 @@ function EmailWorkspace({
             imapHost: "",
             imapPort: "993",
             imapSecure: true,
-            pop3Host: "",
-            pop3Port: "995",
-            pop3Secure: true,
             username: "",
             password: "",
             mailbox: "INBOX"
@@ -9783,7 +9771,7 @@ function EmailWorkspace({
 
   const emailSettingsSteps: Array<{ key: EmailSettingsStep; label: string; description: string }> = [
     { key: "identity", label: "基础信息", description: "账户身份与 Provider" },
-    { key: "inbound", label: "收件配置", description: "IMAP、POP3 或 OAuth" },
+    { key: "inbound", label: "收件配置", description: "IMAP 或 OAuth" },
     { key: "outbound", label: "发件服务", description: "SMTP、Resend 与默认服务" },
     { key: "review", label: "检查启用", description: "保存、测试与同步" }
   ];
@@ -9921,7 +9909,7 @@ function EmailWorkspace({
               <div className="toolbar between">
                 <div>
                   <strong>收件配置</strong>
-                  <div className="subtle">IMAP/POP3 的用户名和密码只用于收件同步，可以与发件服务凭据不同。</div>
+                  <div className="subtle">IMAP 的用户名和密码只用于收件同步，可以与发件服务凭据不同。</div>
                 </div>
                 {editingEmailAccount ? (
                   <button
@@ -9938,48 +9926,17 @@ function EmailWorkspace({
               </div>
             </div>
             <label>
-              <span className="subtle">收信协议</span>
-              <select
-                className="select"
-                data-testid="email-account-sync-protocol"
-                value={accountDraft.syncProtocol}
-                onChange={(event) => onAccountDraftChange({ ...accountDraft, syncProtocol: event.target.value as "imap" | "pop3" })}
-              >
-                <option value="imap">IMAP</option>
-                <option value="pop3">POP3</option>
-              </select>
+              <span className="subtle">IMAP Host</span>
+              <input className="input" data-testid="email-account-imap-host" value={accountDraft.imapHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapHost: event.target.value })} />
             </label>
-            {accountDraft.syncProtocol === "imap" ? (
-              <>
-                <label>
-                  <span className="subtle">IMAP Host</span>
-                  <input className="input" data-testid="email-account-imap-host" value={accountDraft.imapHost} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapHost: event.target.value })} />
-                </label>
-                <label>
-                  <span className="subtle">IMAP Port</span>
-                  <input className="input" type="number" value={accountDraft.imapPort} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapPort: event.target.value })} />
-                </label>
-                <label className="settings-toggle">
-                  <input type="checkbox" checked={accountDraft.imapSecure} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapSecure: event.target.checked })} />
-                  IMAP TLS
-                </label>
-              </>
-            ) : (
-              <>
-                <label>
-                  <span className="subtle">POP3 Host</span>
-                  <input className="input" data-testid="email-account-pop3-host" value={accountDraft.pop3Host} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Host: event.target.value })} />
-                </label>
-                <label>
-                  <span className="subtle">POP3 Port</span>
-                  <input className="input" type="number" value={accountDraft.pop3Port} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Port: event.target.value })} />
-                </label>
-                <label className="settings-toggle">
-                  <input type="checkbox" checked={accountDraft.pop3Secure} onChange={(event) => onAccountDraftChange({ ...accountDraft, pop3Secure: event.target.checked })} />
-                  POP3 TLS
-                </label>
-              </>
-            )}
+            <label>
+              <span className="subtle">IMAP Port</span>
+              <input className="input" type="number" value={accountDraft.imapPort} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapPort: event.target.value })} />
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={accountDraft.imapSecure} onChange={(event) => onAccountDraftChange({ ...accountDraft, imapSecure: event.target.checked })} />
+              IMAP TLS
+            </label>
             <label>
               <span className="subtle">收件用户名</span>
               <input className="input" data-testid="email-account-inbound-username" value={accountDraft.username} onChange={(event) => onAccountDraftChange({ ...accountDraft, username: event.target.value })} />
@@ -9988,12 +9945,10 @@ function EmailWorkspace({
               <span className="subtle">收件密码/应用密码</span>
               <input className="input" data-testid="email-account-inbound-password" type="password" value={accountDraft.password} onChange={(event) => onAccountDraftChange({ ...accountDraft, password: event.target.value })} placeholder={accountDraft.editingAccountId ? "留空保留已保存密码" : undefined} />
             </label>
-            {accountDraft.syncProtocol === "imap" ? (
-              <label>
-                <span className="subtle">邮箱文件夹</span>
-                <input className="input" value={accountDraft.mailbox} onChange={(event) => onAccountDraftChange({ ...accountDraft, mailbox: event.target.value })} />
-              </label>
-            ) : null}
+            <label>
+              <span className="subtle">邮箱文件夹</span>
+              <input className="input" value={accountDraft.mailbox} onChange={(event) => onAccountDraftChange({ ...accountDraft, mailbox: event.target.value })} />
+            </label>
           </>
         ) : null}
         {selectedProviderSetupVisibility.showOAuthFields ? (
@@ -20876,7 +20831,6 @@ function formatEmailConnectionTestResult(entry: EmailConnectionTestRun["results"
     entry.result?.smtp ? `SMTP ${entry.result.smtp}` : undefined,
     entry.result?.resend ? `Resend ${entry.result.resend}` : undefined,
     entry.result?.imap ? `IMAP ${entry.result.imap}` : undefined,
-    entry.result?.pop3 ? `POP3 ${entry.result.pop3}` : undefined,
     entry.result?.oauth ? `OAuth ${entry.result.oauth}` : undefined,
     entry.result?.oauthAccountEmail ? `已授权 ${entry.result.oauthAccountEmail}` : undefined
   ].filter(Boolean);
@@ -20963,7 +20917,6 @@ function buildEmailConnectionConfig(draft: EmailAccountDraft) {
       service.resendApiKey
     ]),
     draft.imapHost,
-    draft.pop3Host,
     draft.username,
     draft.password,
     draft.oauthAccessToken,
@@ -20992,9 +20945,6 @@ function buildEmailConnectionConfig(draft: EmailAccountDraft) {
       imapHost: draft.imapHost.trim() || undefined,
       imapPort: draft.imapPort ? Number(draft.imapPort) : undefined,
       imapSecure: draft.imapSecure,
-      pop3Host: draft.pop3Host.trim() || undefined,
-      pop3Port: draft.pop3Port ? Number(draft.pop3Port) : undefined,
-      pop3Secure: draft.pop3Secure,
       username: draft.username.trim() || undefined,
       password: draft.password || undefined,
       mailbox: draft.mailbox.trim() || "INBOX",

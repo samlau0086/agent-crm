@@ -32,7 +32,7 @@ import {
   type EmailAssistantPurpose
 } from "@/lib/email/assistant";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
-import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, normalizeEmailConnectionConfig } from "@/lib/email/connection-config";
+import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, getInboundConnectionConfig, normalizeEmailConnectionConfig } from "@/lib/email/connection-config";
 import { getEmailProviderCapability } from "@/lib/email/providers";
 import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } from "@/lib/email/tracking";
 import {
@@ -666,6 +666,8 @@ function mapEmailAccount(account: {
   lastSyncImportedCount?: number | null;
   lastSyncSkippedDuplicateCount?: number | null;
   lastSyncError?: string | null;
+  imapUidValidity?: string | null;
+  imapLastSeenUid?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): EmailAccount {
@@ -690,6 +692,8 @@ function mapEmailAccount(account: {
     lastSyncImportedCount: account.lastSyncImportedCount ?? undefined,
     lastSyncSkippedDuplicateCount: account.lastSyncSkippedDuplicateCount ?? undefined,
     lastSyncError: account.lastSyncError ?? undefined,
+    imapUidValidity: account.imapUidValidity ?? undefined,
+    imapLastSeenUid: account.imapLastSeenUid ?? undefined,
     createdAt: account.createdAt.toISOString(),
     updatedAt: account.updatedAt.toISOString()
   };
@@ -2627,9 +2631,18 @@ export class PrismaCrmRepository {
     }
     data.syncEnabled = toggles.syncEnabled;
     data.sendEnabled = toggles.sendEnabled;
+    if (input.provider !== undefined && input.provider !== existing.provider) {
+      data.imapUidValidity = null;
+      data.imapLastSeenUid = null;
+    }
     if (input.connectionConfig) {
       const existingConfig = await this.getEmailAccountConnectionConfig(context, existing.id);
-      data.encryptedConnectionConfig = encryptEmailConnectionConfig(mergeEmailConnectionConfigSecrets(existingConfig, input.connectionConfig));
+      const mergedConfig = mergeEmailConnectionConfigSecrets(existingConfig, input.connectionConfig);
+      if (shouldResetImapSyncCursor(existing.provider, existingConfig, mergedConfig)) {
+        data.imapUidValidity = null;
+        data.imapLastSeenUid = null;
+      }
+      data.encryptedConnectionConfig = encryptEmailConnectionConfig(mergedConfig);
       data.lastConnectionError = null;
       if (input.status === undefined && existing.status === "draft") {
         data.status = "active";
@@ -2638,6 +2651,8 @@ export class PrismaCrmRepository {
     if (input.clearConnectionConfig) {
       data.encryptedConnectionConfig = null;
       data.lastConnectionError = null;
+      data.imapUidValidity = null;
+      data.imapLastSeenUid = null;
       if (input.status === undefined) {
         data.status = "draft";
       }
@@ -3470,7 +3485,7 @@ export class PrismaCrmRepository {
   async markEmailAccountSyncCompleted(
     context: RequestContext,
     accountId: string,
-    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number }
+    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number; imapUidValidity?: string; imapLastSeenUid?: string }
   ): Promise<EmailAccount> {
     requirePermission(context, "crm.admin");
     const account = await this.assertEmailAccount(context, accountId);
@@ -3486,7 +3501,9 @@ export class PrismaCrmRepository {
         lastSyncScannedCount: result.scannedCount ?? result.importedCount,
         lastSyncImportedCount: result.importedCount,
         lastSyncSkippedDuplicateCount: result.skippedDuplicateCount ?? 0,
-        lastSyncError: null
+        lastSyncError: null,
+        ...(result.imapUidValidity !== undefined ? { imapUidValidity: result.imapUidValidity } : {}),
+        ...(result.imapLastSeenUid !== undefined ? { imapLastSeenUid: result.imapLastSeenUid } : {})
       }
     });
     await this.writeAuditLog(context, "update", "email_account", account.id, {
@@ -3535,12 +3552,14 @@ export class PrismaCrmRepository {
   async updateEmailAccountConnectionConfig(context: RequestContext, accountId: string, config: EmailConnectionConfig): Promise<EmailAccount> {
     requirePermission(context, "crm.write");
     const existing = await this.assertEmailAccount(context, accountId);
+    const existingConfig = await this.getEmailAccountConnectionConfig(context, existing.id);
     const account = await this.db.emailAccount.update({
       where: { id: accountId },
       data: {
         encryptedConnectionConfig: encryptEmailConnectionConfig(config),
         lastConnectionError: null,
-        status: "active"
+        status: "active",
+        ...(shouldResetImapSyncCursor(existing.provider, existingConfig, config) ? { imapUidValidity: null, imapLastSeenUid: null } : {})
       }
     });
     if (existing.status !== "active" || existing.lastConnectionError) {
@@ -10831,6 +10850,34 @@ function normalizeEmailAccountToggles(provider: EmailAccount["provider"], toggle
     syncEnabled: capability.supportsSync ? toggles.syncEnabled : false,
     sendEnabled: capability.supportsSend ? toggles.sendEnabled : false
   };
+}
+
+function shouldResetImapSyncCursor(provider: EmailAccount["provider"], currentConfig: EmailConnectionConfig | undefined, nextConfig: EmailConnectionConfig): boolean {
+  if (provider !== "smtp_imap") {
+    return true;
+  }
+  if (!currentConfig) {
+    return false;
+  }
+  const current = getInboundConnectionConfig(currentConfig);
+  const next = getInboundConnectionConfig(nextConfig);
+  const currentEndpoint = [
+    current.syncProtocol ?? "imap",
+    current.imapHost ?? "",
+    current.imapPort ?? "",
+    current.imapSecure === false ? "plain" : "tls",
+    current.mailbox ?? "INBOX",
+    current.username ?? ""
+  ].join("|");
+  const nextEndpoint = [
+    next.syncProtocol ?? "imap",
+    next.imapHost ?? "",
+    next.imapPort ?? "",
+    next.imapSecure === false ? "plain" : "tls",
+    next.mailbox ?? "INBOX",
+    next.username ?? ""
+  ].join("|");
+  return currentEndpoint !== nextEndpoint;
 }
 
 function normalizeEmailAiProviderError(value: string | undefined): string | undefined {

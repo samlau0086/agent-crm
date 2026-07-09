@@ -1,5 +1,7 @@
 import net from "node:net";
 import tls from "node:tls";
+import type { Readable } from "node:stream";
+import { ImapFlow } from "imapflow";
 import type { EmailAttachment, EmailConnectionConfig, EmailOutboundServiceConfig } from "@/lib/crm/types";
 import { MAX_EMAIL_ATTACHMENT_BYTES, normalizeEmailAttachmentBase64 } from "@/lib/email/attachments";
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
@@ -23,7 +25,6 @@ export interface InboundEmail {
 export interface MailConnectionTestResult {
   smtp?: "ok" | "skipped";
   imap?: "ok" | "skipped";
-  pop3?: "ok" | "skipped";
   resend?: "ok" | "skipped";
   oauth?: "ok" | "skipped";
   oauthAccountEmail?: string;
@@ -31,6 +32,19 @@ export interface MailConnectionTestResult {
 
 export interface MailSendResult {
   externalMessageId?: string;
+}
+
+export interface MailboxFetchOptions {
+  deadlineAt?: number;
+  imapUidValidity?: string;
+  imapLastSeenUid?: string;
+}
+
+export interface MailboxFetchResult {
+  messages: InboundEmail[];
+  hasMore?: boolean;
+  imapUidValidity?: string;
+  imapLastSeenUid?: string;
 }
 
 export interface SmtpTransportOptions {
@@ -45,10 +59,6 @@ const DEFAULT_MAIL_FETCH_RESPONSE_TIMEOUT_MS = 60000;
 const MAX_MAIL_TIMEOUT_MS = 300000;
 const DEFAULT_MAIL_IMAP_FETCH_BYTES = 262144;
 const MAX_MAIL_IMAP_FETCH_BYTES = 5000000;
-const DEFAULT_MAIL_POP3_TOP_LINES = 500;
-const MAX_MAIL_POP3_TOP_LINES = 10000;
-type Pop3FetchMode = "retr" | "top";
-const DEFAULT_MAIL_POP3_FETCH_MODE: Pop3FetchMode = "retr";
 
 export function resolveSmtpTransport(config: EmailConnectionConfig | EmailOutboundServiceConfig): SmtpTransportOptions {
   const startTls = config.smtpStartTls === true;
@@ -100,35 +110,21 @@ export async function testMailConnection(config: EmailConnectionConfig, options:
 
   const shouldTestSync = options.sync ?? options.imap ?? true;
   const inboundConfig = getInboundConnectionConfig(config);
-  const syncProtocol = resolveSyncProtocol(inboundConfig);
-  if (shouldTestSync && syncProtocol === "imap") {
+  if (shouldTestSync) {
     assertImapConfig(inboundConfig);
-    const imap = await ImapClient.connect(inboundConfig);
+    const imap = createImapFlowClient(inboundConfig);
     try {
-      await imap.command(`LOGIN "${escapeImap(inboundConfig.username ?? "")}" "${escapeImap(inboundConfig.password ?? "")}"`);
-      await imap.command(`SELECT "${escapeImap(inboundConfig.mailbox ?? "INBOX")}"`);
-      await imap.command("LOGOUT").catch(() => undefined);
+      await imap.connect();
+      await imap.mailboxOpen(inboundConfig.mailbox ?? "INBOX", { readOnly: true });
+      await imap.logout().catch(() => undefined);
       result.imap = "ok";
     } finally {
-      imap.close();
+      if (!result.imap) {
+        imap.close();
+      }
     }
-    result.pop3 = "skipped";
-  } else if (shouldTestSync && syncProtocol === "pop3") {
-    assertPop3Config(inboundConfig);
-    const pop3 = await Pop3Client.connect(inboundConfig);
-    try {
-      await pop3.command(`USER ${inboundConfig.username ?? ""}`);
-      await pop3.command(`PASS ${inboundConfig.password ?? ""}`);
-      await pop3.command("STAT");
-      await pop3.command("QUIT").catch(() => undefined);
-      result.pop3 = "ok";
-    } finally {
-      pop3.close();
-    }
-    result.imap = "skipped";
   } else {
     result.imap = "skipped";
-    result.pop3 = "skipped";
   }
   return result;
 }
@@ -154,214 +150,52 @@ export async function sendSmtpEmail(config: EmailConnectionConfig, input: EmailS
   }
 }
 
-export async function fetchRecentImapEmails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
+export async function fetchRecentImapEmails(config: EmailConnectionConfig, limit = 10, options: MailboxFetchOptions = {}): Promise<InboundEmail[]> {
+  return (await fetchRecentImapEmailBatch(config, limit, options)).messages;
+}
+
+export async function fetchRecentImapEmailBatch(config: EmailConnectionConfig, limit = 10, options: MailboxFetchOptions = {}): Promise<MailboxFetchResult> {
   assertImapConfig(config);
-  const client = await ImapClient.connect(config);
+  const client = createImapFlowClient(config, options);
   try {
-    await client.command(`LOGIN "${escapeImap(config.username ?? "")}" "${escapeImap(config.password ?? "")}"`);
-    const selectResponse = await client.command(`SELECT "${escapeImap(config.mailbox ?? "INBOX")}"`);
-    const messageCount = parseMailboxExists(selectResponse);
+    await client.connect();
+    const mailbox = await client.mailboxOpen(config.mailbox ?? "INBOX", { readOnly: true });
+    const messageCount = mailbox.exists;
     const safeLimit = normalizeMailboxFetchLimit(limit);
-    const startSequenceNumber = Math.max(1, messageCount - safeLimit + 1);
+    const uidValidity = mailbox.uidValidity?.toString();
     const fetchBytes = getMailImapFetchBytes();
+    const uidSearch = await resolveImapFetchUids(client, messageCount, safeLimit, uidValidity, options);
     const messages: InboundEmail[] = [];
-    for (let sequenceNumber = startSequenceNumber; sequenceNumber <= messageCount; sequenceNumber += 1) {
-      const raw = await client.command(`FETCH ${sequenceNumber} (UID BODY.PEEK[]<0.${fetchBytes}>)`, getMailFetchResponseTimeoutMs());
-      const parsed = parseFetchedMessage(raw);
-      const uid = parseFetchUid(raw) ?? `seq-${sequenceNumber}`;
+    let lastSeenUid = options.imapUidValidity === uidValidity ? normalizeImapUid(options.imapLastSeenUid) : undefined;
+    for (const uid of uidSearch.fetchUids) {
+      assertMailSyncDeadline(options);
+      const source = await downloadImapSource(client, uid, fetchBytes, options);
+      const fetchedUid = uid;
+      const parsed = source ? parseRawEmailMessage(source.toString("utf8")) : undefined;
       if (parsed) {
-        messages.push(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", uid));
+        messages.push(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", fetchedUid));
       }
+      lastSeenUid = maxImapUid(lastSeenUid, fetchedUid);
     }
-    await client.command("LOGOUT").catch(() => undefined);
-    return messages;
+    await client.logout().catch(() => undefined);
+    return {
+      messages,
+      hasMore: uidSearch.hasMore,
+      ...(uidValidity ? { imapUidValidity: uidValidity } : {}),
+      ...(lastSeenUid ? { imapLastSeenUid: lastSeenUid } : {})
+    };
   } finally {
     client.close();
   }
 }
 
-export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
+export async function fetchRecentMailboxEmails(config: EmailConnectionConfig, limit = 10, options: MailboxFetchOptions = {}): Promise<InboundEmail[]> {
+  return (await fetchRecentMailboxEmailBatch(config, limit, options)).messages;
+}
+
+export async function fetchRecentMailboxEmailBatch(config: EmailConnectionConfig, limit = 10, options: MailboxFetchOptions = {}): Promise<MailboxFetchResult> {
   const inboundConfig = getInboundConnectionConfig(config);
-  return resolveSyncProtocol(inboundConfig) === "pop3" ? fetchRecentPop3Emails(inboundConfig, limit) : fetchRecentImapEmails(inboundConfig, limit);
-}
-
-export async function fetchRecentPop3Emails(config: EmailConnectionConfig, limit = 10): Promise<InboundEmail[]> {
-  assertPop3Config(config);
-  const client = await Pop3Client.connect(config);
-  try {
-    await client.command(`USER ${config.username ?? ""}`);
-    await client.command(`PASS ${config.password ?? ""}`);
-    const list = await client.command("LIST");
-    const messageEntries = parsePop3ListEntries(list).slice(-limit);
-    const uidlMap = await client.command("UIDL").then(parsePop3Uidl).catch(() => new Map<string, string>());
-    await client.command("QUIT").catch(() => undefined);
-    client.close();
-
-    const messages: InboundEmail[] = [];
-    const skippedFetchErrors: string[] = [];
-    const preferredFetchMode = getMailPop3FetchMode();
-    for (const messageEntry of messageEntries) {
-      const messageNumber = messageEntry.number;
-      const fetchResult = await fetchPop3MessageWithFallback(config, messageEntry, preferredFetchMode);
-      if (!fetchResult.raw) {
-        skippedFetchErrors.push(fetchResult.errorMessage ?? `POP3 message ${messageNumber} fetch failed`);
-        continue;
-      }
-      const parsed = parsePop3Message(fetchResult.raw);
-      if (parsed) {
-        messages.push(withPop3FallbackExternalMessageId(parsed, uidlMap.get(messageNumber) ?? messageNumber));
-      }
-    }
-    if (messages.length === 0 && skippedFetchErrors.length > 0) {
-      throw new Error(skippedFetchErrors[0]);
-    }
-    return messages;
-  } finally {
-    client.close();
-  }
-}
-
-type Pop3ListEntry = {
-  number: string;
-  size?: number;
-};
-
-type Pop3MessageFetchResult = {
-  raw?: string;
-  errorMessage?: string;
-};
-
-async function fetchPop3MessageWithFallback(
-  config: EmailConnectionConfig,
-  messageEntry: Pop3ListEntry,
-  preferredFetchMode: "retr" | "top"
-): Promise<Pop3MessageFetchResult> {
-  if (preferredFetchMode === "top") {
-    return fetchPop3MessageWithTopFallback(config, messageEntry);
-  }
-  return fetchPop3MessageWithRetrFallback(config, messageEntry);
-}
-
-async function fetchPop3MessageWithRetrFallback(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<Pop3MessageFetchResult> {
-  try {
-    return { raw: await fetchPop3MessageByRetr(config, messageEntry) };
-  } catch (retrError) {
-    if (!isPop3RetrTimeout(retrError)) {
-      throw retrError;
-    }
-    try {
-      return { raw: await fetchPop3MessageByTop(config, messageEntry) };
-    } catch (topError) {
-      if (!isPop3TopTimeout(topError)) {
-        throw topError;
-      }
-      return { errorMessage: formatPop3FallbackError(retrError, topError, "TOP") };
-    }
-  }
-}
-
-async function fetchPop3MessageWithTopFallback(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<Pop3MessageFetchResult> {
-  try {
-    return { raw: await fetchPop3MessageByTop(config, messageEntry) };
-  } catch (topError) {
-    if (!isPop3TopTimeout(topError)) {
-      throw topError;
-    }
-    try {
-      return { raw: await fetchPop3MessageByRetr(config, messageEntry) };
-    } catch (retrError) {
-      if (!isPop3RetrTimeout(retrError)) {
-        throw retrError;
-      }
-      return { errorMessage: formatPop3FallbackError(topError, retrError, "RETR") };
-    }
-  }
-}
-
-function formatPop3FallbackError(primaryError: unknown, fallbackError: unknown, fallbackCommand: "RETR" | "TOP"): string {
-  const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
-  const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-  return `${primaryMessage}; ${fallbackCommand} fallback also failed: ${fallbackMessage}`;
-}
-
-async function fetchPop3MessagePreview(client: Pop3Client, messageEntry: Pop3ListEntry): Promise<string> {
-  const messageNumber = messageEntry.number;
-  const topLines = getMailPop3TopLines();
-  try {
-    return await client.command(`TOP ${messageNumber} ${topLines}`, getMailFetchResponseTimeoutMs());
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (!/POP3 TOP failed: POP3 command failed/i.test(message)) {
-      throw withPop3MessageContext(error, messageEntry);
-    }
-    return fetchPop3MessageByRetrOnClient(client, messageEntry);
-  }
-}
-
-async function fetchPop3MessageByRetrOnClient(client: Pop3Client, messageEntry: Pop3ListEntry): Promise<string> {
-  const messageNumber = messageEntry.number;
-  return client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs()).catch((error) => {
-    throw withPop3MessageContext(error, messageEntry);
-  });
-}
-
-async function fetchPop3MessageByRetr(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<string> {
-  const messageNumber = messageEntry.number;
-  const client = await Pop3Client.connect(config);
-  try {
-    await client.command(`USER ${config.username ?? ""}`);
-    await client.command(`PASS ${config.password ?? ""}`);
-    await client.command("STAT").catch(() => undefined);
-    const raw = await client.command(`RETR ${messageNumber}`, getMailFetchResponseTimeoutMs()).catch((error) => {
-      throw withPop3MessageContext(error, messageEntry);
-    });
-    await client.command("QUIT").catch(() => undefined);
-    return raw;
-  } finally {
-    client.close();
-  }
-}
-
-async function fetchPop3MessageByTop(config: EmailConnectionConfig, messageEntry: Pop3ListEntry): Promise<string> {
-  const messageNumber = messageEntry.number;
-  const client = await Pop3Client.connect(config);
-  try {
-    await client.command(`USER ${config.username ?? ""}`);
-    await client.command(`PASS ${config.password ?? ""}`);
-    const raw = await client.command(`TOP ${messageNumber} ${getMailPop3TopLines()}`, getMailFetchResponseTimeoutMs()).catch((error) => {
-      throw withPop3MessageContext(error, messageEntry);
-    });
-    await client.command("QUIT").catch(() => undefined);
-    return raw;
-  } finally {
-    client.close();
-  }
-}
-
-function isPop3TopTimeout(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : "";
-  return /POP3 TOP failed: Mail server response timed out/i.test(message);
-}
-
-function isPop3RetrTimeout(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : "";
-  return /POP3 RETR failed: Mail server response timed out/i.test(message);
-}
-
-function withPop3MessageContext(error: unknown, messageEntry: Pop3ListEntry): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  const size = typeof messageEntry.size === "number" ? `, size ${formatMailByteCount(messageEntry.size)}` : "";
-  return new Error(`${message} [message ${messageEntry.number}${size}]`);
-}
-
-function formatMailByteCount(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${bytes} bytes`;
+  return fetchRecentImapEmailBatch(inboundConfig, limit, options);
 }
 
 export function buildImapFallbackExternalMessageId(mailbox: string, uid: string): string {
@@ -370,14 +204,6 @@ export function buildImapFallbackExternalMessageId(mailbox: string, uid: string)
 
 export function withImapFallbackExternalMessageId(message: InboundEmail, mailbox: string, uid: string): InboundEmail {
   return message.externalMessageId ? message : { ...message, externalMessageId: buildImapFallbackExternalMessageId(mailbox, uid) };
-}
-
-export function buildPop3FallbackExternalMessageId(uid: string): string {
-  return `pop3:${sanitizeImapExternalIdPart(uid)}`;
-}
-
-export function withPop3FallbackExternalMessageId(message: InboundEmail, uid: string): InboundEmail {
-  return message.externalMessageId ? message : { ...message, externalMessageId: buildPop3FallbackExternalMessageId(uid) };
 }
 
 class SmtpClient {
@@ -452,116 +278,19 @@ async function prepareSmtpSession(client: SmtpClient, config: EmailConnectionCon
   }
 }
 
-class ImapClient {
-  private readonly socket: net.Socket;
-  private buffer = "";
-  private tagCounter = 1;
-
-  private constructor(socket: net.Socket) {
-    this.socket = socket;
-    this.socket.setEncoding("utf8");
-    this.socket.on("data", (chunk) => {
-      this.buffer += chunk;
-    });
-  }
-
-  static async connect(config: EmailConnectionConfig): Promise<ImapClient> {
-    const port = config.imapPort ?? (config.imapSecure === false ? 143 : 993);
-    const socket = await connectSocket(config.imapHost!, port, config.imapSecure !== false);
-    const client = new ImapClient(socket);
-    await readUntil(socket, () => client.buffer.includes("* OK"), () => client.buffer);
-    client.buffer = "";
-    return client;
-  }
-
-  async command(command: string, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
-    const tag = `A${String(this.tagCounter++).padStart(4, "0")}`;
-    this.socket.write(`${tag} ${command}\r\n`);
-    const response = await readUntil(
-      this.socket,
-      () => this.buffer.includes(`${tag} OK`) || this.buffer.includes(`${tag} NO`) || this.buffer.includes(`${tag} BAD`),
-      () => this.buffer,
-      timeoutMs
-    );
-    this.buffer = "";
-    if (response.includes(`${tag} NO`) || response.includes(`${tag} BAD`)) {
-      throw new Error(`IMAP command failed: ${response.slice(0, 300)}`);
-    }
-    return response;
-  }
-
-  close(): void {
-    this.socket.destroy();
-  }
-}
-
-class Pop3Client {
-  private readonly socket: net.Socket;
-  private buffer = "";
-
-  private constructor(socket: net.Socket) {
-    this.socket = socket;
-    this.socket.setEncoding("utf8");
-    this.socket.on("data", (chunk) => {
-      this.buffer += chunk;
-    });
-  }
-
-  static async connect(config: EmailConnectionConfig): Promise<Pop3Client> {
-    const port = config.pop3Port ?? (config.pop3Secure === false ? 110 : 995);
-    const socket = await connectSocket(config.pop3Host!, port, config.pop3Secure !== false);
-    const client = new Pop3Client(socket);
-    await client.readResponse(false);
-    return client;
-  }
-
-  async command(command: string, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
-    const isMultiline = /^(LIST|UIDL|RETR|TOP)\b/i.test(command);
-    const commandName = command.trim().split(/\s+/)[0]?.toUpperCase() ?? "COMMAND";
-    this.socket.write(`${command}\r\n`);
-    try {
-      return await this.readResponse(isMultiline, timeoutMs);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown POP3 error";
-      throw new Error(`POP3 ${commandName} failed: ${message}`);
-    }
-  }
-
-  close(): void {
-    this.socket.destroy();
-  }
-
-  private async readResponse(multiline: boolean, timeoutMs = getMailResponseTimeoutMs()): Promise<string> {
-    const response = await readUntil(
-      this.socket,
-      () => (multiline ? /\r?\n\.\r?\n$/.test(this.buffer) : /\r?\n$/.test(this.buffer)),
-      () => this.buffer,
-      timeoutMs
-    );
-    this.buffer = "";
-    if (response.startsWith("-ERR")) {
-      throw new Error(`POP3 command failed: ${response.slice(0, 300)}`);
-    }
-    if (!response.startsWith("+OK")) {
-      throw new Error(`POP3 returned an invalid response: ${response.slice(0, 300)}`);
-    }
-    return response;
-  }
-}
-
-async function connectSocket(host: string, port: number, secure: boolean): Promise<net.Socket> {
+async function connectSocket(host: string, port: number, secure: boolean, timeoutMs = getMailConnectTimeoutMs()): Promise<net.Socket> {
   try {
-    return await connectSocketOnce(host, port, secure);
+    return await connectSocketOnce(host, port, secure, timeoutMs);
   } catch (error) {
     if (!isTransientDnsError(error)) {
       throw error;
     }
     await delay(500);
-    return connectSocketOnce(host, port, secure);
+    return connectSocketOnce(host, port, secure, timeoutMs);
   }
 }
 
-function connectSocketOnce(host: string, port: number, secure: boolean): Promise<net.Socket> {
+function connectSocketOnce(host: string, port: number, secure: boolean, timeoutMs = getMailConnectTimeoutMs()): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = secure ? tls.connect({ host, port, servername: host }) : net.connect({ host, port });
     let settled = false;
@@ -589,7 +318,7 @@ function connectSocketOnce(host: string, port: number, secure: boolean): Promise
 
     timeout = setTimeout(() => {
       fail(new Error(`Connection to ${host}:${port} timed out`));
-    }, getMailConnectTimeoutMs());
+    }, timeoutMs);
 
     if (secure) {
       socket.once("secureConnect", done);
@@ -740,61 +469,106 @@ function encodeHeader(value: string): string {
   return /[^\x20-\x7e]/.test(sanitized) ? `=?UTF-8?B?${Buffer.from(sanitized, "utf8").toString("base64")}?=` : sanitized;
 }
 
-function parseMailboxExists(response: string): number {
-  const value = Number(response.match(/^\* (\d+) EXISTS\b/m)?.[1] ?? 0);
-  return Number.isFinite(value) && value > 0 ? value : 0;
+async function resolveImapFetchUids(
+  client: ImapFlow,
+  messageCount: number,
+  limit: number,
+  uidValidity: string | undefined,
+  options: MailboxFetchOptions
+): Promise<{ fetchUids: string[]; hasMore: boolean }> {
+  if (messageCount <= 0) {
+    return { fetchUids: [], hasMore: false };
+  }
+  const previousUid = normalizeImapUid(options.imapLastSeenUid);
+  if (uidValidity && options.imapUidValidity === uidValidity && previousUid) {
+    const nextUid = (BigInt(previousUid) + 1n).toString();
+    const uids = await searchImapUids(client, { uid: `${nextUid}:*` }, options);
+    return { fetchUids: uids.slice(0, limit), hasMore: uids.length > limit };
+  }
+  const startSequenceNumber = Math.max(1, messageCount - limit + 1);
+  const uids = await searchImapUids(client, { seq: `${startSequenceNumber}:*` }, options);
+  return { fetchUids: uids.slice(-limit), hasMore: false };
 }
 
-function parseFetchUid(response: string): string | undefined {
-  return response.match(/\bUID\s+(\d+)\b/i)?.[1];
+function createImapFlowClient(config: EmailConnectionConfig, options: MailboxFetchOptions = {}): ImapFlow {
+  const port = config.imapPort ?? (config.imapSecure === false ? 143 : 993);
+  const secure = config.imapSecure !== false;
+  const timeoutMs = mailOperationTimeout(getMailResponseTimeoutMs(), options);
+  const client = new ImapFlow({
+    host: config.imapHost!,
+    port,
+    secure,
+    doSTARTTLS: secure ? undefined : false,
+    auth: {
+      user: config.username ?? "",
+      pass: config.password ?? ""
+    },
+    connectionTimeout: mailOperationTimeout(getMailConnectTimeoutMs(), options),
+    greetingTimeout: timeoutMs,
+    socketTimeout: mailOperationTimeout(getMailFetchResponseTimeoutMs(), options),
+    maxLiteralSize: getMailImapFetchBytes(),
+    logger: false
+  });
+  client.on("error", () => undefined);
+  return client;
+}
+
+async function searchImapUids(client: ImapFlow, query: { uid?: string; seq?: string }, options: MailboxFetchOptions): Promise<string[]> {
+  const values = await withMailOperationTimeout(client.search(query, { uid: true }), mailOperationTimeout(getMailResponseTimeoutMs(), options));
+  return sortImapUids((values || []).map((uid) => uid.toString()).map(normalizeImapUid).filter((uid): uid is string => Boolean(uid)));
+}
+
+async function downloadImapSource(client: ImapFlow, uid: string, maxBytes: number, options: MailboxFetchOptions): Promise<Buffer | undefined> {
+  const download = async () => {
+    const response = await client.download(uid, undefined, { uid: true, maxBytes, chunkSize: maxBytes });
+    if (!response.content) {
+      return undefined;
+    }
+    return readBoundedStream(response.content, maxBytes);
+  };
+  return withMailOperationTimeout(download(), mailOperationTimeout(getMailFetchResponseTimeoutMs(), options));
+}
+
+async function readBoundedStream(stream: Readable, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const remaining = maxBytes - total;
+    if (remaining <= 0) {
+      break;
+    }
+    chunks.push(buffer.length > remaining ? buffer.subarray(0, remaining) : buffer);
+    total += Math.min(buffer.length, remaining);
+  }
+  return Buffer.concat(chunks);
+}
+
+function normalizeImapUid(value: string | undefined): string | undefined {
+  if (!value || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+  return BigInt(value).toString();
+}
+
+function sortImapUids(values: string[]): string[] {
+  return [...values].sort((left, right) => (BigInt(left) < BigInt(right) ? -1 : BigInt(left) > BigInt(right) ? 1 : 0));
+}
+
+function maxImapUid(left: string | undefined, right: string | undefined): string | undefined {
+  const normalizedRight = normalizeImapUid(right);
+  if (!normalizedRight) {
+    return normalizeImapUid(left);
+  }
+  const normalizedLeft = normalizeImapUid(left);
+  if (!normalizedLeft) {
+    return normalizedRight;
+  }
+  return BigInt(normalizedRight) > BigInt(normalizedLeft) ? normalizedRight : normalizedLeft;
 }
 
 function normalizeMailboxFetchLimit(limit: number): number {
   return Math.max(1, Math.min(100, Math.floor(Number.isFinite(limit) ? limit : 10)));
-}
-
-function parseFetchedMessage(response: string): InboundEmail | undefined {
-  const messageText = response.match(/\{\\?\d+\}\r?\n([\s\S]*?)\r?\n\)/)?.[1] ?? response;
-  return parseRawEmailMessage(messageText);
-}
-
-function parsePop3List(response: string): string[] {
-  return parsePop3ListEntries(response).map((entry) => entry.number);
-}
-
-function parsePop3ListEntries(response: string): Pop3ListEntry[] {
-  return stripPop3MultilineResponse(response)
-    .split(/\r?\n/)
-    .map((line) => line.trim().split(/\s+/))
-    .filter((parts) => /^\d+$/.test(parts[0] ?? ""))
-    .map(([number, size]) => {
-      const parsedSize = Number.parseInt(size ?? "", 10);
-      return {
-        number,
-        size: Number.isFinite(parsedSize) && parsedSize >= 0 ? parsedSize : undefined
-      };
-    });
-}
-
-function parsePop3Uidl(response: string): Map<string, string> {
-  return new Map(
-    stripPop3MultilineResponse(response)
-      .split(/\r?\n/)
-      .map((line) => line.trim().split(/\s+/))
-      .filter((parts) => parts.length >= 2 && /^\d+$/.test(parts[0]))
-      .map(([messageNumber, uid]) => [messageNumber, uid])
-  );
-}
-
-function parsePop3Message(response: string): InboundEmail | undefined {
-  return parseRawEmailMessage(stripPop3MultilineResponse(response));
-}
-
-function stripPop3MultilineResponse(response: string): string {
-  return response
-    .replace(/^\+OK[^\r\n]*(?:\r?\n)?/, "")
-    .replace(/\r?\n\.\r?\n?$/, "")
-    .replace(/(^|\r?\n)\.\./g, "$1.");
 }
 
 function getMailConnectTimeoutMs(): number {
@@ -809,16 +583,37 @@ function getMailFetchResponseTimeoutMs(): number {
   return resolvePositiveEnvInt("MAIL_FETCH_RESPONSE_TIMEOUT_MS", DEFAULT_MAIL_FETCH_RESPONSE_TIMEOUT_MS);
 }
 
+function mailOperationTimeout(defaultTimeoutMs: number, options: MailboxFetchOptions): number {
+  if (!options.deadlineAt) {
+    return defaultTimeoutMs;
+  }
+  const remainingMs = options.deadlineAt - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error("Mailbox sync timed out before completion.");
+  }
+  return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
+}
+
+function assertMailSyncDeadline(options: MailboxFetchOptions): void {
+  if (options.deadlineAt && Date.now() >= options.deadlineAt) {
+    throw new Error("Mailbox sync timed out before completion.");
+  }
+}
+
+function withMailOperationTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(`Mail server response timed out after ${timeoutMs} ms`)), timeoutMs);
+  });
+  return Promise.race([operation, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
 function getMailImapFetchBytes(): number {
   return resolvePositiveEnvIntWithMax("MAIL_IMAP_FETCH_BYTES", DEFAULT_MAIL_IMAP_FETCH_BYTES, MAX_MAIL_IMAP_FETCH_BYTES);
-}
-
-function getMailPop3TopLines(): number {
-  return resolvePositiveEnvIntWithMax("MAIL_POP3_TOP_LINES", DEFAULT_MAIL_POP3_TOP_LINES, MAX_MAIL_POP3_TOP_LINES);
-}
-
-function getMailPop3FetchMode(): Pop3FetchMode {
-  return process.env.MAIL_POP3_FETCH_MODE?.trim().toLowerCase() === "top" ? "top" : DEFAULT_MAIL_POP3_FETCH_MODE;
 }
 
 function resolvePositiveEnvInt(name: string, fallback: number): number {
@@ -1126,14 +921,4 @@ function assertImapConfig(config: EmailConnectionConfig): void {
   if (!config.imapHost || !config.username || !config.password) {
     throw new Error("IMAP host, username, and password are required");
   }
-}
-
-function assertPop3Config(config: EmailConnectionConfig): void {
-  if (!config.pop3Host || !config.username || !config.password) {
-    throw new Error("POP3 host, username, and password are required");
-  }
-}
-
-function resolveSyncProtocol(config: EmailConnectionConfig): "imap" | "pop3" {
-  return config.syncProtocol === "pop3" ? "pop3" : "imap";
 }

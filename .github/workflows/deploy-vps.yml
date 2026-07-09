@@ -111,6 +111,7 @@ jobs:
           EMAIL_DELIVERY_MODE: ${{ vars.EMAIL_DELIVERY_MODE || 'live' }}
           EMAIL_SYNC_INTERVAL_MS: ${{ vars.EMAIL_SYNC_INTERVAL_MS || '300000' }}
           EMAIL_SYNC_LIMIT: ${{ vars.EMAIL_SYNC_LIMIT || '25' }}
+          EMAIL_SYNC_JOB_TIMEOUT_MS: ${{ vars.EMAIL_SYNC_JOB_TIMEOUT_MS || '540000' }}
           EMAIL_SEND_CLAIM_TIMEOUT_MS: ${{ vars.EMAIL_SEND_CLAIM_TIMEOUT_MS || '900000' }}
           RUN_EMAIL_CONNECTION_TESTS: ${{ inputs.run_email_connections || vars.RUN_EMAIL_CONNECTION_TESTS || 'false' }}
           RUN_EMAIL_AI_PROVIDER_TEST: ${{ inputs.run_email_ai_provider || vars.RUN_EMAIL_AI_PROVIDER_TEST || 'false' }}
@@ -187,6 +188,7 @@ jobs:
             missing=1
           fi
           require_positive_integer EMAIL_SYNC_INTERVAL_MS
+          require_positive_integer EMAIL_SYNC_JOB_TIMEOUT_MS
           require_positive_integer EMAIL_SEND_CLAIM_TIMEOUT_MS
           if ! [[ "$EMAIL_SYNC_LIMIT" =~ ^[0-9]+$ ]] || [ "$EMAIL_SYNC_LIMIT" -lt 1 ] || [ "$EMAIL_SYNC_LIMIT" -gt 100 ]; then
             echo "::error title=Invalid email sync limit::EMAIL_SYNC_LIMIT must be an integer between 1 and 100"
@@ -272,6 +274,7 @@ jobs:
           EMAIL_DELIVERY_MODE: ${{ vars.EMAIL_DELIVERY_MODE || 'live' }}
           EMAIL_SYNC_INTERVAL_MS: ${{ vars.EMAIL_SYNC_INTERVAL_MS || '300000' }}
           EMAIL_SYNC_LIMIT: ${{ vars.EMAIL_SYNC_LIMIT || '25' }}
+          EMAIL_SYNC_JOB_TIMEOUT_MS: ${{ vars.EMAIL_SYNC_JOB_TIMEOUT_MS || '540000' }}
           EMAIL_SYNC_USER_ID: ${{ vars.EMAIL_SYNC_USER_ID || 'user-admin' }}
           EMAIL_VERIFY_USER_ID: ${{ vars.EMAIL_VERIFY_USER_ID || vars.EMAIL_SYNC_USER_ID || 'user-admin' }}
           EMAIL_SEND_CLAIM_TIMEOUT_MS: ${{ vars.EMAIL_SEND_CLAIM_TIMEOUT_MS || '900000' }}
@@ -319,6 +322,7 @@ jobs:
           write_env EMAIL_OAUTH_STATE_SECRET "$EMAIL_OAUTH_STATE_SECRET"
           write_env EMAIL_SYNC_INTERVAL_MS "$EMAIL_SYNC_INTERVAL_MS"
           write_env EMAIL_SYNC_LIMIT "$EMAIL_SYNC_LIMIT"
+          write_env EMAIL_SYNC_JOB_TIMEOUT_MS "$EMAIL_SYNC_JOB_TIMEOUT_MS"
           write_env EMAIL_SYNC_USER_ID "$EMAIL_SYNC_USER_ID"
           write_env EMAIL_VERIFY_USER_ID "$EMAIL_VERIFY_USER_ID"
           write_env EMAIL_SEND_CLAIM_TIMEOUT_MS "$EMAIL_SEND_CLAIM_TIMEOUT_MS"

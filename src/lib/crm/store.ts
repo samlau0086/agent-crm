@@ -698,7 +698,11 @@ export class CrmStore {
     this.assertEmailAccountEmailAvailable(context, emailAddress, account.id);
     if (input.name !== undefined) account.name = normalizeRequiredText(input.name, "Email account name");
     account.emailAddress = emailAddress;
-    if (input.provider !== undefined) account.provider = input.provider;
+    if (input.provider !== undefined && input.provider !== account.provider) {
+      account.provider = input.provider;
+      delete account.imapUidValidity;
+      delete account.imapLastSeenUid;
+    }
     if (input.status !== undefined) account.status = input.status;
     if (input.defaultSignatureId !== undefined) {
       account.defaultSignatureId = this.normalizeEmailAccountDefaultSignatureId(context, input.defaultSignatureId, account.id) ?? undefined;
@@ -708,6 +712,8 @@ export class CrmStore {
     if (input.connectionConfig) {
       account.connectionConfigured = true;
       delete account.lastConnectionError;
+      delete account.imapUidValidity;
+      delete account.imapLastSeenUid;
       if (input.status === undefined && account.status === "draft") {
         account.status = "active";
       }
@@ -715,6 +721,8 @@ export class CrmStore {
     if (input.clearConnectionConfig) {
       account.connectionConfigured = false;
       delete account.lastConnectionError;
+      delete account.imapUidValidity;
+      delete account.imapLastSeenUid;
       if (input.status === undefined) {
         account.status = "draft";
       }
@@ -744,6 +752,8 @@ export class CrmStore {
     const account = this.assertEmailAccount(context, accountId);
     account.connectionConfigured = true;
     delete account.lastConnectionError;
+    delete account.imapUidValidity;
+    delete account.imapLastSeenUid;
     account.status = "active";
     account.updatedAt = stamp();
     return clone(account);
@@ -945,7 +955,7 @@ export class CrmStore {
   markEmailAccountSyncCompleted(
     context: RequestContext,
     accountId: string,
-    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number }
+    result: { importedCount: number; scannedCount?: number; skippedDuplicateCount?: number; imapUidValidity?: string; imapLastSeenUid?: string }
   ): EmailAccount {
     requirePermission(context, "crm.admin");
     const account = this.assertEmailAccount(context, accountId);
@@ -959,6 +969,8 @@ export class CrmStore {
     account.lastSyncScannedCount = result.scannedCount ?? result.importedCount;
     account.lastSyncImportedCount = result.importedCount;
     account.lastSyncSkippedDuplicateCount = result.skippedDuplicateCount ?? 0;
+    if (result.imapUidValidity !== undefined) account.imapUidValidity = result.imapUidValidity;
+    if (result.imapLastSeenUid !== undefined) account.imapLastSeenUid = result.imapLastSeenUid;
     delete account.lastSyncError;
     account.updatedAt = now;
     this.writeAuditLog(context, "update", "email_account", account.id, {
