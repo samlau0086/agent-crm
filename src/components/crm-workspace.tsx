@@ -4461,15 +4461,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function fullResyncEmailAccount(accountId: string) {
-    const account = emailAccounts.find((candidate) => candidate.id === accountId);
-    const confirmed = await requestConfirm({
-      title: "全量同步邮箱",
-      message: `确定重新同步${account ? `“${account.emailAddress}”` : "此邮箱"}的所有邮件？系统会从邮箱历史邮件开始扫描，已存在邮件会自动跳过。`,
-      confirmLabel: "全量同步"
-    });
-    if (!confirmed) {
-      return;
-    }
     await syncEmailAccount(accountId, { fullResync: true });
   }
 
@@ -10627,7 +10618,7 @@ function EmailWorkspace({
                       <RefreshCw className={syncIsPending || (accountSyncInProgress && !fullSyncIsPending) ? "spin-icon" : undefined} size={16} />
                       {syncIsPending ? "提交中" : accountSyncInProgress && !fullSyncIsPending ? "同步中" : "同步"}
                     </button>
-                    <button className="secondary-button" type="button" onClick={() => onFullResyncAccount(account.id)} disabled={disabled || !canFullResyncAccount} title={account.provider === "smtp_imap" ? "从 IMAP 历史邮件开始重新扫描，已存在邮件会跳过" : "当前仅 SMTP/IMAP 邮箱支持全量同步"}>
+                    <button className="secondary-button" data-testid={`email-account-full-sync-${account.id}`} type="button" onClick={() => onFullResyncAccount(account.id)} disabled={disabled || !canFullResyncAccount} title={account.provider === "smtp_imap" ? "从 IMAP 历史邮件开始重新扫描，已存在邮件会跳过" : "当前仅 SMTP/IMAP 邮箱支持全量同步"}>
                       <RefreshCw className={fullSyncIsPending ? "spin-icon" : undefined} size={16} />
                       {fullSyncIsPending ? "提交中" : "全量同步"}
                     </button>

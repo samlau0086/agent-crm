@@ -2609,6 +2609,15 @@ await run("email workspace treats queued sync as background work and polls for i
   assert.match(source, /account\.status === "synced"/);
 });
 
+await run("email full resync button submits without a blocking confirm dialog", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const fullResyncFunction = source.slice(source.indexOf("async function fullResyncEmailAccount"), source.indexOf("async function syncAllEmailAccounts"));
+  assert.match(fullResyncFunction, /await syncEmailAccount\(accountId, \{ fullResync: true \}\)/);
+  assert.doesNotMatch(fullResyncFunction, /requestConfirm/);
+  assert.match(source, /body: \{ accountId, \.\.\.\(options\.fullResync \? \{ fullResync: true, limit: 100 \} : \{\}\) \}/);
+  assert.match(source, /data-testid=\{`email-account-full-sync-\$\{account\.id\}`\}/);
+});
+
 await run("crm workspace routes modules through stable paths", () => {
   assert.deepEqual(resolveCrmRoute([], ["contacts", "companies"]), { navKey: "dashboard", objectKey: "contacts", path: "/" });
   assert.deepEqual(resolveCrmRoute(["companies"], ["contacts", "companies"]), { navKey: "companies", objectKey: "companies", path: "/companies" });
