@@ -188,7 +188,7 @@ export const customerLevelChangeRequestSchema = z
 
 export const customerLevelSuggestionGenerateSchema = z
   .object({
-    objectKey: z.enum(["contacts", "companies"]).optional(),
+    objectKey: z.enum(["companies"]).optional(),
     recordId: z.string().trim().min(1).optional()
   })
   .strict();

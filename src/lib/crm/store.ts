@@ -43,6 +43,7 @@ import type {
   CrmPoolSettings,
   CrmRecord,
   CrmSnapshot,
+  CustomerLevel,
   DashboardSummary,
   EmailAccount,
   EmailAttachment,
@@ -221,6 +222,31 @@ function getEffectivePoolLevelReclaimDays(settings: CrmPoolSettings, level: CrmP
 function getCrmPoolLevelFromRecord(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {
   const value = record.data.customerLevel;
   return value === "A" || value === "B" || value === "C" || value === "D" ? value : "unrated";
+}
+
+function getValidCustomerLevelValue(value: unknown): CustomerLevel | undefined {
+  return value === "A" || value === "B" || value === "C" || value === "D" ? value : undefined;
+}
+
+function getContactTempCustomerLevel(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {
+  return getValidCustomerLevelValue(record.data.contactTempCustomerLevel) ?? "unrated";
+}
+
+function normalizeContactCustomerLevelData(data: Record<string, unknown>): Record<string, unknown> {
+  const nextData = { ...data };
+  const hasCompany = typeof nextData.companyId === "string" && nextData.companyId.trim().length > 0;
+  const legacyLevel = getValidCustomerLevelValue(nextData.customerLevel);
+  delete nextData.customerLevel;
+  delete nextData.customerLevelSuggested;
+  delete nextData.customerLevelScore;
+  delete nextData.customerLevelReasons;
+  delete nextData.customerLevelSuggestedAt;
+  if (hasCompany) {
+    delete nextData.contactTempCustomerLevel;
+  } else if (!getValidCustomerLevelValue(nextData.contactTempCustomerLevel) && legacyLevel) {
+    nextData.contactTempCustomerLevel = legacyLevel;
+  }
+  return nextData;
 }
 
 function normalizeRoleInput(input: Pick<Role, "name" | "permissions">): Pick<Role, "name" | "permissions"> {
@@ -3277,7 +3303,12 @@ export class CrmStore {
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
     const existing = this.listRecordsForValidation(context, objectKey);
-    const data = objectKey === "quotes" ? normalizeQuoteRecordData(input.data, this.listRecordsForValidation(context, "currencies")) : input.data;
+    const data =
+      objectKey === "quotes"
+        ? normalizeQuoteRecordData(input.data, this.listRecordsForValidation(context, "currencies"))
+        : objectKey === "contacts"
+          ? normalizeContactCustomerLevelData(input.data)
+          : input.data;
     if (objectKey === "quotes") {
       validateQuoteRecordData(data, this.listRecordsForValidation(context, "products"));
     }
@@ -3318,7 +3349,12 @@ export class CrmStore {
     }
     const previousStageKey = record.stageKey;
     const mergedData = { ...record.data, ...(patch.data ?? {}) };
-    const nextData = objectKey === "quotes" ? normalizeQuoteRecordData(mergedData, this.listRecordsForValidation(context, "currencies")) : mergedData;
+    const nextData =
+      objectKey === "quotes"
+        ? normalizeQuoteRecordData(mergedData, this.listRecordsForValidation(context, "currencies"))
+        : objectKey === "contacts"
+          ? normalizeContactCustomerLevelData(mergedData)
+          : mergedData;
     const fields = this.listFieldDefinitions(context, objectKey);
     if (objectKey === "quotes") {
       validateQuoteRecordData(nextData, this.listRecordsForValidation(context, "products"));
@@ -3353,6 +3389,18 @@ export class CrmStore {
     return clone(record);
   }
 
+  private getEffectivePoolLevelForRecord(record: Pick<CrmRecord, "objectKey" | "data">): CrmPoolLevelKey {
+    if (record.objectKey !== "contacts") {
+      return getCrmPoolLevelFromRecord(record);
+    }
+    const companyId = typeof record.data.companyId === "string" ? record.data.companyId.trim() : "";
+    if (!companyId) {
+      return getContactTempCustomerLevel(record);
+    }
+    const company = this.data.records.find((candidate) => candidate.objectKey === "companies" && candidate.id === companyId);
+    return company ? getCrmPoolLevelFromRecord(company) : "unrated";
+  }
+
   claimRecord(context: RequestContext, objectKey: string, recordId: string): RecordPoolActionResult {
     requirePermission(context, "crm.write");
     this.assertPoolObjectEnabled(context, objectKey);
@@ -3364,7 +3412,7 @@ export class CrmStore {
       throw new Error("该记录已在私海中，不能重复领取");
     }
     const settings = this.ensureCrmPoolSettings(context.workspaceId);
-    const customerLevel = getCrmPoolLevelFromRecord(record);
+    const customerLevel = this.getEffectivePoolLevelForRecord(record);
     const levelPrivateLimit = getEffectivePoolLevelPrivateLimit(settings, customerLevel);
     const privateCount = this.data.records.filter(
       (candidate) => candidate.workspaceId === context.workspaceId && settings.objectKeys.includes(candidate.objectKey) && candidate.ownerId === context.user.id
@@ -3377,7 +3425,7 @@ export class CrmStore {
         candidate.workspaceId === context.workspaceId &&
         settings.objectKeys.includes(candidate.objectKey) &&
         candidate.ownerId === context.user.id &&
-        getCrmPoolLevelFromRecord(candidate) === customerLevel
+        this.getEffectivePoolLevelForRecord(candidate) === customerLevel
     ).length;
     if (levelPrivateCount >= levelPrivateLimit) {
       const label = customerLevel === "unrated" ? "unrated" : customerLevel;
@@ -3481,7 +3529,7 @@ export class CrmStore {
         .map((thread) => new Date(thread.lastMessageAt ?? thread.updatedAt).getTime())
         .reduce((max, value) => Math.max(max, value), 0);
       const latestFollowUpAt = Math.max(new Date(record.updatedAt).getTime(), latestActivityAt, latestThreadAt);
-      const customerLevel = getCrmPoolLevelFromRecord(record);
+      const customerLevel = this.getEffectivePoolLevelForRecord(record);
       const effectiveAutoReclaimDays = getEffectivePoolLevelReclaimDays(settings, customerLevel);
       const cutoff = ranAt.getTime() - effectiveAutoReclaimDays * 24 * 60 * 60 * 1000;
       if (latestFollowUpAt >= cutoff) {

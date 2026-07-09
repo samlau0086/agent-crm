@@ -1347,7 +1347,8 @@ button {
   font-weight: 700;
 }
 
-.contact-profile-info-item strong {
+.contact-profile-info-item strong,
+.contact-profile-info-item .record-reference-link {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
@@ -1355,6 +1356,20 @@ button {
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.record-reference-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.record-reference-link:hover {
+  text-decoration: underline;
+}
+
+.contact-profile-info-item .record-reference-link,
+.editable-field-row .record-reference-link {
+  color: var(--accent);
 }
 
 .contact-profile-grid {
@@ -1478,11 +1493,13 @@ button {
   font-weight: 700;
 }
 
-.editable-field-row strong {
+.editable-field-row strong,
+.editable-field-row .editable-field-value {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
   font-size: 14px;
+  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

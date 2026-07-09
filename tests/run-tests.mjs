@@ -1375,10 +1375,11 @@ await run("customer level schemas accept settings and approval changes", () => {
   assert.equal(settings.levels?.length, 4);
   assert.equal(customerLevelChangeRequestSchema.parse({ level: "A", changeReason: "重要客户" }).level, "A");
   assert.equal(customerLevelChangeRequestSchema.parse({ level: "", changeReason: "重新评级" }).level, "");
-  assert.deepEqual(customerLevelSuggestionGenerateSchema.parse({ objectKey: "contacts", recordId: "contact-lin" }), {
-    objectKey: "contacts",
-    recordId: "contact-lin"
+  assert.deepEqual(customerLevelSuggestionGenerateSchema.parse({ objectKey: "companies", recordId: "company-acme" }), {
+    objectKey: "companies",
+    recordId: "company-acme"
   });
+  assert.throws(() => customerLevelSuggestionGenerateSchema.parse({ objectKey: "contacts", recordId: "contact-lin" }), /Invalid enum value|validation/i);
 });
 
 await run("pool settings schema accepts level rules and rejects invalid level rules", () => {
@@ -1400,8 +1401,9 @@ await run("pool settings schema accepts level rules and rejects invalid level ru
 
 await run("seed includes customer level fields settings and default columns", () => {
   const customerLevelFields = seedData.fieldDefinitions.filter((field) => field.key.startsWith("customerLevel"));
-  assert.ok(customerLevelFields.some((field) => field.objectKey === "contacts" && field.key === "customerLevel"));
+  assert.equal(customerLevelFields.some((field) => field.objectKey === "contacts" && field.key === "customerLevel"), false);
   assert.ok(customerLevelFields.some((field) => field.objectKey === "companies" && field.key === "customerLevel"));
+  assert.ok(seedData.fieldDefinitions.some((field) => field.objectKey === "contacts" && field.key === "contactTempCustomerLevel"));
 
   assert.equal(seedData.customerLevelSettings?.[0]?.workspaceId, defaultWorkspaceId);
   assert.deepEqual(
@@ -1411,7 +1413,8 @@ await run("seed includes customer level fields settings and default columns", ()
 
   const contactView = seedData.savedViews.find((view) => view.objectKey === "contacts" && view.isDefault);
   const companyView = seedData.savedViews.find((view) => view.objectKey === "companies" && view.isDefault);
-  assert.ok(contactView?.columns.includes("customerLevel"));
+  assert.ok(contactView?.columns.includes("contactTempCustomerLevel"));
+  assert.equal(contactView?.columns.includes("customerLevel"), false);
   assert.ok(companyView?.columns.includes("customerLevel"));
 });
 
@@ -3570,7 +3573,7 @@ await run("contact and company country fields use searchable sovereign country o
   assert.match(addressParser, /getCountryLabel\(address\.country\)/);
   assert.match(seed, /objectKey: "contacts", key: "country"/);
   assert.match(seed, /objectKey: "companies", key: "country"/);
-  assert.match(seed, /columns: \["title", "customerLevel", "email", "phone", "companyId", "country", "birthday", "gender"\]/);
+  assert.match(seed, /columns: \["title", "contactTempCustomerLevel", "email", "phone", "companyId", "country", "birthday", "gender"\]/);
   assert.match(seed, /columns: \["title", "customerLevel", "domain", "industry", "country", "billingAddresses", "shippingAddresses"\]/);
   assert.match(migration, /'country', '国家\/地区', 'text'/);
   assert.match(migration, /ARRAY\['title', 'email', 'phone', 'companyId', 'country', 'birthday', 'gender'\]/);
@@ -6163,12 +6166,30 @@ await run("public pool claim respects customer level private limits", () => {
   const snapshot = structuredClone(seedData);
   snapshot.records.push(
     {
+      id: "company-a-limit",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "companies",
+      title: "A Limit Company",
+      data: { customerLevel: "A" },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    },
+    {
+      id: "company-b-limit",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "companies",
+      title: "B Limit Company",
+      data: { customerLevel: "B" },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    },
+    {
       id: "contact-private-a-limit",
       workspaceId: defaultWorkspaceId,
       objectKey: "contacts",
       title: "Private A Contact",
       ownerId: "user-sales",
-      data: { email: "private-a@example.com", customerLevel: "A" },
+      data: { email: "private-a@example.com", companyId: "company-a-limit" },
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z"
     },
@@ -6177,7 +6198,7 @@ await run("public pool claim respects customer level private limits", () => {
       workspaceId: defaultWorkspaceId,
       objectKey: "contacts",
       title: "Public A Contact",
-      data: { email: "public-a@example.com", customerLevel: "A" },
+      data: { email: "public-a@example.com", companyId: "company-a-limit" },
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z"
     },
@@ -6186,7 +6207,7 @@ await run("public pool claim respects customer level private limits", () => {
       workspaceId: defaultWorkspaceId,
       objectKey: "contacts",
       title: "Public B Contact",
-      data: { email: "public-b@example.com", customerLevel: "B" },
+      data: { email: "public-b@example.com", companyId: "company-b-limit" },
       createdAt: "2026-06-18T00:00:00.000Z",
       updatedAt: "2026-06-18T00:00:00.000Z"
     }
@@ -6209,7 +6230,8 @@ await run("public pool claim respects customer level private limits", () => {
   assert.throws(() => store.claimRecord(salesContext, "contacts", "contact-public-a-limit"), /customer level A|level/i);
   const claimed = store.claimRecord(salesContext, "contacts", "contact-public-b-limit");
   assert.equal(claimed.record.ownerId, "user-sales");
-  assert.equal(claimed.record.data.customerLevel, "B");
+  assert.equal(claimed.record.data.companyId, "company-b-limit");
+  assert.equal(claimed.record.data.customerLevel, undefined);
 });
 
 await run("public pool auto reclaim uses customer level reclaim days", () => {
@@ -6217,12 +6239,30 @@ await run("public pool auto reclaim uses customer level reclaim days", () => {
   const snapshot = structuredClone(seedData);
   snapshot.records.push(
     {
+      id: "company-a-reclaim",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "companies",
+      title: "A Reclaim Company",
+      data: { customerLevel: "A" },
+      createdAt: fortyDaysAgo,
+      updatedAt: fortyDaysAgo
+    },
+    {
+      id: "company-d-reclaim",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "companies",
+      title: "D Reclaim Company",
+      data: { customerLevel: "D" },
+      createdAt: fortyDaysAgo,
+      updatedAt: fortyDaysAgo
+    },
+    {
       id: "contact-private-a-fresh-by-level",
       workspaceId: defaultWorkspaceId,
       objectKey: "contacts",
       title: "Private A Level Reclaim",
       ownerId: "user-sales",
-      data: { email: "private-a-reclaim@example.com", customerLevel: "A" },
+      data: { email: "private-a-reclaim@example.com", companyId: "company-a-reclaim" },
       createdAt: fortyDaysAgo,
       updatedAt: fortyDaysAgo
     },
@@ -6232,7 +6272,7 @@ await run("public pool auto reclaim uses customer level reclaim days", () => {
       objectKey: "contacts",
       title: "Private D Level Reclaim",
       ownerId: "user-sales",
-      data: { email: "private-d-reclaim@example.com", customerLevel: "D" },
+      data: { email: "private-d-reclaim@example.com", companyId: "company-d-reclaim" },
       createdAt: fortyDaysAgo,
       updatedAt: fortyDaysAgo
     }

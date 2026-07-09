@@ -202,6 +202,7 @@ const editApprovalObjectKeys = new Set(["contacts", "companies", "deals"]);
 const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "products", "quotes"]);
 const customerLevelFieldKeys = new Set([
   "customerLevel",
+  "contactTempCustomerLevel",
   "customerLevelSuggested",
   "customerLevelScore",
   "customerLevelReasons",
@@ -3470,7 +3471,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   async function refreshCustomerLevelSuggestion(record: CrmRecord) {
-    if (record.objectKey !== "contacts" && record.objectKey !== "companies") {
+    if (record.objectKey !== "companies") {
       return;
     }
     const actionKey = `suggest:${record.id}`;
@@ -3498,14 +3499,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (record.objectKey !== "contacts" && record.objectKey !== "companies") {
       return;
     }
-    const currentLevel = typeof record.data.customerLevel === "string" ? record.data.customerLevel : "";
+    const linkedCompanyId = record.objectKey === "contacts" && typeof record.data.companyId === "string" ? record.data.companyId : "";
+    const linkedCompany = linkedCompanyId ? records.find((candidate) => candidate.objectKey === "companies" && candidate.id === linkedCompanyId) : undefined;
+    const currentLevel =
+      record.objectKey === "contacts"
+        ? linkedCompany
+          ? normalizeCustomerLevelValue(linkedCompany.data.customerLevel)
+          : normalizeCustomerLevelValue(record.data.contactTempCustomerLevel)
+        : normalizeCustomerLevelValue(record.data.customerLevel);
     if (currentLevel === nextLevel) {
       showToast({ intent: "info", message: "客户等级没有变化" });
       return;
     }
+    if (linkedCompany) {
+      showError("联系人已关联公司，请到公司记录修改客户等级");
+      return;
+    }
     const reason = await requestPrompt({
       title: "提交客户等级修改审批",
-      message: `将 ${record.title} 的正式客户等级修改为 ${customerLevelLabel(customerLevelSettings, nextLevel)}。请填写修改原因。`,
+      message: `将 ${record.title} 的${record.objectKey === "contacts" ? "临时" : "正式"}客户等级修改为 ${customerLevelLabel(customerLevelSettings, nextLevel)}。请填写修改原因。`,
       placeholder: "例如：近期交易金额提升、客户回复积极，建议升级为 A 级客户。",
       confirmLabel: "提交审批"
     });
@@ -15672,6 +15684,27 @@ function formatEditableFieldValue(field: FieldDefinition, value: string, allReco
   return value;
 }
 
+function buildRecordDetailHref(record: CrmRecord): string {
+  const navKey = coreObjects.has(record.objectKey) ? record.objectKey : "records";
+  return `${crmPathForNav(navKey, record.objectKey)}?recordId=${encodeURIComponent(record.id)}`;
+}
+
+function resolveReferenceFieldRecord(field: FieldDefinition, value: string, allRecords: CrmRecord[]): CrmRecord | undefined {
+  if (field.type !== "reference" || !value) {
+    return undefined;
+  }
+  const referencedObjectKey = field.options?.[0]?.value;
+  return allRecords.find((record) => record.id === value && (!referencedObjectKey || record.objectKey === referencedObjectKey));
+}
+
+function RecordReferenceLink({ record, children }: { record: CrmRecord; children: ReactNode }) {
+  return (
+    <a className="record-reference-link editable-field-value" href={buildRecordDetailHref(record)}>
+      {children}
+    </a>
+  );
+}
+
 function isAddressTextField(field: FieldDefinition): boolean {
   const key = field.key.toLowerCase();
   const label = field.label.toLowerCase();
@@ -15803,6 +15836,7 @@ function EditableFieldRow({
   const [draftValue, setDraftValue] = useState(value);
   const [isSaving, setIsSaving] = useState(false);
   const displayValue = formatEditableFieldValue(field, value, allRecords, users);
+  const referenceRecord = resolveReferenceFieldRecord(field, value, allRecords);
 
   useEffect(() => {
     if (!isOpen) {
@@ -15825,7 +15859,11 @@ function EditableFieldRow({
       <div className={`editable-field-row ${field.type === "textarea" ? "wide" : ""}`} data-testid={testId ? `${testId}-display` : undefined}>
         <div>
           <span className="editable-field-label">{field.label}</span>
-          <strong title={displayValue}>{displayValue}</strong>
+          {referenceRecord ? (
+            <RecordReferenceLink record={referenceRecord}>{displayValue}</RecordReferenceLink>
+          ) : (
+            <strong title={displayValue}>{displayValue}</strong>
+          )}
         </div>
         <button className="icon-button" aria-label={`编辑${field.label}`} type="button" onClick={() => setIsOpen(true)}>
           <Pencil size={15} />
@@ -17272,20 +17310,32 @@ function CustomerLevelBadge({
 
 function CustomerLevelPanel({
   actionKey,
+  changeEnabled = true,
+  currentLabel = "正式等级",
+  currentLevel: currentLevelOverride,
+  description = "正式等级需审批；系统建议仅作为参考。",
   disabled,
   record,
   settings,
+  showSuggestion = true,
+  title = "客户等级",
   onRefreshSuggestion,
   onRequestChange
 }: {
   actionKey: string;
+  changeEnabled?: boolean;
+  currentLabel?: string;
+  currentLevel?: CustomerLevel | "";
+  description?: string;
   disabled: boolean;
   record: CrmRecord;
   settings: CustomerLevelSettings;
+  showSuggestion?: boolean;
+  title?: string;
   onRefreshSuggestion: () => void;
   onRequestChange: (level: CustomerLevel | "") => void;
 }) {
-  const currentLevel = normalizeCustomerLevelValue(record.data.customerLevel);
+  const currentLevel = currentLevelOverride ?? normalizeCustomerLevelValue(record.data.customerLevel);
   const suggestedLevel = normalizeCustomerLevelValue(record.data.customerLevelSuggested);
   const score = typeof record.data.customerLevelScore === "number" ? record.data.customerLevelScore : undefined;
   const reasons = customerLevelReasons(record.data.customerLevelReasons);
@@ -17299,37 +17349,41 @@ function CustomerLevelPanel({
     <section className="contact-profile-card customer-level-panel" data-testid="customer-level-panel">
       <div className="stage-header">
         <div>
-          <strong>客户等级</strong>
-          <div className="subtle">正式等级需审批；系统建议仅作为参考。</div>
+          <strong>{title}</strong>
+          <div className="subtle">{description}</div>
         </div>
-        <button className="secondary-button" type="button" onClick={onRefreshSuggestion} disabled={disabled || isSuggesting || !settings.enabled}>
-          <RefreshCw size={15} className={isSuggesting ? "spin" : ""} />
-          刷新建议
-        </button>
+        {showSuggestion ? (
+          <button className="secondary-button" type="button" onClick={onRefreshSuggestion} disabled={disabled || isSuggesting || !settings.enabled}>
+            <RefreshCw size={15} className={isSuggesting ? "spin" : ""} />
+            刷新建议
+          </button>
+        ) : null}
       </div>
       <div className="customer-level-grid">
         <div className="customer-level-current">
-          <span className="editable-field-label">正式等级</span>
+          <span className="editable-field-label">{currentLabel}</span>
           <CustomerLevelBadge level={currentLevel} settings={settings} />
         </div>
-        <label className="customer-level-select">
-          <span className="editable-field-label">提交修改审批</span>
-          <select
-            className="select"
-            value={currentLevel}
-            onChange={(event) => onRequestChange(event.target.value as CustomerLevel | "")}
-            disabled={disabled || isChanging}
-          >
-            <option value="">未评级</option>
-            {enabledLevels.map((level) => (
-              <option key={level.value} value={level.value}>
-                {level.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        {changeEnabled ? (
+          <label className="customer-level-select">
+            <span className="editable-field-label">提交修改审批</span>
+            <select
+              className="select"
+              value={currentLevel}
+              onChange={(event) => onRequestChange(event.target.value as CustomerLevel | "")}
+              disabled={disabled || isChanging}
+            >
+              <option value="">未评级</option>
+              {enabledLevels.map((level) => (
+                <option key={level.value} value={level.value}>
+                  {level.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
-      {suggestedLevel ? (
+      {showSuggestion && suggestedLevel ? (
         <div className={`customer-level-suggestion ${suggestionDiffers ? "actionable" : ""}`}>
           <div>
             <span className="editable-field-label">建议等级</span>
@@ -17345,10 +17399,10 @@ function CustomerLevelPanel({
             </button>
           ) : null}
         </div>
-      ) : (
+      ) : showSuggestion ? (
         <div className="customer-level-empty">暂无建议等级，可点击刷新建议生成评分。</div>
-      )}
-      {reasons.length > 0 ? (
+      ) : null}
+      {showSuggestion && reasons.length > 0 ? (
         <ul className="customer-level-reasons">
           {reasons.slice(0, 5).map((reason, index) => (
             <li key={`${reason}-${index}`}>{reason}</li>
@@ -17433,6 +17487,9 @@ function ContactProfileEditor({
   const detailFields = fields.filter((field) => field.key !== "avatarUrl" && field.key !== "companyId" && !customerLevelFieldKeys.has(field.key));
   const primaryEmail = getPrimaryRecordEmail({ ...record, title, data: { ...record.data, ...values } });
   const company = typeof values.companyId === "string" ? allRecords.find((candidate) => candidate.id === values.companyId) : undefined;
+  const contactEffectiveCustomerLevel = company
+    ? normalizeCustomerLevelValue(company.data.customerLevel)
+    : normalizeCustomerLevelValue(values.contactTempCustomerLevel ?? record.data.contactTempCustomerLevel);
   const contactMethods = normalizeContactMethods(contactMethodValue);
   const actualOwner = record.ownerId ? users.find((user) => user.id === record.ownerId) : undefined;
   const editedOwner = ownerId ? users.find((user) => user.id === ownerId) : undefined;
@@ -17462,7 +17519,7 @@ function ContactProfileEditor({
             <div className="contact-profile-summary">
               {company ? <span>{company.title}</span> : null}
               {primaryEmail ? <span>{primaryEmail}</span> : null}
-              <span>{customerLevelLabel(customerLevelSettings, normalizeCustomerLevelValue(record.data.customerLevel))}</span>
+              <span>{customerLevelLabel(customerLevelSettings, contactEffectiveCustomerLevel)}</span>
               <span>{users.find((user) => user.id === ownerId)?.name ?? "未分配负责人"}</span>
             </div>
           </div>
@@ -17485,7 +17542,7 @@ function ContactProfileEditor({
           </div>
         </div>
         <ContactProfileInfoStrip
-          companyName={company?.title}
+          company={company}
           contactMethodCount={contactMethods.length}
           ownerName={ownerName}
           poolLabel={poolLabel}
@@ -17496,9 +17553,15 @@ function ContactProfileEditor({
 
       <CustomerLevelPanel
         actionKey={customerLevelActionKey}
+        changeEnabled={!company}
+        currentLabel={company ? "公司等级" : "临时等级"}
+        currentLevel={contactEffectiveCustomerLevel}
+        description={company ? "联系人客户等级由关联公司决定，请到公司记录修改。" : "未关联公司时可维护临时等级；关联公司后以公司等级为准。"}
         disabled={isPending}
         record={record}
         settings={customerLevelSettings}
+        showSuggestion={false}
+        title={company ? "公司客户等级" : "临时客户等级"}
         onRefreshSuggestion={onRefreshCustomerLevelSuggestion}
         onRequestChange={onRequestCustomerLevelChange}
       />
@@ -17578,14 +17641,14 @@ function ContactProfileEditor({
 }
 
 function ContactProfileInfoStrip({
-  companyName,
+  company,
   contactMethodCount,
   ownerName,
   poolLabel,
   primaryEmail,
   reviewStatus
 }: {
-  companyName?: string;
+  company?: CrmRecord;
   contactMethodCount: number;
   ownerName: string;
   poolLabel: string;
@@ -17595,7 +17658,7 @@ function ContactProfileInfoStrip({
   const items = [
     { label: "归属", value: poolLabel },
     { label: "负责人", value: ownerName },
-    { label: "公司", value: companyName || "未关联" },
+    { label: "公司", value: company?.title || "未关联", record: company },
     { label: "主要邮箱", value: primaryEmail || "未设置" },
     { label: "联系方式", value: `${contactMethodCount} 条` },
     { label: "审核状态", value: reviewStatus }
@@ -17610,7 +17673,7 @@ function CompanyProfileInfoStrip({
   industry,
   ownerName,
   poolLabel,
-  primaryContactName,
+  primaryContact,
   reviewStatus
 }: {
   contactCount: number;
@@ -17618,13 +17681,14 @@ function CompanyProfileInfoStrip({
   industry?: string;
   ownerName: string;
   poolLabel: string;
-  primaryContactName?: string;
+  primaryContact?: CrmRecord;
   reviewStatus: string;
 }) {
+  const primaryContactName = primaryContact ? formatEmailContactLabel(primaryContact, getPrimaryRecordEmail(primaryContact)) : "";
   const items = [
     { label: "归属", value: poolLabel },
     { label: "负责人", value: ownerName },
-    { label: "主联系人", value: primaryContactName || "未设置" },
+    { label: "主联系人", value: primaryContactName || "未设置", record: primaryContact },
     { label: "联系人", value: `${contactCount} 位` },
     { label: "域名/行业", value: [domain || "", industry || ""].filter(Boolean).join(" / ") || "未设置" },
     { label: "审核状态", value: reviewStatus }
@@ -17636,7 +17700,7 @@ function CompanyProfileInfoStrip({
 function DealProfileInfoStrip({
   amount,
   closeDate,
-  companyName,
+  company,
   ownerName,
   pipelineName,
   reviewStatus,
@@ -17644,7 +17708,7 @@ function DealProfileInfoStrip({
 }: {
   amount: string;
   closeDate?: string;
-  companyName?: string;
+  company?: CrmRecord;
   ownerName: string;
   pipelineName?: string;
   reviewStatus: string;
@@ -17654,7 +17718,7 @@ function DealProfileInfoStrip({
     { label: "金额", value: amount || "未设置" },
     { label: "阶段", value: stageName || "未设置" },
     { label: "销售管道", value: pipelineName || "默认管道" },
-    { label: "关联公司", value: companyName || "未关联" },
+    { label: "关联公司", value: company?.title || "未关联", record: company },
     { label: "预计成交", value: closeDate || "未设置" },
     { label: "负责人/审核", value: `${ownerName} / ${reviewStatus}` }
   ];
@@ -17662,13 +17726,19 @@ function DealProfileInfoStrip({
   return <ProfileInfoStrip items={items} testId="deal-profile-info-strip" />;
 }
 
-function ProfileInfoStrip({ items, testId }: { items: Array<{ label: string; value: string }>; testId: string }) {
+function ProfileInfoStrip({ items, testId }: { items: Array<{ label: string; value: string; record?: CrmRecord }>; testId: string }) {
   return (
     <div className="contact-profile-info-strip" data-testid={testId}>
       {items.map((item) => (
         <div className="contact-profile-info-item" key={item.label}>
           <span className="contact-profile-info-label">{item.label}</span>
-          <strong title={item.value}>{item.value}</strong>
+          {item.record ? (
+            <a className="record-reference-link" href={buildRecordDetailHref(item.record)} title={item.value}>
+              {item.value}
+            </a>
+          ) : (
+            <strong title={item.value}>{item.value}</strong>
+          )}
         </div>
       ))}
     </div>
@@ -17890,7 +17960,7 @@ function CompanyProfileEditor({
           industry={industry}
           ownerName={ownerName}
           poolLabel={poolLabel}
-          primaryContactName={primaryContact ? formatEmailContactLabel(primaryContact, getPrimaryRecordEmail(primaryContact)) : undefined}
+          primaryContact={primaryContact}
           reviewStatus={reviewStatus}
         />
       </section>
@@ -18106,7 +18176,7 @@ function DealProfileEditor({
         <DealProfileInfoStrip
           amount={amountLabel}
           closeDate={closeDateLabel}
-          companyName={company?.title}
+          company={company}
           ownerName={ownerName}
           pipelineName={pipelineName}
           reviewStatus={reviewStatus}
@@ -18882,7 +18952,11 @@ function EditablePrimaryContactRow({
       <div className="editable-field-row wide" data-testid="company-primary-contact-select-display">
         <div>
           <span className="editable-field-label">主联系人</span>
-          <strong title={displayValue}>{displayValue}</strong>
+          {selectedContact ? (
+            <RecordReferenceLink record={selectedContact}>{displayValue}</RecordReferenceLink>
+          ) : (
+            <strong title={displayValue}>{displayValue}</strong>
+          )}
           <small>给公司发邮件时会优先使用主联系人邮箱。</small>
         </div>
         <button className="icon-button" aria-label="编辑主联系人" type="button" onClick={() => setIsOpen(true)} disabled={disabled || contacts.length === 0}>
