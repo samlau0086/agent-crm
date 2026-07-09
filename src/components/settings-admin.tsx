@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
@@ -225,6 +225,36 @@ const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: str
   { key: "operations", label: "运维审计", description: "导入队列、备份与审计日志" }
 ];
 
+const settingsTabSlugs: Record<SettingsTabKey, string> = {
+  access: "access",
+  crm: "crm",
+  pool: "pool",
+  smartReminders: "smart-reminders",
+  aiAgents: "ai-agents",
+  workflows: "workflows",
+  integrations: "integrations",
+  operations: "operations"
+};
+
+const settingsTabBySlug = Object.fromEntries(
+  (Object.entries(settingsTabSlugs) as Array<[SettingsTabKey, string]>).flatMap(([key, slug]) => [
+    [key, key],
+    [slug, key]
+  ])
+) as Record<string, SettingsTabKey>;
+
+function settingsTabFromPathname(pathname: string): SettingsTabKey {
+  const [, firstSegment, secondSegment] = pathname.split("/");
+  if (firstSegment !== "settings") {
+    return "access";
+  }
+  return settingsTabBySlug[decodeURIComponent(secondSegment ?? "")] ?? "access";
+}
+
+function settingsTabPath(tab: SettingsTabKey): string {
+  return tab === "access" ? "/settings" : `/settings/${settingsTabSlugs[tab]}`;
+}
+
 const aiAgentToolOptions: TagSelectOption[] = [
   { value: "query_records", label: "Query records", description: "Read CRM records allowed by RBAC" },
   { value: "create_email_draft", label: "Create email draft", description: "Prepare a draft for human review" },
@@ -250,6 +280,7 @@ const aiProviderTypeOptions: Array<{ value: AiProviderProfile["provider"]; label
 
 export function SettingsAdmin(props: SettingsAdminProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -259,7 +290,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [webhookActionKey, setWebhookActionKey] = useState("");
   const [workflowActionKey, setWorkflowActionKey] = useState("");
   const [reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId] = useState("");
-  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTabKey>("access");
+  const activeSettingsTab = settingsTabFromPathname(pathname);
   const [selectedObjectId, setSelectedObjectId] = useState("");
   const [selectedFieldId, setSelectedFieldId] = useState("");
   const [selectedRelationId, setSelectedRelationId] = useState("");
@@ -1702,7 +1733,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               type="button"
               role="tab"
               aria-selected={activeSettingsTab === tab.key}
-              onClick={() => setActiveSettingsTab(tab.key)}
+              onClick={() => router.push(settingsTabPath(tab.key))}
             >
               <strong>{tab.label}</strong>
               <span>{tab.description}</span>
@@ -1713,7 +1744,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             type="button"
             role="tab"
             aria-selected={activeSettingsTab === "workflows"}
-            onClick={() => setActiveSettingsTab("workflows")}
+            onClick={() => router.push(settingsTabPath("workflows"))}
           >
             <strong>自动化工作流</strong>
             <span>营销培育、客户跟进、交易推进与审批队列</span>
