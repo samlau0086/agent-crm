@@ -4621,6 +4621,23 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
   }
 
+  async function openEmailThreadMessage(threadId: string, messageId: string) {
+    if (!messageId) {
+      await openEmailThread(threadId);
+      return;
+    }
+    const nextEmailThreadPath = buildEmailRoutePath({ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, listDisplayMode: routeEmailListDisplayMode, search: routeEmailSearch, mailMode: "detail", threadId, messageId });
+    selectEmailThread(threadId);
+    setEmailDetailThreadId(threadId);
+    setEmailWorkspaceView("mail");
+    setActiveNav("email");
+    router.push(nextEmailThreadPath);
+    void updateEmailThreadState(threadId, { read: true });
+    if (!emailMessagesByThread[threadId]) {
+      await loadEmailMessages(threadId);
+    }
+  }
+
   function composeEmailForRecord(record: CrmRecord, emailAddress: string) {
     const requestKey = `record:${record.id}:${Date.now()}`;
     const composeParams = new URLSearchParams({
@@ -6971,6 +6988,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             {selectedRecordVisibleEmailThreads.map((thread) => {
                               const threadState = emailThreadUiStateFromThread(thread);
                               const threadMessages = emailMessagesByThread[thread.id] ?? [];
+                              const targetMessageId = [...threadMessages].sort((left, right) => emailMessageTimeValue(right).localeCompare(emailMessageTimeValue(left)))[0]?.id ?? "";
                               const threadCategory = threadState.category ?? inferEmailThreadCategory(thread, threadMessages);
                               const threadLabels = getEmailThreadDisplayLabels(thread, threadState, threadMessages);
                               return (
@@ -6979,7 +6997,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                                   data-testid={`record-email-thread-${thread.id}`}
                                   key={thread.id}
                                   type="button"
-                                  onClick={() => runAction(() => openEmailThread(thread.id))}
+                                  onClick={() => runAction(() => openEmailThreadMessage(thread.id, targetMessageId))}
                                 >
                                   <strong>{thread.subject}</strong>
                                   <div className="subtle">
@@ -9034,6 +9052,14 @@ function EmailWorkspace({
   const [threadUiState, setThreadUiState] = useState<Record<string, EmailThreadUiState>>(() => buildEmailThreadUiStateMap(threads));
   const [trashDisplayMessageIds, setTrashDisplayMessageIds] = useState<EmailTrashDisplayMessageIds>({});
   const [externalImageThreadIds, setExternalImageThreadIds] = useState<Set<string>>(() => new Set());
+  const [emailNowMs, setEmailNowMs] = useState<number | undefined>();
+  useEffect(() => {
+    setEmailNowMs(Date.now());
+  }, []);
+  const isFutureEmailTime = useCallback(
+    (value?: string | null) => Boolean(emailNowMs !== undefined && value && new Date(value).getTime() > emailNowMs),
+    [emailNowMs]
+  );
   const selectedMailboxMessages = selectedThread ? getEmailThreadMailboxDisplayMessages(selectedMessages, mailbox, labelFilter) : [];
   const selectedDisplayedMessages = selectedMailboxMessages.length > 0 ? selectedMailboxMessages : selectedMessages;
   const selectedDisplayMessage = getEmailThreadDisplayMessage(selectedDisplayedMessages, mailbox, selectedThread ? trashDisplayMessageIds[selectedThread.id] : undefined);
@@ -9051,7 +9077,7 @@ function EmailWorkspace({
         : selectedDisplayedMessages;
   const selectedThreadState = selectedThread ? threadUiState[selectedThread.id] ?? {} : {};
   const selectedThreadIsRead = Boolean(selectedThreadState.read);
-  const selectedThreadIsSnoozed = Boolean(selectedThreadState.snoozedUntil && new Date(selectedThreadState.snoozedUntil).getTime() > Date.now());
+  const selectedThreadIsSnoozed = isFutureEmailTime(selectedThreadState.snoozedUntil);
   const selectedThreadAllowsExternalImages = selectedThread ? externalImageThreadIds.has(selectedThread.id) : false;
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMinimized, setComposeMinimized] = useState(false);
@@ -9191,7 +9217,7 @@ function EmailWorkspace({
       const state = threadUiState[thread.id] ?? {};
       const threadCategory = state.category ?? inferEmailThreadCategory(thread, messages);
       const displayLabels = getEmailThreadDisplayLabels(thread, state, messages).map((label) => label.toLowerCase());
-      const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
+      const isSnoozed = isFutureEmailTime(state.snoozedUntil);
       const isDeleted = Boolean(state.deleted);
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
@@ -9225,7 +9251,7 @@ function EmailWorkspace({
       const matchesLabel = labelFilter ? displayLabels.includes(labelFilter.toLowerCase()) : true;
       return matchesMailbox && matchesCategory && matchesLabel && emailThreadMatchesSearch(thread, messages, searchQuery);
     });
-  }, [accountFilteredThreads, category, labelFilter, mailbox, messagesByThread, searchQuery, threadUiState]);
+  }, [accountFilteredThreads, category, isFutureEmailTime, labelFilter, mailbox, messagesByThread, searchQuery, threadUiState]);
   const visibleRows = useMemo(() => {
     return visibleThreads.flatMap((thread) => {
       const messages = messagesByThread[thread.id] ?? [];
@@ -9256,7 +9282,7 @@ function EmailWorkspace({
     for (const thread of accountFilteredThreads) {
       const messages = messagesByThread[thread.id] ?? [];
       const state = threadUiState[thread.id] ?? {};
-      const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
+      const isSnoozed = isFutureEmailTime(state.snoozedUntil);
       const isDeleted = Boolean(state.deleted);
       const isArchived = Boolean(state.archived);
       const hasDraft = messages.some((message) => message.status === "draft");
@@ -9277,20 +9303,20 @@ function EmailWorkspace({
       if (!isDeleted && hasAllMailMessage) counts.all += 1;
     }
     return counts;
-  }, [accountFilteredThreads, messagesByThread, threadUiState]);
+  }, [accountFilteredThreads, isFutureEmailTime, messagesByThread, threadUiState]);
   const categoryCounts = useMemo(() => {
     const counts = Object.fromEntries(emailCategoryMeta.map((item) => [item.key, 0])) as Record<EmailCategoryKey, number>;
     for (const thread of accountFilteredThreads) {
       const messages = messagesByThread[thread.id] ?? [];
       const state = threadUiState[thread.id] ?? {};
       const hasInboxMessage = getEmailThreadMailboxMessages(messages, "inbox").length > 0;
-      if (state.deleted || state.archived || !hasInboxMessage || (state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now())) {
+      if (state.deleted || state.archived || !hasInboxMessage || isFutureEmailTime(state.snoozedUntil)) {
         continue;
       }
       counts[state.category ?? inferEmailThreadCategory(thread, messages)] += 1;
     }
     return counts;
-  }, [accountFilteredThreads, messagesByThread, threadUiState]);
+  }, [accountFilteredThreads, isFutureEmailTime, messagesByThread, threadUiState]);
   const accountThreadCounts = useMemo(() => {
     const counts = new Map(accounts.map((account) => [account.id, 0]));
     for (const thread of threads) {
@@ -11129,7 +11155,7 @@ function EmailWorkspace({
                   const labels = getEmailThreadDisplayLabels(thread, state, displayMessage ? [displayMessage] : displayMessages);
                   const snippet = repairEmailMojibake(displayMessage?.bodyText || thread.summary || thread.aiAnalysis || "");
                   const isRead = state.read ?? false;
-                  const isSnoozed = Boolean(state.snoozedUntil && new Date(state.snoozedUntil).getTime() > Date.now());
+                  const isSnoozed = isFutureEmailTime(state.snoozedUntil);
                   const sendStatus = getEmailThreadSendStatus(messages, displayMessage);
                   const rowSubject = displayMessage?.subject || thread.subject;
                   const rowTime = displayMessage ? emailMessageTimeValue(displayMessage) : emailThreadTimeValue(thread);
@@ -12420,28 +12446,35 @@ function SmartReminderPanel({
 }) {
   const [activeView, setActiveView] = useState<SmartReminderPanelView>("open");
   const [activeKindFilter, setActiveKindFilter] = useState<SmartReminderKindFilter>("all");
-  const now = Date.now();
+  const [now, setNow] = useState<number | undefined>();
+  useEffect(() => {
+    setNow(Date.now());
+  }, []);
+  const isSnoozedForPanel = useCallback(
+    (reminder: SmartReminder) => now !== undefined && isSmartReminderSnoozed(reminder, now),
+    [now]
+  );
   const reminderCounts = useMemo(
     () => ({
-      open: reminders.filter((reminder) => reminder.status === "open" && !isSmartReminderSnoozed(reminder, now)).length,
-      snoozed: reminders.filter((reminder) => reminder.status === "open" && isSmartReminderSnoozed(reminder, now)).length,
+      open: reminders.filter((reminder) => reminder.status === "open" && !isSnoozedForPanel(reminder)).length,
+      snoozed: reminders.filter((reminder) => reminder.status === "open" && isSnoozedForPanel(reminder)).length,
       done: reminders.filter((reminder) => reminder.status === "done").length,
       dismissed: reminders.filter((reminder) => reminder.status === "dismissed").length
     }),
-    [now, reminders]
+    [isSnoozedForPanel, reminders]
   );
   const visibleReminders = useMemo(
     () =>
       reminders
         .filter((reminder) => {
-          if (activeView === "snoozed") return reminder.status === "open" && isSmartReminderSnoozed(reminder, now);
-          if (activeView === "open") return reminder.status === "open" && !isSmartReminderSnoozed(reminder, now);
+          if (activeView === "snoozed") return reminder.status === "open" && isSnoozedForPanel(reminder);
+          if (activeView === "open") return reminder.status === "open" && !isSnoozedForPanel(reminder);
           return reminder.status === activeView;
         })
         .filter((reminder) => smartReminderMatchesKindFilter(reminder, activeKindFilter))
         .sort(compareSmartReminderForUi)
         .slice(0, compact ? 8 : 20),
-    [activeKindFilter, activeView, compact, now, reminders]
+    [activeKindFilter, activeView, compact, isSnoozedForPanel, reminders]
   );
   const viewEmptyMessage =
     activeView === "dismissed"
@@ -12518,7 +12551,7 @@ function SmartReminderPanel({
                     <span className="subtle-badge">{smartReminderKindLabel(reminder.kind)}</span>
                     {reminder.status === "dismissed" ? <span className="subtle-badge">已忽略</span> : null}
                     {reminder.status === "done" ? <span className="subtle-badge">已完成</span> : null}
-                    {reminder.status === "open" && isSmartReminderSnoozed(reminder, now) ? <span className="subtle-badge">稍后提醒</span> : null}
+                    {reminder.status === "open" && isSnoozedForPanel(reminder) ? <span className="subtle-badge">稍后提醒</span> : null}
                     {pendingDeleteRequest ? <span className="danger-badge">删除待审核</span> : null}
                   </div>
                   <p>{reminder.body}</p>
@@ -12526,7 +12559,7 @@ function SmartReminderPanel({
                     {reminder.actionLabel ? <span>{reminder.actionLabel}</span> : null}
                     <span>创建时间 {formatDateTimeSeconds(reminder.createdAt)}</span>
                     {reminder.dueAt ? <span>建议截止 {formatDateTimeSeconds(reminder.dueAt)}</span> : null}
-                    {reminder.snoozedUntil && isSmartReminderSnoozed(reminder, now) ? <span>稍后至 {formatDateTimeSeconds(reminder.snoozedUntil)}</span> : null}
+                    {reminder.snoozedUntil && isSnoozedForPanel(reminder) ? <span>稍后至 {formatDateTimeSeconds(reminder.snoozedUntil)}</span> : null}
                     {reminder.sources.length ? <span>{reminder.sources.slice(0, 2).map((source) => source.label).join("、")}</span> : null}
                     {pendingDeleteRequest ? <span>删除原因：{pendingDeleteRequest.reason}</span> : null}
                   </div>
@@ -12544,7 +12577,7 @@ function SmartReminderPanel({
                       取消申请
                     </button>
                   ) : null
-                ) : reminder.status === "open" && !isSmartReminderSnoozed(reminder, now) ? (
+                ) : reminder.status === "open" && !isSnoozedForPanel(reminder) ? (
                   <>
                     <button type="button" className="secondary-button" onClick={() => onComplete(reminder)}>
                       <CheckCircle2 size={14} />
@@ -13900,11 +13933,11 @@ function sameCalendarDay(left: Date, right: Date): boolean {
 }
 
 function formatCalendarMonth(date: Date): string {
-  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(date);
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", timeZone: "Asia/Shanghai" }).format(date);
 }
 
 function formatCalendarDayLabel(date: Date): string {
-  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(date);
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "full", timeZone: "Asia/Shanghai" }).format(date);
 }
 
 function formatCalendarRange(start: Date, end: Date): string {
@@ -13912,11 +13945,11 @@ function formatCalendarRange(start: Date, end: Date): string {
 }
 
 function formatShortDate(date: Date): string {
-  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", timeZone: "Asia/Shanghai" }).format(date);
 }
 
 function formatShortWeekday(date: Date): string {
-  return new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(date);
+  return new Intl.DateTimeFormat("zh-CN", { weekday: "short", timeZone: "Asia/Shanghai" }).format(date);
 }
 
 function formatHourLabel(hour: number): string {
@@ -13927,11 +13960,11 @@ function formatTaskCalendarTime(value?: string): string {
   if (!value) {
     return "未排期";
   }
-  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }).format(new Date(value));
 }
 
 function formatCalendarDateTime(date: Date): string {
-  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(date);
 }
 
 function buildHeaderNotifications({

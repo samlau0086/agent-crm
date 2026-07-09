@@ -4280,6 +4280,19 @@ await run("quick contact actions open follow-up dialogs and save timeline activi
   assert.match(source, /Associated with <span>\{linkedRecord\.title\}<\/span>/);
 });
 
+await run("client date rendering stays deterministic during hydration", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const formatUtils = readFileSync("src/lib/utils/format.ts", "utf8");
+  assert.ok((formatUtils.match(/timeZone: "Asia\/Shanghai"/g) ?? []).length >= 2);
+  assert.ok((source.match(/timeZone: "Asia\/Shanghai"/g) ?? []).length >= 6);
+  assert.match(source, /const \[emailNowMs, setEmailNowMs\] = useState<number \| undefined>\(\)/);
+  assert.match(source, /setEmailNowMs\(Date\.now\(\)\)/);
+  assert.match(source, /const isFutureEmailTime = useCallback/);
+  assert.match(source, /const \[now, setNow\] = useState<number \| undefined>\(\)/);
+  assert.match(source, /setNow\(Date\.now\(\)\)/);
+  assert.match(source, /const isSnoozedForPanel = useCallback/);
+});
+
 await run("email workspace explains when translation fallback is not persisted", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(source, /text:\s*translated\.translatedBodyText \?\? "翻译未保存：需要配置可用 AI provider/);

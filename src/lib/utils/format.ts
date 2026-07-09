@@ -9,7 +9,7 @@ export function formatDate(value?: string): string {
   if (!value) {
     return "-";
   }
-  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(value));
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeZone: "Asia/Shanghai" }).format(new Date(value));
 }
 
 export function formatDateTimeSeconds(value?: string): string {
@@ -19,6 +19,7 @@ export function formatDateTimeSeconds(value?: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
     dateStyle: "medium",
     timeStyle: "medium",
+    timeZone: "Asia/Shanghai",
     hour12: false
   }).format(new Date(value));
 }
