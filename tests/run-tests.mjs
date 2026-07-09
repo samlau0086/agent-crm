@@ -3374,6 +3374,8 @@ await run("contact and company editing refinements are guarded", () => {
   assert.match(source, /disabled=\{isPending \|\| !title\.trim\(\) \|\| Boolean\(saveDisabled\)\}/);
   assert.match(source, /!hasRecordUpdatePatchChanges\(approvalBaselineRecord, updatePatch\)/);
   assert.match(source, /未检测到修改，无需提交审批/);
+  assert.match(source, /setEditOwnerId\(selectedRecord\.ownerId \?\? ""\)/);
+  assert.doesNotMatch(source, /setEditOwnerId\(selectedRecord\.ownerId \?\? props\.contextUser\.id\)/);
   assert.match(source, /function TimezoneSearchInput/);
   assert.match(source, /<TimezoneSearchInput/);
   assert.match(source, /function AddressAiParserButton/);

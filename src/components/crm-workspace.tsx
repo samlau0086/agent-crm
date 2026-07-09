@@ -3072,12 +3072,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     previousEditFormResetKey.current = selectedRecordFormResetKey;
     setEditTitle(selectedRecord.title);
-    setEditOwnerId(selectedRecord.ownerId ?? props.contextUser.id);
+    setEditOwnerId(selectedRecord.ownerId ?? "");
     setEditValues(buildRecordValues(selectedFields, selectedRecord));
     setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
     setContactDetailActivityTab("all");
     setRecordActivityComposerType("");
-  }, [props.contextUser.id, selectedFields, selectedRecord, selectedRecordFormResetKey]);
+  }, [selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
   function navigateToWorkspace(navKey: NavKey, objectKey?: string) {
     const nextPath = crmPathForNav(navKey, objectKey);
