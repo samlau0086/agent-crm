@@ -128,10 +128,27 @@ const schemas = {
   crm_admin_delete_pipeline: z.object({ pipelineId: idSchema }).strict()
 };
 
-export type CrmMcpToolName = keyof typeof schemas;
+type BaseCrmMcpToolName = keyof typeof schemas;
+const toolAliases = {
+  crmSalesDailyBriefing: "crm_sales_daily_briefing",
+  crmGetTodayBestActions: "crm_get_today_best_actions",
+  crmFindContact: "crm_find_contact",
+  crmCountContacts: "crm_count_contacts",
+  crmListContacts: "crm_list_contacts",
+  crmSearchRecords: "crm_search_records",
+  crmGetRecord: "crm_get_record",
+  crmListSmartReminders: "crm_list_smart_reminders",
+  crmGenerateSmartReminders: "crm_generate_smart_reminders",
+  crmDismissDuplicateTodayBestActions: "crm_dismiss_duplicate_today_best_actions",
+  crmUpdateSmartReminder: "crm_update_smart_reminder",
+  crmDeleteSmartReminder: "crm_delete_smart_reminder",
+  crmAiQuery: "crm_ai_query"
+} as const satisfies Record<string, BaseCrmMcpToolName>;
+
+export type CrmMcpToolName = BaseCrmMcpToolName | keyof typeof toolAliases;
 type RecordListLike = { records?: unknown[]; total?: unknown };
 
-export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string; description: string; inputSchema: (typeof schemas)[CrmMcpToolName] }> = [
+export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string; description: string; inputSchema: (typeof schemas)[BaseCrmMcpToolName] }> = [
   { name: "crm_health", title: "CRM health", description: "Check the remote CRM service health.", inputSchema: schemas.crm_health },
   { name: "crm_sales_daily_briefing", title: "Sales daily briefing", description: "Read an existing salesperson-style daily briefing. For ordinary today-best-action questions, use this read-only tool first; it never regenerates reminders.", inputSchema: schemas.crm_sales_daily_briefing },
   { name: "crm_get_today_best_actions", title: "Get today best actions", description: "Directly read existing open today-best-action smart reminders. Use this for user questions asking for today's best actions; it never regenerates reminders.", inputSchema: schemas.crm_get_today_best_actions },
@@ -180,20 +197,38 @@ export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string;
   { name: "crm_admin_delete_field", title: "Admin delete field", description: "Admin: delete a field definition when data and views allow it.", inputSchema: schemas.crm_admin_delete_field },
   { name: "crm_admin_create_pipeline", title: "Admin create pipeline", description: "Admin: create a CRM pipeline.", inputSchema: schemas.crm_admin_create_pipeline },
   { name: "crm_admin_update_pipeline", title: "Admin update pipeline", description: "Admin: update a CRM pipeline and stages.", inputSchema: schemas.crm_admin_update_pipeline },
-  { name: "crm_admin_delete_pipeline", title: "Admin delete pipeline", description: "Admin: delete a CRM pipeline when records do not depend on it.", inputSchema: schemas.crm_admin_delete_pipeline }
+  { name: "crm_admin_delete_pipeline", title: "Admin delete pipeline", description: "Admin: delete a CRM pipeline when records do not depend on it.", inputSchema: schemas.crm_admin_delete_pipeline },
+  { name: "crmSalesDailyBriefing", title: "Sales daily briefing alias", description: "Alias of crm_sales_daily_briefing for clients that prefer camelCase tool names.", inputSchema: schemas.crm_sales_daily_briefing },
+  { name: "crmGetTodayBestActions", title: "Get today best actions alias", description: "Alias of crm_get_today_best_actions for clients that prefer camelCase tool names.", inputSchema: schemas.crm_get_today_best_actions },
+  { name: "crmFindContact", title: "Find contact alias", description: "Alias of crm_find_contact for clients that prefer camelCase tool names.", inputSchema: schemas.crm_find_contact },
+  { name: "crmCountContacts", title: "Count contacts alias", description: "Alias of crm_count_contacts for clients that prefer camelCase tool names.", inputSchema: schemas.crm_count_contacts },
+  { name: "crmListContacts", title: "List contacts alias", description: "Alias of crm_list_contacts for clients that prefer camelCase tool names.", inputSchema: schemas.crm_list_contacts },
+  { name: "crmSearchRecords", title: "Search CRM records alias", description: "Alias of crm_search_records for clients that prefer camelCase tool names.", inputSchema: schemas.crm_search_records },
+  { name: "crmGetRecord", title: "Get CRM record alias", description: "Alias of crm_get_record for clients that prefer camelCase tool names.", inputSchema: schemas.crm_get_record },
+  { name: "crmListSmartReminders", title: "List smart reminders alias", description: "Alias of crm_list_smart_reminders for clients that prefer camelCase tool names.", inputSchema: schemas.crm_list_smart_reminders },
+  { name: "crmGenerateSmartReminders", title: "Regenerate smart reminders alias", description: "Alias of crm_generate_smart_reminders for clients that prefer camelCase tool names.", inputSchema: schemas.crm_generate_smart_reminders },
+  { name: "crmDismissDuplicateTodayBestActions", title: "Dismiss duplicate today best actions alias", description: "Alias of crm_dismiss_duplicate_today_best_actions for clients that prefer camelCase tool names.", inputSchema: schemas.crm_dismiss_duplicate_today_best_actions },
+  { name: "crmUpdateSmartReminder", title: "Update smart reminder alias", description: "Alias of crm_update_smart_reminder for clients that prefer camelCase tool names.", inputSchema: schemas.crm_update_smart_reminder },
+  { name: "crmDeleteSmartReminder", title: "Delete smart reminder alias", description: "Alias of crm_delete_smart_reminder for clients that prefer camelCase tool names.", inputSchema: schemas.crm_delete_smart_reminder },
+  { name: "crmAiQuery", title: "Ask CRM AI query alias", description: "Alias of crm_ai_query for clients that prefer camelCase tool names.", inputSchema: schemas.crm_ai_query }
 ];
 
 export async function executeCrmMcpTool(name: CrmMcpToolName, rawArgs: unknown, client: CrmMcpClient): Promise<CallToolResult> {
   try {
-    const args = schemas[name].parse(rawArgs ?? {});
-    const data = await dispatchTool(name, args, client);
+    const canonicalName = canonicalToolName(name);
+    const args = schemas[canonicalName].parse(rawArgs ?? {});
+    const data = await dispatchTool(canonicalName, args, client);
     return toToolResult(data);
   } catch (error) {
     return toToolErrorResult(error);
   }
 }
 
-async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)[CrmMcpToolName]>, client: CrmMcpClient): Promise<unknown> {
+function canonicalToolName(name: CrmMcpToolName): BaseCrmMcpToolName {
+  return name in toolAliases ? toolAliases[name as keyof typeof toolAliases] : (name as BaseCrmMcpToolName);
+}
+
+async function dispatchTool(name: BaseCrmMcpToolName, args: z.infer<(typeof schemas)[BaseCrmMcpToolName]>, client: CrmMcpClient): Promise<unknown> {
   switch (name) {
     case "crm_health":
       return client.get("/api/health");
