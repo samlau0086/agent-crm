@@ -11,6 +11,10 @@ const optionalIdSchema = z.union([idSchema, z.literal(""), z.null()]).optional()
 const recordFilterSchema = z.object({ field: z.string().trim().min(1), operator: z.enum(["contains", "equals"]), value: z.string() }).strict();
 const recordSortSchema = z.object({ field: z.string().trim().min(1), direction: z.enum(["asc", "desc"]) }).strict();
 const recordWriteSchema = z.object({ objectKey: objectKeySchema, title: z.string().trim().min(1), data: z.record(z.unknown()), stageKey: optionalIdSchema, ownerId: optionalIdSchema }).strict();
+const changeReasonSchema = z.string().trim().min(1).max(1000).optional();
+const metadataKeySchema = z.string().trim().regex(/^[a-z][a-z0-9_]*$/);
+const fieldOptionSchema = z.object({ label: z.string().trim().min(1), value: z.string().trim().min(1) }).strict();
+const pipelineStageSchema = z.object({ key: z.string().trim().min(1), label: z.string().trim().min(1), probability: z.number().min(0).max(1), position: z.number().int().min(0), color: z.string().trim().min(1) }).strict();
 const activityListSchema = z
   .object({
     recordId: idSchema.optional(),
@@ -61,11 +65,14 @@ const schemas = {
     .strict(),
   crm_get_record: z.object({ objectKey: objectKeySchema, recordId: idSchema }).strict(),
   crm_create_record: recordWriteSchema,
-  crm_update_record: recordWriteSchema.partial({ title: true, data: true, stageKey: true, ownerId: true }).extend({ objectKey: objectKeySchema, recordId: idSchema, changeReason: z.string().trim().min(1).max(1000).optional() }).strict(),
+  crm_update_record: recordWriteSchema.partial({ title: true, data: true, stageKey: true, ownerId: true }).extend({ objectKey: objectKeySchema, recordId: idSchema, changeReason: changeReasonSchema }).strict(),
+  crm_delete_record: z.object({ objectKey: objectKeySchema, recordId: idSchema, changeReason: changeReasonSchema }).strict(),
+  crm_transfer_record: z.object({ objectKey: objectKeySchema, recordId: idSchema, ownerId: z.union([idSchema, z.null()]).optional() }).strict(),
   crm_list_activities: activityListSchema,
   crm_create_activity: z.object({ recordId: optionalIdSchema, type: z.enum(["note", "call", "meeting", "task", "email"]), title: z.string().trim().min(1), body: z.string().trim().optional(), dueAt: z.string().trim().min(1).optional(), completedAt: z.string().trim().min(1).optional() }).strict(),
   crm_update_activity: z.object({ activityId: idSchema, title: z.string().trim().min(1).optional(), body: z.string().trim().optional(), dueAt: z.union([z.string().trim().min(1), z.null()]).optional(), completedAt: z.union([z.string().trim().min(1), z.null()]).optional(), archivedAt: z.union([z.string().trim().min(1), z.null()]).optional() }).strict(),
   crm_complete_task: z.object({ activityId: idSchema }).strict(),
+  crm_delete_activity: z.object({ activityId: idSchema, changeReason: changeReasonSchema }).strict(),
   crm_list_smart_reminders: z
     .object({
       status: z.enum(["open", "done", "dismissed"]).optional(),
@@ -87,45 +94,82 @@ const schemas = {
     })
     .strict(),
   crm_convert_smart_reminder_to_task: z.object({ reminderId: idSchema }).strict(),
+  crm_update_smart_reminder: z.object({ reminderId: idSchema, status: z.enum(["open", "done", "dismissed"]).optional(), snoozedUntil: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional() }).strict(),
+  crm_delete_smart_reminder: z.object({ reminderId: idSchema, changeReason: changeReasonSchema }).strict(),
   crm_ai_query: z.object({ question: z.string().trim().min(1), objectKey: objectKeySchema.optional() }).strict(),
   crm_list_email_accounts: z.object({}).strict(),
   crm_send_email: emailSendSchema,
   crm_list_email_threads: z.object({ recordId: idSchema.optional(), mailSearch: z.string().trim().optional() }).strict(),
   crm_get_email_thread: z.object({ threadId: idSchema }).strict(),
   crm_list_email_messages: z.object({ threadId: idSchema }).strict(),
+  crm_update_email_thread: z.object({ threadId: idSchema, recordId: z.union([idSchema, z.null()]).optional() }).strict(),
+  crm_update_email_thread_state: z.object({ threadId: idSchema, archived: z.boolean().optional(), category: z.union([z.enum(["primary", "promotions", "social", "updates"]), z.literal(""), z.null()]).optional(), deleted: z.boolean().optional(), important: z.boolean().optional(), labels: z.array(z.string().trim().min(1).max(40)).max(20).optional(), read: z.boolean().optional(), snoozedUntil: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional(), starred: z.boolean().optional() }).strict(),
+  crm_delete_email_thread: z.object({ threadId: idSchema }).strict(),
   crm_advance_deal_stage: z.object({ dealId: idSchema, stageKey: z.string().trim().min(1), pipelineOrder: z.number().finite().optional() }).strict(),
   crm_claim_record: z.object({ objectKey: objectKeySchema, recordId: idSchema }).strict(),
-  crm_release_record: z.object({ objectKey: objectKeySchema, recordId: idSchema }).strict()
+  crm_release_record: z.object({ objectKey: objectKeySchema, recordId: idSchema }).strict(),
+  crm_admin_create_object: z.object({ key: objectKeySchema, label: z.string().trim().min(1), pluralLabel: z.string().trim().min(1), description: z.string().trim().optional(), icon: z.string().trim().optional() }).strict(),
+  crm_admin_update_object: z.object({ objectId: idSchema, label: z.string().trim().min(1).optional(), pluralLabel: z.string().trim().min(1).optional(), description: z.string().trim().optional(), icon: z.string().trim().optional() }).strict(),
+  crm_admin_delete_object: z.object({ objectId: idSchema }).strict(),
+  crm_admin_create_relation: z.object({ fromObjectKey: objectKeySchema, toObjectKey: objectKeySchema, key: metadataKeySchema, label: z.string().trim().min(1), cardinality: z.enum(["one-to-one", "one-to-many", "many-to-many"]) }).strict(),
+  crm_admin_update_relation: z.object({ relationId: idSchema, fromObjectKey: objectKeySchema.optional(), toObjectKey: objectKeySchema.optional(), key: metadataKeySchema.optional(), label: z.string().trim().min(1).optional(), cardinality: z.enum(["one-to-one", "one-to-many", "many-to-many"]).optional() }).strict(),
+  crm_admin_delete_relation: z.object({ relationId: idSchema }).strict(),
+  crm_admin_create_field: z.object({ objectKey: objectKeySchema, key: z.string().trim().min(1), label: z.string().trim().min(1), type: z.enum(["text", "textarea", "number", "currency", "date", "select", "boolean", "user", "reference"]), required: z.boolean(), unique: z.boolean(), options: z.array(fieldOptionSchema).max(200).optional(), defaultValue: z.unknown().optional(), position: z.number().int().min(0).optional() }).strict(),
+  crm_admin_update_field: z.object({ fieldId: idSchema, label: z.string().trim().min(1).optional(), required: z.boolean().optional(), unique: z.boolean().optional(), options: z.array(fieldOptionSchema).max(200).optional(), defaultValue: z.unknown().optional(), position: z.number().int().min(0).optional() }).strict(),
+  crm_admin_delete_field: z.object({ fieldId: idSchema }).strict(),
+  crm_admin_create_pipeline: z.object({ objectKey: objectKeySchema, name: z.string().trim().min(1), isDefault: z.boolean(), stages: z.array(pipelineStageSchema).min(1).max(50) }).strict(),
+  crm_admin_update_pipeline: z.object({ pipelineId: idSchema, objectKey: objectKeySchema.optional(), name: z.string().trim().min(1).optional(), isDefault: z.boolean().optional(), stages: z.array(pipelineStageSchema).min(1).max(50).optional() }).strict(),
+  crm_admin_delete_pipeline: z.object({ pipelineId: idSchema }).strict()
 };
 
 export type CrmMcpToolName = keyof typeof schemas;
 
 export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string; description: string; inputSchema: (typeof schemas)[CrmMcpToolName] }> = [
   { name: "crm_health", title: "CRM health", description: "Check the remote CRM service health.", inputSchema: schemas.crm_health },
-  { name: "crm_sales_daily_briefing", title: "Sales daily briefing", description: "Read an existing salesperson-style daily briefing. For 'today's best actions' or '今日最佳行动', use this read-only tool first; it never regenerates reminders.", inputSchema: schemas.crm_sales_daily_briefing },
+  { name: "crm_sales_daily_briefing", title: "Sales daily briefing", description: "Read an existing salesperson-style daily briefing. For ordinary today-best-action questions, use this read-only tool first; it never regenerates reminders.", inputSchema: schemas.crm_sales_daily_briefing },
   { name: "crm_list_objects", title: "List CRM objects", description: "List CRM object definitions visible to this API key.", inputSchema: schemas.crm_list_objects },
   { name: "crm_describe_object", title: "Describe CRM object", description: "Return object metadata, fields, relations, and pipelines for one object.", inputSchema: schemas.crm_describe_object },
   { name: "crm_find_contact", title: "Find contact", description: "Find contacts by name, email, or company text and return matching CRM contact records.", inputSchema: schemas.crm_find_contact },
-  { name: "crm_search_records", title: "Search CRM records", description: "Search or list CRM records using existing CRM pagination and filters.", inputSchema: schemas.crm_search_records },
-  { name: "crm_get_record", title: "Get CRM record", description: "Fetch one CRM record by object key and record id.", inputSchema: schemas.crm_get_record },
+  { name: "crm_search_records", title: "Search CRM records", description: "Search or list CRM records using existing CRM pagination and filters. Use this first for exact business lookups such as contact/company/deal/product/quote name, email, phone, owner, or field value.", inputSchema: schemas.crm_search_records },
+  { name: "crm_get_record", title: "Get CRM record", description: "Fetch one CRM record by object key and record id. Use after search when the user asks for specific record details such as a contact email or company fields.", inputSchema: schemas.crm_get_record },
   { name: "crm_create_record", title: "Create CRM record", description: "Create a CRM record through the remote CRM API.", inputSchema: schemas.crm_create_record },
   { name: "crm_update_record", title: "Update CRM record", description: "Update a CRM record; approval responses are returned as-is.", inputSchema: schemas.crm_update_record },
+  { name: "crm_delete_record", title: "Delete CRM record", description: "Delete or request deletion of a CRM record, respecting approval rules for contacts, companies, deals, products, and quotes.", inputSchema: schemas.crm_delete_record },
+  { name: "crm_transfer_record", title: "Transfer CRM record", description: "Transfer a record owner or release ownership by setting ownerId null, respecting pool/admin permissions.", inputSchema: schemas.crm_transfer_record },
   { name: "crm_list_activities", title: "List CRM activities", description: "List CRM activities and tasks. Use type=task, completed=false, archived=false, and dueFrom/dueTo for today's tasks.", inputSchema: schemas.crm_list_activities },
   { name: "crm_create_activity", title: "Create CRM activity", description: "Create a note, call, meeting, task, or email activity.", inputSchema: schemas.crm_create_activity },
   { name: "crm_update_activity", title: "Update CRM activity", description: "Update an activity or task status.", inputSchema: schemas.crm_update_activity },
   { name: "crm_complete_task", title: "Complete task", description: "Mark a CRM task/activity complete using the current time.", inputSchema: schemas.crm_complete_task },
-  { name: "crm_list_smart_reminders", title: "List smart reminders", description: "Read existing CRM smart reminders, including today's best actions. For 'today's best actions' or '今日最佳行动', use status=open, snoozed=false, kind=today_best_action. Do not generate unless the user explicitly asks to regenerate or refresh.", inputSchema: schemas.crm_list_smart_reminders },
-  { name: "crm_generate_smart_reminders", title: "Regenerate smart reminders", description: "Regenerate or refresh smart reminders only when the user explicitly asks to regenerate, refresh, recalculate, or create new best actions. Do not use for ordinary questions like '今日最佳行动'. Set confirmRegenerate=true only for explicit regeneration requests. Requires ai.use permission.", inputSchema: schemas.crm_generate_smart_reminders },
+  { name: "crm_delete_activity", title: "Delete activity", description: "Delete or request deletion of an activity/task through the CRM approval path.", inputSchema: schemas.crm_delete_activity },
+  { name: "crm_list_smart_reminders", title: "List smart reminders", description: "Read existing CRM smart reminders, including today's best actions. For ordinary today-best-action questions, use status=open, snoozed=false, kind=today_best_action. Do not generate unless the user explicitly asks to regenerate or refresh.", inputSchema: schemas.crm_list_smart_reminders },
+  { name: "crm_generate_smart_reminders", title: "Regenerate smart reminders", description: "Regenerate or refresh smart reminders only when the user explicitly asks to regenerate, refresh, recalculate, or create new best actions. Do not use for ordinary today-best-action questions. Set confirmRegenerate=true only for explicit regeneration requests. Requires ai.use permission.", inputSchema: schemas.crm_generate_smart_reminders },
   { name: "crm_convert_smart_reminder_to_task", title: "Convert reminder to task", description: "Convert a smart reminder / today's best action into a concrete CRM task.", inputSchema: schemas.crm_convert_smart_reminder_to_task },
-  { name: "crm_ai_query", title: "Ask CRM AI query", description: "Ask a read-only natural-language CRM question through /api/ai/query.", inputSchema: schemas.crm_ai_query },
+  { name: "crm_update_smart_reminder", title: "Update smart reminder", description: "Mark a smart reminder open/done/dismissed or snooze it.", inputSchema: schemas.crm_update_smart_reminder },
+  { name: "crm_delete_smart_reminder", title: "Delete smart reminder", description: "Request deletion of a smart reminder through the CRM approval path.", inputSchema: schemas.crm_delete_smart_reminder },
+  { name: "crm_ai_query", title: "Ask CRM AI query", description: "Ask a read-only analytical CRM question through /api/ai/query. Do not use this for exact record lookups; use crm_search_records and crm_get_record for contacts, companies, deals, products, quotes, tasks, and emails.", inputSchema: schemas.crm_ai_query },
   { name: "crm_list_email_accounts", title: "List email accounts", description: "List available email sending accounts so a salesperson can choose an accountId before sending mail.", inputSchema: schemas.crm_list_email_accounts },
   { name: "crm_send_email", title: "Send CRM email", description: "Send or schedule an outbound CRM email through the normal CRM email queue, policies, permissions, tracking, and audit path.", inputSchema: schemas.crm_send_email },
   { name: "crm_list_email_threads", title: "List email threads", description: "List visible CRM email threads without modifying mail state.", inputSchema: schemas.crm_list_email_threads },
   { name: "crm_get_email_thread", title: "Get email thread", description: "Fetch one visible email thread.", inputSchema: schemas.crm_get_email_thread },
   { name: "crm_list_email_messages", title: "List email messages", description: "List messages in one visible email thread.", inputSchema: schemas.crm_list_email_messages },
+  { name: "crm_update_email_thread", title: "Link email thread", description: "Link or unlink an email thread to a CRM record by setting recordId or null.", inputSchema: schemas.crm_update_email_thread },
+  { name: "crm_update_email_thread_state", title: "Update email thread state", description: "Archive, trash, star, mark read, label, categorize, or snooze an email thread.", inputSchema: schemas.crm_update_email_thread_state },
+  { name: "crm_delete_email_thread", title: "Delete email thread", description: "Delete an email thread through the CRM email API; requires normal write permission.", inputSchema: schemas.crm_delete_email_thread },
   { name: "crm_advance_deal_stage", title: "Advance deal stage", description: "Move a deal to another pipeline stage through the CRM stage update API.", inputSchema: schemas.crm_advance_deal_stage },
   { name: "crm_claim_record", title: "Claim CRM record", description: "Claim a public pool contact or company record as the salesperson, respecting pool limits.", inputSchema: schemas.crm_claim_record },
-  { name: "crm_release_record", title: "Release CRM record", description: "Release an owned contact or company record back to the public pool.", inputSchema: schemas.crm_release_record }
+  { name: "crm_release_record", title: "Release CRM record", description: "Release an owned contact or company record back to the public pool.", inputSchema: schemas.crm_release_record },
+  { name: "crm_admin_create_object", title: "Admin create object", description: "Admin: create a custom CRM object definition.", inputSchema: schemas.crm_admin_create_object },
+  { name: "crm_admin_update_object", title: "Admin update object", description: "Admin: update a CRM object definition.", inputSchema: schemas.crm_admin_update_object },
+  { name: "crm_admin_delete_object", title: "Admin delete object", description: "Admin: delete a CRM object definition when records or references do not block it.", inputSchema: schemas.crm_admin_delete_object },
+  { name: "crm_admin_create_relation", title: "Admin create relation", description: "Admin: create a CRM relation definition between two objects.", inputSchema: schemas.crm_admin_create_relation },
+  { name: "crm_admin_update_relation", title: "Admin update relation", description: "Admin: update a CRM relation definition.", inputSchema: schemas.crm_admin_update_relation },
+  { name: "crm_admin_delete_relation", title: "Admin delete relation", description: "Admin: delete a CRM relation definition when existing data does not block it.", inputSchema: schemas.crm_admin_delete_relation },
+  { name: "crm_admin_create_field", title: "Admin create field", description: "Admin: create a field definition for a CRM object.", inputSchema: schemas.crm_admin_create_field },
+  { name: "crm_admin_update_field", title: "Admin update field", description: "Admin: update a field definition.", inputSchema: schemas.crm_admin_update_field },
+  { name: "crm_admin_delete_field", title: "Admin delete field", description: "Admin: delete a field definition when data and views allow it.", inputSchema: schemas.crm_admin_delete_field },
+  { name: "crm_admin_create_pipeline", title: "Admin create pipeline", description: "Admin: create a CRM pipeline.", inputSchema: schemas.crm_admin_create_pipeline },
+  { name: "crm_admin_update_pipeline", title: "Admin update pipeline", description: "Admin: update a CRM pipeline and stages.", inputSchema: schemas.crm_admin_update_pipeline },
+  { name: "crm_admin_delete_pipeline", title: "Admin delete pipeline", description: "Admin: delete a CRM pipeline when records do not depend on it.", inputSchema: schemas.crm_admin_delete_pipeline }
 ];
 
 export async function executeCrmMcpTool(name: CrmMcpToolName, rawArgs: unknown, client: CrmMcpClient): Promise<CallToolResult> {
@@ -164,6 +208,14 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
       const input = args as z.infer<typeof schemas.crm_update_record>;
       return client.patch(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}`, stripUndefined({ title: input.title, data: input.data, stageKey: input.stageKey, ownerId: input.ownerId, changeReason: input.changeReason }));
     }
+    case "crm_delete_record": {
+      const input = args as z.infer<typeof schemas.crm_delete_record>;
+      return client.delete(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}`, stripUndefined({ changeReason: input.changeReason }));
+    }
+    case "crm_transfer_record": {
+      const input = args as z.infer<typeof schemas.crm_transfer_record>;
+      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}/transfer`, stripUndefined({ ownerId: input.ownerId }));
+    }
     case "crm_list_activities":
       return client.get("/api/activities", { query: args as z.infer<typeof schemas.crm_list_activities> });
     case "crm_create_activity":
@@ -176,6 +228,10 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
       const input = args as z.infer<typeof schemas.crm_complete_task>;
       return client.patch(`/api/activities/${encodeURIComponent(input.activityId)}`, { completedAt: new Date().toISOString() });
     }
+    case "crm_delete_activity": {
+      const input = args as z.infer<typeof schemas.crm_delete_activity>;
+      return client.delete(`/api/activities/${encodeURIComponent(input.activityId)}`, stripUndefined({ changeReason: input.changeReason }));
+    }
     case "crm_list_smart_reminders":
       return listSmartReminders(client, args as z.infer<typeof schemas.crm_list_smart_reminders>);
     case "crm_generate_smart_reminders":
@@ -183,6 +239,14 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
     case "crm_convert_smart_reminder_to_task": {
       const input = args as z.infer<typeof schemas.crm_convert_smart_reminder_to_task>;
       return client.post(`/api/smart-reminders/${encodeURIComponent(input.reminderId)}/convert-task`);
+    }
+    case "crm_update_smart_reminder": {
+      const input = args as z.infer<typeof schemas.crm_update_smart_reminder>;
+      return client.patch(`/api/smart-reminders/${encodeURIComponent(input.reminderId)}`, stripUndefined({ status: input.status, snoozedUntil: input.snoozedUntil }));
+    }
+    case "crm_delete_smart_reminder": {
+      const input = args as z.infer<typeof schemas.crm_delete_smart_reminder>;
+      return client.delete(`/api/smart-reminders/${encodeURIComponent(input.reminderId)}`, stripUndefined({ changeReason: input.changeReason }));
     }
     case "crm_ai_query":
       return client.post("/api/ai/query", args);
@@ -200,6 +264,18 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
       const input = args as z.infer<typeof schemas.crm_list_email_messages>;
       return client.get(`/api/email/threads/${encodeURIComponent(input.threadId)}/messages`);
     }
+    case "crm_update_email_thread": {
+      const input = args as z.infer<typeof schemas.crm_update_email_thread>;
+      return client.patch(`/api/email/threads/${encodeURIComponent(input.threadId)}`, stripUndefined({ recordId: input.recordId }));
+    }
+    case "crm_update_email_thread_state": {
+      const input = args as z.infer<typeof schemas.crm_update_email_thread_state>;
+      return client.patch(`/api/email/threads/${encodeURIComponent(input.threadId)}/state`, stripUndefined({ ...input, threadId: undefined }));
+    }
+    case "crm_delete_email_thread": {
+      const input = args as z.infer<typeof schemas.crm_delete_email_thread>;
+      return client.delete(`/api/email/threads/${encodeURIComponent(input.threadId)}`);
+    }
     case "crm_advance_deal_stage": {
       const input = args as z.infer<typeof schemas.crm_advance_deal_stage>;
       return client.patch(`/api/records/deals/${encodeURIComponent(input.dealId)}/stage`, stripUndefined({ stageKey: input.stageKey, pipelineOrder: input.pipelineOrder }));
@@ -211,6 +287,46 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
     case "crm_release_record": {
       const input = args as z.infer<typeof schemas.crm_release_record>;
       return client.post(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}/release`);
+    }
+    case "crm_admin_create_object":
+      return client.post("/api/object-definitions", stripUndefined(args as z.infer<typeof schemas.crm_admin_create_object>));
+    case "crm_admin_update_object": {
+      const input = args as z.infer<typeof schemas.crm_admin_update_object>;
+      return client.patch(`/api/object-definitions/${encodeURIComponent(input.objectId)}`, stripUndefined({ ...input, objectId: undefined }));
+    }
+    case "crm_admin_delete_object": {
+      const input = args as z.infer<typeof schemas.crm_admin_delete_object>;
+      return client.delete(`/api/object-definitions/${encodeURIComponent(input.objectId)}`);
+    }
+    case "crm_admin_create_relation":
+      return client.post("/api/relation-definitions", stripUndefined(args as z.infer<typeof schemas.crm_admin_create_relation>));
+    case "crm_admin_update_relation": {
+      const input = args as z.infer<typeof schemas.crm_admin_update_relation>;
+      return client.patch(`/api/relation-definitions/${encodeURIComponent(input.relationId)}`, stripUndefined({ ...input, relationId: undefined }));
+    }
+    case "crm_admin_delete_relation": {
+      const input = args as z.infer<typeof schemas.crm_admin_delete_relation>;
+      return client.delete(`/api/relation-definitions/${encodeURIComponent(input.relationId)}`);
+    }
+    case "crm_admin_create_field":
+      return client.post("/api/field-definitions", stripUndefined(args as z.infer<typeof schemas.crm_admin_create_field>));
+    case "crm_admin_update_field": {
+      const input = args as z.infer<typeof schemas.crm_admin_update_field>;
+      return client.patch(`/api/field-definitions/${encodeURIComponent(input.fieldId)}`, stripUndefined({ ...input, fieldId: undefined }));
+    }
+    case "crm_admin_delete_field": {
+      const input = args as z.infer<typeof schemas.crm_admin_delete_field>;
+      return client.delete(`/api/field-definitions/${encodeURIComponent(input.fieldId)}`);
+    }
+    case "crm_admin_create_pipeline":
+      return client.post("/api/pipelines", stripUndefined(args as z.infer<typeof schemas.crm_admin_create_pipeline>));
+    case "crm_admin_update_pipeline": {
+      const input = args as z.infer<typeof schemas.crm_admin_update_pipeline>;
+      return client.patch(`/api/pipelines/${encodeURIComponent(input.pipelineId)}`, stripUndefined({ ...input, pipelineId: undefined }));
+    }
+    case "crm_admin_delete_pipeline": {
+      const input = args as z.infer<typeof schemas.crm_admin_delete_pipeline>;
+      return client.delete(`/api/pipelines/${encodeURIComponent(input.pipelineId)}`);
     }
     default:
       throw new Error(`Unsupported MCP tool: ${name satisfies never}`);

@@ -241,6 +241,61 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.deepEqual(JSON.parse(String(requests[4].init.body)), { accountId: "account-1", to: ["sam@example.com"], subject: "Follow up", bodyText: "Hello Sam", trackingEnabled: true, clientRequestId: "mcp-test-1" });
   });
 
+  await run("mcp business object tools cover delete transfer email state and admin metadata", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    await executeCrmMcpTool("crm_delete_record", { objectKey: "contacts", recordId: "contact-1", changeReason: "duplicate" }, client);
+    await executeCrmMcpTool("crm_transfer_record", { objectKey: "companies", recordId: "company-1", ownerId: null }, client);
+    await executeCrmMcpTool("crm_delete_activity", { activityId: "task-1", changeReason: "cancelled" }, client);
+    await executeCrmMcpTool("crm_update_smart_reminder", { reminderId: "reminder-1", status: "done" }, client);
+    await executeCrmMcpTool("crm_delete_smart_reminder", { reminderId: "reminder-1", changeReason: "not relevant" }, client);
+    await executeCrmMcpTool("crm_update_email_thread", { threadId: "thread-1", recordId: "contact-1" }, client);
+    await executeCrmMcpTool("crm_update_email_thread_state", { threadId: "thread-1", read: true, archived: true, labels: ["vip"] }, client);
+    await executeCrmMcpTool("crm_delete_email_thread", { threadId: "thread-1" }, client);
+    await executeCrmMcpTool("crm_admin_create_object", { key: "partners", label: "Partner", pluralLabel: "Partners" }, client);
+    await executeCrmMcpTool("crm_admin_create_relation", { fromObjectKey: "contacts", toObjectKey: "companies", key: "employer", label: "Employer", cardinality: "many-to-many" }, client);
+    await executeCrmMcpTool("crm_admin_update_relation", { relationId: "relation-1", label: "Primary employer" }, client);
+    await executeCrmMcpTool("crm_admin_delete_relation", { relationId: "relation-1" }, client);
+    await executeCrmMcpTool("crm_admin_update_field", { fieldId: "field-1", label: "Mobile" }, client);
+    await executeCrmMcpTool("crm_admin_delete_pipeline", { pipelineId: "pipeline-1" }, client);
+
+    assert.equal(new URL(requests[0].url).pathname, "/api/records/contacts/contact-1");
+    assert.equal(requests[0].init.method, "DELETE");
+    assert.deepEqual(JSON.parse(String(requests[0].init.body)), { changeReason: "duplicate" });
+    assert.equal(new URL(requests[1].url).pathname, "/api/records/companies/company-1/transfer");
+    assert.deepEqual(JSON.parse(String(requests[1].init.body)), { ownerId: null });
+    assert.equal(new URL(requests[2].url).pathname, "/api/activities/task-1");
+    assert.equal(requests[2].init.method, "DELETE");
+    assert.equal(new URL(requests[3].url).pathname, "/api/smart-reminders/reminder-1");
+    assert.equal(requests[3].init.method, "PATCH");
+    assert.equal(new URL(requests[5].url).pathname, "/api/email/threads/thread-1");
+    assert.equal(requests[5].init.method, "PATCH");
+    assert.equal(new URL(requests[6].url).pathname, "/api/email/threads/thread-1/state");
+    assert.deepEqual(JSON.parse(String(requests[6].init.body)), { archived: true, labels: ["vip"], read: true });
+    assert.equal(new URL(requests[7].url).pathname, "/api/email/threads/thread-1");
+    assert.equal(requests[7].init.method, "DELETE");
+    assert.equal(new URL(requests[8].url).pathname, "/api/object-definitions");
+    assert.equal(requests[8].init.method, "POST");
+    assert.equal(new URL(requests[9].url).pathname, "/api/relation-definitions");
+    assert.equal(requests[9].init.method, "POST");
+    assert.equal(new URL(requests[10].url).pathname, "/api/relation-definitions/relation-1");
+    assert.equal(requests[10].init.method, "PATCH");
+    assert.equal(new URL(requests[11].url).pathname, "/api/relation-definitions/relation-1");
+    assert.equal(requests[11].init.method, "DELETE");
+    assert.equal(new URL(requests[12].url).pathname, "/api/field-definitions/field-1");
+    assert.equal(requests[12].init.method, "PATCH");
+    assert.equal(new URL(requests[13].url).pathname, "/api/pipelines/pipeline-1");
+    assert.equal(requests[13].init.method, "DELETE");
+  });
+
   await run("mcp ai query tool calls crm ai query endpoint", async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const client = new CrmMcpClient({

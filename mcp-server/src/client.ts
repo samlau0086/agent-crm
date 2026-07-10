@@ -68,6 +68,10 @@ export class CrmMcpClient {
     return this.request<T>("PATCH", path, { ...options, body });
   }
 
+  delete<T>(path: string, body?: unknown, options: Omit<CrmMcpRequestOptions, "body"> = {}): Promise<T> {
+    return this.request<T>("DELETE", path, { ...options, body });
+  }
+
   private async request<T>(method: string, path: string, options: CrmMcpRequestOptions): Promise<T> {
     const url = this.buildUrl(path, options.query);
     const controller = new AbortController();

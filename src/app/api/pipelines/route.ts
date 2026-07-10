@@ -1,6 +1,5 @@
-
 export const dynamic = "force-dynamic";
-﻿import type { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { pipelineCreateSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
