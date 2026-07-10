@@ -246,7 +246,7 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
       return client.patch(`/api/activities/${encodeURIComponent(input.activityId)}`, { completedAt: new Date().toISOString() });
     }
     case "crm_list_smart_reminders":
-      return client.get("/api/smart-reminders", { query: args as z.infer<typeof schemas.crm_list_smart_reminders> });
+      return listSmartReminders(client, args as z.infer<typeof schemas.crm_list_smart_reminders>);
     case "crm_generate_smart_reminders":
       return generateSmartReminders(client, args as z.infer<typeof schemas.crm_generate_smart_reminders>);
     case "crm_convert_smart_reminder_to_task": {
@@ -338,6 +338,26 @@ function generateSmartReminders(client: CrmMcpClient, input: z.infer<typeof sche
     "/api/smart-reminders/generate",
     stripUndefined({ objectKey: input.objectKey, recordId: input.recordId, force: input.force, daily: input.daily })
   );
+}
+
+async function listSmartReminders(client: CrmMcpClient, input: z.infer<typeof schemas.crm_list_smart_reminders>): Promise<unknown> {
+  const reminders = await client.get("/api/smart-reminders", { query: input });
+  if (!Array.isArray(reminders)) {
+    return reminders;
+  }
+
+  const isTodayBestActionQuery = input.kind === "today_best_action";
+  return {
+    reminders,
+    count: reminders.length,
+    ...(reminders.length === 0
+      ? {
+          emptyState: isTodayBestActionQuery
+            ? "No existing generated today-best-action reminders were found. This does not prove there is no work to do. Ask the user whether to regenerate/refresh best actions before calling crm_generate_smart_reminders."
+            : "No existing smart reminders matched the filters."
+        }
+      : {})
+  };
 }
 
 function searchRecords(client: CrmMcpClient, input: z.infer<typeof schemas.crm_search_records>): Promise<unknown> {

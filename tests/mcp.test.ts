@@ -147,7 +147,9 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
       apiKey: "crm_live_test",
       fetchImpl: async (url, init) => {
         requests.push({ url: String(url), init: init ?? {} });
-        return new Response(JSON.stringify({ reminders: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        const requestUrl = new URL(String(url));
+        const body = requestUrl.pathname === "/api/smart-reminders" ? [] : { reminders: [] };
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
       }
     });
 
@@ -155,6 +157,11 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     const generateResult = await executeCrmMcpTool("crm_generate_smart_reminders", { force: true, daily: true, confirmRegenerate: true }, client);
 
     assert.equal(listResult.isError, undefined);
+    assert.deepEqual(listResult.structuredContent, {
+      reminders: [],
+      count: 0,
+      emptyState: "No existing generated today-best-action reminders were found. This does not prove there is no work to do. Ask the user whether to regenerate/refresh best actions before calling crm_generate_smart_reminders."
+    });
     assert.equal(generateResult.isError, undefined);
     const listUrl = new URL(requests[0].url);
     assert.equal(listUrl.pathname, "/api/smart-reminders");
