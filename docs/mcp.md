@@ -28,6 +28,17 @@ MCP_CRM_TIMEOUT_MS="30000"
 
 在本仓库目录执行：
 
+PowerShell 手动启动前，至少需要先设置 `CRM_BASE_URL` 和 `CRM_API_KEY`，否则会报 `CRM_BASE_URL is required` 或 `CRM_API_KEY is required`：
+
+```powershell
+$env:CRM_BASE_URL="https://你的-crm-域名"
+$env:CRM_API_KEY="crm_live_你的apikey"
+$env:MCP_CRM_DEFAULT_PAGE_SIZE="50"
+$env:MCP_CRM_TIMEOUT_MS="30000"
+```
+
+推荐在专用子目录执行，这样 OpenClaw / Cherry Studio 不需要直接指向仓库根目录：
+
 ```bash
 cd mcp-server
 npm install

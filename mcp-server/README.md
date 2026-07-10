@@ -13,6 +13,15 @@ MCP_CRM_TIMEOUT_MS="30000"
 
 启动：
 
+PowerShell 手动启动前，至少需要先设置 `CRM_BASE_URL` 和 `CRM_API_KEY`，否则会报 `CRM_BASE_URL is required` 或 `CRM_API_KEY is required`：
+
+```powershell
+$env:CRM_BASE_URL="https://你的-crm-域名"
+$env:CRM_API_KEY="crm_live_你的apikey"
+$env:MCP_CRM_DEFAULT_PAGE_SIZE="50"
+$env:MCP_CRM_TIMEOUT_MS="30000"
+```
+
 ```bash
 npm install
 npm run start
