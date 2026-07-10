@@ -3,7 +3,7 @@ import type { z } from "zod";
 import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { emailSendSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
-import type { EmailSignature } from "@/lib/crm/types";
+import type { EmailAccount, EmailSignature } from "@/lib/crm/types";
 import { getFailedEmailSendResultOrThrow } from "@/lib/email/send-failure";
 import { getEmailDeliveryMode } from "@/lib/email/delivery-mode";
 import { getEmailProviderCapability } from "@/lib/email/providers";
@@ -20,7 +20,7 @@ async function sendEmail(request: NextRequest) {
     const repository = getCrmRepository();
     const account = await repository.getEmailAccount(context, body.accountId);
     const { signatureId, signatureName, ...messageBody } = body;
-    const queuedBody = await applySelectedSignature(repository, context, account.id, messageBody as EmailQueueBody, { signatureId, signatureName });
+    const queuedBody = await applySelectedSignature(repository, context, account, messageBody as EmailQueueBody, { signatureId, signatureName });
     const capability = getEmailProviderCapability(account.provider);
     if (getEmailDeliveryMode() !== "dry-run" && account.status === "active" && account.sendEnabled && capability.supportsSend && !account.connectionConfigured) {
       throw new Error("Email account connection is not configured");
@@ -73,14 +73,14 @@ export const POST = withApiMetrics("POST /api/email/send", sendEmail);
 async function applySelectedSignature(
   repository: ReturnType<typeof getCrmRepository>,
   context: Awaited<ReturnType<typeof getRequestContext>>,
-  accountId: string,
+  account: EmailAccount,
   message: EmailQueueBody,
   selection: Pick<EmailSendBody, "signatureId" | "signatureName">
 ): Promise<EmailQueueBody> {
-  if (!selection.signatureId && !selection.signatureName) {
+  const signature = await resolveSelectedSignature(repository, context, account, selection);
+  if (!signature) {
     return message;
   }
-  const signature = await resolveSelectedSignature(repository, context, accountId, selection);
   return {
     ...message,
     bodyText: appendTextSignature(message.bodyText, signature.bodyText),
@@ -91,18 +91,21 @@ async function applySelectedSignature(
 async function resolveSelectedSignature(
   repository: ReturnType<typeof getCrmRepository>,
   context: Awaited<ReturnType<typeof getRequestContext>>,
-  accountId: string,
+  account: EmailAccount,
   selection: Pick<EmailSendBody, "signatureId" | "signatureName">
-): Promise<EmailSignature> {
+): Promise<EmailSignature | undefined> {
   const signatures = await repository.listEmailSignatures(context);
-  const activeScoped = signatures.filter((signature) => signature.active && (!signature.accountId || signature.accountId === accountId));
-  const signature = selection.signatureId
-    ? activeScoped.find((candidate) => candidate.id === selection.signatureId)
-    : activeScoped.find((candidate) => candidate.name.toLowerCase() === selection.signatureName!.toLowerCase());
-  if (!signature) {
-    throw new Error(selection.signatureId ? `Email signature not found: ${selection.signatureId}` : `Email signature not found: ${selection.signatureName}`);
+  const activeScoped = signatures.filter((signature) => signature.active && (!signature.accountId || signature.accountId === account.id));
+  if (selection.signatureId || selection.signatureName) {
+    const signature = selection.signatureId
+      ? activeScoped.find((candidate) => candidate.id === selection.signatureId)
+      : activeScoped.find((candidate) => candidate.name.toLowerCase() === selection.signatureName!.toLowerCase());
+    if (!signature) {
+      throw new Error(selection.signatureId ? `Email signature not found: ${selection.signatureId}` : `Email signature not found: ${selection.signatureName}`);
+    }
+    return signature;
   }
-  return signature;
+  return activeScoped.find((candidate) => candidate.id === account.defaultSignatureId) ?? activeScoped.find((candidate) => !candidate.accountId && candidate.isDefault);
 }
 
 function appendTextSignature(bodyText: string, signatureText: string): string {

@@ -2577,6 +2577,8 @@ await run("email send route rejects live unconfigured accounts before queueing",
   assert.match(source, /throw new Error\("Email account connection is not configured"\)/);
   assert.match(source, /getEmailAccount\(context, body\.accountId\)[\s\S]*applySelectedSignature\(/);
   assert.match(source, /queueEmailMessage\(context, queuedBody\)/);
+  assert.match(source, /candidate\.id === account\.defaultSignatureId/);
+  assert.match(source, /!candidate\.accountId && candidate\.isDefault/);
 });
 
 await run("email workspace exposes sync-all control backed by the sync-all api", () => {
