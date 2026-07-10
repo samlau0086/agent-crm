@@ -4,7 +4,7 @@
 
 本项目提供一个本地 stdio MCP server，方便 OpenClaw、Cherry Studio 等本地 AI agent 操作远程部署的 CRM。MCP server 不直连数据库，也不新增远程 `/mcp` 端点；它只通过 `CRM_BASE_URL` + `CRM_API_KEY` 调用远程 CRM 的现有 HTTPS REST API，所以会继续复用现有 Bearer API key、RBAC、审批流、审计日志、分页和 API 限制。
 
-简要来说：AI agent 在本地运行，CRM 在远程服务器运行；本地 MCP 客户端启动 `npm run mcp:server`，这个本地 MCP server 再用 CRM API key 远程调用你的 CRM 服务。
+简要来说：AI agent 在本地运行，CRM 在远程服务器运行；本地 MCP 客户端从 `mcp-server` 子目录启动 `npm run start`，这个本地 MCP server 再用 CRM API key 远程调用你的 CRM 服务。
 
 ### 当前 MCP 支持能力
 
@@ -36,7 +36,9 @@ MCP_CRM_TIMEOUT_MS="30000"
 启动 MCP server：
 
 ```bash
-npm run mcp:server
+cd mcp-server
+npm install
+npm run start
 ```
 
 ### 接入 OpenClaw / Cherry Studio
@@ -50,8 +52,8 @@ npm run mcp:server
   "mcpServers": {
     "ai-agent-crm": {
       "command": "npm",
-      "args": ["run", "mcp:server"],
-      "cwd": "C:\\Users\\samla\\Documents\\ai-agent-crm",
+      "args": ["run", "start"],
+      "cwd": "C:\\Users\\samla\\Documents\\ai-agent-crm\\mcp-server",
       "env": {
         "CRM_BASE_URL": "https://crm.example.com",
         "CRM_API_KEY": "crm_live_...",
@@ -63,7 +65,7 @@ npm run mcp:server
 }
 ```
 
-在 Windows 上，如果客户端找不到 `npm`，把 `"command": "npm"` 改成 `"command": "npm.cmd"`。如果客户端界面没有 `cwd` 字段，就使用它提供的“工作目录/启动目录”设置，或确保它从本仓库目录启动 `npm run mcp:server`。
+在 Windows 上，如果客户端找不到 `npm`，把 `"command": "npm"` 改成 `"command": "npm.cmd"`。如果客户端界面没有 `cwd` 字段，就使用它提供的“工作目录/启动目录”设置，并指向 `mcp-server` 子目录。
 
 更完整说明见 [docs/mcp.md](docs/mcp.md)。
 
