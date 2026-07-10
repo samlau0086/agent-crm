@@ -287,6 +287,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [actionPending, setActionPending] = useState(false);
   const [webhookActionKey, setWebhookActionKey] = useState("");
   const [workflowActionKey, setWorkflowActionKey] = useState("");
   const [reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId] = useState("");
@@ -310,6 +311,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [teamDraft, setTeamDraft] = useState<TeamDraft>(emptyTeamDraft());
   const [apiKeyDraft, setApiKeyDraft] = useState<ApiKeyDraft>(emptyApiKeyDraft());
   const [createdApiKeyToken, setCreatedApiKeyToken] = useState<string | null>(null);
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>(props.apiKeys);
   const [webhookDraft, setWebhookDraft] = useState<WebhookDraft>(emptyWebhookDraft());
   const [selectedWebhookEditId, setSelectedWebhookEditId] = useState("");
   const [recordChangeRequests, setRecordChangeRequests] = useState<RecordChangeRequest[]>(props.recordChangeRequests);
@@ -366,6 +368,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [auditQuery, setAuditQuery] = useState("");
 
   const canManage = props.role.permissions.includes("crm.admin");
+  const isActionPending = isPending || actionPending;
   const selectedObject = props.objects.find((object) => object.id === selectedObjectId);
   const selectedField = props.fields.find((field) => field.id === selectedFieldId);
   const selectedRelation = props.relations.find((relation) => relation.id === selectedRelationId);
@@ -680,6 +683,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setTeamDraft(selectedTeam ? { name: selectedTeam.name } : emptyTeamDraft());
   }, [selectedTeam]);
 
+  useEffect(() => {
+    setApiKeys(props.apiKeys);
+  }, [props.apiKeys]);
+
   function resetObjectForm() {
     setSelectedObjectId("");
     setObjectDraft(emptyObjectDraft());
@@ -787,6 +794,24 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         showError(actionError instanceof Error ? actionError.message : "操作失败");
       }
     });
+  }
+
+  function runManagedAction(action: () => Promise<void>) {
+    setMessage(null);
+    setError(null);
+    setActionPending(true);
+    void action()
+      .then(() => {
+        startTransition(() => {
+          router.refresh();
+        });
+      })
+      .catch((actionError) => {
+        showError(actionError instanceof Error ? actionError.message : "Action failed");
+      })
+      .finally(() => {
+        setActionPending(false);
+      });
   }
 
   async function runWebhookAction(actionKey: string, action: () => Promise<void>) {
@@ -1231,13 +1256,15 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       }
     });
     setCreatedApiKeyToken(result.token);
+    setApiKeys((current) => [result.apiKey, ...current.filter((candidate) => candidate.id !== result.apiKey.id)]);
     setMessage(`Created API key ${result.apiKey.name}. Copy the token now; it will not be shown again.`);
     setApiKeyDraft(emptyApiKeyDraft());
   }
 
   async function revokeApiKey(apiKey: ApiKey) {
     if (!(await requestConfirm({ title: "撤销 API Key", message: `确定撤销 API Key“${apiKey.name}”？撤销后使用该 token 的集成会立即失效。`, confirmLabel: "撤销", danger: true }))) return;
-    await fetchJson(`/api/api-keys/${apiKey.id}`, { method: "PATCH", body: { action: "revoke" } });
+    const revoked = await fetchJson<ApiKey>(`/api/api-keys/${apiKey.id}`, { method: "PATCH", body: { action: "revoke" } });
+    setApiKeys((current) => current.map((candidate) => (candidate.id === revoked.id ? revoked : candidate)));
     setMessage(`Revoked API key ${apiKey.name}`);
     setCreatedApiKeyToken(null);
   }
@@ -2795,15 +2822,15 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       {activeSettingsTab === "integrations" ? (
         <div className="settings-tab-panel" role="tabpanel">
           <ApiKeyAdminPanel
-            apiKeys={props.apiKeys}
+            apiKeys={apiKeys}
             users={props.users}
             draft={apiKeyDraft}
             createdToken={createdApiKeyToken}
-            isPending={isPending}
+            isPending={isActionPending}
             onDraftChange={(patch) => setApiKeyDraft((current) => ({ ...current, ...patch }))}
             onTogglePermission={toggleApiKeyPermission}
-            onCreate={() => runAction(createApiKey)}
-            onRevoke={(apiKey) => runAction(() => revokeApiKey(apiKey))}
+            onCreate={() => runManagedAction(createApiKey)}
+            onRevoke={(apiKey) => runManagedAction(() => revokeApiKey(apiKey))}
             onClearToken={() => setCreatedApiKeyToken(null)}
             onReset={resetApiKeyForm}
           />
@@ -5764,7 +5791,9 @@ function formatAuditTime(value: string): string {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
+    timeZone: "Asia/Shanghai",
+    hour12: false
   }).format(new Date(value));
 }
 
