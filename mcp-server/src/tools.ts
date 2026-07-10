@@ -1,4 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CrmMcpApiError, type CrmMcpClient } from "./client.ts";
 
@@ -38,6 +39,8 @@ const emailSendSchema = z
     subject: z.string().trim().min(1).max(200),
     bodyText: z.string().trim().min(1),
     bodyHtml: z.string().trim().optional(),
+    signatureId: idSchema.optional(),
+    signatureName: z.string().trim().min(1).max(120).optional(),
     scheduledSendAt: z.string().trim().min(1).optional(),
     trackingEnabled: z.boolean().optional(),
     clientRequestId: z.string().trim().min(8).max(120).regex(/^[A-Za-z0-9._:-]+$/).optional()
@@ -104,6 +107,7 @@ const schemas = {
   crm_delete_smart_reminder: z.object({ reminderId: smartReminderIdSchema, changeReason: changeReasonSchema }).strict(),
   crm_ai_query: z.object({ question: z.string().trim().min(1), objectKey: objectKeySchema.optional() }).strict(),
   crm_list_email_accounts: z.object({}).strict(),
+  crm_list_email_signatures: z.object({ accountId: idSchema.optional() }).strict(),
   crm_send_email: emailSendSchema,
   crm_list_email_threads: z.object({ recordId: idSchema.optional(), mailSearch: z.string().trim().optional() }).strict(),
   crm_get_email_thread: z.object({ threadId: idSchema }).strict(),
@@ -142,7 +146,9 @@ const toolAliases = {
   crmDismissDuplicateTodayBestActions: "crm_dismiss_duplicate_today_best_actions",
   crmUpdateSmartReminder: "crm_update_smart_reminder",
   crmDeleteSmartReminder: "crm_delete_smart_reminder",
-  crmAiQuery: "crm_ai_query"
+  crmAiQuery: "crm_ai_query",
+  crmListEmailSignatures: "crm_list_email_signatures",
+  crmSendEmail: "crm_send_email"
 } as const satisfies Record<string, BaseCrmMcpToolName>;
 
 export type CrmMcpToolName = BaseCrmMcpToolName | keyof typeof toolAliases;
@@ -176,7 +182,8 @@ export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string;
   { name: "crm_delete_smart_reminder", title: "Delete smart reminder", description: "Request deletion of a real smart reminder through the CRM approval path. Only use reminderId values returned in reminders by crm_get_today_best_actions or crm_list_smart_reminders; never invent ids.", inputSchema: schemas.crm_delete_smart_reminder },
   { name: "crm_ai_query", title: "Ask CRM AI query", description: "Ask a read-only analytical CRM question through /api/ai/query. Do not use this for exact record lookups; use crm_search_records and crm_get_record for contacts, companies, deals, products, quotes, tasks, and emails.", inputSchema: schemas.crm_ai_query },
   { name: "crm_list_email_accounts", title: "List email accounts", description: "List available email sending accounts so a salesperson can choose an accountId before sending mail.", inputSchema: schemas.crm_list_email_accounts },
-  { name: "crm_send_email", title: "Send CRM email", description: "Send or schedule an outbound CRM email through the normal CRM email queue, policies, permissions, tracking, and audit path.", inputSchema: schemas.crm_send_email },
+  { name: "crm_list_email_signatures", title: "List email signatures", description: "List available CRM email signature templates. Use this before sending when the user asks to use a named signature such as Cigafun.", inputSchema: schemas.crm_list_email_signatures },
+  { name: "crm_send_email", title: "Send CRM email", description: "Send or schedule an outbound CRM email through the normal CRM email queue, policies, permissions, tracking, and audit path. When the user says to use a named signature, pass signatureName, for example signatureName=\"Cigafun\"; do not type the signature name manually in bodyText.", inputSchema: schemas.crm_send_email },
   { name: "crm_list_email_threads", title: "List email threads", description: "List visible CRM email threads without modifying mail state.", inputSchema: schemas.crm_list_email_threads },
   { name: "crm_get_email_thread", title: "Get email thread", description: "Fetch one visible email thread.", inputSchema: schemas.crm_get_email_thread },
   { name: "crm_list_email_messages", title: "List email messages", description: "List messages in one visible email thread.", inputSchema: schemas.crm_list_email_messages },
@@ -210,7 +217,9 @@ export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string;
   { name: "crmDismissDuplicateTodayBestActions", title: "Dismiss duplicate today best actions alias", description: "Alias of crm_dismiss_duplicate_today_best_actions for clients that prefer camelCase tool names.", inputSchema: schemas.crm_dismiss_duplicate_today_best_actions },
   { name: "crmUpdateSmartReminder", title: "Update smart reminder alias", description: "Alias of crm_update_smart_reminder for clients that prefer camelCase tool names.", inputSchema: schemas.crm_update_smart_reminder },
   { name: "crmDeleteSmartReminder", title: "Delete smart reminder alias", description: "Alias of crm_delete_smart_reminder for clients that prefer camelCase tool names.", inputSchema: schemas.crm_delete_smart_reminder },
-  { name: "crmAiQuery", title: "Ask CRM AI query alias", description: "Alias of crm_ai_query for clients that prefer camelCase tool names.", inputSchema: schemas.crm_ai_query }
+  { name: "crmAiQuery", title: "Ask CRM AI query alias", description: "Alias of crm_ai_query for clients that prefer camelCase tool names.", inputSchema: schemas.crm_ai_query },
+  { name: "crmListEmailSignatures", title: "List email signatures alias", description: "Alias of crm_list_email_signatures for clients that prefer camelCase tool names.", inputSchema: schemas.crm_list_email_signatures },
+  { name: "crmSendEmail", title: "Send CRM email alias", description: "Alias of crm_send_email for clients that prefer camelCase tool names.", inputSchema: schemas.crm_send_email }
 ];
 
 export async function executeCrmMcpTool(name: CrmMcpToolName, rawArgs: unknown, client: CrmMcpClient): Promise<CallToolResult> {
@@ -306,8 +315,10 @@ async function dispatchTool(name: BaseCrmMcpToolName, args: z.infer<(typeof sche
       return client.post("/api/ai/query", args);
     case "crm_list_email_accounts":
       return client.get("/api/email/accounts");
+    case "crm_list_email_signatures":
+      return listEmailSignatures(client, args as z.infer<typeof schemas.crm_list_email_signatures>);
     case "crm_send_email":
-      return client.post("/api/email/send", stripUndefined(args as z.infer<typeof schemas.crm_send_email>));
+      return sendEmail(client, args as z.infer<typeof schemas.crm_send_email>);
     case "crm_list_email_threads":
       return client.get("/api/email/threads", { query: args as z.infer<typeof schemas.crm_list_email_threads> });
     case "crm_get_email_thread": {
@@ -606,6 +617,47 @@ function searchRecords(client: CrmMcpClient, input: z.infer<typeof schemas.crm_s
       keyset: input.keyset ? "1" : undefined
     }
   });
+}
+
+async function listEmailSignatures(client: CrmMcpClient, input: z.infer<typeof schemas.crm_list_email_signatures>): Promise<unknown> {
+  const signatures = await client.get("/api/email/signatures");
+  if (!input.accountId || !Array.isArray(signatures)) {
+    return signatures;
+  }
+  return signatures.filter((signature) => {
+    if (!signature || typeof signature !== "object") {
+      return false;
+    }
+    const accountId = (signature as { accountId?: unknown }).accountId;
+    return accountId === undefined || accountId === null || accountId === input.accountId;
+  });
+}
+
+function sendEmail(client: CrmMcpClient, input: z.infer<typeof schemas.crm_send_email>): Promise<unknown> {
+  return client.post(
+    "/api/email/send",
+    stripUndefined({
+      ...input,
+      clientRequestId: input.clientRequestId ?? createEmailClientRequestId(input)
+    })
+  );
+}
+
+function createEmailClientRequestId(input: z.infer<typeof schemas.crm_send_email>): string {
+  const stablePayload = {
+    accountId: input.accountId,
+    to: input.to.map((email) => email.toLowerCase()),
+    cc: input.cc?.map((email) => email.toLowerCase()),
+    bcc: input.bcc?.map((email) => email.toLowerCase()),
+    subject: input.subject,
+    bodyText: input.bodyText,
+    bodyHtml: input.bodyHtml,
+    signatureId: input.signatureId,
+    signatureName: input.signatureName?.toLowerCase(),
+    scheduledSendAt: input.scheduledSendAt
+  };
+  const digest = createHash("sha256").update(JSON.stringify(stablePayload)).digest("hex").slice(0, 48);
+  return `mcp:${digest}`;
 }
 
 function dayBounds(dateInput: string | undefined, timezoneOffsetMinutes = -new Date().getTimezoneOffset()): { start: string; end: string } {

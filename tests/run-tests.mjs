@@ -2575,7 +2575,8 @@ await run("email send route rejects live unconfigured accounts before queueing",
   assert.match(source, /getEmailDeliveryMode\(\) !== "dry-run"/);
   assert.match(source, /account\.status === "active" && account\.sendEnabled && capability\.supportsSend && !account\.connectionConfigured/);
   assert.match(source, /throw new Error\("Email account connection is not configured"\)/);
-  assert.match(source, /getEmailAccount\(context, body\.accountId\)[\s\S]*queueEmailMessage\(context, body\)/);
+  assert.match(source, /getEmailAccount\(context, body\.accountId\)[\s\S]*applySelectedSignature\(/);
+  assert.match(source, /queueEmailMessage\(context, queuedBody\)/);
 });
 
 await run("email workspace exposes sync-all control backed by the sync-all api", () => {
@@ -4712,7 +4713,7 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /"snooze" \| "unsnooze" \| "important"/);
   assert.match(workspace, /snoozedUntil: null/);
   assert.match(workspace, /aria-label="取消稍后提醒"/);
-  assert.match(sendRoute, /body\.groupSendMode && body\.to\.length > 1/);
+  assert.match(sendRoute, /queuedBody\.groupSendMode && queuedBody\.to\.length > 1/);
   assert.match(sendRoute, /shouldDelaySend/);
   assert.match(worker, /listDueQueuedEmailMessagesForWorker\(1\)/);
   assert.match(tracking, /function appendEmailTrackingHtml/);
@@ -12908,6 +12909,7 @@ await run("email send sync and ai schemas validate bounded payloads", () => {
     bcc: ["archive@example.com"],
     subject: "Follow up",
     bodyText: "Thanks for your time.",
+    signatureName: "Cigafun",
     clientRequestId: "send-request-123",
     attachments: [{ fileName: "proposal.txt", contentType: "text/plain", size: 11, contentBase64: Buffer.from("hello world").toString("base64") }]
   }).clientRequestId, "send-request-123");

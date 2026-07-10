@@ -1,12 +1,16 @@
 import type { NextRequest } from "next/server";
+import type { z } from "zod";
 import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { emailSendSchema } from "@/lib/crm/api-schemas";
 import { getCrmRepository } from "@/lib/crm/repository";
+import type { EmailSignature } from "@/lib/crm/types";
 import { getFailedEmailSendResultOrThrow } from "@/lib/email/send-failure";
 import { getEmailDeliveryMode } from "@/lib/email/delivery-mode";
 import { getEmailProviderCapability } from "@/lib/email/providers";
 import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 
+type EmailSendBody = z.infer<typeof emailSendSchema>;
+type EmailQueueBody = Omit<EmailSendBody, "signatureId" | "signatureName">;
 
 export const dynamic = "force-dynamic";
 async function sendEmail(request: NextRequest) {
@@ -15,20 +19,22 @@ async function sendEmail(request: NextRequest) {
     const body = await parseJson(request, emailSendSchema);
     const repository = getCrmRepository();
     const account = await repository.getEmailAccount(context, body.accountId);
+    const { signatureId, signatureName, ...messageBody } = body;
+    const queuedBody = await applySelectedSignature(repository, context, account.id, messageBody as EmailQueueBody, { signatureId, signatureName });
     const capability = getEmailProviderCapability(account.provider);
     if (getEmailDeliveryMode() !== "dry-run" && account.status === "active" && account.sendEnabled && capability.supportsSend && !account.connectionConfigured) {
       throw new Error("Email account connection is not configured");
     }
-    const scheduledAt = body.scheduledSendAt ? new Date(body.scheduledSendAt) : undefined;
+    const scheduledAt = queuedBody.scheduledSendAt ? new Date(queuedBody.scheduledSendAt) : undefined;
     const shouldDelaySend = Boolean(scheduledAt && scheduledAt.getTime() > Date.now());
-    if (body.groupSendMode && body.to.length > 1) {
+    if (queuedBody.groupSendMode && queuedBody.to.length > 1) {
       const messages = [];
-      for (const [index, recipient] of body.to.entries()) {
+      for (const [index, recipient] of queuedBody.to.entries()) {
         messages.push(
           await repository.queueEmailMessage(context, {
-            ...body,
+            ...queuedBody,
             to: [recipient],
-            clientRequestId: body.clientRequestId ? `${body.clientRequestId}:${index}` : undefined,
+            clientRequestId: queuedBody.clientRequestId ? `${queuedBody.clientRequestId}:${index}` : undefined,
             groupSendMode: true
           })
         );
@@ -47,7 +53,7 @@ async function sendEmail(request: NextRequest) {
       }
       return ok({ messages }, { status: 202 });
     }
-    const queuedMessage = await repository.queueEmailMessage(context, body);
+    const queuedMessage = await repository.queueEmailMessage(context, queuedBody);
     if (shouldDelaySend) {
       return ok(queuedMessage, { status: 202 });
     }
@@ -63,3 +69,60 @@ async function sendEmail(request: NextRequest) {
 }
 
 export const POST = withApiMetrics("POST /api/email/send", sendEmail);
+
+async function applySelectedSignature(
+  repository: ReturnType<typeof getCrmRepository>,
+  context: Awaited<ReturnType<typeof getRequestContext>>,
+  accountId: string,
+  message: EmailQueueBody,
+  selection: Pick<EmailSendBody, "signatureId" | "signatureName">
+): Promise<EmailQueueBody> {
+  if (!selection.signatureId && !selection.signatureName) {
+    return message;
+  }
+  const signature = await resolveSelectedSignature(repository, context, accountId, selection);
+  return {
+    ...message,
+    bodyText: appendTextSignature(message.bodyText, signature.bodyText),
+    bodyHtml: appendHtmlSignature(message.bodyHtml, signature.bodyHtml ?? signature.bodyText)
+  };
+}
+
+async function resolveSelectedSignature(
+  repository: ReturnType<typeof getCrmRepository>,
+  context: Awaited<ReturnType<typeof getRequestContext>>,
+  accountId: string,
+  selection: Pick<EmailSendBody, "signatureId" | "signatureName">
+): Promise<EmailSignature> {
+  const signatures = await repository.listEmailSignatures(context);
+  const activeScoped = signatures.filter((signature) => signature.active && (!signature.accountId || signature.accountId === accountId));
+  const signature = selection.signatureId
+    ? activeScoped.find((candidate) => candidate.id === selection.signatureId)
+    : activeScoped.find((candidate) => candidate.name.toLowerCase() === selection.signatureName!.toLowerCase());
+  if (!signature) {
+    throw new Error(selection.signatureId ? `Email signature not found: ${selection.signatureId}` : `Email signature not found: ${selection.signatureName}`);
+  }
+  return signature;
+}
+
+function appendTextSignature(bodyText: string, signatureText: string): string {
+  const normalizedSignature = signatureText.trim();
+  if (!normalizedSignature || bodyText.includes(normalizedSignature)) {
+    return bodyText;
+  }
+  return `${bodyText.trimEnd()}\n\n${normalizedSignature}`;
+}
+
+function appendHtmlSignature(bodyHtml: string | undefined, signatureHtml: string | undefined): string | undefined {
+  const normalizedSignature = signatureHtml?.trim();
+  if (!normalizedSignature) {
+    return bodyHtml;
+  }
+  if (!bodyHtml) {
+    return normalizedSignature.includes("<") ? normalizedSignature : normalizedSignature.replace(/\n/g, "<br>");
+  }
+  if (bodyHtml.includes(normalizedSignature)) {
+    return bodyHtml;
+  }
+  return `${bodyHtml.trimEnd()}<br><br>${normalizedSignature}`;
+}

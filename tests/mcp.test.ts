@@ -311,6 +311,30 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.deepEqual(JSON.parse(String(requests[4].init.body)), { accountId: "account-1", to: ["sam@example.com"], subject: "Follow up", bodyText: "Hello Sam", trackingEnabled: true, clientRequestId: "mcp-test-1" });
   });
 
+  await run("mcp email tools support signatures and deterministic send idempotency", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        return new Response(JSON.stringify([{ id: "sig-1", accountId: "account-1", name: "Cigafun", active: true }]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    await executeCrmMcpTool("crm_list_email_signatures", { accountId: "account-1" }, client);
+    await executeCrmMcpTool("crm_send_email", { accountId: "account-1", to: ["sam@example.com"], subject: "Recent Procurement Plans", bodyText: "Hello Sam", signatureName: "Cigafun" }, client);
+    await executeCrmMcpTool("crmSendEmail", { accountId: "account-1", to: ["sam@example.com"], subject: "Recent Procurement Plans", bodyText: "Hello Sam", signatureName: "Cigafun" }, client);
+
+    assert.equal(new URL(requests[0].url).pathname, "/api/email/signatures");
+    assert.equal(new URL(requests[1].url).pathname, "/api/email/send");
+    const firstPayload = JSON.parse(String(requests[1].init.body));
+    const secondPayload = JSON.parse(String(requests[2].init.body));
+    assert.equal(firstPayload.signatureName, "Cigafun");
+    assert.match(firstPayload.clientRequestId, /^mcp:[a-f0-9]{48}$/);
+    assert.equal(secondPayload.clientRequestId, firstPayload.clientRequestId);
+  });
+
   await run("mcp business object tools cover delete transfer email state and admin metadata", async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const client = new CrmMcpClient({

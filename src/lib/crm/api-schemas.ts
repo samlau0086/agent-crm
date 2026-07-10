@@ -755,6 +755,8 @@ export const emailSendSchema = z
     subject: labelSchema,
     bodyText: z.string().trim().min(1),
     bodyHtml: optionalTextSchema,
+    signatureId: z.string().trim().min(1).max(200).optional(),
+    signatureName: z.string().trim().min(1).max(120).optional(),
     attachments: outboundEmailAttachmentsSchema,
     aiAssisted: z.boolean().optional(),
     aiPurpose: emailOutboundAiPurposeSchema.optional(),
