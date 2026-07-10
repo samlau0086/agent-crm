@@ -7,6 +7,7 @@ const MAX_PAGE_SIZE = 200;
 
 const objectKeySchema = z.string().trim().regex(/^[a-z][a-z0-9-]*s$/);
 const idSchema = z.string().trim().min(1).max(200);
+const smartReminderIdSchema = idSchema.refine((value) => /[A-Za-z_-]/.test(value), "Use a real reminderId returned by crm_get_today_best_actions or crm_list_smart_reminders; do not invent numeric ids.");
 const optionalIdSchema = z.union([idSchema, z.literal(""), z.null()]).optional();
 const recordFilterSchema = z.object({ field: z.string().trim().min(1), operator: z.enum(["contains", "equals"]), value: z.string() }).strict();
 const recordSortSchema = z.object({ field: z.string().trim().min(1), direction: z.enum(["asc", "desc"]) }).strict();
@@ -97,9 +98,10 @@ const schemas = {
       confirmRegenerate: z.literal(true)
     })
     .strict(),
-  crm_convert_smart_reminder_to_task: z.object({ reminderId: idSchema }).strict(),
-  crm_update_smart_reminder: z.object({ reminderId: idSchema, status: z.enum(["open", "done", "dismissed"]).optional(), snoozedUntil: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional() }).strict(),
-  crm_delete_smart_reminder: z.object({ reminderId: idSchema, changeReason: changeReasonSchema }).strict(),
+  crm_convert_smart_reminder_to_task: z.object({ reminderId: smartReminderIdSchema }).strict(),
+  crm_dismiss_duplicate_today_best_actions: z.object({}).strict(),
+  crm_update_smart_reminder: z.object({ reminderId: smartReminderIdSchema, status: z.enum(["open", "done", "dismissed"]).optional(), snoozedUntil: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional() }).strict(),
+  crm_delete_smart_reminder: z.object({ reminderId: smartReminderIdSchema, changeReason: changeReasonSchema }).strict(),
   crm_ai_query: z.object({ question: z.string().trim().min(1), objectKey: objectKeySchema.optional() }).strict(),
   crm_list_email_accounts: z.object({}).strict(),
   crm_send_email: emailSendSchema,
@@ -127,6 +129,7 @@ const schemas = {
 };
 
 export type CrmMcpToolName = keyof typeof schemas;
+type RecordListLike = { records?: unknown[]; total?: unknown };
 
 export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string; description: string; inputSchema: (typeof schemas)[CrmMcpToolName] }> = [
   { name: "crm_health", title: "CRM health", description: "Check the remote CRM service health.", inputSchema: schemas.crm_health },
@@ -151,8 +154,9 @@ export const crmMcpToolDefinitions: Array<{ name: CrmMcpToolName; title: string;
   { name: "crm_list_smart_reminders", title: "List smart reminders", description: "Read existing CRM smart reminders, including today's best actions. For ordinary today-best-action questions, use status=open, snoozed=false, kind=today_best_action. Do not generate unless the user explicitly asks to regenerate or refresh.", inputSchema: schemas.crm_list_smart_reminders },
   { name: "crm_generate_smart_reminders", title: "Regenerate smart reminders", description: "Regenerate or refresh smart reminders only when the user explicitly asks to regenerate, refresh, recalculate, or create new best actions. Do not use for ordinary today-best-action questions. Set confirmRegenerate=true only for explicit regeneration requests. Requires ai.use permission.", inputSchema: schemas.crm_generate_smart_reminders },
   { name: "crm_convert_smart_reminder_to_task", title: "Convert reminder to task", description: "Convert a smart reminder / today's best action into a concrete CRM task.", inputSchema: schemas.crm_convert_smart_reminder_to_task },
-  { name: "crm_update_smart_reminder", title: "Update smart reminder", description: "Mark a smart reminder open/done/dismissed or snooze it.", inputSchema: schemas.crm_update_smart_reminder },
-  { name: "crm_delete_smart_reminder", title: "Delete smart reminder", description: "Request deletion of a smart reminder through the CRM approval path.", inputSchema: schemas.crm_delete_smart_reminder },
+  { name: "crm_dismiss_duplicate_today_best_actions", title: "Dismiss duplicate today best actions", description: "Remove duplicate generated today-best-action reminders without requiring manual reminder ids. Use this when the user asks to delete, remove, or dismiss duplicate today's best action prompts.", inputSchema: schemas.crm_dismiss_duplicate_today_best_actions },
+  { name: "crm_update_smart_reminder", title: "Update smart reminder", description: "Mark a real smart reminder open/done/dismissed or snooze it. Only use reminderId values returned in reminders by crm_get_today_best_actions or crm_list_smart_reminders; never invent ids from titles or positions.", inputSchema: schemas.crm_update_smart_reminder },
+  { name: "crm_delete_smart_reminder", title: "Delete smart reminder", description: "Request deletion of a real smart reminder through the CRM approval path. Only use reminderId values returned in reminders by crm_get_today_best_actions or crm_list_smart_reminders; never invent ids.", inputSchema: schemas.crm_delete_smart_reminder },
   { name: "crm_ai_query", title: "Ask CRM AI query", description: "Ask a read-only analytical CRM question through /api/ai/query. Do not use this for exact record lookups; use crm_search_records and crm_get_record for contacts, companies, deals, products, quotes, tasks, and emails.", inputSchema: schemas.crm_ai_query },
   { name: "crm_list_email_accounts", title: "List email accounts", description: "List available email sending accounts so a salesperson can choose an accountId before sending mail.", inputSchema: schemas.crm_list_email_accounts },
   { name: "crm_send_email", title: "Send CRM email", description: "Send or schedule an outbound CRM email through the normal CRM email queue, policies, permissions, tracking, and audit path.", inputSchema: schemas.crm_send_email },
@@ -253,6 +257,8 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
       const input = args as z.infer<typeof schemas.crm_convert_smart_reminder_to_task>;
       return client.post(`/api/smart-reminders/${encodeURIComponent(input.reminderId)}/convert-task`);
     }
+    case "crm_dismiss_duplicate_today_best_actions":
+      return dismissDuplicateTodayBestActions(client);
     case "crm_update_smart_reminder": {
       const input = args as z.infer<typeof schemas.crm_update_smart_reminder>;
       return client.patch(`/api/smart-reminders/${encodeURIComponent(input.reminderId)}`, stripUndefined({ status: input.status, snoozedUntil: input.snoozedUntil }));
@@ -377,12 +383,51 @@ async function salesDailyBriefing(client: CrmMcpClient, input: z.infer<typeof sc
 }
 
 async function getTodayBestActions(client: CrmMcpClient, input: z.infer<typeof schemas.crm_get_today_best_actions>): Promise<unknown> {
-  return listSmartReminders(client, {
-    status: "open",
-    snoozed: false,
-    kind: "today_best_action",
-    limit: input.limit ?? 10
-  });
+  const limit = input.limit ?? 10;
+  const reminders = await client.get("/api/smart-reminders", { query: { status: "open", snoozed: false, kind: "today_best_action", limit } });
+  if (!Array.isArray(reminders)) {
+    return reminders;
+  }
+  if (reminders.length > 0) {
+    return { source: "generated_smart_reminders", reminders, count: reminders.length };
+  }
+
+  const { start, end } = dayBounds(undefined);
+  const [todayTasksResult, overdueTasksResult, contactsResult, dealsResult] = await Promise.allSettled([
+    client.get("/api/activities", { query: { type: "task", completed: false, archived: false, dueFrom: start, dueTo: end } }),
+    client.get("/api/activities", { query: { type: "task", completed: false, archived: false, dueTo: start } }),
+    client.get("/api/records/contacts", { query: { page: 1, pageSize: Math.min(5, limit), pool: "all", fields: ["email", "phone", "company", "jobTitle"] } }),
+    client.get("/api/records/deals", { query: { page: 1, pageSize: Math.min(5, limit), pool: "all" } })
+  ]);
+  const todayTasks = settledValue(todayTasksResult);
+  const overdueTasks = settledValue(overdueTasksResult);
+  const contacts = settledValue(contactsResult);
+  const deals = settledValue(dealsResult);
+  const todayTaskItems = asArray(todayTasks).slice(0, limit);
+  const overdueTaskItems = asArray(overdueTasks).slice(0, limit);
+  const contactList = asRecordList(contacts);
+  const dealList = asRecordList(deals);
+  const fallbackActions = [
+    ...overdueTaskItems.map((item) => ({ kind: "overdue_task", title: titleOf(item, "Follow up overdue task"), source: item })),
+    ...todayTaskItems.map((item) => ({ kind: "today_task", title: titleOf(item, "Complete today's task"), source: item })),
+    ...dealList.records.slice(0, Math.max(0, limit - overdueTaskItems.length - todayTaskItems.length)).map((item) => ({ kind: "deal_follow_up", title: titleOf(item, "Review open deal"), source: item })),
+    ...contactList.records.slice(0, Math.max(0, limit - overdueTaskItems.length - todayTaskItems.length - dealList.records.length)).map((item) => ({ kind: "contact_follow_up", title: titleOf(item, "Review contact"), source: item }))
+  ].slice(0, limit);
+
+  return {
+    source: "crm_read_fallback",
+    reminders: [],
+    count: 0,
+    fallbackActions,
+    diagnostics: {
+      todayTaskCount: todayTaskItems.length,
+      overdueTaskCount: overdueTaskItems.length,
+      visibleContactTotal: contactList.total,
+      visibleDealTotal: dealList.total,
+      errors: [settledError(todayTasksResult, "todayTasks"), settledError(overdueTasksResult, "overdueTasks"), settledError(contactsResult, "contacts"), settledError(dealsResult, "deals")].filter(Boolean)
+    },
+    emptyState: "No generated today-best-action reminders exist. fallbackActions are read-only CRM candidates, not smart reminder ids. Do not call crm_update_smart_reminder unless the user first selects a real reminder id returned in reminders."
+  };
 }
 
 function findContact(client: CrmMcpClient, input: z.infer<typeof schemas.crm_find_contact>): Promise<unknown> {
@@ -415,6 +460,73 @@ function listContacts(client: CrmMcpClient, input: z.infer<typeof schemas.crm_li
       fields: ["email", "phone", "company", "companyId", "contactMethods", "jobTitle", "country"]
     }
   });
+}
+
+async function dismissDuplicateTodayBestActions(client: CrmMcpClient): Promise<unknown> {
+  const reminders = await client.get("/api/smart-reminders", { query: { status: "open", snoozed: false, kind: "today_best_action", limit: 50 } });
+  if (!Array.isArray(reminders) || reminders.length === 0) {
+    return { dismissed: [], kept: [], count: 0, emptyState: "No generated open today-best-action reminders exist, so there are no duplicates to dismiss." };
+  }
+  const seen = new Set<string>();
+  const kept: unknown[] = [];
+  const duplicates: Array<{ id: string; title: string }> = [];
+  for (const reminder of reminders) {
+    const title = titleOf(reminder, "today_best_action");
+    const key = normalizeDuplicateKey(title);
+    const id = idOf(reminder);
+    if (!seen.has(key)) {
+      seen.add(key);
+      kept.push(reminder);
+    } else if (id) {
+      duplicates.push({ id, title });
+    }
+  }
+  const dismissed = [];
+  for (const duplicate of duplicates) {
+    const result = await client.patch(`/api/smart-reminders/${encodeURIComponent(duplicate.id)}`, { status: "dismissed", snoozedUntil: null });
+    dismissed.push({ ...duplicate, result });
+  }
+  return { dismissed, kept, count: dismissed.length };
+}
+
+function settledValue(result: PromiseSettledResult<unknown>): unknown {
+  return result.status === "fulfilled" ? result.value : undefined;
+}
+
+function settledError(result: PromiseSettledResult<unknown>, scope: string): { scope: string; message: string } | undefined {
+  return result.status === "rejected" ? { scope, message: result.reason instanceof Error ? result.reason.message : String(result.reason) } : undefined;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asRecordList(value: unknown): { records: unknown[]; total: unknown } {
+  if (value && typeof value === "object") {
+    const list = value as RecordListLike;
+    return { records: Array.isArray(list.records) ? list.records : [], total: list.total ?? 0 };
+  }
+  return { records: [], total: 0 };
+}
+
+function titleOf(value: unknown, fallback: string): string {
+  if (value && typeof value === "object") {
+    const record = value as { title?: unknown; subject?: unknown; name?: unknown };
+    return String(record.title ?? record.subject ?? record.name ?? fallback);
+  }
+  return fallback;
+}
+
+function idOf(value: unknown): string | undefined {
+  if (value && typeof value === "object") {
+    const id = (value as { id?: unknown }).id;
+    return typeof id === "string" && id.trim() ? id : undefined;
+  }
+  return undefined;
+}
+
+function normalizeDuplicateKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function generateSmartReminders(client: CrmMcpClient, input: z.infer<typeof schemas.crm_generate_smart_reminders>): Promise<unknown> {

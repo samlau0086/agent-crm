@@ -200,11 +200,11 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.equal(actionUrl.searchParams.get("snoozed"), "false");
     assert.equal(actionUrl.searchParams.get("kind"), "today_best_action");
     assert.equal(actionUrl.searchParams.get("limit"), "5");
-    const countUrl = new URL(requests[1].url);
+    const countUrl = new URL(requests[5].url);
     assert.equal(countUrl.pathname, "/api/records/contacts");
     assert.equal(countUrl.searchParams.get("pageSize"), "1");
     assert.equal(countUrl.searchParams.get("pool"), "all");
-    const listUrl = new URL(requests[2].url);
+    const listUrl = new URL(requests[6].url);
     assert.equal(listUrl.pathname, "/api/records/contacts");
     assert.equal(listUrl.searchParams.get("q"), "Sam");
     assert.equal(listUrl.searchParams.get("pageSize"), "3");
@@ -223,6 +223,39 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     const content = result.content[0];
     assert.equal(content?.type, "text");
     assert.match(content.type === "text" ? content.text : "", /VALIDATION_ERROR/);
+  });
+
+  await run("mcp smart reminder operations avoid invented ids and can dismiss duplicates", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        const requestUrl = new URL(String(url));
+        if (requestUrl.pathname === "/api/smart-reminders") {
+          return new Response(
+            JSON.stringify([
+              { id: "reminder-a", title: "Call Sam" },
+              { id: "reminder-b", title: "Call Sam" },
+              { id: "reminder-c", title: "Review quote" }
+            ]),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    const inventedIdResult = await executeCrmMcpTool("crm_update_smart_reminder", { reminderId: "699804018027374208", status: "dismissed" }, client);
+    const dedupeResult = await executeCrmMcpTool("crm_dismiss_duplicate_today_best_actions", {}, client);
+
+    assert.equal(inventedIdResult.isError, true);
+    assert.equal(dedupeResult.isError, undefined);
+    assert.equal(new URL(requests[0].url).pathname, "/api/smart-reminders");
+    assert.equal(new URL(requests[1].url).pathname, "/api/smart-reminders/reminder-b");
+    assert.equal(requests[1].init.method, "PATCH");
+    assert.deepEqual(JSON.parse(String(requests[1].init.body)), { status: "dismissed", snoozedUntil: null });
   });
 
   await run("mcp sales daily briefing aggregates salesperson context", async () => {
