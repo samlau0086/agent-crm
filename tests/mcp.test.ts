@@ -173,6 +173,43 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.deepEqual(JSON.parse(String(requests[1].init.body)), { force: true, daily: true });
   });
 
+  await run("mcp direct daily action and contact tools use concrete endpoints", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        if (String(url).includes("/api/smart-reminders")) {
+          return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ records: [{ id: "contact-1" }], total: 7 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    const actions = await executeCrmMcpTool("crm_get_today_best_actions", { limit: 5 }, client);
+    const count = await executeCrmMcpTool("crm_count_contacts", {}, client);
+    await executeCrmMcpTool("crm_list_contacts", { q: "Sam", pageSize: 3 }, client);
+
+    assert.equal(actions.isError, undefined);
+    assert.equal(count.isError, undefined);
+    assert.deepEqual(count.structuredContent, { objectKey: "contacts", total: 7 });
+    const actionUrl = new URL(requests[0].url);
+    assert.equal(actionUrl.pathname, "/api/smart-reminders");
+    assert.equal(actionUrl.searchParams.get("status"), "open");
+    assert.equal(actionUrl.searchParams.get("snoozed"), "false");
+    assert.equal(actionUrl.searchParams.get("kind"), "today_best_action");
+    assert.equal(actionUrl.searchParams.get("limit"), "5");
+    const countUrl = new URL(requests[1].url);
+    assert.equal(countUrl.pathname, "/api/records/contacts");
+    assert.equal(countUrl.searchParams.get("pageSize"), "1");
+    assert.equal(countUrl.searchParams.get("pool"), "all");
+    const listUrl = new URL(requests[2].url);
+    assert.equal(listUrl.pathname, "/api/records/contacts");
+    assert.equal(listUrl.searchParams.get("q"), "Sam");
+    assert.equal(listUrl.searchParams.get("pageSize"), "3");
+  });
+
   await run("mcp smart reminder regeneration requires explicit confirmation", async () => {
     const client = new CrmMcpClient({
       baseUrl: "https://crm.example.com",

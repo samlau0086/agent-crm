@@ -78,6 +78,7 @@ const schemas = {
       timezoneOffsetMinutes: z.number().int().min(-720).max(840).optional()
     })
     .strict(),
+  crm_get_today_best_actions: z.object({ limit: z.number().int().min(1).max(50).optional() }).strict(),
   crm_list_objects: z.object({}).strict(),
   crm_describe_object: z.object({ objectKey: objectKeySchema }).strict(),
   crm_find_contact: z
@@ -86,6 +87,15 @@ const schemas = {
       email: emailAddressSchema.optional(),
       company: z.string().trim().optional(),
       limit: z.number().int().min(1).max(20).optional()
+    })
+    .strict(),
+  crm_count_contacts: z.object({}).strict(),
+  crm_list_contacts: z
+    .object({
+      q: z.string().trim().optional(),
+      page: z.number().int().min(1).optional(),
+      pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
+      pool: z.enum(["public", "private", "all"]).optional()
     })
     .strict(),
   crm_search_records: z
@@ -145,7 +155,8 @@ const schemas = {
         .enum(["today_best_action", "follow_up", "overdue", "email_reply", "deal_close", "risk", "portfolio_health", "data_quality", "customer_level", "pipeline_optimization"])
         .optional(),
       objectKey: objectKeySchema.optional(),
-      recordId: idSchema.optional()
+      recordId: idSchema.optional(),
+      limit: z.number().int().min(1).max(50).optional()
     })
     .strict(),
   crm_generate_smart_reminders: z
@@ -258,9 +269,12 @@ export const crmMcpToolDefinitions: Array<{
 }> = [
   { name: "crm_health", title: "CRM health", description: "Check the remote CRM service health.", inputSchema: schemas.crm_health },
   { name: "crm_sales_daily_briefing", title: "Sales daily briefing", description: "Read an existing salesperson-style daily briefing. For ordinary today-best-action questions, use this read-only tool first; it never regenerates reminders.", inputSchema: schemas.crm_sales_daily_briefing },
+  { name: "crm_get_today_best_actions", title: "Get today best actions", description: "Directly read existing open today-best-action smart reminders. Use this for user questions asking for today's best actions; it never regenerates reminders.", inputSchema: schemas.crm_get_today_best_actions },
   { name: "crm_list_objects", title: "List CRM objects", description: "List CRM object definitions visible to this API key.", inputSchema: schemas.crm_list_objects },
   { name: "crm_describe_object", title: "Describe CRM object", description: "Return object metadata, fields, relations, and pipelines for one object.", inputSchema: schemas.crm_describe_object },
   { name: "crm_find_contact", title: "Find contact", description: "Find contacts by name, email, or company text and return matching CRM contact records.", inputSchema: schemas.crm_find_contact },
+  { name: "crm_count_contacts", title: "Count contacts", description: "Return the visible contacts count. Use this for questions asking how many contact records exist.", inputSchema: schemas.crm_count_contacts },
+  { name: "crm_list_contacts", title: "List contacts", description: "List visible contact records directly without requiring objectKey inference.", inputSchema: schemas.crm_list_contacts },
   { name: "crm_search_records", title: "Search CRM records", description: "Search or list CRM records using existing CRM pagination and filters. Use this first for exact business lookups such as contact/company/deal/product/quote name, email, phone, owner, or field value.", inputSchema: schemas.crm_search_records },
   { name: "crm_get_record", title: "Get CRM record", description: "Fetch one CRM record by object key and record id. Use after search when the user asks for specific record details such as a contact email or company fields.", inputSchema: schemas.crm_get_record },
   { name: "crm_create_record", title: "Create CRM record", description: "Create a CRM record through the remote CRM API.", inputSchema: schemas.crm_create_record },
@@ -319,12 +333,18 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
       return client.get("/api/health");
     case "crm_sales_daily_briefing":
       return salesDailyBriefing(client, args as z.infer<typeof schemas.crm_sales_daily_briefing>);
+    case "crm_get_today_best_actions":
+      return getTodayBestActions(client, args as z.infer<typeof schemas.crm_get_today_best_actions>);
     case "crm_list_objects":
       return client.get("/api/object-definitions");
     case "crm_describe_object":
       return describeObject(client, args as z.infer<typeof schemas.crm_describe_object>);
     case "crm_find_contact":
       return findContact(client, args as z.infer<typeof schemas.crm_find_contact>);
+    case "crm_count_contacts":
+      return countContacts(client);
+    case "crm_list_contacts":
+      return listContacts(client, args as z.infer<typeof schemas.crm_list_contacts>);
     case "crm_search_records":
       return searchRecords(client, args as z.infer<typeof schemas.crm_search_records>);
     case "crm_get_record": {
@@ -502,6 +522,15 @@ async function salesDailyBriefing(client: CrmMcpClient, input: z.infer<typeof sc
   };
 }
 
+async function getTodayBestActions(client: CrmMcpClient, input: z.infer<typeof schemas.crm_get_today_best_actions>): Promise<unknown> {
+  return listSmartReminders(client, {
+    status: "open",
+    snoozed: false,
+    kind: "today_best_action",
+    limit: input.limit ?? 10
+  });
+}
+
 function findContact(client: CrmMcpClient, input: z.infer<typeof schemas.crm_find_contact>): Promise<unknown> {
   const q = input.email ?? input.name ?? input.company ?? "";
   return client.get("/api/records/contacts", {
@@ -510,6 +539,26 @@ function findContact(client: CrmMcpClient, input: z.infer<typeof schemas.crm_fin
       pageSize: input.limit ?? 10,
       fields: ["email", "phone", "company", "companyId", "contactMethods", "jobTitle", "country"],
       pool: "all"
+    }
+  });
+}
+
+async function countContacts(client: CrmMcpClient): Promise<unknown> {
+  const result = await client.get("/api/records/contacts", { query: { pageSize: 1, page: 1, pool: "all" } });
+  if (result && typeof result === "object" && "total" in result) {
+    return { objectKey: "contacts", total: (result as { total: unknown }).total };
+  }
+  return result;
+}
+
+function listContacts(client: CrmMcpClient, input: z.infer<typeof schemas.crm_list_contacts>): Promise<unknown> {
+  return client.get("/api/records/contacts", {
+    query: {
+      q: input.q,
+      page: input.page,
+      pageSize: input.pageSize ?? defaultPageSize(),
+      pool: input.pool ?? "all",
+      fields: ["email", "phone", "company", "companyId", "contactMethods", "jobTitle", "country"]
     }
   });
 }
