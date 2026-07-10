@@ -1,30 +1,30 @@
 # AI Agent CRM
 
-## MCP Local Proxy for OpenClaw / Cherry Studio
+## MCP 本地代理（OpenClaw / Cherry Studio）
 
-This project provides a local stdio MCP server so local AI agents such as OpenClaw and Cherry Studio can operate a remotely deployed CRM. The MCP server does not connect to the database and does not add a remote `/mcp` endpoint. It calls the existing CRM HTTPS REST API with `CRM_BASE_URL` and `CRM_API_KEY`, so existing Bearer API key permissions, RBAC, approval flows, audit logs, pagination, and API limits still apply.
+本项目提供一个本地 stdio MCP server，方便 OpenClaw、Cherry Studio 等本地 AI agent 操作远程部署的 CRM。MCP server 不直连数据库，也不新增远程 `/mcp` 端点；它只通过 `CRM_BASE_URL` + `CRM_API_KEY` 调用远程 CRM 的现有 HTTPS REST API，所以会继续复用现有 Bearer API key、RBAC、审批流、审计日志、分页和 API 限制。
 
-简要说明：本地的 OpenClaw、Cherry Studio 等 MCP 客户端启动 `npm run mcp:server`，这个本地 MCP server 再用 CRM API Key 远程调用你的服务器。也就是说 AI agent 在本地运行，CRM 在远程服务器运行，两者通过 HTTPS REST API 连接。
+简要来说：AI agent 在本地运行，CRM 在远程服务器运行；本地 MCP 客户端启动 `npm run mcp:server`，这个本地 MCP server 再用 CRM API key 远程调用你的 CRM 服务。
 
-### Supported MCP Capabilities
+### 当前 MCP 支持能力
 
-- Health: `crm_health` checks the remote `/api/health`.
-- Metadata: `crm_list_objects` and `crm_describe_object` read object, field, relation, and pipeline metadata.
-- Records: `crm_search_records`, `crm_get_record`, `crm_create_record`, and `crm_update_record`.
-- Activities: `crm_list_activities`, `crm_create_activity`, and `crm_update_activity`.
-- Read-only AI query: `crm_ai_query` calls `/api/ai/query` and requires `ai.use`.
-- Read-only email: `crm_list_email_threads`, `crm_get_email_thread`, and `crm_list_email_messages`.
+- 健康检查：`crm_health`，检查远程 `/api/health`。
+- 元数据：`crm_list_objects`、`crm_describe_object`，读取对象、字段、关系和管道信息。
+- 记录读写：`crm_search_records`、`crm_get_record`、`crm_create_record`、`crm_update_record`。
+- 跟进活动：`crm_list_activities`、`crm_create_activity`、`crm_update_activity`。
+- AI 只读查询：`crm_ai_query`，调用 `/api/ai/query`，需要 API key 具备 `ai.use`。
+- 邮件只读：`crm_list_email_threads`、`crm_get_email_thread`、`crm_list_email_messages`。
 
-The v1 MCP server intentionally does not expose record deletion, outbound email sending, user management, API key management, mailbox configuration, or workflow administration. If a record update triggers the existing approval flow, the MCP tool returns the CRM `pendingApproval` response unchanged.
+v1 不暴露删除记录、发送邮件、用户管理、API key 管理、邮箱配置、工作流启停/管理等高风险工具。记录更新如果触发现有审批逻辑，MCP 工具会把 CRM 的 `pendingApproval` 响应原样返回给 agent。
 
-### Local MCP Server Setup
+### 本地 MCP server 配置
 
-Create an API key in the CRM first. Recommended permissions:
+先在 CRM 后台创建 API key。推荐权限：
 
-- Read-only agent: `crm.read`, optionally `ai.use`.
-- Controlled read/write agent: `crm.read`, `crm.write`, optionally `ai.use`.
+- 只读 agent：`crm.read`，可选 `ai.use`。
+- 受控读写 agent：`crm.read`、`crm.write`，可选 `ai.use`。
 
-Set these environment variables where the local MCP client starts the server:
+在本地 MCP 客户端启动 server 的环境里设置：
 
 ```bash
 CRM_BASE_URL="https://crm.example.com"
@@ -33,17 +33,17 @@ MCP_CRM_DEFAULT_PAGE_SIZE="50"
 MCP_CRM_TIMEOUT_MS="30000"
 ```
 
-Start the MCP server:
+启动 MCP server：
 
 ```bash
 npm run mcp:server
 ```
 
-### Connect OpenClaw / Cherry Studio
+### 接入 OpenClaw / Cherry Studio
 
-In OpenClaw, Cherry Studio, or any MCP client that supports stdio servers, add a server with command/stdio mode and point the working directory to this repository.
+在 OpenClaw、Cherry Studio 或其他支持 MCP stdio 的客户端里添加一个 MCP server，类型选择 `stdio` 或 “Command”，工作目录指向本仓库。
 
-Generic configuration:
+通用配置示例：
 
 ```json
 {
@@ -63,9 +63,9 @@ Generic configuration:
 }
 ```
 
-On Windows, if the client cannot find `npm`, use `"command": "npm.cmd"`. If the client UI does not expose `cwd`, use its working-directory/start-directory setting or make sure it launches `npm run mcp:server` from this repository folder.
+在 Windows 上，如果客户端找不到 `npm`，把 `"command": "npm"` 改成 `"command": "npm.cmd"`。如果客户端界面没有 `cwd` 字段，就使用它提供的“工作目录/启动目录”设置，或确保它从本仓库目录启动 `npm run mcp:server`。
 
-More details are in [docs/mcp.md](docs/mcp.md).
+更完整说明见 [docs/mcp.md](docs/mcp.md)。
 
 私有化部署优先的 HubSpot 风格销售 CRM。当前版本包含联系人、公司、交易、任务、活动、CSV 导入、审计日志、RBAC、可配置对象/字段/关系/视图，以及只读 AI 助手层。
 
