@@ -24,6 +24,7 @@
     "deploy:verify:dry-run": "node scripts/deploy-verify.mjs --dry-run",
     "deploy:verify:live-email": "node scripts/deploy-verify.mjs --run-email-connections --run-email-ai-provider --run-email-smoke --require-live-email",
     "worker": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/job-worker.ts",
+    "mcp:server": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/mcp-server.ts",
     "email:sync": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-sync.ts",
     "email:verify": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/email-verify.ts",
     "email:verify:report": "node scripts/email-verify-report.mjs",
@@ -32,6 +33,7 @@
     "verify": "npm run typecheck && npm test && npm run lint && npm run build && npm run build:artifacts && npm run test:e2e"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@prisma/client": "5.22.0",
     "clsx": "2.1.1",
     "geoip-lite": "^1.4.10",

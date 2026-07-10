@@ -684,7 +684,7 @@ export interface AiAgentRunLog {
 }
 
 export interface EmailAiGenerationAuditInput {
-  purpose: "draft" | "translate" | "context_analysis" | "summarize";
+  purpose: "draft" | "translate" | "context_analysis" | "summarize" | "classification";
   enabled: boolean;
   recordId?: string;
   threadId?: string;

@@ -13,7 +13,7 @@ import type {
 } from "@/lib/crm/types";
 import { repairEmailMojibake } from "@/lib/email/mojibake";
 
-export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize";
+export type EmailAssistantPurpose = "draft" | "translate" | "context_analysis" | "summarize" | "classification";
 
 export interface EmailAssistantContextInput {
   settings: EmailAiSettings;
@@ -55,7 +55,7 @@ export interface EmailAssistantContext {
   sources: Array<{ label: string; objectKey?: string; recordId?: string; activityId?: string; messageId?: string; knowledgeArticleId?: string }>;
 }
 
-const purposeFeature: Record<EmailAssistantPurpose, EmailAiFeature> = {
+const purposeFeature: Record<Exclude<EmailAssistantPurpose, "classification">, EmailAiFeature> = {
   draft: "draft",
   translate: "translate",
   context_analysis: "context_analysis",
@@ -201,6 +201,7 @@ export function createDefaultAiAgentSettings(): AiAgentSetting[] {
 }
 
 export function getEmailAssistantAgentKey(purpose: EmailAssistantPurpose): string {
+  if (purpose === "classification") return emailClassificationAgentKey;
   if (purpose === "draft") return emailDraftAgentKey;
   if (purpose === "translate") return emailTranslationAgentKey;
   if (purpose === "context_analysis") return emailContextAnalysisAgentKey;
@@ -245,11 +246,11 @@ export function getAiAgentSetting(settings: Pick<EmailAiSettings, "agents"> | un
   return normalizeAiAgentSettings(settings?.agents).find((agent) => agent.key === key);
 }
 
-export function getEmailAiPurposeFeature(purpose: EmailAssistantPurpose): EmailAiFeature {
+export function getEmailAiPurposeFeature(purpose: Exclude<EmailAssistantPurpose, "classification">): EmailAiFeature {
   return purposeFeature[purpose];
 }
 
-export function isEmailAiPurposeEnabled(features: Partial<Record<EmailAiFeature, boolean>> | undefined, purpose: EmailAssistantPurpose): boolean {
+export function isEmailAiPurposeEnabled(features: Partial<Record<EmailAiFeature, boolean>> | undefined, purpose: Exclude<EmailAssistantPurpose, "classification">): boolean {
   return normalizeEmailAiFeatures(features)[getEmailAiPurposeFeature(purpose)];
 }
 
@@ -286,7 +287,7 @@ export function buildEmailAssistantContext(input: EmailAssistantContextInput): E
   const enabledFeatures = normalizeEmailAiFeatures(input.settings.features);
   const agent = getAiAgentSetting(input.settings, getEmailAssistantAgentKey(input.purpose));
   const purpose = input.purpose;
-  const featureEnabled = enabledFeatures[getEmailAiPurposeFeature(purpose)];
+  const featureEnabled = purpose === "classification" ? true : enabledFeatures[getEmailAiPurposeFeature(purpose)];
   const maxContextChars = normalizeLimit(input.settings.maxContextChars, 8000, 1000, 20000);
   const maxHistoryMessages = normalizeLimit(input.settings.maxHistoryMessages, 8, 1, 20);
   const shouldUseCompactSummary = purpose !== "summarize" && enabledFeatures.auto_summarize;
@@ -680,6 +681,9 @@ function buildInstruction(
   }
   if (input.purpose === "translate") {
     return `Translate the email content to ${locale}. Preserve names, amounts, dates, and CRM facts. ${sourceRequirement}${agentInstruction}`;
+  }
+  if (input.purpose === "classification") {
+    return `Classify this inbound email thread into exactly one category: primary, promotions, social, or updates. Return only the category token in JSON text. Use primary for direct customer, prospect, sales, support, or human business conversations. Use promotions for marketing, offers, newsletters, coupons, or sales campaigns. Use social for social network, community, follower, mention, comment, or connection notifications. Use updates for receipts, invoices, security alerts, account notifications, reports, verification, system, or billing messages. Do not modify CRM data. ${sourceRequirement}${agentInstruction}`;
   }
   if (input.purpose === "summarize") {
     return `用简体中文将邮件线程总结为紧凑、CRM 安全的记忆，用于替代未来提示词中的长历史。${sourceRequirement}${agentInstruction}`;

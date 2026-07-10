@@ -10,6 +10,7 @@ import { adminUserId, defaultWorkspaceId, seedData } from "@/lib/crm/seed";
 import { buildEmailAssistantContext, canRunEmailClassification, createDefaultEmailAiSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
 import { scheduleEmailAutomationsBestEffort } from "@/lib/email/automations";
+import { classifyEmailMessageWithAi } from "@/lib/email/classification";
 import { getEmailProviderCapability } from "@/lib/email/providers";
 import { appendEmailTrackingHtml, buildTrackingEvent, createEmailTrackingId } from "@/lib/email/tracking";
 import { mergeAiProviderConfigSecrets, mergeAiProviderProfilesSecrets, normalizeAiProviderConfig, normalizeAiProviderProfiles, publicAiProviderConfig, publicAiProviderProfiles, resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
@@ -5081,6 +5082,7 @@ export class CrmStore {
       context,
       this,
       {
+        runEmailClassifyJob: (automationContext, payload) => classifyEmailMessageWithAi(automationContext, this, payload),
         runEmailTranslateJob: (automationContext, payload) => translateEmailMessage(automationContext, this, payload),
         runEmailAnalyzeJob: (automationContext, payload) => analyzeEmailThreadWithAi(automationContext, this, payload),
         runEmailSummarizeJob: (automationContext, payload) => summarizeEmailThreadWithAi(automationContext, this, payload)

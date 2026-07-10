@@ -2,6 +2,7 @@ import { getRequestContextByUserId, getCrmRepository, type PrismaCrmRepository }
 import type { CsvImportJob, EmailMessage, EmailThread, WebhookDelivery, WorkflowRun } from "@/lib/crm/types";
 import type { QueuedJobEnvelope } from "@/lib/jobs/executor";
 import { analyzeEmailThreadWithAi } from "@/lib/email/analysis";
+import { classifyEmailMessageWithAi } from "@/lib/email/classification";
 import { createEmailProviderAdapter, type EmailSyncResult } from "@/lib/email/provider";
 import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
@@ -133,6 +134,11 @@ export async function processQueuedJobEnvelope(
     return { processed: true, jobType: envelope.type, emailMessage };
   }
 
+  if (envelope.type === "email_classify") {
+    const result = await classifyEmailMessageWithAi(context, repository, envelope.payload);
+    return { processed: true, jobType: envelope.type, emailThread: result.thread };
+  }
+
   if (envelope.type === "email_analyze") {
     const result = await analyzeEmailThreadWithAi(context, repository, envelope.payload);
     return { processed: true, jobType: envelope.type, emailThread: result.thread };
@@ -183,7 +189,7 @@ export function formatJobWorkerResult(result: JobWorkerResult): string | undefin
     return `Processed email ${result.scheduledEmailSend ? "scheduled " : ""}${action} ${result.emailMessage.id} with status ${result.emailMessage.status}`;
   }
   if (result.emailThread) {
-    const action = result.jobType === "email_analyze" ? "analyze" : result.jobType === "email_summarize" ? "summarize" : "thread";
+    const action = result.jobType === "email_classify" ? "classify" : result.jobType === "email_analyze" ? "analyze" : result.jobType === "email_summarize" ? "summarize" : "thread";
     return `Processed email ${action} for thread ${result.emailThread.id}`;
   }
   if (result.deliveries) {

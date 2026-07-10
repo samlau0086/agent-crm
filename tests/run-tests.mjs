@@ -92,7 +92,7 @@ import { getDatabaseObservabilitySnapshot, listRecentApiRequestMetrics, recordAp
 import { assertValidFieldDefinition, validateRecordPayload } from "../src/lib/crm/validation.ts";
 import { compareRecords, findRelatedRecords, matchesSavedView } from "../src/lib/crm/views.ts";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, isValidWebhookEvent, signWebhookPayload } from "../src/lib/integrations/webhook.ts";
-import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailSendJobEnvelope, buildEmailSummarizeJobEnvelope, buildEmailSyncJobEnvelope, buildEmailTranslateJobEnvelope, buildWebhookEventEnvelope, buildWorkflowRunJobEnvelope, InlineBackgroundJobExecutor, RedisBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
+import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailClassifyJobEnvelope, buildEmailSendJobEnvelope, buildEmailSummarizeJobEnvelope, buildEmailSyncJobEnvelope, buildEmailTranslateJobEnvelope, buildWebhookEventEnvelope, buildWorkflowRunJobEnvelope, InlineBackgroundJobExecutor, RedisBackgroundJobExecutor } from "../src/lib/jobs/executor.ts";
 import { encodeRedisCommand, getDeadLetterQueueName } from "../src/lib/jobs/redis-queue.ts";
 import { buildFailedJobEnvelope, getMaxJobAttempts, getMaxJobAttemptsForEnvelope } from "../src/lib/jobs/worker-policy.ts";
 import { formatJobWorkerResult, processQueuedJobEnvelope } from "../src/lib/jobs/worker.ts";
@@ -104,12 +104,14 @@ import { applySecurityHeaders, buildSecurityHeaders } from "../src/lib/security/
 import { buildEmailAttachmentResponse } from "../src/lib/email/attachment-response.ts";
 import { canOpenEmailAiSource, emailAiSourceKey } from "../src/lib/email/ai-sources.ts";
 import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "../src/lib/email/attachments.ts";
+import { parseEmailThreadCategory } from "../src/lib/email/classification.ts";
 import { isEmailMessageEligibleForAutomation, runEmailAutomationsBestEffort, scheduleEmailAutomationsBestEffort, shouldRunEmailAutoSummary } from "../src/lib/email/automations.ts";
 import { buildEmailAssistantContext as buildEmailPromptContext, canRunEmailAiAutomation, createDefaultEmailAiSettings, emailClassificationAgentKey, emailContextAnalysisAgentKey, emailDraftAgentKey, emailThreadSummaryAgentKey, emailTranslationAgentKey, getAiAgentSetting, getEmailAiPurposeFeature, inboundEmailPreprocessAgentKey, isEmailAiPurposeEnabled, normalizeAiAgentSettings, normalizeEmailAiFeatures, workflowDesignerAgentKey } from "../src/lib/email/assistant.ts";
 import { readEmailOAuthCallbackNotice, readEmailOAuthConnectedNotice } from "../src/lib/email/oauth-callback.ts";
 import { getDatabaseConnectionTarget } from "../scripts/database-preflight.ts";
 import { formatDatabasePreflightFailure } from "../scripts/runtime-preflight.mjs";
 import { loadLocalEnvFiles } from "../scripts/load-env.ts";
+import { runMcpTests } from "./mcp.test.ts";
 
 const results = [];
 
@@ -6769,6 +6771,25 @@ await run("email translate job envelopes preserve workspace user and message pay
   assert.equal(envelope.attempts, 0);
 });
 
+await run("email classify job envelopes preserve workspace user and message payload", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const envelope = buildEmailClassifyJobEnvelope(context, { messageId: "email-message-classify" });
+
+  assert.equal(envelope.type, "email_classify");
+  assert.equal(envelope.workspaceId, context.workspaceId);
+  assert.equal(envelope.userId, context.user.id);
+  assert.equal(envelope.payload.messageId, "email-message-classify");
+  assert.equal(envelope.attempts, 0);
+});
+
+await run("email classification parser accepts only supported categories", () => {
+  assert.equal(parseEmailThreadCategory("promotions"), "promotions");
+  assert.equal(parseEmailThreadCategory('{"text":"updates"}'), "updates");
+  assert.equal(parseEmailThreadCategory("Category: social because this is a LinkedIn notification."), "social");
+  assert.equal(parseEmailThreadCategory("sales_lead"), undefined);
+});
+
 await run("email analyze job envelopes preserve workspace user and thread payload", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
@@ -6814,6 +6835,7 @@ await run("redis email executor checks permissions before enqueueing jobs", asyn
 
   await assert.rejects(() => executor.runEmailSyncJob(noAdminContext, { accountId: "account-queued" }), /crm\.admin/);
   await assert.rejects(() => executor.runEmailSendJob(readOnlyContext, { messageId: "message-queued" }), /crm\.write/);
+  await assert.rejects(() => executor.runEmailClassifyJob(noAiContext, { messageId: "message-classify" }), /ai\.use/);
   await assert.rejects(() => executor.runEmailTranslateJob(noAiContext, { messageId: "message-translate" }), /ai\.use/);
   await assert.rejects(() => executor.runEmailAnalyzeJob(noAiContext, { threadId: "thread-analyze" }), /ai\.use/);
   await assert.rejects(() => executor.runEmailSummarizeJob(noAiContext, { threadId: "thread-summarize" }), /ai\.use/);
@@ -7398,6 +7420,7 @@ await run("store record email triggers enabled translate summarize and analyze a
   assert.match(thread?.aiAnalysis ?? "", /AI 线程分析/);
   assert.match(thread?.aiAnalysis ?? "", /建议下一步/);
   assert.equal(thread?.aiAnalysisSources?.some((source) => source.messageId === message.id), true);
+  assert.equal(aiAudits.some((log) => log.details.purpose === "classification" && log.details.sourceMessageId === message.id && log.details.persisted === false), true);
   assert.equal(aiAudits.some((log) => log.details.purpose === "translate" && log.details.sourceMessageId === message.id && log.details.persisted === false), true);
   assert.equal(aiAudits.some((log) => log.details.purpose === "summarize" && log.details.threadId === message.threadId), true);
   assert.equal(aiAudits.some((log) => log.details.purpose === "context_analysis" && log.details.threadId === message.threadId), true);
@@ -12694,6 +12717,9 @@ await run("email ai automations are best effort and audit failures", async () =>
     }
   };
   const executor = {
+    async runEmailClassifyJob() {
+      throw new Error("classification provider unavailable");
+    },
     async runEmailTranslateJob() {
       throw new Error("translate provider unavailable");
     },
@@ -12706,8 +12732,9 @@ await run("email ai automations are best effort and audit failures", async () =>
   };
 
   await assert.doesNotReject(() => runEmailAutomationsBestEffort(context, repository, executor, message, settings));
-  assert.equal(audits.length, 3);
+  assert.equal(audits.length, 4);
   assert.equal(audits.every((audit) => audit.enabled === false && audit.automationFailed === true), true);
+  assert.equal(audits.some((audit) => audit.purpose === "classification" && audit.sourceMessageId === message.id && /classification provider/.test(audit.errorMessage)), true);
   assert.equal(audits.some((audit) => audit.purpose === "translate" && audit.sourceMessageId === message.id && /translate provider/.test(audit.errorMessage)), true);
   assert.equal(audits.some((audit) => audit.purpose === "context_analysis" && audit.sourceMessageId === message.id && /analysis provider/.test(audit.errorMessage)), true);
   assert.equal(audits.some((audit) => audit.purpose === "summarize" && audit.threadId === message.threadId && /summary queue/.test(audit.errorMessage)), true);
@@ -12825,6 +12852,7 @@ await run("email ai automation scheduling does not block email intake", async ()
     auto_context_analysis: false,
     auto_summarize: false
   };
+  settings.agents = settings.agents.map((agent) => (agent.key === emailClassificationAgentKey ? { ...agent, enabled: false } : agent));
   const message = {
     id: "message-automation-slow",
     workspaceId: defaultWorkspaceId,
@@ -12842,6 +12870,9 @@ await run("email ai automation scheduling does not block email intake", async ()
   let releaseAutomation;
   const automationStarted = new Promise((resolveStarted) => {
     const executor = {
+      async runEmailClassifyJob() {
+        throw new Error("should not run");
+      },
       async runEmailTranslateJob() {
         resolveStarted();
         await new Promise((resolveRelease) => {
@@ -14975,6 +15006,8 @@ function restoreEnv(name, value) {
   }
   process.env[name] = value;
 }
+
+await runMcpTests(run);
 
 const failed = results.filter((result) => !result.ok);
 for (const result of results) {

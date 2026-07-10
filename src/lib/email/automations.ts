@@ -1,10 +1,12 @@
 import type { EmailAiGenerationAuditInput, EmailAiSettings, EmailMessage, EmailThread, RequestContext } from "@/lib/crm/types";
-import { canRunEmailAiAutomation } from "@/lib/email/assistant";
+import { canRunEmailAiAutomation, canRunEmailClassification } from "@/lib/email/assistant";
 import type { EmailAnalyzeJobPayload } from "@/lib/email/analysis";
+import type { EmailClassifyJobPayload } from "@/lib/email/classification";
 import type { EmailSummarizeJobPayload } from "@/lib/email/summarization";
 import type { EmailTranslateJobPayload } from "@/lib/email/translation";
 
 export interface EmailAutomationExecutor {
+  runEmailClassifyJob(context: RequestContext, payload: EmailClassifyJobPayload): Promise<unknown>;
   runEmailTranslateJob(context: RequestContext, payload: EmailTranslateJobPayload): Promise<EmailMessage>;
   runEmailAnalyzeJob(context: RequestContext, payload: EmailAnalyzeJobPayload): Promise<unknown>;
   runEmailSummarizeJob(context: RequestContext, payload: EmailSummarizeJobPayload): Promise<unknown>;
@@ -29,6 +31,16 @@ export async function runEmailAutomationsBestEffort(
     return;
   }
   const tasks: Array<Promise<void>> = [];
+  if (message.direction === "inbound" && canRunEmailClassification(context, settings)) {
+    tasks.push(
+      runAutomationTask(context, repository, {
+        purpose: "classification",
+        threadId: message.threadId,
+        sourceMessageId: message.id,
+        action: () => executor.runEmailClassifyJob(context, { messageId: message.id })
+      })
+    );
+  }
   if (message.direction === "inbound" && canRunEmailAiAutomation(context, settings, "auto_translate")) {
     tasks.push(
       runAutomationTask(context, repository, {
@@ -123,7 +135,7 @@ async function runAutomationTask(
   context: RequestContext,
   repository: EmailAutomationAuditRepository,
   input: {
-    purpose: "translate" | "context_analysis" | "summarize";
+    purpose: "classification" | "translate" | "context_analysis" | "summarize";
     threadId: string;
     sourceMessageId?: string;
     targetLocale?: string;
@@ -141,7 +153,7 @@ async function recordAutomationFailure(
   context: RequestContext,
   repository: EmailAutomationAuditRepository,
   input: {
-    purpose: "translate" | "context_analysis" | "summarize";
+    purpose: "classification" | "translate" | "context_analysis" | "summarize";
     threadId: string;
     sourceMessageId?: string;
     targetLocale?: string;
