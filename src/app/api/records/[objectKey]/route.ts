@@ -1,6 +1,5 @@
-
 export const dynamic = "force-dynamic";
-﻿import type { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { recordWriteSchema } from "@/lib/crm/api-schemas";
 import { parseRecordListQuery } from "@/lib/crm/record-query";

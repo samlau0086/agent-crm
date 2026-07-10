@@ -1144,6 +1144,15 @@ export interface Activity {
   createdAt: string;
 }
 
+export interface ActivityListQuery {
+  recordId?: string;
+  type?: ActivityType;
+  completed?: boolean;
+  archived?: boolean;
+  dueFrom?: string;
+  dueTo?: string;
+}
+
 export interface AuditLog {
   id: string;
   workspaceId: string;

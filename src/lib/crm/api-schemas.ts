@@ -386,7 +386,8 @@ export const smartReminderGenerateSchema = z
   .object({
     objectKey: objectKeySchema.optional(),
     recordId: z.string().trim().min(1).optional(),
-    force: z.boolean().optional()
+    force: z.boolean().optional(),
+    daily: z.boolean().optional()
   })
   .strict();
 

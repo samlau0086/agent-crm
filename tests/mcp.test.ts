@@ -107,6 +107,118 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.deepEqual(result.structuredContent, { pendingApproval: true, request: { id: "approval-1" }, record: { id: "contact-1" } });
   });
 
+  await run("mcp activity list tool passes task filters", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    const result = await executeCrmMcpTool(
+      "crm_list_activities",
+      {
+        type: "task",
+        completed: false,
+        archived: false,
+        dueFrom: "2026-07-10T00:00:00.000+08:00",
+        dueTo: "2026-07-10T23:59:59.999+08:00"
+      },
+      client
+    );
+
+    assert.equal(result.isError, undefined);
+    const url = new URL(requests[0].url);
+    assert.equal(url.pathname, "/api/activities");
+    assert.equal(url.searchParams.get("type"), "task");
+    assert.equal(url.searchParams.get("completed"), "false");
+    assert.equal(url.searchParams.get("archived"), "false");
+    assert.equal(url.searchParams.get("dueFrom"), "2026-07-10T00:00:00.000+08:00");
+    assert.equal(url.searchParams.get("dueTo"), "2026-07-10T23:59:59.999+08:00");
+  });
+
+  await run("mcp smart reminder tools call reminder endpoints", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        return new Response(JSON.stringify({ reminders: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    const listResult = await executeCrmMcpTool("crm_list_smart_reminders", { status: "open", snoozed: false, kind: "today_best_action" }, client);
+    const generateResult = await executeCrmMcpTool("crm_generate_smart_reminders", { force: true, daily: true }, client);
+
+    assert.equal(listResult.isError, undefined);
+    assert.equal(generateResult.isError, undefined);
+    const listUrl = new URL(requests[0].url);
+    assert.equal(listUrl.pathname, "/api/smart-reminders");
+    assert.equal(listUrl.searchParams.get("status"), "open");
+    assert.equal(listUrl.searchParams.get("snoozed"), "false");
+    assert.equal(listUrl.searchParams.get("kind"), "today_best_action");
+    assert.equal(new URL(requests[1].url).pathname, "/api/smart-reminders/generate");
+    assert.equal(requests[1].init.method, "POST");
+    assert.deepEqual(JSON.parse(String(requests[1].init.body)), { force: true, daily: true });
+  });
+
+  await run("mcp sales daily briefing aggregates salesperson context", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    const result = await executeCrmMcpTool("crm_sales_daily_briefing", { date: "2026-07-10T12:00:00.000Z", timezoneOffsetMinutes: 480 }, client);
+
+    assert.equal(result.isError, undefined);
+    assert.equal(requests.length, 4);
+    assert.equal(new URL(requests[0].url).pathname, "/api/smart-reminders");
+    assert.equal(new URL(requests[1].url).searchParams.get("type"), "task");
+    assert.equal(new URL(requests[1].url).searchParams.get("completed"), "false");
+    assert.equal(new URL(requests[1].url).searchParams.get("dueFrom"), "2026-07-09T16:00:00.000Z");
+    assert.equal(new URL(requests[1].url).searchParams.get("dueTo"), "2026-07-10T15:59:59.999Z");
+    assert.equal(new URL(requests[2].url).searchParams.get("dueTo"), "2026-07-09T16:00:00.000Z");
+    assert.equal(new URL(requests[3].url).pathname, "/api/email/threads");
+  });
+
+  await run("mcp salesperson action tools call write endpoints", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    await executeCrmMcpTool("crm_complete_task", { activityId: "task-1" }, client);
+    await executeCrmMcpTool("crm_advance_deal_stage", { dealId: "deal-1", stageKey: "won", pipelineOrder: 1 }, client);
+    await executeCrmMcpTool("crm_claim_record", { objectKey: "contacts", recordId: "contact-1" }, client);
+    await executeCrmMcpTool("crm_release_record", { objectKey: "contacts", recordId: "contact-1" }, client);
+    await executeCrmMcpTool("crm_send_email", { accountId: "account-1", to: ["sam@example.com"], subject: "Follow up", bodyText: "Hello Sam", trackingEnabled: true, clientRequestId: "mcp-test-1" }, client);
+
+    assert.equal(new URL(requests[0].url).pathname, "/api/activities/task-1");
+    assert.equal(requests[0].init.method, "PATCH");
+    assert.equal(typeof JSON.parse(String(requests[0].init.body)).completedAt, "string");
+    assert.equal(new URL(requests[1].url).pathname, "/api/records/deals/deal-1/stage");
+    assert.deepEqual(JSON.parse(String(requests[1].init.body)), { stageKey: "won", pipelineOrder: 1 });
+    assert.equal(new URL(requests[2].url).pathname, "/api/records/contacts/contact-1/claim");
+    assert.equal(new URL(requests[3].url).pathname, "/api/records/contacts/contact-1/release");
+    assert.equal(new URL(requests[4].url).pathname, "/api/email/send");
+    assert.equal(requests[4].init.method, "POST");
+    assert.deepEqual(JSON.parse(String(requests[4].init.body)), { accountId: "account-1", to: ["sam@example.com"], subject: "Follow up", bodyText: "Hello Sam", trackingEnabled: true, clientRequestId: "mcp-test-1" });
+  });
+
   await run("mcp ai query tool calls crm ai query endpoint", async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const client = new CrmMcpClient({

@@ -46,6 +46,7 @@ import {
 } from "@/lib/knowledge/vectorization";
 import type {
   Activity,
+  ActivityListQuery,
   ApiKey,
   AuditAction,
   AuditLog,
@@ -6533,8 +6534,10 @@ export class PrismaCrmRepository {
     });
   }
 
-  async listActivities(context: RequestContext, recordId?: string): Promise<Activity[]> {
+  async listActivities(context: RequestContext, input: string | ActivityListQuery = {}): Promise<Activity[]> {
     requirePermission(context, "crm.read");
+    const query = typeof input === "string" ? { recordId: input } : input;
+    const recordId = query.recordId;
     if (recordId) {
       const record = await this.db.crmRecord.findFirst({
         where: {
@@ -6550,9 +6553,22 @@ export class PrismaCrmRepository {
     }
 
     const visibleRecordIds = await this.visibleRecordIds(context);
+    const dueFrom = query.dueFrom ? new Date(query.dueFrom) : undefined;
+    const dueTo = query.dueTo ? new Date(query.dueTo) : undefined;
     const activities = await this.db.activity.findMany({
       where: {
         workspaceId: context.workspaceId,
+        ...(query.type ? { type: query.type } : {}),
+        ...(query.completed === true ? { completedAt: { not: null } } : query.completed === false ? { completedAt: null } : {}),
+        ...(query.archived === true ? { archivedAt: { not: null } } : query.archived === false ? { archivedAt: null } : {}),
+        ...(dueFrom || dueTo
+          ? {
+              dueAt: {
+                ...(dueFrom ? { gte: dueFrom } : {}),
+                ...(dueTo ? { lte: dueTo } : {})
+              }
+            }
+          : {}),
         ...(recordId
           ? { recordId }
           : {
