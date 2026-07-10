@@ -138,7 +138,8 @@ const schemas = {
       objectKey: objectKeySchema.optional(),
       recordId: idSchema.optional(),
       force: z.boolean().optional(),
-      daily: z.boolean().optional()
+      daily: z.boolean().optional(),
+      confirmRegenerate: z.literal(true)
     })
     .strict(),
   crm_convert_smart_reminder_to_task: z.object({ reminderId: idSchema }).strict(),
@@ -167,7 +168,7 @@ export const crmMcpToolDefinitions: Array<{
   inputSchema: (typeof schemas)[CrmMcpToolName];
 }> = [
   { name: "crm_health", title: "CRM health", description: "Check the remote CRM service health.", inputSchema: schemas.crm_health },
-  { name: "crm_sales_daily_briefing", title: "Sales daily briefing", description: "Get a salesperson-style daily briefing: today's best actions, today's tasks, overdue tasks, and recent email threads.", inputSchema: schemas.crm_sales_daily_briefing },
+  { name: "crm_sales_daily_briefing", title: "Sales daily briefing", description: "Read an existing salesperson-style daily briefing. For 'today's best actions' or '今日最佳行动', use this read-only tool first; it never regenerates reminders.", inputSchema: schemas.crm_sales_daily_briefing },
   { name: "crm_list_objects", title: "List CRM objects", description: "List CRM object definitions visible to this API key.", inputSchema: schemas.crm_list_objects },
   { name: "crm_describe_object", title: "Describe CRM object", description: "Return object metadata, fields, relations, and pipelines for one object.", inputSchema: schemas.crm_describe_object },
   { name: "crm_find_contact", title: "Find contact", description: "Find contacts by name, email, or company text and return matching CRM contact records.", inputSchema: schemas.crm_find_contact },
@@ -179,8 +180,8 @@ export const crmMcpToolDefinitions: Array<{
   { name: "crm_create_activity", title: "Create CRM activity", description: "Create a note, call, meeting, task, or email activity.", inputSchema: schemas.crm_create_activity },
   { name: "crm_update_activity", title: "Update CRM activity", description: "Update an activity or task status.", inputSchema: schemas.crm_update_activity },
   { name: "crm_complete_task", title: "Complete task", description: "Mark a CRM task/activity complete using the current time.", inputSchema: schemas.crm_complete_task },
-  { name: "crm_list_smart_reminders", title: "List smart reminders", description: "List CRM smart reminders, including today's best actions. Use status=open, snoozed=false, kind=today_best_action for current best actions.", inputSchema: schemas.crm_list_smart_reminders },
-  { name: "crm_generate_smart_reminders", title: "Generate smart reminders", description: "Generate or refresh today's best actions and follow-up reminders. Requires ai.use permission.", inputSchema: schemas.crm_generate_smart_reminders },
+  { name: "crm_list_smart_reminders", title: "List smart reminders", description: "Read existing CRM smart reminders, including today's best actions. For 'today's best actions' or '今日最佳行动', use status=open, snoozed=false, kind=today_best_action. Do not generate unless the user explicitly asks to regenerate or refresh.", inputSchema: schemas.crm_list_smart_reminders },
+  { name: "crm_generate_smart_reminders", title: "Regenerate smart reminders", description: "Regenerate or refresh smart reminders only when the user explicitly asks to regenerate, refresh, recalculate, or create new best actions. Do not use for ordinary questions like '今日最佳行动'. Set confirmRegenerate=true only for explicit regeneration requests. Requires ai.use permission.", inputSchema: schemas.crm_generate_smart_reminders },
   { name: "crm_convert_smart_reminder_to_task", title: "Convert reminder to task", description: "Convert a smart reminder / today's best action into a concrete CRM task.", inputSchema: schemas.crm_convert_smart_reminder_to_task },
   { name: "crm_ai_query", title: "Ask CRM AI query", description: "Ask a read-only natural-language CRM question through /api/ai/query.", inputSchema: schemas.crm_ai_query },
   { name: "crm_list_email_accounts", title: "List email accounts", description: "List available email sending accounts so a salesperson can choose an accountId before sending mail.", inputSchema: schemas.crm_list_email_accounts },
@@ -247,7 +248,7 @@ async function dispatchTool(name: CrmMcpToolName, args: z.infer<(typeof schemas)
     case "crm_list_smart_reminders":
       return client.get("/api/smart-reminders", { query: args as z.infer<typeof schemas.crm_list_smart_reminders> });
     case "crm_generate_smart_reminders":
-      return client.post("/api/smart-reminders/generate", stripUndefined(args as z.infer<typeof schemas.crm_generate_smart_reminders>));
+      return generateSmartReminders(client, args as z.infer<typeof schemas.crm_generate_smart_reminders>);
     case "crm_convert_smart_reminder_to_task": {
       const input = args as z.infer<typeof schemas.crm_convert_smart_reminder_to_task>;
       return client.post(`/api/smart-reminders/${encodeURIComponent(input.reminderId)}/convert-task`);
@@ -330,6 +331,13 @@ function findContact(client: CrmMcpClient, input: z.infer<typeof schemas.crm_fin
       pool: "all"
     }
   });
+}
+
+function generateSmartReminders(client: CrmMcpClient, input: z.infer<typeof schemas.crm_generate_smart_reminders>): Promise<unknown> {
+  return client.post(
+    "/api/smart-reminders/generate",
+    stripUndefined({ objectKey: input.objectKey, recordId: input.recordId, force: input.force, daily: input.daily })
+  );
 }
 
 function searchRecords(client: CrmMcpClient, input: z.infer<typeof schemas.crm_search_records>): Promise<unknown> {

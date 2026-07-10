@@ -152,7 +152,7 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     });
 
     const listResult = await executeCrmMcpTool("crm_list_smart_reminders", { status: "open", snoozed: false, kind: "today_best_action" }, client);
-    const generateResult = await executeCrmMcpTool("crm_generate_smart_reminders", { force: true, daily: true }, client);
+    const generateResult = await executeCrmMcpTool("crm_generate_smart_reminders", { force: true, daily: true, confirmRegenerate: true }, client);
 
     assert.equal(listResult.isError, undefined);
     assert.equal(generateResult.isError, undefined);
@@ -164,6 +164,21 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.equal(new URL(requests[1].url).pathname, "/api/smart-reminders/generate");
     assert.equal(requests[1].init.method, "POST");
     assert.deepEqual(JSON.parse(String(requests[1].init.body)), { force: true, daily: true });
+  });
+
+  await run("mcp smart reminder regeneration requires explicit confirmation", async () => {
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async () => new Response(JSON.stringify({ reminders: [] }), { status: 200, headers: { "content-type": "application/json" } })
+    });
+
+    const result = await executeCrmMcpTool("crm_generate_smart_reminders", { force: true, daily: true }, client);
+
+    assert.equal(result.isError, true);
+    const content = result.content[0];
+    assert.equal(content?.type, "text");
+    assert.match(content.type === "text" ? content.text : "", /VALIDATION_ERROR/);
   });
 
   await run("mcp sales daily briefing aggregates salesperson context", async () => {

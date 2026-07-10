@@ -8866,53 +8866,84 @@ export class PrismaCrmRepository {
 
   private async pruneStaleSmartReminderRecordSources(context: RequestContext, reminders: SmartReminder[]): Promise<SmartReminder[]> {
     const referencedRecords = new Map<string, { objectKey: string; recordId: string }>();
+    const referencedEmailThreadIds = new Set<string>();
+    const referencedEmailMessageIds = new Set<string>();
     for (const reminder of reminders) {
       if (reminder.objectKey && reminder.recordId) {
-        referencedRecords.set(`${reminder.objectKey}:${reminder.recordId}`, { objectKey: reminder.objectKey, recordId: reminder.recordId });
+        if (isSmartReminderEmailReference(reminder.objectKey)) {
+          referencedEmailThreadIds.add(reminder.recordId);
+          referencedEmailMessageIds.add(reminder.recordId);
+        } else {
+          referencedRecords.set(`${reminder.objectKey}:${reminder.recordId}`, { objectKey: reminder.objectKey, recordId: reminder.recordId });
+        }
       }
       for (const source of reminder.sources) {
         if (source.objectKey && source.recordId) {
-          referencedRecords.set(`${source.objectKey}:${source.recordId}`, { objectKey: source.objectKey, recordId: source.recordId });
+          if (isSmartReminderEmailReference(source.objectKey)) {
+            referencedEmailThreadIds.add(source.recordId);
+            referencedEmailMessageIds.add(source.recordId);
+          } else {
+            referencedRecords.set(`${source.objectKey}:${source.recordId}`, { objectKey: source.objectKey, recordId: source.recordId });
+          }
+        }
+        if (source.threadId) {
+          referencedEmailThreadIds.add(source.threadId);
+        }
+        if (source.messageId) {
+          referencedEmailMessageIds.add(source.messageId);
         }
       }
     }
-    if (referencedRecords.size === 0) {
+    if (referencedRecords.size === 0 && referencedEmailThreadIds.size === 0 && referencedEmailMessageIds.size === 0) {
       return reminders;
     }
 
-    const existingRecords = await this.db.crmRecord.findMany({
-      where: {
-        workspaceId: context.workspaceId,
-        OR: Array.from(referencedRecords.values()).map((reference) => ({ id: reference.recordId, objectKey: reference.objectKey }))
-      },
-      select: { id: true, objectKey: true }
-    });
+    const existingRecords =
+      referencedRecords.size > 0
+        ? await this.db.crmRecord.findMany({
+            where: {
+              workspaceId: context.workspaceId,
+              OR: Array.from(referencedRecords.values()).map((reference) => ({ id: reference.recordId, objectKey: reference.objectKey }))
+            },
+            select: { id: true, objectKey: true }
+          })
+        : [];
     const existingRecordKeys = new Set(existingRecords.map((record) => `${record.objectKey}:${record.id}`));
+    const visibleEmailThreadIds = await this.visibleEmailThreadIds(context, referencedEmailThreadIds);
+    const visibleEmailMessageIds = await this.visibleEmailMessageIds(context, referencedEmailMessageIds);
     const staleReminderIds: string[] = [];
     const sourceUpdates: Array<{ id: string; sources: SmartReminder["sources"] }> = [];
     const visibleReminders: SmartReminder[] = [];
 
     for (const reminder of reminders) {
-      if (reminder.objectKey && reminder.recordId && !existingRecordKeys.has(`${reminder.objectKey}:${reminder.recordId}`)) {
+      if (reminder.objectKey && reminder.recordId && !smartReminderTargetExists(reminder.objectKey, reminder.recordId, existingRecordKeys, visibleEmailThreadIds, visibleEmailMessageIds)) {
         staleReminderIds.push(reminder.id);
         continue;
       }
 
-      let hadRecordSources = false;
+      let hadReferencedSources = false;
       let changedSources = false;
       const sources = reminder.sources.filter((source) => {
-        if (!source.objectKey || !source.recordId) {
-          return true;
+        let exists = true;
+        if (source.objectKey && source.recordId) {
+          hadReferencedSources = true;
+          exists = smartReminderTargetExists(source.objectKey, source.recordId, existingRecordKeys, visibleEmailThreadIds, visibleEmailMessageIds);
         }
-        hadRecordSources = true;
-        const exists = existingRecordKeys.has(`${source.objectKey}:${source.recordId}`);
+        if (exists && source.threadId) {
+          hadReferencedSources = true;
+          exists = visibleEmailThreadIds.has(source.threadId);
+        }
+        if (exists && source.messageId) {
+          hadReferencedSources = true;
+          exists = visibleEmailMessageIds.has(source.messageId);
+        }
         if (!exists) {
           changedSources = true;
         }
         return exists;
       });
 
-      if (!reminder.recordId && hadRecordSources && sources.length === 0) {
+      if (!reminder.recordId && hadReferencedSources && sources.length === 0) {
         staleReminderIds.push(reminder.id);
         continue;
       }
@@ -8934,6 +8965,32 @@ export class PrismaCrmRepository {
       })
     ));
     return visibleReminders;
+  }
+
+  private async visibleEmailThreadIds(context: RequestContext, threadIds: Set<string>): Promise<Set<string>> {
+    const visible = new Set<string>();
+    await Promise.all(Array.from(threadIds).map(async (threadId) => {
+      try {
+        await this.assertEmailThread(context, threadId);
+        visible.add(threadId);
+      } catch {
+        // Stale or inaccessible smart reminder source.
+      }
+    }));
+    return visible;
+  }
+
+  private async visibleEmailMessageIds(context: RequestContext, messageIds: Set<string>): Promise<Set<string>> {
+    const visible = new Set<string>();
+    await Promise.all(Array.from(messageIds).map(async (messageId) => {
+      try {
+        await this.getEmailMessage(context, messageId);
+        visible.add(messageId);
+      } catch {
+        // Stale or inaccessible smart reminder source.
+      }
+    }));
+    return visible;
   }
 
   private async getEmailAiProviderConfigForWorkspace(workspaceId: string): Promise<AiProviderConfig> {
@@ -10568,6 +10625,23 @@ function smartReminderReferencesDeletedEmailThread(
     const sourceMessageId = typeof source.messageId === "string" ? source.messageId : "";
     return sourceThreadId === threadId || Boolean(sourceMessageId && messageIds.has(sourceMessageId));
   });
+}
+
+function isSmartReminderEmailReference(objectKey: string): boolean {
+  return ["emails", "emailThreads", "email-threads", "emailMessages", "email-messages"].includes(objectKey);
+}
+
+function smartReminderTargetExists(
+  objectKey: string,
+  recordId: string,
+  existingRecordKeys: Set<string>,
+  visibleEmailThreadIds: Set<string>,
+  visibleEmailMessageIds: Set<string>
+): boolean {
+  if (isSmartReminderEmailReference(objectKey)) {
+    return visibleEmailThreadIds.has(recordId) || visibleEmailMessageIds.has(recordId);
+  }
+  return existingRecordKeys.has(`${objectKey}:${recordId}`);
 }
 
 function mapSmartReminder(reminder: {
