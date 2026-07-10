@@ -1,5 +1,72 @@
 # AI Agent CRM
 
+## MCP Local Proxy for OpenClaw / Cherry Studio
+
+This project provides a local stdio MCP server so local AI agents such as OpenClaw and Cherry Studio can operate a remotely deployed CRM. The MCP server does not connect to the database and does not add a remote `/mcp` endpoint. It calls the existing CRM HTTPS REST API with `CRM_BASE_URL` and `CRM_API_KEY`, so existing Bearer API key permissions, RBAC, approval flows, audit logs, pagination, and API limits still apply.
+
+简要说明：本地的 OpenClaw、Cherry Studio 等 MCP 客户端启动 `npm run mcp:server`，这个本地 MCP server 再用 CRM API Key 远程调用你的服务器。也就是说 AI agent 在本地运行，CRM 在远程服务器运行，两者通过 HTTPS REST API 连接。
+
+### Supported MCP Capabilities
+
+- Health: `crm_health` checks the remote `/api/health`.
+- Metadata: `crm_list_objects` and `crm_describe_object` read object, field, relation, and pipeline metadata.
+- Records: `crm_search_records`, `crm_get_record`, `crm_create_record`, and `crm_update_record`.
+- Activities: `crm_list_activities`, `crm_create_activity`, and `crm_update_activity`.
+- Read-only AI query: `crm_ai_query` calls `/api/ai/query` and requires `ai.use`.
+- Read-only email: `crm_list_email_threads`, `crm_get_email_thread`, and `crm_list_email_messages`.
+
+The v1 MCP server intentionally does not expose record deletion, outbound email sending, user management, API key management, mailbox configuration, or workflow administration. If a record update triggers the existing approval flow, the MCP tool returns the CRM `pendingApproval` response unchanged.
+
+### Local MCP Server Setup
+
+Create an API key in the CRM first. Recommended permissions:
+
+- Read-only agent: `crm.read`, optionally `ai.use`.
+- Controlled read/write agent: `crm.read`, `crm.write`, optionally `ai.use`.
+
+Set these environment variables where the local MCP client starts the server:
+
+```bash
+CRM_BASE_URL="https://crm.example.com"
+CRM_API_KEY="crm_live_..."
+MCP_CRM_DEFAULT_PAGE_SIZE="50"
+MCP_CRM_TIMEOUT_MS="30000"
+```
+
+Start the MCP server:
+
+```bash
+npm run mcp:server
+```
+
+### Connect OpenClaw / Cherry Studio
+
+In OpenClaw, Cherry Studio, or any MCP client that supports stdio servers, add a server with command/stdio mode and point the working directory to this repository.
+
+Generic configuration:
+
+```json
+{
+  "mcpServers": {
+    "ai-agent-crm": {
+      "command": "npm",
+      "args": ["run", "mcp:server"],
+      "cwd": "C:\\Users\\samla\\Documents\\ai-agent-crm",
+      "env": {
+        "CRM_BASE_URL": "https://crm.example.com",
+        "CRM_API_KEY": "crm_live_...",
+        "MCP_CRM_DEFAULT_PAGE_SIZE": "50",
+        "MCP_CRM_TIMEOUT_MS": "30000"
+      }
+    }
+  }
+}
+```
+
+On Windows, if the client cannot find `npm`, use `"command": "npm.cmd"`. If the client UI does not expose `cwd`, use its working-directory/start-directory setting or make sure it launches `npm run mcp:server` from this repository folder.
+
+More details are in [docs/mcp.md](docs/mcp.md).
+
 私有化部署优先的 HubSpot 风格销售 CRM。当前版本包含联系人、公司、交易、任务、活动、CSV 导入、审计日志、RBAC、可配置对象/字段/关系/视图，以及只读 AI 助手层。
 
 ## 演示账号
