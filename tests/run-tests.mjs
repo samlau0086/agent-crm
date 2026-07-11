@@ -4346,9 +4346,14 @@ await run("current user profile settings support avatar name and password update
   assert.match(settings, /function ProfileSettingsPanel/);
   assert.match(settings, /data-testid="profile-settings-panel"/);
   assert.match(settings, /data-testid="profile-password-save"/);
+  assert.match(settings, /onUpdateMediaAsset=\{onUpdateMediaAsset\}/);
+  assert.match(settings, /onDeleteMediaAsset=\{onDeleteMediaAsset\}/);
+  assert.doesNotMatch(settings, /testId="profile-avatar-media-library-modal"[\s\S]{0,500}selectFirstUploaded/);
   assert.match(workspace, /className="user-strip-profile"/);
   assert.match(workspace, /router\.push\("\/settings\/profile"\)/);
   assert.match(workspace, /uploadCurrentUserAvatarAssets/);
+  assert.match(workspace, /onUpdateMediaAsset=\{\(assetId, patch\) => runAction\(\(\) => updateMediaAsset\(assetId, patch\)\)\}/);
+  assert.match(workspace, /onDeleteMediaAsset=\{\(asset\) => \{ void runImmediateAction\(\(\) => deleteMediaAsset\(asset\)\); \}\}/);
   assert.match(page, /currentUserAvatarAsset/);
 });
 

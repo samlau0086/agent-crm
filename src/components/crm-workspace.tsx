@@ -7781,6 +7781,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onVectorizeKnowledgeArticle={(articleId) => runAction(() => vectorizeKnowledgeArticle(articleId))}
             onVectorizeKnowledge={() => runAction(vectorizeKnowledge)}
             onUploadCurrentUserAvatarAssets={uploadCurrentUserAvatarAssets}
+            onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+            onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
           />
         )}
 

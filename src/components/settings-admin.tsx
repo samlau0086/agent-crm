@@ -57,6 +57,8 @@ interface SettingsAdminProps {
   onVectorizeKnowledgeArticle: (articleId: string) => void;
   onVectorizeKnowledge: () => void;
   onUploadCurrentUserAvatarAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
 }
 
 type ObjectDraft = {
@@ -1822,6 +1824,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           onSaveProfile={() => runAction(saveCurrentUserProfile)}
           onSavePassword={() => runAction(saveCurrentUserPassword)}
           onUploadAvatarAssets={props.onUploadCurrentUserAvatarAssets}
+          onUpdateMediaAsset={props.onUpdateMediaAsset}
+          onDeleteMediaAsset={props.onDeleteMediaAsset}
         />
       </div>
     );
@@ -1884,6 +1888,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           onSaveProfile={() => runAction(saveCurrentUserProfile)}
           onSavePassword={() => runAction(saveCurrentUserPassword)}
           onUploadAvatarAssets={props.onUploadCurrentUserAvatarAssets}
+          onUpdateMediaAsset={props.onUpdateMediaAsset}
+          onDeleteMediaAsset={props.onDeleteMediaAsset}
         />
       ) : null}
 
@@ -4050,7 +4056,9 @@ function ProfileSettingsPanel({
   onPasswordDraftChange,
   onSaveProfile,
   onSavePassword,
-  onUploadAvatarAssets
+  onUploadAvatarAssets,
+  onUpdateMediaAsset,
+  onDeleteMediaAsset
 }: {
   currentUser: User;
   role: Role;
@@ -4063,6 +4071,8 @@ function ProfileSettingsPanel({
   onSaveProfile: () => void;
   onSavePassword: () => void;
   onUploadAvatarAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
+  onDeleteMediaAsset: (asset: MediaAsset) => void;
 }) {
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const avatarAsset = profileDraft.avatarMediaAssetId ? mediaAssets.find((asset) => asset.id === profileDraft.avatarMediaAssetId) : undefined;
@@ -4170,8 +4180,9 @@ function ProfileSettingsPanel({
             onProfileDraftChange({ avatarMediaAssetId: asset.id });
             setMediaLibraryOpen(false);
           }}
+          onDeleteMediaAsset={onDeleteMediaAsset}
+          onUpdateMediaAsset={onUpdateMediaAsset}
           onUploadMediaAssets={onUploadAvatarAssets}
-          selectFirstUploaded
           selectLabel="使用"
           testId="profile-avatar-media-library-modal"
           title="头像媒体库"
