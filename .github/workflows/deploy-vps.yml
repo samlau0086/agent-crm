@@ -536,10 +536,15 @@ jobs:
           fi
           docker compose ps
           port="$(grep -E '^APP_PORT=' .env | sed -E "s/^APP_PORT='?([^']*)'?.*/\1/")"
-          if ! curl --fail --retry 30 --retry-delay 3 --retry-connrefused "http://127.0.0.1:${port:-3000}/api/health"; then
+          set +e
+          curl --fail --retry 30 --retry-delay 3 --retry-connrefused "http://127.0.0.1:${port:-3000}/api/health"
+          health_code="$?"
+          set -e
+          if [ "$health_code" -ne 0 ]; then
             dump_diagnostics
-            exit 1
+            exit "$health_code"
           fi
+          docker compose exec -T web node scripts/verify-crm-tags-schema.mjs
           email_verify_args=""
           if [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ]; then
             email_verify_args="$email_verify_args --require-live-readiness"

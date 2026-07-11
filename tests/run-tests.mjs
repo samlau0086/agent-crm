@@ -3354,6 +3354,7 @@ await run("tag migration is idempotent and included in VPS failed-migration reco
   const migration = readFileSync("prisma/migrations/20260711130000_record_activity_tags/migration.sql", "utf8");
   const ensureMigration = readFileSync("prisma/migrations/20260711143000_ensure_record_activity_tags/migration.sql", "utf8");
   const recoveryScript = readFileSync("scripts/recover-known-failed-migrations.mjs", "utf8");
+  const verifyScript = readFileSync("scripts/verify-crm-tags-schema.mjs", "utf8");
   const deployWorkflow = readFileSync(".github/workflows/deploy-vps.yml", "utf8");
 
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "tags"/);
@@ -3366,9 +3367,12 @@ await run("tag migration is idempotent and included in VPS failed-migration reco
   assert.match(ensureMigration, /CREATE INDEX IF NOT EXISTS "Activity_tags_gin_idx"/);
   assert.match(recoveryScript, /20260711130000_record_activity_tags/);
   assert.match(recoveryScript, /20260711143000_ensure_record_activity_tags/);
+  assert.match(verifyScript, /CrmRecord\.tagColors/);
+  assert.match(verifyScript, /Activity\.tagColors/);
   assert.match(deployWorkflow, /20260711130000_record_activity_tags/);
   assert.match(deployWorkflow, /20260711143000_ensure_record_activity_tags/);
   assert.match(deployWorkflow, /ADD COLUMN IF NOT EXISTS "tagColors"/);
+  assert.match(deployWorkflow, /verify-crm-tags-schema\.mjs/);
 });
 
 await run("record create and detail panels render full width in the main content flow", () => {
