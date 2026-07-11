@@ -16,6 +16,7 @@ async function main() {
   await prisma.auditLog.deleteMany();
   await prisma.activity.deleteMany();
   await prisma.savedView.deleteMany();
+  await prisma.documentTemplate.deleteMany();
   await prisma.pipeline.deleteMany();
   await prisma.crmRecord.deleteMany();
   await prisma.fieldDefinition.deleteMany();
@@ -249,6 +250,23 @@ async function main() {
         createdById: preset.createdById,
         createdAt: new Date(preset.createdAt),
         updatedAt: new Date(preset.updatedAt)
+      }
+    });
+  }
+
+  for (const template of seedData.documentTemplates ?? []) {
+    await prisma.documentTemplate.create({
+      data: {
+        id: template.id,
+        workspaceId: template.workspaceId,
+        objectKey: template.objectKey,
+        name: template.name,
+        active: template.active,
+        isDefault: template.isDefault,
+        templateJson: template.templateJson,
+        createdById: template.createdById,
+        createdAt: new Date(template.createdAt),
+        updatedAt: new Date(template.updatedAt)
       }
     });
   }

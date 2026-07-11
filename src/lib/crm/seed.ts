@@ -17,6 +17,73 @@ export const demoCredentials = {
   }
 };
 
+const paymentTermOptions = [
+  { label: "Due on receipt", value: "due_on_receipt" },
+  { label: "Net 15", value: "net_15" },
+  { label: "Net 30", value: "net_30" },
+  { label: "Net 60", value: "net_60" }
+];
+
+const salesDocumentObjects = [
+  { id: "obj-salesorder", key: "salesorders", label: "Sales Order", pluralLabel: "Sales Orders", description: "Sales orders converted from accepted quotes", icon: "ClipboardList" },
+  { id: "obj-proformainvoice", key: "proformainvoices", label: "Proforma Invoice", pluralLabel: "Proforma Invoices", description: "Proforma invoices converted from sales orders", icon: "FileText" },
+  { id: "obj-commercialinvoice", key: "commercialinvoices", label: "Commercial Invoice", pluralLabel: "Commercial Invoices", description: "Commercial invoices converted from proforma invoices", icon: "ReceiptText" }
+].map((object) => ({
+  ...object,
+  workspaceId: defaultWorkspaceId,
+  isSystem: true,
+  createdAt: now,
+  updatedAt: now
+}));
+
+const salesDocumentFields = salesDocumentObjects.flatMap((object) => [
+  { id: `field-${object.key}-document-number`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "documentNumber", label: "单据编号", type: "text" as const, required: true, unique: true, isSystem: true, position: 1 },
+  { id: `field-${object.key}-company`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "companyId", label: "关联公司", type: "reference" as const, required: true, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 2 },
+  { id: `field-${object.key}-contact`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "contactId", label: "关联联系人", type: "reference" as const, required: true, unique: false, options: [{ label: "联系人", value: "contacts" }], isSystem: true, position: 3 },
+  { id: `field-${object.key}-deal`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "dealId", label: "关联交易", type: "reference" as const, required: false, unique: false, options: [{ label: "交易", value: "deals" }], isSystem: true, position: 4 },
+  { id: `field-${object.key}-currency`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "documentCurrency", label: "单据币种", type: "text" as const, required: true, unique: false, defaultValue: "CNY", isSystem: true, position: 5 },
+  { id: `field-${object.key}-payment-term`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "paymentTerm", label: "Payment term", type: "select" as const, required: true, unique: false, options: paymentTermOptions, defaultValue: "net_30", isSystem: true, position: 6 },
+  { id: `field-${object.key}-total-amount`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "totalAmount", label: "总金额", type: "currency" as const, required: true, unique: false, isSystem: true, position: 7 },
+  { id: `field-${object.key}-status`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "status", label: "状态", type: "select" as const, required: true, unique: false, options: [{ label: "草稿", value: "draft" }, { label: "已发送", value: "sent" }, { label: "已确认", value: "confirmed" }, { label: "已取消", value: "cancelled" }], defaultValue: "draft", isSystem: true, position: 8 },
+  { id: `field-${object.key}-issue-date`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "issueDate", label: "出具日期", type: "date" as const, required: false, unique: false, isSystem: true, position: 9 },
+  { id: `field-${object.key}-due-date`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "dueDate", label: "到期日期", type: "date" as const, required: false, unique: false, isSystem: true, position: 10 },
+  { id: `field-${object.key}-notes`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "notes", label: "备注", type: "textarea" as const, required: false, unique: false, isSystem: true, position: 11 },
+  { id: `field-${object.key}-source-object`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "sourceObjectKey", label: "来源对象", type: "text" as const, required: false, unique: false, isSystem: true, position: 12 },
+  { id: `field-${object.key}-source-record`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "sourceRecordId", label: "来源记录", type: "text" as const, required: false, unique: false, isSystem: true, position: 13 },
+  { id: `field-${object.key}-converted-from`, workspaceId: defaultWorkspaceId, objectKey: object.key, key: "convertedFromRecordId", label: "转换来源", type: "text" as const, required: false, unique: false, isSystem: true, position: 14 }
+]);
+
+const salesDocumentRelations = [
+  ...salesDocumentObjects.flatMap((object) => [
+    { id: `rel-company-${object.key}`, fromObjectKey: "companies", toObjectKey: object.key, key: `company_${object.key}`, label: `公司 ${object.pluralLabel}`, cardinality: "one-to-many" as const },
+    { id: `rel-contact-${object.key}`, fromObjectKey: "contacts", toObjectKey: object.key, key: `contact_${object.key}`, label: `联系人 ${object.pluralLabel}`, cardinality: "one-to-many" as const },
+    { id: `rel-deal-${object.key}`, fromObjectKey: "deals", toObjectKey: object.key, key: `deal_${object.key}`, label: `交易 ${object.pluralLabel}`, cardinality: "one-to-many" as const }
+  ]),
+  { id: "rel-quote-salesorders", fromObjectKey: "quotes", toObjectKey: "salesorders", key: "quote_salesorders", label: "报价 Sales Orders", cardinality: "one-to-many" as const },
+  { id: "rel-salesorder-proformainvoices", fromObjectKey: "salesorders", toObjectKey: "proformainvoices", key: "salesorder_proformainvoices", label: "Sales Order Proforma Invoices", cardinality: "one-to-many" as const },
+  { id: "rel-proformainvoice-commercialinvoices", fromObjectKey: "proformainvoices", toObjectKey: "commercialinvoices", key: "proformainvoice_commercialinvoices", label: "Proforma Invoice Commercial Invoices", cardinality: "one-to-many" as const }
+].map((relation) => ({ ...relation, workspaceId: defaultWorkspaceId }));
+
+const defaultDocumentTemplateJson = {
+  pageSize: "A4",
+  pageMargins: [40, 48, 40, 48],
+  content: [
+    { text: "{{documentTitle}}", style: "header" },
+    { text: "Number: {{documentNumber}}", style: "meta" },
+    { text: "Customer: {{company.title}} / {{contact.title}}", style: "meta" },
+    { text: "Issue date: {{date record.data.issueDate}}", style: "meta" },
+    { table: { widths: ["*", "auto", "auto", "auto"], body: "{{lineItemsTable}}" }, layout: "lightHorizontalLines", margin: [0, 16, 0, 8] },
+    { text: "Fees: {{money totals.feeSubtotal currency}}", alignment: "right" },
+    { text: "Total: {{money totals.totalAmount currency}}", style: "total" },
+    { text: "{{record.data.notes}}", margin: [0, 16, 0, 0] }
+  ],
+  styles: {
+    header: { fontSize: 20, bold: true, margin: [0, 0, 0, 12] },
+    meta: { fontSize: 10, color: "#475569", margin: [0, 2, 0, 0] },
+    total: { fontSize: 14, bold: true, alignment: "right", margin: [0, 8, 0, 0] }
+  }
+};
+
 export const seedData: CrmSnapshot = {
   workspaces: [{ id: defaultWorkspaceId, name: "私有化 CRM", slug: "private-crm" }],
   roles: [
@@ -117,6 +184,7 @@ export const seedData: CrmSnapshot = {
       createdAt: now,
       updatedAt: now
     },
+    ...salesDocumentObjects,
     {
       id: "obj-currency",
       workspaceId: defaultWorkspaceId,
@@ -186,6 +254,11 @@ export const seedData: CrmSnapshot = {
     { id: "field-quote-total-amount", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "totalAmount", label: "报价金额", type: "currency", required: true, unique: false, isSystem: true, position: 6 },
     { id: "field-quote-status", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "status", label: "状态", type: "select", required: true, unique: false, options: [{ label: "草稿", value: "draft" }, { label: "已发送", value: "sent" }, { label: "已接受", value: "accepted" }, { label: "已拒绝", value: "declined" }, { label: "已过期", value: "expired" }], defaultValue: "draft", isSystem: true, position: 7 },
     { id: "field-quote-valid-until", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "validUntil", label: "有效期至", type: "date", required: false, unique: false, isSystem: true, position: 8 },
+    { id: "field-quote-deal", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "dealId", label: "关联交易", type: "reference", required: false, unique: false, options: [{ label: "交易", value: "deals" }], isSystem: true, position: 9 },
+    { id: "field-quote-source-object", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "sourceObjectKey", label: "来源对象", type: "text", required: false, unique: false, isSystem: true, position: 10 },
+    { id: "field-quote-source-record", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "sourceRecordId", label: "来源记录", type: "text", required: false, unique: false, isSystem: true, position: 11 },
+    { id: "field-quote-converted-from", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "convertedFromRecordId", label: "转换来源", type: "text", required: false, unique: false, isSystem: true, position: 12 },
+    ...salesDocumentFields,
     { id: "field-currency-code", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "code", label: "币种代码", type: "text", required: true, unique: true, isSystem: true, position: 1 },
     { id: "field-currency-label", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "label", label: "名称", type: "text", required: true, unique: false, isSystem: true, position: 2 },
     { id: "field-currency-symbol", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "symbol", label: "符号", type: "text", required: false, unique: false, isSystem: true, position: 3 },
@@ -200,6 +273,7 @@ export const seedData: CrmSnapshot = {
     { id: "rel-company-quotes", workspaceId: defaultWorkspaceId, fromObjectKey: "companies", toObjectKey: "quotes", key: "company_quotes", label: "公司报价", cardinality: "one-to-many" },
     { id: "rel-contact-quotes", workspaceId: defaultWorkspaceId, fromObjectKey: "contacts", toObjectKey: "quotes", key: "contact_quotes", label: "联系人报价", cardinality: "one-to-many" },
     { id: "rel-product-quotes", workspaceId: defaultWorkspaceId, fromObjectKey: "products", toObjectKey: "quotes", key: "product_quotes", label: "产品报价", cardinality: "one-to-many" },
+    ...salesDocumentRelations,
     { id: "rel-partner-companies", workspaceId: defaultWorkspaceId, fromObjectKey: "partners", toObjectKey: "companies", key: "partner_companies", label: "伙伴客户", cardinality: "many-to-many" }
   ],
   records: [
@@ -539,12 +613,33 @@ export const seedData: CrmSnapshot = {
   workflowDefinitions: [],
   workflowRuns: [],
   workflowActionApprovals: [],
+  documentTemplates: ["quotes", ...salesDocumentObjects.map((object) => object.key)].map((objectKey) => ({
+    id: `template-${objectKey}-default`,
+    workspaceId: defaultWorkspaceId,
+    objectKey,
+    name: "默认 PDF 模板",
+    active: true,
+    isDefault: true,
+    templateJson: defaultDocumentTemplateJson,
+    createdById: adminUserId,
+    createdAt: now,
+    updatedAt: now
+  })),
   savedViews: [
     { id: "view-contacts-default", workspaceId: defaultWorkspaceId, objectKey: "contacts", name: "全部联系人", columns: ["title", "contactTempCustomerLevel", "email", "phone", "companyId", "country", "birthday", "gender"], isDefault: true },
     { id: "view-companies-default", workspaceId: defaultWorkspaceId, objectKey: "companies", name: "全部公司", columns: ["title", "customerLevel", "domain", "industry", "country", "billingAddresses", "shippingAddresses"], isDefault: true },
     { id: "view-deals-default", workspaceId: defaultWorkspaceId, objectKey: "deals", name: "销售管道", columns: ["title", "amount", "closeDate", "companyId"], sort: { field: "amount", direction: "desc" }, isDefault: true },
     { id: "view-products-default", workspaceId: defaultWorkspaceId, objectKey: "products", name: "全部产品", columns: ["title", "mainImageUrl", "sku", "unitPrice", "unitPriceCurrency", "billingCycle", "active"], sort: { field: "title", direction: "asc" }, isDefault: true },
     { id: "view-quotes-default", workspaceId: defaultWorkspaceId, objectKey: "quotes", name: "全部报价", columns: ["title", "quoteNumber", "companyId", "contactId", "quoteCurrency", "paymentTerm", "totalAmount", "status"], sort: { field: "updatedAt", direction: "desc" }, isDefault: true },
+    ...salesDocumentObjects.map((object) => ({
+      id: `view-${object.key}-default`,
+      workspaceId: defaultWorkspaceId,
+      objectKey: object.key,
+      name: `全部${object.pluralLabel}`,
+      columns: ["title", "documentNumber", "companyId", "contactId", "documentCurrency", "paymentTerm", "totalAmount", "status"],
+      sort: { field: "updatedAt", direction: "desc" as const },
+      isDefault: true
+    })),
     { id: "view-currencies-default", workspaceId: defaultWorkspaceId, objectKey: "currencies", name: "全部货币", columns: ["title", "code", "label", "symbol", "rateToBase", "isBase", "active"], sort: { field: "code", direction: "asc" }, isDefault: true }
   ]
 };

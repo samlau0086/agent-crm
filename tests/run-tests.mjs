@@ -86,6 +86,8 @@ import { extractInboundMetadata } from "../src/lib/email/tracking.ts";
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
+import { renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
+import { salesDocumentNextObjectKey } from "../src/lib/crm/quotes.ts";
 import { generateWorkflowWithAiDesigner } from "../src/lib/workflows/ai-designer.ts";
 import { buildWorkflowDraftFromGoal, graphToLegacyWorkflow, legacyWorkflowToGraph, workflowMatchesEvent } from "../src/lib/workflows/core.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
@@ -3776,7 +3778,7 @@ await run("workspace exposes product and quote modules as first-class crm object
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(source, /key: "products", label: "产品", icon: Package/);
   assert.match(source, /key: "quotes", label: "报价", icon: FileText/);
-  assert.match(source, /new Set\(\["contacts", "companies", "deals", "products", "quotes"\]\)/);
+  assert.match(source, /new Set\(\["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"\]\)/);
   assert.match(source, /objectKey === "products"[\s\S]*SKU-AI-SALES-STD/);
   assert.match(source, /objectKey === "quotes"[\s\S]*companyId,contactId,paymentTerm,totalAmount/);
   assert.match(source, /QuotePricingEditor/);
@@ -9876,6 +9878,61 @@ await run("product and quote seed metadata supports company and contact associat
       }),
     /不存在的产品/
   );
+});
+
+await run("sales documents convert through order and invoice chain and render pdf templates", async () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const objects = store.snapshot().objectDefinitions;
+  const fields = store.listFieldDefinitions(context);
+  const relations = store.listRelationDefinitions(context);
+
+  for (const objectKey of ["salesorders", "proformainvoices", "commercialinvoices"]) {
+    assert.equal(objects.some((object) => object.key === objectKey && object.isSystem), true);
+    assert.equal(fields.some((field) => field.objectKey === objectKey && field.key === "documentNumber" && field.required && field.unique), true);
+    assert.equal(fields.some((field) => field.objectKey === objectKey && field.key === "companyId" && field.type === "reference"), true);
+    assert.equal(fields.some((field) => field.objectKey === objectKey && field.key === "documentCurrency" && field.required), true);
+  }
+  assert.equal(relations.some((relation) => relation.key === "quote_salesorders"), true);
+  assert.equal(relations.some((relation) => relation.key === "salesorder_proformainvoices"), true);
+  assert.equal(relations.some((relation) => relation.key === "proformainvoice_commercialinvoices"), true);
+
+  const firstSalesOrderNumber = store.generateSalesDocumentNumber(context, "salesorders", new Date("2026-07-11T00:00:00.000Z"));
+  assert.equal(firstSalesOrderNumber, "SO-202607-0001");
+  assert.equal(salesDocumentNextObjectKey.quotes, "salesorders");
+
+  const salesOrder = store.convertSalesDocument(context, "quotes", "quote-acme-platform", "salesorders");
+  assert.equal(salesOrder.objectKey, "salesorders");
+  assert.match(String(salesOrder.data.documentNumber), /^SO-\d{6}-\d{4}$/);
+  assert.equal(salesOrder.data.sourceObjectKey, "quotes");
+  assert.equal(salesOrder.data.sourceRecordId, "quote-acme-platform");
+  assert.equal(salesOrder.data.companyId, "company-acme");
+  assert.equal(salesOrder.data.contactId, "contact-lin");
+  assert.equal(salesOrder.data.documentCurrency, "CNY");
+  assert.equal(salesOrder.data.totalAmount, 3499);
+
+  const proformaInvoice = store.convertSalesDocument(context, "salesorders", salesOrder.id, "proformainvoices");
+  assert.equal(proformaInvoice.objectKey, "proformainvoices");
+  assert.match(String(proformaInvoice.data.documentNumber), /^PI-\d{6}-\d{4}$/);
+  assert.equal(proformaInvoice.data.sourceRecordId, salesOrder.id);
+
+  const commercialInvoice = store.convertSalesDocument(context, "proformainvoices", proformaInvoice.id, "commercialinvoices");
+  assert.equal(commercialInvoice.objectKey, "commercialinvoices");
+  assert.match(String(commercialInvoice.data.documentNumber), /^CI-\d{6}-\d{4}$/);
+  assert.equal(commercialInvoice.data.sourceRecordId, proformaInvoice.id);
+  assert.throws(() => store.convertSalesDocument(context, "quotes", "quote-acme-platform", "commercialinvoices"), /Cannot convert/);
+
+  const templates = store.listDocumentTemplates(context, "commercialinvoices");
+  assert.equal(templates.some((template) => template.isDefault && template.active), true);
+  const pdf = await renderSalesDocumentPdf(templates[0], {
+    record: commercialInvoice,
+    company: store.getRecord(context, "companies", String(commercialInvoice.data.companyId)),
+    contact: store.getRecord(context, "contacts", String(commercialInvoice.data.contactId)),
+    records: store.listRecords(context, "currencies"),
+    workspace: { id: context.workspaceId }
+  });
+  assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
+  assert.equal(pdf.length > 1000, true);
 });
 
 await run("email accounts messages and thread summaries are workspace scoped", () => {

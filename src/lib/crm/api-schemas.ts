@@ -170,6 +170,36 @@ export const recordDeleteRequestSchema = z
   })
   .strict();
 
+export const salesDocumentConvertSchema = z
+  .object({
+    targetObjectKey: z.enum(["salesorders", "proformainvoices", "commercialinvoices"])
+  })
+  .strict();
+
+const documentTemplateJsonSchema = z.record(z.unknown());
+
+export const documentTemplateCreateSchema = z
+  .object({
+    objectKey: z.enum(["quotes", "salesorders", "proformainvoices", "commercialinvoices"]),
+    name: labelSchema,
+    active: z.boolean().optional().default(true),
+    isDefault: z.boolean().optional().default(false),
+    templateJson: documentTemplateJsonSchema
+  })
+  .strict();
+
+export const documentTemplateUpdateSchema = z
+  .object({
+    name: labelSchema.optional(),
+    active: z.boolean().optional(),
+    isDefault: z.boolean().optional(),
+    templateJson: documentTemplateJsonSchema.optional()
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one template field is required"
+  });
+
 export const customerLevelSchema = z.enum(["A", "B", "C", "D"]);
 
 export const customerLevelDefinitionSchema = z

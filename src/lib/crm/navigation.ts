@@ -1,4 +1,4 @@
-export const crmCoreObjectKeys = ["contacts", "companies", "deals", "products", "quotes"] as const;
+export const crmCoreObjectKeys = ["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"] as const;
 
 export type CrmCoreObjectKey = (typeof crmCoreObjectKeys)[number];
 export type CrmRouteNavKey =
@@ -28,6 +28,9 @@ const navPathByKey: Record<Exclude<CrmRouteNavKey, "records">, string> = {
   deals: "/deals",
   products: "/products",
   quotes: "/quotes",
+  salesorders: "/salesorders",
+  proformainvoices: "/proformainvoices",
+  commercialinvoices: "/commercialinvoices",
   objects: "/objects",
   tasks: "/tasks",
   activities: "/activities",

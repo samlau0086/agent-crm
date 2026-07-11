@@ -29,16 +29,59 @@ export interface QuoteTotals {
 
 const MAX_QUOTE_LINE_ITEMS = 100;
 const MAX_QUOTE_FEES = 50;
+export const salesDocumentObjectKeys = ["quotes", "salesorders", "proformainvoices", "commercialinvoices"] as const;
+export type SalesDocumentObjectKey = (typeof salesDocumentObjectKeys)[number];
+
+export const salesDocumentNextObjectKey: Partial<Record<SalesDocumentObjectKey, SalesDocumentObjectKey>> = {
+  quotes: "salesorders",
+  salesorders: "proformainvoices",
+  proformainvoices: "commercialinvoices"
+};
+
+export const salesDocumentNumberPrefixes: Record<SalesDocumentObjectKey, string> = {
+  quotes: "Q",
+  salesorders: "SO",
+  proformainvoices: "PI",
+  commercialinvoices: "CI"
+};
+
+export const salesDocumentTitles: Record<SalesDocumentObjectKey, string> = {
+  quotes: "Quote",
+  salesorders: "Sales Order",
+  proformainvoices: "Proforma Invoice",
+  commercialinvoices: "Commercial Invoice"
+};
+
+export function isSalesDocumentObjectKey(objectKey: string): objectKey is SalesDocumentObjectKey {
+  return (salesDocumentObjectKeys as readonly string[]).includes(objectKey);
+}
+
+export function salesDocumentNumberField(objectKey: string): "quoteNumber" | "documentNumber" {
+  return objectKey === "quotes" ? "quoteNumber" : "documentNumber";
+}
+
+export function salesDocumentCurrencyField(objectKey: string): "quoteCurrency" | "documentCurrency" {
+  return objectKey === "quotes" ? "quoteCurrency" : "documentCurrency";
+}
+
+export function getSalesDocumentCurrency(data: Record<string, unknown>, objectKey = "quotes"): string {
+  return normalizeCurrencyCode(data[salesDocumentCurrencyField(objectKey)]) || defaultCurrencyCode;
+}
 
 export function normalizeQuoteRecordData(data: Record<string, unknown>, currencyRecords: CrmRecord[] = []): Record<string, unknown> {
-  const quoteCurrency = normalizeCurrencyCode(data.quoteCurrency) || defaultCurrencyCode;
-  const lineItems = normalizeQuoteLineItems(data.lineItems, quoteCurrency);
-  const fees = normalizeQuoteFees(data.fees, quoteCurrency);
-  const totals = calculateQuoteTotals(lineItems, fees, quoteCurrency, currencyRecords);
+  return normalizeSalesDocumentRecordData("quotes", data, currencyRecords);
+}
+
+export function normalizeSalesDocumentRecordData(objectKey: string, data: Record<string, unknown>, currencyRecords: CrmRecord[] = []): Record<string, unknown> {
+  const currencyField = salesDocumentCurrencyField(objectKey);
+  const documentCurrency = normalizeCurrencyCode(data[currencyField]) || defaultCurrencyCode;
+  const lineItems = normalizeQuoteLineItems(data.lineItems, documentCurrency);
+  const fees = normalizeQuoteFees(data.fees, documentCurrency);
+  const totals = calculateQuoteTotals(lineItems, fees, documentCurrency, currencyRecords);
 
   return {
     ...data,
-    quoteCurrency,
+    [currencyField]: documentCurrency,
     lineItems,
     fees,
     totalAmount: totals.totalAmount
@@ -112,7 +155,11 @@ export function buildQuoteLineItemFromProduct(product: CrmRecord): QuoteLineItem
 }
 
 export function validateQuoteRecordData(data: Record<string, unknown>, products: CrmRecord[]): void {
-  const quoteCurrency = normalizeCurrencyCode(data.quoteCurrency) || defaultCurrencyCode;
+  validateSalesDocumentRecordData("quotes", data, products);
+}
+
+export function validateSalesDocumentRecordData(objectKey: string, data: Record<string, unknown>, products: CrmRecord[]): void {
+  const quoteCurrency = getSalesDocumentCurrency(data, objectKey);
   const lineItems = normalizeQuoteLineItems(data.lineItems, quoteCurrency);
   const fees = normalizeQuoteFees(data.fees, quoteCurrency);
   const productsById = new Map(products.map((product) => [product.id, product]));
@@ -143,8 +190,13 @@ export function validateQuoteRecordData(data: Record<string, unknown>, products:
 }
 
 export function convertQuotePricingToCurrency(data: Record<string, unknown>, targetCurrencyCode: string, currencyRecords: CrmRecord[]): Record<string, unknown> {
+  return convertSalesDocumentPricingToCurrency("quotes", data, targetCurrencyCode, currencyRecords);
+}
+
+export function convertSalesDocumentPricingToCurrency(objectKey: string, data: Record<string, unknown>, targetCurrencyCode: string, currencyRecords: CrmRecord[]): Record<string, unknown> {
   const currencies = getCurrencyDefinitions(currencyRecords);
-  const previousCurrency = normalizeCurrencyCode(data.quoteCurrency) || targetCurrencyCode || defaultCurrencyCode;
+  const currencyField = salesDocumentCurrencyField(objectKey);
+  const previousCurrency = normalizeCurrencyCode(data[currencyField]) || targetCurrencyCode || defaultCurrencyCode;
   const nextCurrency = normalizeCurrencyCode(targetCurrencyCode) || previousCurrency;
   const lineItems = normalizeQuoteLineItems(data.lineItems, previousCurrency).map((item) => ({
     ...item,
@@ -159,11 +211,33 @@ export function convertQuotePricingToCurrency(data: Record<string, unknown>, tar
   const totals = calculateQuoteTotals(lineItems, fees);
   return {
     ...data,
-    quoteCurrency: nextCurrency,
+    [currencyField]: nextCurrency,
     lineItems,
     fees,
     totalAmount: totals.totalAmount
   };
+}
+
+export function buildSalesDocumentConversionData(source: CrmRecord, targetObjectKey: SalesDocumentObjectKey, documentNumber: string): Record<string, unknown> {
+  const sourceCurrency = getSalesDocumentCurrency(source.data, source.objectKey);
+  return normalizeSalesDocumentRecordData(targetObjectKey, {
+    documentNumber,
+    companyId: source.data.companyId,
+    contactId: source.data.contactId,
+    dealId: source.data.dealId,
+    documentCurrency: sourceCurrency,
+    paymentTerm: source.data.paymentTerm ?? "net_30",
+    status: "draft",
+    issueDate: new Date().toISOString().slice(0, 10),
+    dueDate: source.data.validUntil ?? source.data.dueDate,
+    validUntil: source.data.validUntil,
+    lineItems: source.data.lineItems,
+    fees: source.data.fees,
+    notes: source.data.notes,
+    sourceObjectKey: source.objectKey,
+    sourceRecordId: source.id,
+    convertedFromRecordId: source.id
+  });
 }
 
 export function quoteLineItemFromProductForCurrency(product: CrmRecord, targetCurrencyCode: string, currencyRecords: CrmRecord[]): QuoteLineItem {

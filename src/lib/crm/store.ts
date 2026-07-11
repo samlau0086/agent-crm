@@ -47,6 +47,7 @@ import type {
   CrmSnapshot,
   CustomerLevel,
   DashboardSummary,
+  DocumentTemplate,
   EmailAccount,
   EmailAttachment,
   EmailAiGenerationAuditInput,
@@ -101,7 +102,17 @@ import type {
 } from "@/lib/crm/types";
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
 import { compareRecords, matchesRecordSearch, matchesSavedView } from "@/lib/crm/views";
-import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
+import {
+  buildSalesDocumentConversionData,
+  isSalesDocumentObjectKey,
+  normalizeSalesDocumentRecordData,
+  salesDocumentNextObjectKey,
+  salesDocumentNumberField,
+  salesDocumentNumberPrefixes,
+  salesDocumentTitles,
+  validateSalesDocumentRecordData,
+  type SalesDocumentObjectKey
+} from "@/lib/crm/quotes";
 import {
   buildWorkflowDraftFromGoal,
   buildWorkflowIdempotencyKey,
@@ -3341,19 +3352,177 @@ export class CrmStore {
     return clone(record);
   }
 
+  listDocumentTemplates(context: RequestContext, objectKey?: string): DocumentTemplate[] {
+    requirePermission(context, "crm.read");
+    if (objectKey && !isSalesDocumentObjectKey(objectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
+    }
+    return clone(
+      (this.data.documentTemplates ?? [])
+        .filter((template) => template.workspaceId === context.workspaceId && (!objectKey || template.objectKey === objectKey))
+        .sort((left, right) => left.objectKey.localeCompare(right.objectKey) || Number(right.isDefault) - Number(left.isDefault) || right.updatedAt.localeCompare(left.updatedAt))
+    );
+  }
+
+  getDocumentTemplate(context: RequestContext, id: string): DocumentTemplate {
+    requirePermission(context, "crm.read");
+    const template = (this.data.documentTemplates ?? []).find((candidate) => candidate.workspaceId === context.workspaceId && candidate.id === id);
+    if (!template) {
+      throw new Error("Document template not found");
+    }
+    return clone(template);
+  }
+
+  getDefaultDocumentTemplate(context: RequestContext, objectKey: string): DocumentTemplate {
+    requirePermission(context, "crm.read");
+    if (!isSalesDocumentObjectKey(objectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
+    }
+    const templates = this.listDocumentTemplates(context, objectKey).filter((template) => template.active);
+    const template = templates.find((candidate) => candidate.isDefault) ?? templates[0];
+    if (!template) {
+      throw new Error("No active PDF template found");
+    }
+    return template;
+  }
+
+  createDocumentTemplate(context: RequestContext, input: Pick<DocumentTemplate, "objectKey" | "name" | "active" | "isDefault" | "templateJson">): DocumentTemplate {
+    requirePermission(context, "crm.admin");
+    if (!isSalesDocumentObjectKey(input.objectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
+    }
+    if (!this.data.documentTemplates) {
+      this.data.documentTemplates = [];
+    }
+    if (this.data.documentTemplates.some((template) => template.workspaceId === context.workspaceId && template.objectKey === input.objectKey && template.name === input.name)) {
+      throw new Error("Document template name already exists");
+    }
+    if (input.isDefault) {
+      this.data.documentTemplates.forEach((template) => {
+        if (template.workspaceId === context.workspaceId && template.objectKey === input.objectKey) {
+          template.isDefault = false;
+        }
+      });
+    }
+    const template: DocumentTemplate = {
+      ...input,
+      id: createId("template"),
+      workspaceId: context.workspaceId,
+      createdById: context.user.id,
+      createdAt: stamp(),
+      updatedAt: stamp()
+    };
+    this.data.documentTemplates.push(template);
+    this.writeAuditLog(context, "create", "document_template", template.id, {
+      objectKey: template.objectKey,
+      summary: `Created PDF template ${template.name}`,
+      details: { objectKey: template.objectKey, isDefault: template.isDefault }
+    });
+    return clone(template);
+  }
+
+  updateDocumentTemplate(context: RequestContext, id: string, patch: Partial<Pick<DocumentTemplate, "name" | "active" | "isDefault" | "templateJson">>): DocumentTemplate {
+    requirePermission(context, "crm.admin");
+    const template = (this.data.documentTemplates ?? []).find((candidate) => candidate.workspaceId === context.workspaceId && candidate.id === id);
+    if (!template) {
+      throw new Error("Document template not found");
+    }
+    if (patch.name && this.data.documentTemplates?.some((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === template.objectKey && candidate.id !== id && candidate.name === patch.name)) {
+      throw new Error("Document template name already exists");
+    }
+    if (patch.isDefault) {
+      this.data.documentTemplates?.forEach((candidate) => {
+        if (candidate.workspaceId === context.workspaceId && candidate.objectKey === template.objectKey && candidate.id !== id) {
+          candidate.isDefault = false;
+        }
+      });
+    }
+    Object.assign(template, patch, { updatedAt: stamp() });
+    this.writeAuditLog(context, "update", "document_template", template.id, {
+      objectKey: template.objectKey,
+      summary: `Updated PDF template ${template.name}`,
+      details: { patch }
+    });
+    return clone(template);
+  }
+
+  deleteDocumentTemplate(context: RequestContext, id: string): void {
+    requirePermission(context, "crm.admin");
+    const template = (this.data.documentTemplates ?? []).find((candidate) => candidate.workspaceId === context.workspaceId && candidate.id === id);
+    if (!template) {
+      throw new Error("Document template not found");
+    }
+    this.data.documentTemplates = (this.data.documentTemplates ?? []).filter((candidate) => candidate.id !== id);
+    this.writeAuditLog(context, "delete", "document_template", id, {
+      objectKey: template.objectKey,
+      summary: `Deleted PDF template ${template.name}`,
+      details: { objectKey: template.objectKey }
+    });
+  }
+
+  generateSalesDocumentNumber(context: RequestContext, objectKey: SalesDocumentObjectKey, nowDate = new Date()): string {
+    requirePermission(context, "crm.write");
+    const prefix = salesDocumentNumberPrefixes[objectKey];
+    const period = `${nowDate.getUTCFullYear()}${String(nowDate.getUTCMonth() + 1).padStart(2, "0")}`;
+    const field = salesDocumentNumberField(objectKey);
+    let sequence =
+      this.data.records.filter(
+        (record) =>
+          record.workspaceId === context.workspaceId &&
+          record.objectKey === objectKey &&
+          typeof record.data[field] === "string" &&
+          String(record.data[field]).startsWith(`${prefix}-${period}-`)
+      ).length + 1;
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const candidate = `${prefix}-${period}-${String(sequence).padStart(4, "0")}`;
+      const duplicate = this.data.records.some((record) => record.workspaceId === context.workspaceId && record.objectKey === objectKey && record.data[field] === candidate);
+      if (!duplicate) {
+        return candidate;
+      }
+      sequence += 1;
+    }
+    throw new Error("Unable to generate document number");
+  }
+
+  convertSalesDocument(context: RequestContext, objectKey: string, recordId: string, targetObjectKey: string): CrmRecord {
+    requirePermission(context, "crm.write");
+    if (!isSalesDocumentObjectKey(objectKey) || !isSalesDocumentObjectKey(targetObjectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "Unsupported sales document conversion");
+    }
+    const expectedTarget = salesDocumentNextObjectKey[objectKey];
+    if (expectedTarget !== targetObjectKey) {
+      throw new ApiError(400, "VALIDATION_ERROR", `Cannot convert ${objectKey} to ${targetObjectKey}`);
+    }
+    const source = this.getRecord(context, objectKey, recordId);
+    const documentNumber = this.generateSalesDocumentNumber(context, targetObjectKey);
+    const created = this.createRecord(context, targetObjectKey, {
+      title: `${salesDocumentTitles[targetObjectKey]} - ${source.title}`,
+      ownerId: source.ownerId,
+      tags: source.tags,
+      tagColors: source.tagColors,
+      data: buildSalesDocumentConversionData(source, targetObjectKey, documentNumber)
+    });
+    this.writeAuditLog(context, "create", "record_conversion", created.id, {
+      objectKey: targetObjectKey,
+      summary: `Converted ${objectKey} ${source.title} to ${targetObjectKey} ${created.title}`,
+      details: { sourceObjectKey: objectKey, sourceRecordId: recordId, targetObjectKey, targetRecordId: created.id }
+    });
+    return created;
+  }
+
   createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string> }): CrmRecord {
     requirePermission(context, "crm.write");
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
     const existing = this.listRecordsForValidation(context, objectKey);
     const data =
-      objectKey === "quotes"
-        ? normalizeQuoteRecordData(input.data, this.listRecordsForValidation(context, "currencies"))
+      isSalesDocumentObjectKey(objectKey)
+        ? normalizeSalesDocumentRecordData(objectKey, input.data, this.listRecordsForValidation(context, "currencies"))
         : objectKey === "contacts"
           ? normalizeContactCustomerLevelData(input.data)
           : input.data;
-    if (objectKey === "quotes") {
-      validateQuoteRecordData(data, this.listRecordsForValidation(context, "products"));
+    if (isSalesDocumentObjectKey(objectKey)) {
+      validateSalesDocumentRecordData(objectKey, data, this.listRecordsForValidation(context, "products"));
     }
     validateRecordPayload(fields, data, existing);
     this.assertRecordReferences(context, fields, data, true);
@@ -3403,14 +3572,14 @@ export class CrmStore {
     }
     const mergedData = { ...record.data, ...(patch.data ?? {}) };
     const nextData =
-      objectKey === "quotes"
-        ? normalizeQuoteRecordData(mergedData, this.listRecordsForValidation(context, "currencies"))
+      isSalesDocumentObjectKey(objectKey)
+        ? normalizeSalesDocumentRecordData(objectKey, mergedData, this.listRecordsForValidation(context, "currencies"))
         : objectKey === "contacts"
           ? normalizeContactCustomerLevelData(mergedData)
           : mergedData;
     const fields = this.listFieldDefinitions(context, objectKey);
-    if (objectKey === "quotes") {
-      validateQuoteRecordData(nextData, this.listRecordsForValidation(context, "products"));
+    if (isSalesDocumentObjectKey(objectKey)) {
+      validateSalesDocumentRecordData(objectKey, nextData, this.listRecordsForValidation(context, "products"));
     }
     validateRecordPayload(fields, nextData, this.listRecordsForValidation(context, objectKey), recordId);
     this.assertRecordReferences(context, fields, nextData, true);

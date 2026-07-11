@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
 import { isImageMediaAsset, MediaLibraryModal, mediaAssetDataUrl } from "@/components/media-library";
@@ -10,7 +10,7 @@ import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currenc
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -194,8 +194,37 @@ type CustomerLevelSettingsDraft = {
   levels: CustomerLevelSettings["levels"];
   rules: Record<keyof CustomerLevelSettings["rules"], string>;
 };
+type DocumentTemplateDraft = {
+  objectKey: string;
+  name: string;
+  active: boolean;
+  isDefault: boolean;
+  templateJsonText: string;
+};
 type ToastState = { intent: "success" | "error" | "info"; message: string };
 type ConfirmDialogState = { title: string; message: string; confirmLabel?: string; danger?: boolean };
+
+const salesDocumentTemplateObjectKeys = ["quotes", "salesorders", "proformainvoices", "commercialinvoices"];
+const defaultDocumentTemplateText = JSON.stringify(
+  {
+    pageSize: "A4",
+    pageMargins: [40, 48, 40, 48],
+    content: [
+      { text: "{{documentTitle}}", style: "header" },
+      { text: "Number: {{documentNumber}}", style: "meta" },
+      { text: "Customer: {{company.title}} / {{contact.title}}", style: "meta" },
+      { table: { widths: ["*", "auto", "auto", "auto"], body: "{{lineItemsTable}}" }, layout: "lightHorizontalLines", margin: [0, 16, 0, 8] },
+      { text: "Total: {{money totals.totalAmount currency}}", style: "total" }
+    ],
+    styles: {
+      header: { fontSize: 20, bold: true, margin: [0, 0, 0, 12] },
+      meta: { fontSize: 10, color: "#475569", margin: [0, 2, 0, 0] },
+      total: { fontSize: 14, bold: true, alignment: "right", margin: [0, 8, 0, 0] }
+    }
+  },
+  null,
+  2
+);
 
 const baseWebhookEventOptions: WebhookEvent[] = ["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"];
 const emailWebhookEventOptions: WebhookEvent[] = [
@@ -334,6 +363,10 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [relationDraft, setRelationDraft] = useState<RelationDraft>(emptyRelationDraft(props.objects[0]?.key ?? ""));
   const [pipelineDraft, setPipelineDraft] = useState<PipelineDraft>(emptyPipelineDraft(props.objects[0]?.key ?? ""));
   const [viewDraft, setViewDraft] = useState<ViewDraft>(emptyViewDraft(props.objects[0]?.key ?? ""));
+  const [documentTemplates, setDocumentTemplates] = useState<DocumentTemplate[]>([]);
+  const [selectedDocumentTemplateId, setSelectedDocumentTemplateId] = useState("");
+  const [documentTemplateDraft, setDocumentTemplateDraft] = useState<DocumentTemplateDraft>(() => emptyDocumentTemplateDraft());
+  const [documentTemplatesLoaded, setDocumentTemplatesLoaded] = useState(false);
   const [roleDraft, setRoleDraft] = useState<RoleDraft>(emptyRoleDraft());
   const [userDraft, setUserDraft] = useState<UserDraft>(emptyUserDraft(props.roles[0]?.id ?? "", props.teams[0]?.id ?? ""));
   const [passwordSetupLink, setPasswordSetupLink] = useState<string | null>(null);
@@ -403,6 +436,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const selectedRelation = props.relations.find((relation) => relation.id === selectedRelationId);
   const selectedPipeline = props.pipelines.find((pipeline) => pipeline.id === selectedPipelineId);
   const selectedView = props.savedViews.find((view) => view.id === selectedViewId);
+  const selectedDocumentTemplate = documentTemplates.find((template) => template.id === selectedDocumentTemplateId);
   const selectedRole = props.roles.find((role) => role.id === selectedRoleId);
   const selectedUser = props.users.find((user) => user.id === selectedUserId);
   const selectedTeam = props.teams.find((team) => team.id === selectedTeamId);
@@ -480,17 +514,17 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const fieldObject = props.objects.find((object) => object.key === fieldDraft.objectKey);
   const quotePaymentTermField = props.fields.find((field) => field.objectKey === "quotes" && field.key === "paymentTerm");
 
-  function showToast(nextToast: ToastState) {
+  const showToast = useCallback((nextToast: ToastState) => {
     setToast(nextToast);
     window.setTimeout(() => {
       setToast((current) => (current?.message === nextToast.message && current.intent === nextToast.intent ? null : current));
     }, 3600);
-  }
+  }, []);
 
-  function showError(messageText: string) {
+  const showError = useCallback((messageText: string) => {
     setError(messageText);
     showToast({ intent: "error", message: messageText });
-  }
+  }, [showToast]);
 
   function requestConfirm(options: ConfirmDialogState): Promise<boolean> {
     setConfirmDialog(options);
@@ -602,6 +636,32 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   useEffect(() => {
     setPaymentTermOptionsText(quotePaymentTermField ? formatFieldOptions(quotePaymentTermField) : "");
   }, [quotePaymentTermField]);
+
+  useEffect(() => {
+    if (activeSettingsTab !== "crm" || documentTemplatesLoaded) {
+      return;
+    }
+    let cancelled = false;
+    void fetchJson<DocumentTemplate[]>("/api/document-templates", { method: "GET" })
+      .then((templates) => {
+        if (cancelled) return;
+        setDocumentTemplates(templates);
+        setSelectedDocumentTemplateId((current) => current || templates[0]?.id || "");
+        setDocumentTemplatesLoaded(true);
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          showError(loadError instanceof Error ? loadError.message : "Failed to load PDF templates");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSettingsTab, documentTemplatesLoaded, showError]);
+
+  useEffect(() => {
+    setDocumentTemplateDraft(selectedDocumentTemplate ? documentTemplateDraftFromTemplate(selectedDocumentTemplate) : emptyDocumentTemplateDraft());
+  }, [selectedDocumentTemplate]);
 
   useEffect(() => {
     if (!canManage || !webhookDeliveryWebhookId) {
@@ -817,6 +877,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   function resetCurrencyForm() {
     setSelectedCurrencyId("");
     setCurrencyDraft(emptyCurrencyDraft());
+  }
+
+  function resetDocumentTemplateForm() {
+    setSelectedDocumentTemplateId("");
+    setDocumentTemplateDraft(emptyDocumentTemplateDraft());
   }
 
   function runAction(action: () => Promise<void>) {
@@ -1831,6 +1896,57 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     );
   }
 
+  async function saveDocumentTemplate() {
+    const templateJson = parseDocumentTemplateJson(documentTemplateDraft.templateJsonText);
+    if (selectedDocumentTemplate) {
+      const updated = await fetchJson<DocumentTemplate>(`/api/document-templates/${selectedDocumentTemplate.id}`, {
+        method: "PATCH",
+        body: {
+          name: documentTemplateDraft.name,
+          active: documentTemplateDraft.active,
+          isDefault: documentTemplateDraft.isDefault,
+          templateJson
+        }
+      });
+      setDocumentTemplates((current) => [updated, ...current.filter((template) => template.id !== updated.id)].sort(sortDocumentTemplates));
+      setSelectedDocumentTemplateId(updated.id);
+      setMessage("PDF 模板已保存");
+      return;
+    }
+    const created = await fetchJson<DocumentTemplate>("/api/document-templates", {
+      method: "POST",
+      body: {
+        objectKey: documentTemplateDraft.objectKey,
+        name: documentTemplateDraft.name,
+        active: documentTemplateDraft.active,
+        isDefault: documentTemplateDraft.isDefault,
+        templateJson
+      }
+    });
+    setDocumentTemplates((current) => [created, ...current].sort(sortDocumentTemplates));
+    setSelectedDocumentTemplateId(created.id);
+    setMessage("PDF 模板已创建");
+  }
+
+  async function deleteDocumentTemplate() {
+    if (!selectedDocumentTemplate) {
+      return;
+    }
+    const confirmed = await requestConfirm({
+      title: "删除 PDF 模板",
+      message: `确定删除模板“${selectedDocumentTemplate.name}”？`,
+      confirmLabel: "删除",
+      danger: true
+    });
+    if (!confirmed) {
+      return;
+    }
+    await fetchJson<{ ok: true }>(`/api/document-templates/${selectedDocumentTemplate.id}`, { method: "DELETE" });
+    setDocumentTemplates((current) => current.filter((template) => template.id !== selectedDocumentTemplate.id));
+    resetDocumentTemplateForm();
+    setMessage("PDF 模板已删除");
+  }
+
   if (!canManage && activeSettingsTab !== "profile") {
     return (
       <section className="settings-panel">
@@ -1959,6 +2075,19 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             optionsText={paymentTermOptionsText}
             onChange={setPaymentTermOptionsText}
             onSave={() => runAction(savePaymentTermOptions)}
+          />
+          <DocumentTemplateAdminPanel
+            draft={documentTemplateDraft}
+            isPending={isPending}
+            objects={props.objects}
+            records={props.records}
+            selectedTemplate={selectedDocumentTemplate}
+            templates={documentTemplates}
+            onChange={(patch) => setDocumentTemplateDraft((current) => ({ ...current, ...patch }))}
+            onDelete={() => runAction(deleteDocumentTemplate)}
+            onNew={resetDocumentTemplateForm}
+            onSave={() => runAction(saveDocumentTemplate)}
+            onSelect={setSelectedDocumentTemplateId}
           />
           <section className="settings-panel">
             <div className="settings-panel-header">
@@ -4647,6 +4776,119 @@ function PaymentTermAdminPanel({
   );
 }
 
+function DocumentTemplateAdminPanel({
+  draft,
+  isPending,
+  objects,
+  records,
+  selectedTemplate,
+  templates,
+  onChange,
+  onDelete,
+  onNew,
+  onSave,
+  onSelect
+}: {
+  draft: DocumentTemplateDraft;
+  isPending: boolean;
+  objects: ObjectDefinition[];
+  records: CrmRecord[];
+  selectedTemplate?: DocumentTemplate;
+  templates: DocumentTemplate[];
+  onChange: (patch: Partial<DocumentTemplateDraft>) => void;
+  onDelete: () => void;
+  onNew: () => void;
+  onSave: () => void;
+  onSelect: (templateId: string) => void;
+}) {
+  const previewRecord = records.find((record) => record.objectKey === draft.objectKey);
+  const objectLabel = (objectKey: string) => objects.find((object) => object.key === objectKey)?.label ?? objectKey;
+  return (
+    <section className="settings-panel" data-testid="document-template-settings">
+      <div className="settings-panel-header">
+        <div>
+          <h2 className="page-title">PDF 模板</h2>
+          <div className="subtle">使用 JSON 定义 pdfmake 文档结构，支持 record、company、contact、deal、lineItems、fees、totals、workspace、generatedAt 变量。</div>
+        </div>
+        <button className="secondary-button" type="button" onClick={onNew} disabled={isPending}>
+          <Plus size={16} />
+          新建模板
+        </button>
+      </div>
+      <div className="settings-admin-grid">
+        <div className="settings-list">
+          {templates.length ? (
+            templates.map((template) => (
+              <button
+                className={`settings-item record-title ${selectedTemplate?.id === template.id ? "active" : ""}`}
+                data-testid={`document-template-${template.id}`}
+                key={template.id}
+                type="button"
+                onClick={() => onSelect(template.id)}
+              >
+                <strong>{template.name}</strong>
+                <span className="subtle">{objectLabel(template.objectKey)}</span>
+                <span className={template.active ? "badge" : "danger-badge"}>{template.active ? "启用" : "停用"}</span>
+                {template.isDefault ? <span className="badge">默认</span> : null}
+              </button>
+            ))
+          ) : (
+            <div className="empty-state">尚未加载 PDF 模板</div>
+          )}
+        </div>
+        <div className="settings-form-stack">
+          <div className="form-grid">
+            <label>
+              <span className="subtle">适用对象</span>
+              <select className="select" value={draft.objectKey} onChange={(event) => onChange({ objectKey: event.target.value })} disabled={Boolean(selectedTemplate)}>
+                {salesDocumentTemplateObjectKeys.map((objectKey) => (
+                  <option key={objectKey} value={objectKey}>
+                    {objectLabel(objectKey)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className="subtle">模板名称</span>
+              <input className="input" data-testid="document-template-name" value={draft.name} onChange={(event) => onChange({ name: event.target.value })} />
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={draft.active} onChange={(event) => onChange({ active: event.target.checked })} />
+              <span>启用模板</span>
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={draft.isDefault} onChange={(event) => onChange({ isDefault: event.target.checked })} />
+              <span>设为默认模板</span>
+            </label>
+          </div>
+          <label>
+            <span className="subtle">模板 JSON</span>
+            <textarea className="textarea code-textarea" data-testid="document-template-json" value={draft.templateJsonText} onChange={(event) => onChange({ templateJsonText: event.target.value })} rows={14} />
+          </label>
+          <div className="toolbar">
+            <button className="primary-button" type="button" onClick={onSave} disabled={isPending || !draft.name.trim()}>
+              <Save size={16} />
+              保存模板
+            </button>
+            {previewRecord ? (
+              <a className="secondary-button" href={`/api/records/${previewRecord.objectKey}/${previewRecord.id}/pdf${selectedTemplate ? `?templateId=${encodeURIComponent(selectedTemplate.id)}` : ""}`} download>
+                <Download size={16} />
+                预览 PDF
+              </a>
+            ) : null}
+            {selectedTemplate ? (
+              <button className="danger-button" type="button" onClick={onDelete} disabled={isPending}>
+                <Trash2 size={16} />
+                删除模板
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ApiKeyAdminPanel({
   apiKeys,
   users,
@@ -6130,6 +6372,42 @@ function emptyViewDraft(objectKey: string): ViewDraft {
     filterOperator: "contains",
     filterValue: ""
   };
+}
+
+function emptyDocumentTemplateDraft(): DocumentTemplateDraft {
+  return {
+    objectKey: "quotes",
+    name: "自定义 PDF 模板",
+    active: true,
+    isDefault: false,
+    templateJsonText: defaultDocumentTemplateText
+  };
+}
+
+function documentTemplateDraftFromTemplate(template: DocumentTemplate): DocumentTemplateDraft {
+  return {
+    objectKey: template.objectKey,
+    name: template.name,
+    active: template.active,
+    isDefault: template.isDefault,
+    templateJsonText: JSON.stringify(template.templateJson, null, 2)
+  };
+}
+
+function parseDocumentTemplateJson(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Template JSON must be an object");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(error instanceof Error ? `PDF 模板 JSON 无效：${error.message}` : "PDF 模板 JSON 无效");
+  }
+}
+
+function sortDocumentTemplates(left: DocumentTemplate, right: DocumentTemplate): number {
+  return left.objectKey.localeCompare(right.objectKey) || Number(right.isDefault) - Number(left.isDefault) || right.updatedAt.localeCompare(left.updatedAt);
 }
 
 function emptyRoleDraft(): RoleDraft {

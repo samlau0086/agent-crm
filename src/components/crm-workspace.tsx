@@ -43,6 +43,7 @@ import {
   Phone,
   Plus,
   RefreshCw,
+  ReceiptText,
   RotateCcw,
   Save,
   Search,
@@ -89,7 +90,7 @@ import { SettingsAdmin } from "@/components/settings-admin";
 import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
-import { calculateQuoteTotals, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
+import { calculateQuoteTotals, isSalesDocumentObjectKey, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, salesDocumentCurrencyField, salesDocumentNextObjectKey, salesDocumentTitles, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
 import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, type RecordApprovalPatch } from "@/lib/crm/record-approval";
 import { parseEmailThreadSearchCommand } from "@/lib/email/search-command";
 import type {
@@ -203,7 +204,7 @@ interface CrmWorkspaceProps {
 const recordListRequestTimeoutMs = 15_000;
 const routeRefreshTimeoutMs = 10_000;
 const editApprovalObjectKeys = new Set(["contacts", "companies", "deals"]);
-const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "products", "quotes"]);
+const deleteApprovalObjectKeys = new Set(["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"]);
 const customerLevelFieldKeys = new Set([
   "customerLevel",
   "contactTempCustomerLevel",
@@ -279,7 +280,7 @@ function hasRecordUpdatePatchChanges(record: CrmRecord, patch: RecordApprovalPat
   return Object.entries(data).some(([key, nextValue]) => normalizeComparableRecordValue(nextValue) !== normalizeComparableRecordValue(record.data[key]));
 }
 
-type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "objects" | "records" | "tasks" | "activities" | "record-approvals" | "automation" | "email" | "settings";
+type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "salesorders" | "proformainvoices" | "commercialinvoices" | "objects" | "records" | "tasks" | "activities" | "record-approvals" | "automation" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type DealWorkspaceView = "pipeline" | "list";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
@@ -614,6 +615,9 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
   { key: "deals", label: "交易", icon: BadgeDollarSign },
   { key: "products", label: "产品", icon: Package },
   { key: "quotes", label: "报价", icon: FileText },
+  { key: "salesorders", label: "Sales Orders", icon: ClipboardList },
+  { key: "proformainvoices", label: "Proforma Invoices", icon: FileText },
+  { key: "commercialinvoices", label: "Commercial Invoices", icon: ReceiptText },
   { key: "objects", label: "对象", icon: LayoutList },
   { key: "tasks", label: "任务", icon: CheckCircle2 },
   { key: "activities", label: "活动", icon: ActivityIcon },
@@ -622,7 +626,7 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
   { key: "settings", label: "设置", icon: Settings }
 ];
 
-const coreObjects = new Set(["contacts", "companies", "deals", "products", "quotes"]);
+const coreObjects = new Set(["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"]);
 const emailAiFeatureMeta: Record<keyof EmailAiSettings["features"], { label: string; description: string; dependsOn?: keyof EmailAiSettings["features"] }> = {
   draft: { label: "AI 写邮件", description: "基于客户背景、沟通历史和知识库生成邮件草稿" },
   translate: { label: "AI 翻译", description: "手动翻译邮件内容" },
@@ -2686,7 +2690,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     [activeObject?.key, importPresets]
   );
   const quickAddObjects = useMemo(() => {
-    const quickObjectKeys = ["deals", "activities", "contacts", "companies", "products", "quotes"];
+    const quickObjectKeys = ["deals", "activities", "contacts", "companies", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"];
     const candidates = quickObjectKeys
       .map((objectKey) => props.objects.find((object) => object.key === objectKey))
       .filter((object): object is ObjectDefinition => Boolean(object));
@@ -3940,6 +3944,20 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     setMessage("记录已删除");
     setRecordPanelMode("closed");
+    router.refresh();
+  }
+
+  async function convertSelectedSalesDocument(targetObjectKey: string) {
+    if (!selectedRecord || !isSalesDocumentObjectKey(selectedRecord.objectKey)) {
+      return;
+    }
+    const result = await fetchJson<CrmRecord>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}/convert`, {
+      method: "POST",
+      body: { targetObjectKey }
+    });
+    setRecords((current) => mergeRecords(current, [result]));
+    setMessage(`已转换为 ${salesDocumentTitles[result.objectKey as keyof typeof salesDocumentTitles] ?? result.objectKey}`);
+    openRecord(result);
     router.refresh();
   }
 
@@ -6633,13 +6651,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onChange={(nextValue) => setCreateValues((current) => ({ ...current, [field.key]: nextValue }))}
                     />
                   ))}
-                  {activeObject.key === "quotes" ? (
+                  {isSalesDocumentObjectKey(activeObject.key) ? (
                     <QuotePricingEditor
                       allRecords={records}
+                      objectKey={activeObject.key}
                       onRecordsLoaded={mergeLoadedRecords}
                       testIdPrefix="create-quote"
                       values={createValues}
-                      onCurrencyChange={(nextCurrency) => setCreateValues((current) => convertQuoteFormCurrency(current, nextCurrency, currencyRecords))}
+                      onCurrencyChange={(nextCurrency) => setCreateValues((current) => convertQuoteFormCurrency(current, nextCurrency, currencyRecords, activeObject.key))}
                       onChange={setCreateValues}
                     />
                   ) : null}
@@ -6958,13 +6977,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onSave={(nextValue) => submitSingleRecordField(field, nextValue)}
                         />
                       ))}
-                      {selectedRecord.objectKey === "quotes" ? (
+                      {isSalesDocumentObjectKey(selectedRecord.objectKey) ? (
                         <QuotePricingEditor
                           allRecords={records}
+                          objectKey={selectedRecord.objectKey}
                           onRecordsLoaded={mergeLoadedRecords}
                           testIdPrefix="edit-quote"
                           values={editValues}
-                          onCurrencyChange={(nextCurrency) => setEditValues((current) => convertQuoteFormCurrency(current, nextCurrency, currencyRecords))}
+                          onCurrencyChange={(nextCurrency) => setEditValues((current) => convertQuoteFormCurrency(current, nextCurrency, currencyRecords, selectedRecord.objectKey))}
                           onChange={setEditValues}
                         />
                       ) : null}
@@ -7022,6 +7042,29 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         <Save size={16} />
                         保存
                       </button>
+                      {isSalesDocumentObjectKey(selectedRecord.objectKey) ? (
+                        <a
+                          className="secondary-button"
+                          data-testid={`download-document-pdf-${selectedRecord.objectKey}`}
+                          href={`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}/pdf`}
+                          download
+                        >
+                          <Download size={16} />
+                          下载 PDF
+                        </a>
+                      ) : null}
+                      {isSalesDocumentObjectKey(selectedRecord.objectKey) && salesDocumentNextObjectKey[selectedRecord.objectKey] ? (
+                        <button
+                          className="secondary-button"
+                          data-testid={`convert-document-${selectedRecord.objectKey}`}
+                          type="button"
+                          onClick={() => runAction(() => convertSelectedSalesDocument(salesDocumentNextObjectKey[selectedRecord.objectKey as keyof typeof salesDocumentNextObjectKey] ?? ""))}
+                          disabled={isPending}
+                        >
+                          <ChevronRight size={16} />
+                          转为 {salesDocumentTitles[salesDocumentNextObjectKey[selectedRecord.objectKey as keyof typeof salesDocumentNextObjectKey] as keyof typeof salesDocumentTitles]}
+                        </button>
+                      ) : null}
                       {selectedRecordPendingDeleteRequest ? (
                         <button className="danger-button" data-testid="edit-record-cancel-delete-request" type="button" onClick={() => { void runImmediateAction(() => cancelRecordChangeRequest(selectedRecordPendingDeleteRequest)); }} disabled={isPending}>
                           <RotateCcw size={16} />
@@ -16945,6 +16988,7 @@ function QuotePricingEditor({
   onChange,
   onCurrencyChange,
   onRecordsLoaded,
+  objectKey,
   testIdPrefix,
   values
 }: {
@@ -16952,22 +16996,24 @@ function QuotePricingEditor({
   onChange: (updater: (current: Record<string, string>) => Record<string, string>) => void;
   onCurrencyChange: (nextCurrency: string) => void;
   onRecordsLoaded?: (records: CrmRecord[]) => void;
+  objectKey: string;
   testIdPrefix: string;
   values: Record<string, string>;
 }) {
   const currencyRecords = allRecords.filter((record) => record.objectKey === "currencies");
   const currencies = getCurrencyDefinitions(currencyRecords);
-  const quoteCurrency = normalizeCurrencyCode(values.quoteCurrency) || getBaseCurrencyCode(currencies);
+  const currencyField = salesDocumentCurrencyField(objectKey);
+  const quoteCurrency = normalizeCurrencyCode(values[currencyField]) || getBaseCurrencyCode(currencies);
   const lineItems = quoteLineItemsFromValues(values, quoteCurrency);
   const fees = quoteFeesFromValues(values, quoteCurrency);
   const totals = calculateQuoteTotals(lineItems, fees, quoteCurrency, currencyRecords);
 
   function updateLineItems(nextLineItems: QuoteLineItem[]) {
-    onChange((current) => withQuotePricingValues(current, nextLineItems, fees, quoteCurrency, currencyRecords));
+    onChange((current) => withQuotePricingValues(current, nextLineItems, fees, quoteCurrency, currencyRecords, objectKey));
   }
 
   function updateFees(nextFees: QuoteFee[]) {
-    onChange((current) => withQuotePricingValues(current, lineItems, nextFees, quoteCurrency, currencyRecords));
+    onChange((current) => withQuotePricingValues(current, lineItems, nextFees, quoteCurrency, currencyRecords, objectKey));
   }
 
   function updateLineItem(index: number, patch: Partial<QuoteLineItem>) {
@@ -19934,7 +19980,7 @@ function formatCompanyAddressLines(address: CompanyAddressDraft): string[] {
 
 const quoteLineItemsValueKey = "__quoteLineItems";
 const quoteFeesValueKey = "__quoteFees";
-const hiddenQuoteFormFields = new Set(["productId", "quoteCurrency", "totalAmount"]);
+const hiddenSalesDocumentFormFields = new Set(["productId", "quoteCurrency", "documentCurrency", "totalAmount", "sourceObjectKey", "sourceRecordId", "convertedFromRecordId"]);
 
 function visibleFormFieldsForObject(objectKey: string | undefined, fields: FieldDefinition[]): FieldDefinition[] {
   if (objectKey === "contacts") {
@@ -19945,8 +19991,8 @@ function visibleFormFieldsForObject(objectKey: string | undefined, fields: Field
     return fields.filter((field) => !hiddenCompanyFormFields.has(field.key));
   }
 
-  if (objectKey === "quotes") {
-    return fields.filter((field) => !hiddenQuoteFormFields.has(field.key));
+  if (objectKey && isSalesDocumentObjectKey(objectKey)) {
+    return fields.filter((field) => !hiddenSalesDocumentFormFields.has(field.key));
   }
 
   return fields;
@@ -19960,24 +20006,26 @@ function quoteFeesFromValues(values: Record<string, string>, fallbackCurrency?: 
   return normalizeQuoteFees(parseJsonValue(values[quoteFeesValueKey]), fallbackCurrency);
 }
 
-function withQuotePricingValues(values: Record<string, string>, lineItems: QuoteLineItem[], fees: QuoteFee[], quoteCurrency?: string, currencyRecords: CrmRecord[] = []): Record<string, string> {
+function withQuotePricingValues(values: Record<string, string>, lineItems: QuoteLineItem[], fees: QuoteFee[], quoteCurrency?: string, currencyRecords: CrmRecord[] = [], objectKey = "quotes"): Record<string, string> {
   const currencies = getCurrencyDefinitions(currencyRecords);
-  const nextCurrency = normalizeCurrencyCode(quoteCurrency || values.quoteCurrency) || getBaseCurrencyCode(currencies);
+  const currencyField = salesDocumentCurrencyField(objectKey);
+  const nextCurrency = normalizeCurrencyCode(quoteCurrency || values[currencyField]) || getBaseCurrencyCode(currencies);
   const normalizedLineItems = normalizeQuoteLineItems(lineItems, nextCurrency);
   const normalizedFees = normalizeQuoteFees(fees, nextCurrency);
   const totals = calculateQuoteTotals(normalizedLineItems, normalizedFees, nextCurrency, currencyRecords);
   return {
     ...values,
-    quoteCurrency: nextCurrency,
+    [currencyField]: nextCurrency,
     [quoteLineItemsValueKey]: JSON.stringify(normalizedLineItems),
     [quoteFeesValueKey]: JSON.stringify(normalizedFees),
     totalAmount: String(totals.totalAmount)
   };
 }
 
-function convertQuoteFormCurrency(values: Record<string, string>, nextCurrency: string, currencyRecords: CrmRecord[]): Record<string, string> {
+function convertQuoteFormCurrency(values: Record<string, string>, nextCurrency: string, currencyRecords: CrmRecord[], objectKey = "quotes"): Record<string, string> {
   const currencies = getCurrencyDefinitions(currencyRecords);
-  const previousCurrency = normalizeCurrencyCode(values.quoteCurrency) || getBaseCurrencyCode(currencies);
+  const currencyField = salesDocumentCurrencyField(objectKey);
+  const previousCurrency = normalizeCurrencyCode(values[currencyField]) || getBaseCurrencyCode(currencies);
   const targetCurrency = normalizeCurrencyCode(nextCurrency) || previousCurrency;
   const lineItems = quoteLineItemsFromValues(values, previousCurrency).map((item) => ({
     ...item,
@@ -19989,7 +20037,7 @@ function convertQuoteFormCurrency(values: Record<string, string>, nextCurrency: 
     amount: convertCurrencyAmount(fee.amount, fee.currency || previousCurrency, targetCurrency, currencies),
     currency: targetCurrency
   }));
-  return withQuotePricingValues(values, lineItems, fees, targetCurrency, currencyRecords);
+  return withQuotePricingValues(values, lineItems, fees, targetCurrency, currencyRecords, objectKey);
 }
 
 function emptyQuoteLineItem(currency = "CNY"): QuoteLineItem {
@@ -20295,7 +20343,7 @@ function buildInitialValues(fields: FieldDefinition[], objectKey?: string): Reco
   const initialValues = fields.reduce<Record<string, string>>((accumulator, field) => {
     accumulator[field.key] = toInputValue(field.defaultValue);
     return accumulator;
-  }, objectKey === "quotes" ? withQuotePricingValues({}, [], []) : {});
+  }, objectKey && isSalesDocumentObjectKey(objectKey) ? withQuotePricingValues({}, [], [], undefined, [], objectKey) : {});
   if (objectKey === "contacts") {
     return withContactMethodValues(initialValues, []);
   }
@@ -20321,9 +20369,10 @@ function buildRecordValues(fields: FieldDefinition[], record: CrmRecord): Record
     values.__stageKey = record.stageKey;
   }
 
-  if (record.objectKey === "quotes") {
-    const quoteCurrency = normalizeCurrencyCode(record.data.quoteCurrency) || "CNY";
-    return withQuotePricingValues(values, normalizeQuoteLineItems(record.data.lineItems, quoteCurrency), normalizeQuoteFees(record.data.fees, quoteCurrency), quoteCurrency);
+  if (isSalesDocumentObjectKey(record.objectKey)) {
+    const currencyField = salesDocumentCurrencyField(record.objectKey);
+    const quoteCurrency = normalizeCurrencyCode(record.data[currencyField]) || "CNY";
+    return withQuotePricingValues(values, normalizeQuoteLineItems(record.data.lineItems, quoteCurrency), normalizeQuoteFees(record.data.fees, quoteCurrency), quoteCurrency, [], record.objectKey);
   }
 
   if (record.objectKey === "contacts") {
@@ -20529,13 +20578,14 @@ function parseFormValues(fields: FieldDefinition[], values: Record<string, strin
     return accumulator;
   }, {});
 
-  if (objectKey === "quotes") {
+  if (objectKey && isSalesDocumentObjectKey(objectKey)) {
     const currencies = getCurrencyDefinitions(currencyRecords);
-    const quoteCurrency = normalizeCurrencyCode(values.quoteCurrency) || getBaseCurrencyCode(currencies);
+    const currencyField = salesDocumentCurrencyField(objectKey);
+    const quoteCurrency = normalizeCurrencyCode(values[currencyField]) || getBaseCurrencyCode(currencies);
     const lineItems = quoteLineItemsFromValues(values, quoteCurrency);
     const fees = quoteFeesFromValues(values, quoteCurrency);
     const totals = calculateQuoteTotals(lineItems, fees, quoteCurrency, currencyRecords);
-    data.quoteCurrency = quoteCurrency;
+    data[currencyField] = quoteCurrency;
     data.lineItems = lineItems;
     data.fees = fees;
     data.totalAmount = totals.totalAmount;
@@ -20588,8 +20638,8 @@ function displayTableColumnValue(column: TableColumn, record: CrmRecord, records
     return formatMoneyWithCurrency(record.data.unitPrice, normalizeCurrencyCode(record.data.unitPriceCurrency) || getBaseCurrencyCode(currencies), currencies);
   }
 
-  if (record.objectKey === "quotes" && column.field.key === "totalAmount") {
-    return formatMoneyWithCurrency(record.data.totalAmount, normalizeCurrencyCode(record.data.quoteCurrency) || getBaseCurrencyCode(currencies), currencies);
+  if (isSalesDocumentObjectKey(record.objectKey) && column.field.key === "totalAmount") {
+    return formatMoneyWithCurrency(record.data.totalAmount, normalizeCurrencyCode(record.data[salesDocumentCurrencyField(record.objectKey)]) || getBaseCurrencyCode(currencies), currencies);
   }
 
   return displayValue(column.field, record.data[column.field.key], records, users, currencies);
@@ -20759,7 +20809,7 @@ function toDateTimeLocalValue(value?: string): string {
 }
 
 function isCurrencyCodeField(field: FieldDefinition): boolean {
-  return (field.objectKey === "products" && field.key === "unitPriceCurrency") || (field.objectKey === "quotes" && field.key === "quoteCurrency");
+  return (field.objectKey === "products" && field.key === "unitPriceCurrency") || (isSalesDocumentObjectKey(field.objectKey) && field.key === salesDocumentCurrencyField(field.objectKey));
 }
 
 function isCountryField(field: FieldDefinition): boolean {
@@ -20815,6 +20865,15 @@ function sampleCsvFor(objectKey: string, fields: FieldDefinition[]): string {
   }
   if (objectKey === "quotes") {
     return "title,tags,quoteNumber,companyId,contactId,paymentTerm,totalAmount,status,validUntil\nAcme 年度订阅报价,续约; 重点,Q-2026-001,company-acme,contact-lin,net_30,3499,draft,2026-07-31";
+  }
+  if (objectKey === "salesorders") {
+    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme Sales Order,续约,SO-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
+  }
+  if (objectKey === "proformainvoices") {
+    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme Proforma Invoice,续约,PI-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
+  }
+  if (objectKey === "commercialinvoices") {
+    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme Commercial Invoice,续约,CI-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
   }
   if (objectKey === "contacts") {
     return "title,tags,email,phone\n王敏,vip; 华东,wang@example.com,+86 139 0000 0000";

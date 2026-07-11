@@ -49,6 +49,7 @@ model Workspace {
   smartReminderRuns   SmartReminderRun[]
   poolSettings        CrmPoolSettings?
   mediaAssets         MediaAsset[]
+  documentTemplates   DocumentTemplate[]
   recordChangeRequests RecordChangeRequest[]
   workflowDefinitions WorkflowDefinition[]
   workflowRuns        WorkflowRun[]
@@ -897,6 +898,24 @@ model MediaAsset {
 
   @@index([workspaceId, createdAt])
   @@index([workspaceId, contentType])
+}
+
+model DocumentTemplate {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  objectKey    String
+  name         String
+  active       Boolean   @default(true)
+  isDefault    Boolean   @default(false)
+  templateJson Json
+  createdById  String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, objectKey, name])
+  @@index([workspaceId, objectKey, active])
+  @@index([workspaceId, objectKey, isDefault])
 }
 
 model EmailAiSettings {

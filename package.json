@@ -35,11 +35,14 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@prisma/client": "5.22.0",
+    "@types/pdfmake": "^0.2.11",
     "clsx": "2.1.1",
     "geoip-lite": "^1.4.10",
+    "handlebars": "^4.7.9",
     "imapflow": "^1.4.6",
     "lucide-react": "0.468.0",
     "next": "14.2.23",
+    "pdfmake": "^0.2.20",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "zod": "3.24.1"

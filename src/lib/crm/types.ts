@@ -504,6 +504,19 @@ export interface MediaAsset {
   updatedAt: string;
 }
 
+export interface DocumentTemplate {
+  id: string;
+  workspaceId: string;
+  objectKey: string;
+  name: string;
+  active: boolean;
+  isDefault: boolean;
+  templateJson: Record<string, unknown>;
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface EmailAiSettings {
   workspaceId: string;
   features: Record<EmailAiFeature, boolean>;
@@ -1327,6 +1340,7 @@ export interface CrmSnapshot {
   customerLevelSettings?: CustomerLevelSettings[];
   recordChangeRequests?: RecordChangeRequest[];
   mediaAssets?: MediaAsset[];
+  documentTemplates?: DocumentTemplate[];
   workflowDefinitions?: WorkflowDefinition[];
   workflowRuns?: WorkflowRun[];
   workflowResumes?: WorkflowResume[];

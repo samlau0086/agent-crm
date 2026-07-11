@@ -72,6 +72,7 @@ import type {
   EmailAiGenerationAuditInput,
   EmailAiSettings,
   EmailSyncSettings,
+  DocumentTemplate,
   AiAgentRunLog,
   AiAgentRunResult,
   AiAgentSetting,
@@ -128,7 +129,17 @@ import type {
   WorkflowTrigger
 } from "@/lib/crm/types";
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
-import { normalizeQuoteRecordData, validateQuoteRecordData } from "@/lib/crm/quotes";
+import {
+  buildSalesDocumentConversionData,
+  isSalesDocumentObjectKey,
+  normalizeSalesDocumentRecordData,
+  salesDocumentNextObjectKey,
+  salesDocumentNumberField,
+  salesDocumentNumberPrefixes,
+  salesDocumentTitles,
+  validateSalesDocumentRecordData,
+  type SalesDocumentObjectKey
+} from "@/lib/crm/quotes";
 import {
   buildWorkflowIdempotencyKey,
   buildWorkflowTestIdempotencyKey,
@@ -150,7 +161,7 @@ type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: str
 type EmailThreadCommandScope = { recordIds: Set<string>; emails: Set<string> };
 const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
 const EDIT_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals"] as const;
-const DELETE_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals", "products", "quotes"] as const;
+const DELETE_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"] as const;
 type SmartReminderCandidate = {
   kind: SmartReminderKind;
   priority: SmartReminderPriority;
@@ -1445,6 +1456,32 @@ function mapRecord(record: {
     data: asRecord(record.data),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString()
+  };
+}
+
+function mapDocumentTemplate(template: {
+  id: string;
+  workspaceId: string;
+  objectKey: string;
+  name: string;
+  active: boolean;
+  isDefault: boolean;
+  templateJson: Prisma.JsonValue;
+  createdById: string;
+  createdAt: Date;
+  updatedAt: Date;
+}): DocumentTemplate {
+  return {
+    id: template.id,
+    workspaceId: template.workspaceId,
+    objectKey: template.objectKey,
+    name: template.name,
+    active: template.active,
+    isDefault: template.isDefault,
+    templateJson: asRecord(template.templateJson),
+    createdById: template.createdById,
+    createdAt: template.createdAt.toISOString(),
+    updatedAt: template.updatedAt.toISOString()
   };
 }
 
@@ -5876,18 +5913,206 @@ export class PrismaCrmRepository {
     return mapRecord(record);
   }
 
+  async listDocumentTemplates(context: RequestContext, objectKey?: string): Promise<DocumentTemplate[]> {
+    requirePermission(context, "crm.read");
+    if (objectKey && !isSalesDocumentObjectKey(objectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
+    }
+    const templates = await this.db.documentTemplate.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        ...(objectKey ? { objectKey } : {})
+      },
+      orderBy: [{ objectKey: "asc" }, { isDefault: "desc" }, { updatedAt: "desc" }]
+    });
+    return templates.map(mapDocumentTemplate);
+  }
+
+  async getDocumentTemplate(context: RequestContext, id: string): Promise<DocumentTemplate> {
+    requirePermission(context, "crm.read");
+    const template = await this.db.documentTemplate.findFirst({
+      where: { id, workspaceId: context.workspaceId }
+    });
+    if (!template) {
+      throw new Error("Document template not found");
+    }
+    return mapDocumentTemplate(template);
+  }
+
+  async getDefaultDocumentTemplate(context: RequestContext, objectKey: string): Promise<DocumentTemplate> {
+    requirePermission(context, "crm.read");
+    if (!isSalesDocumentObjectKey(objectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
+    }
+    const template = await this.db.documentTemplate.findFirst({
+      where: { workspaceId: context.workspaceId, objectKey, active: true, isDefault: true },
+      orderBy: { updatedAt: "desc" }
+    });
+    if (template) {
+      return mapDocumentTemplate(template);
+    }
+    const fallback = await this.db.documentTemplate.findFirst({
+      where: { workspaceId: context.workspaceId, objectKey, active: true },
+      orderBy: { updatedAt: "desc" }
+    });
+    if (!fallback) {
+      throw new Error("No active PDF template found");
+    }
+    return mapDocumentTemplate(fallback);
+  }
+
+  async createDocumentTemplate(
+    context: RequestContext,
+    input: Pick<DocumentTemplate, "objectKey" | "name" | "active" | "isDefault" | "templateJson">
+  ): Promise<DocumentTemplate> {
+    requirePermission(context, "crm.admin");
+    if (!isSalesDocumentObjectKey(input.objectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
+    }
+    const created = await this.db.$transaction(async (tx) => {
+      if (input.isDefault) {
+        await tx.documentTemplate.updateMany({
+          where: { workspaceId: context.workspaceId, objectKey: input.objectKey },
+          data: { isDefault: false }
+        });
+      }
+      return tx.documentTemplate.create({
+        data: {
+          workspaceId: context.workspaceId,
+          objectKey: input.objectKey,
+          name: input.name,
+          active: input.active,
+          isDefault: input.isDefault,
+          templateJson: input.templateJson as Prisma.InputJsonValue,
+          createdById: context.user.id
+        }
+      });
+    });
+    await this.writeAuditLog(context, "create", "document_template", created.id, {
+      objectKey: created.objectKey,
+      summary: `Created PDF template ${created.name}`,
+      details: { objectKey: created.objectKey, isDefault: created.isDefault }
+    });
+    return mapDocumentTemplate(created);
+  }
+
+  async updateDocumentTemplate(
+    context: RequestContext,
+    id: string,
+    patch: Partial<Pick<DocumentTemplate, "name" | "active" | "isDefault" | "templateJson">>
+  ): Promise<DocumentTemplate> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.db.documentTemplate.findFirst({ where: { id, workspaceId: context.workspaceId } });
+    if (!existing) {
+      throw new Error("Document template not found");
+    }
+    const updated = await this.db.$transaction(async (tx) => {
+      if (patch.isDefault) {
+        await tx.documentTemplate.updateMany({
+          where: { workspaceId: context.workspaceId, objectKey: existing.objectKey, id: { not: id } },
+          data: { isDefault: false }
+        });
+      }
+      return tx.documentTemplate.update({
+        where: { id },
+        data: {
+          name: patch.name,
+          active: patch.active,
+          isDefault: patch.isDefault,
+          templateJson: patch.templateJson as Prisma.InputJsonValue | undefined
+        }
+      });
+    });
+    await this.writeAuditLog(context, "update", "document_template", id, {
+      objectKey: updated.objectKey,
+      summary: `Updated PDF template ${updated.name}`,
+      details: { patch }
+    });
+    return mapDocumentTemplate(updated);
+  }
+
+  async deleteDocumentTemplate(context: RequestContext, id: string): Promise<void> {
+    requirePermission(context, "crm.admin");
+    const existing = await this.db.documentTemplate.findFirst({ where: { id, workspaceId: context.workspaceId } });
+    if (!existing) {
+      throw new Error("Document template not found");
+    }
+    await this.db.documentTemplate.delete({ where: { id } });
+    await this.writeAuditLog(context, "delete", "document_template", id, {
+      objectKey: existing.objectKey,
+      summary: `Deleted PDF template ${existing.name}`,
+      details: { objectKey: existing.objectKey }
+    });
+  }
+
+  async generateSalesDocumentNumber(context: RequestContext, objectKey: SalesDocumentObjectKey, nowDate = new Date()): Promise<string> {
+    requirePermission(context, "crm.write");
+    const prefix = salesDocumentNumberPrefixes[objectKey];
+    const period = `${nowDate.getUTCFullYear()}${String(nowDate.getUTCMonth() + 1).padStart(2, "0")}`;
+    const field = salesDocumentNumberField(objectKey);
+    const rows = await this.db.$queryRaw<Array<{ total: string | number | bigint }>>(Prisma.sql`
+      SELECT COUNT(*) AS total
+      FROM "CrmRecord"
+      WHERE "workspaceId" = ${context.workspaceId}
+        AND "objectKey" = ${objectKey}
+        AND "data"->>${field} LIKE ${`${prefix}-${period}-%`}
+    `);
+    let sequence = Number(rows[0]?.total ?? 0) + 1;
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const candidate = `${prefix}-${period}-${String(sequence).padStart(4, "0")}`;
+      const duplicateRows = await this.db.$queryRaw<Array<{ total: string | number | bigint }>>(Prisma.sql`
+        SELECT COUNT(*) AS total
+        FROM "CrmRecord"
+        WHERE "workspaceId" = ${context.workspaceId}
+          AND "objectKey" = ${objectKey}
+          AND "data"->>${field} = ${candidate}
+      `);
+      if (Number(duplicateRows[0]?.total ?? 0) === 0) {
+        return candidate;
+      }
+      sequence += 1;
+    }
+    throw new Error("Unable to generate document number");
+  }
+
+  async convertSalesDocument(context: RequestContext, objectKey: string, recordId: string, targetObjectKey: string): Promise<CrmRecord> {
+    requirePermission(context, "crm.write");
+    if (!isSalesDocumentObjectKey(objectKey) || !isSalesDocumentObjectKey(targetObjectKey)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "Unsupported sales document conversion");
+    }
+    const expectedTarget = salesDocumentNextObjectKey[objectKey];
+    if (expectedTarget !== targetObjectKey) {
+      throw new ApiError(400, "VALIDATION_ERROR", `Cannot convert ${objectKey} to ${targetObjectKey}`);
+    }
+    const source = await this.getRecord(context, objectKey, recordId);
+    const documentNumber = await this.generateSalesDocumentNumber(context, targetObjectKey);
+    const created = await this.createRecord(context, targetObjectKey, {
+      title: `${salesDocumentTitles[targetObjectKey]} - ${source.title}`,
+      ownerId: source.ownerId,
+      tags: source.tags,
+      tagColors: source.tagColors,
+      data: buildSalesDocumentConversionData(source, targetObjectKey, documentNumber)
+    });
+    await this.writeAuditLog(context, "create", "record_conversion", created.id, {
+      objectKey: targetObjectKey,
+      summary: `Converted ${objectKey} ${source.title} to ${targetObjectKey} ${created.title}`,
+      details: { sourceObjectKey: objectKey, sourceRecordId: recordId, targetObjectKey, targetRecordId: created.id }
+    });
+    return created;
+  }
+
   async createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string> }): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
     const data =
-      objectKey === "quotes"
-        ? normalizeQuoteRecordData(input.data, await this.listRecordsForValidation(context, "currencies"))
+      isSalesDocumentObjectKey(objectKey)
+        ? normalizeSalesDocumentRecordData(objectKey, input.data, await this.listRecordsForValidation(context, "currencies"))
         : objectKey === "contacts"
           ? normalizeContactCustomerLevelData(input.data)
           : input.data;
-    if (objectKey === "quotes") {
-      validateQuoteRecordData(data, await this.listRecordsForValidation(context, "products"));
+    if (isSalesDocumentObjectKey(objectKey)) {
+      validateSalesDocumentRecordData(objectKey, data, await this.listRecordsForValidation(context, "products"));
     }
     const existing = await this.listRecordsForUniqueValidation(context, objectKey, fields, data);
     validateRecordPayload(fields, data, existing);
@@ -5994,14 +6219,14 @@ export class PrismaCrmRepository {
     }
     const mergedData = { ...current.data, ...(patch.data ?? {}) };
     const nextData =
-      objectKey === "quotes"
-        ? normalizeQuoteRecordData(mergedData, await this.listRecordsForValidation(context, "currencies"))
+      isSalesDocumentObjectKey(objectKey)
+        ? normalizeSalesDocumentRecordData(objectKey, mergedData, await this.listRecordsForValidation(context, "currencies"))
         : objectKey === "contacts"
           ? normalizeContactCustomerLevelData(mergedData)
           : mergedData;
     const fields = await this.listFieldDefinitions(context, objectKey);
-    if (objectKey === "quotes") {
-      validateQuoteRecordData(nextData, await this.listRecordsForValidation(context, "products"));
+    if (isSalesDocumentObjectKey(objectKey)) {
+      validateSalesDocumentRecordData(objectKey, nextData, await this.listRecordsForValidation(context, "products"));
     }
     validateRecordPayload(fields, nextData, await this.listRecordsForUniqueValidation(context, objectKey, fields, nextData, recordId), recordId);
     await this.assertRecordReferences(context, fields, nextData, true);
