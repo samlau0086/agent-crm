@@ -41,6 +41,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
   const poolSettings = await repository.getPoolSettings(context);
   const smartReminderSettings = await repository.getSmartReminderSettings(context);
   const customerLevelSettings = await repository.getCustomerLevelSettings(context);
+  const salesDocumentNumberSettings = await repository.getSalesDocumentNumberSettings(context);
   const recordChangeRequests = await repository.listRecordChangeRequests(context, "pending");
   const knowledgeArticles = await repository.listKnowledgeArticles(context);
   const knowledgeVectorSettings = await repository.getKnowledgeVectorSettings(context);
@@ -119,6 +120,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
       poolSettings={poolSettings}
       smartReminderSettings={smartReminderSettings}
       customerLevelSettings={customerLevelSettings}
+      salesDocumentNumberSettings={salesDocumentNumberSettings}
       recordChangeRequests={recordChangeRequests}
       knowledgeArticles={knowledgeArticles}
       knowledgeVectorSettings={knowledgeVectorSettings}

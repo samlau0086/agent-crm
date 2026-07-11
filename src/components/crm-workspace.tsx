@@ -91,7 +91,7 @@ import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, ge
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
 import { buildPaymentTermSchedule, getPaymentTermDefinitions, normalizePaymentTermCode } from "@/lib/crm/payment-terms";
-import { calculateQuoteTotals, isSalesDocumentObjectKey, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, salesDocumentCurrencyField, salesDocumentNextObjectKey, salesDocumentTitles, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
+import { calculateQuoteTotals, isSalesDocumentObjectKey, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, salesDocumentCurrencyField, salesDocumentNextObjectKey, salesDocumentNumberField, salesDocumentTitles, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
 import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, type RecordApprovalPatch } from "@/lib/crm/record-approval";
 import { parseEmailThreadSearchCommand } from "@/lib/email/search-command";
 import type {
@@ -137,6 +137,8 @@ import type {
   RelationDefinition,
   Role,
   SavedView,
+  SalesDocumentNumberPreview,
+  SalesDocumentNumberSetting,
   SmartReminder,
   SmartReminderRun,
   SmartReminderSettings,
@@ -188,6 +190,7 @@ interface CrmWorkspaceProps {
   poolSettings: CrmPoolSettings;
   smartReminderSettings: SmartReminderSettings;
   customerLevelSettings: CustomerLevelSettings;
+  salesDocumentNumberSettings: SalesDocumentNumberSetting[];
   recordChangeRequests: RecordChangeRequest[];
   knowledgeArticles: KnowledgeArticle[];
   knowledgeVectorSettings: KnowledgeVectorSettings;
@@ -2284,6 +2287,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailAiSettings, setEmailAiSettings] = useState<EmailAiSettings>(props.emailAiSettings);
   const [emailSyncSettings, setEmailSyncSettings] = useState<EmailSyncSettings>(props.emailSyncSettings ?? defaultEmailSyncSettings);
   const [customerLevelSettings, setCustomerLevelSettings] = useState<CustomerLevelSettings>(props.customerLevelSettings);
+  const [salesDocumentNumberSettings, setSalesDocumentNumberSettings] = useState<SalesDocumentNumberSetting[]>(props.salesDocumentNumberSettings);
+  const [createNumberPreview, setCreateNumberPreview] = useState<SalesDocumentNumberPreview | null>(null);
+  const [createAutoGenerateNumber, setCreateAutoGenerateNumber] = useState(false);
   const [customerLevelActionKey, setCustomerLevelActionKey] = useState("");
   const [emailComposeOpenRequestKey, setEmailComposeOpenRequestKey] = useState("");
   const [emailAccountDraft, setEmailAccountDraft] = useState<EmailAccountDraft>(() => createEmptyEmailAccountDraft());
@@ -3594,6 +3600,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         ownerId: createOwnerId || undefined,
         tags: createTags,
         tagColors: createTagColors,
+        autoGenerateNumber: createAutoGenerateNumber,
         data: parseFormValues(objectFields, createValues, activeObject.key, currencyRecords)
       }
     });
@@ -3603,9 +3610,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setCreateTags([]);
     setCreateTagColors({});
     setCreateValues(buildInitialValues(objectFields, activeObject.key));
+    setCreateNumberPreview(null);
+    setCreateAutoGenerateNumber(false);
     openRecord(created);
     setMessage(`已创建${activeObjectDisplay.label}：${created.title}`);
     router.refresh();
+  }
+
+  async function previewCreateSalesDocumentNumber() {
+    if (!activeObject || !isSalesDocumentObjectKey(activeObject.key)) return;
+    const preview = await fetchJson<SalesDocumentNumberPreview>(`/api/sales-document-number-preview?objectKey=${encodeURIComponent(activeObject.key)}`, { method: "GET" });
+    setCreateNumberPreview(preview);
+    setCreateAutoGenerateNumber(true);
   }
 
   async function loadRecordForApprovalDecision(record: CrmRecord): Promise<CrmRecord> {
@@ -6289,6 +6305,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
     setCreateValues(buildInitialValues(nextFields, objectKey));
+    setCreateNumberPreview(null);
+    setCreateAutoGenerateNumber(false);
     setRecordReturnEmailThreadId("");
     setRecordPanelMode("create");
     if (`${pathname}?${searchParams.toString()}` !== nextPath) {
@@ -6775,22 +6793,44 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     value={createOwnerId}
                     onChange={setCreateOwnerId}
                   />
-                  {objectFormFields.map((field) => (
-                    <FieldInput
-                      key={`create-${field.id}`}
-                      field={field}
-                      value={createValues[field.key] ?? ""}
-                      allRecords={records}
-                      mediaAssets={mediaAssets}
-                      users={workspaceUsers}
-                      testId={`create-field-${activeObject.key}-${field.key}`}
-                      onRecordsLoaded={mergeLoadedRecords}
-                      onUploadMediaAssets={uploadMediaAssets}
-                      onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
-                      onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
-                      onChange={(nextValue) => setCreateValues((current) => ({ ...current, [field.key]: nextValue }))}
-                    />
-                  ))}
+                  {objectFormFields.map((field) => {
+                    const isDocumentNumber = isSalesDocumentObjectKey(activeObject.key) && field.key === salesDocumentNumberField(activeObject.key);
+                    return (
+                      <div className={isDocumentNumber ? "wide settings-item" : undefined} style={isDocumentNumber ? undefined : { display: "contents" }} key={`create-${field.id}`}>
+                        <FieldInput
+                          field={field}
+                          value={createValues[field.key] ?? ""}
+                          allRecords={records}
+                          mediaAssets={mediaAssets}
+                          users={workspaceUsers}
+                          testId={`create-field-${activeObject.key}-${field.key}`}
+                          onRecordsLoaded={mergeLoadedRecords}
+                          onUploadMediaAssets={uploadMediaAssets}
+                          onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
+                          onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
+                          onChange={(nextValue) => {
+                            setCreateValues((current) => ({ ...current, [field.key]: nextValue }));
+                            if (isDocumentNumber) {
+                              setCreateAutoGenerateNumber(false);
+                              setCreateNumberPreview(null);
+                            }
+                          }}
+                        />
+                        {isDocumentNumber ? (
+                          <div style={{ marginTop: 8 }}>
+                            <button className="secondary-button" data-testid={`generate-number-${activeObject.key}`} type="button" onClick={() => runAction(previewCreateSalesDocumentNumber)} disabled={isPending}>
+                              <RefreshCw size={16} /> 自动生成
+                            </button>
+                            {createNumberPreview?.objectKey === activeObject.key ? (
+                              <div className="subtle" data-testid={`number-preview-${activeObject.key}`} style={{ marginTop: 8 }}>
+                                预览：{createNumberPreview.preview}（最终编号将在保存时确认）
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                   {isSalesDocumentObjectKey(activeObject.key) ? (
                     <QuotePricingEditor
                       allRecords={records}
@@ -7183,15 +7223,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         保存
                       </button>
                       {isSalesDocumentObjectKey(selectedRecord.objectKey) ? (
-                        <a
+                        <button
                           className="secondary-button"
                           data-testid={`download-document-pdf-${selectedRecord.objectKey}`}
-                          href={`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}/pdf`}
-                          download
+                          type="button"
+                          onClick={() => window.location.assign(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}/pdf`)}
                         >
                           <Download size={16} />
                           下载 PDF
-                        </a>
+                        </button>
                       ) : null}
                       {isSalesDocumentObjectKey(selectedRecord.objectKey) && salesDocumentNextObjectKey[selectedRecord.objectKey] ? (
                         <button
@@ -8033,6 +8073,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             poolSettings={props.poolSettings}
             smartReminderSettings={props.smartReminderSettings}
             customerLevelSettings={customerLevelSettings}
+            salesDocumentNumberSettings={salesDocumentNumberSettings}
             recordChangeRequests={recordChangeRequests}
             workflows={props.workflows}
             workflowRuns={props.workflowRuns}
@@ -8040,6 +8081,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onCurrentUserUpdated={(user) => setCurrentUser((current) => ({ ...current, ...user }))}
             onRecordsUpdated={mergeLoadedRecords}
             onCustomerLevelSettingsUpdated={setCustomerLevelSettings}
+            onSalesDocumentNumberSettingsUpdated={setSalesDocumentNumberSettings}
             onKnowledgeDraftChange={setKnowledgeDraft}
             onCreateKnowledgeArticle={() => runAction(createKnowledgeArticle)}
             onUpdateKnowledgeArticle={(articleId, patch) => runAction(() => updateKnowledgeArticle(articleId, patch))}

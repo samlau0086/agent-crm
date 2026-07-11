@@ -517,6 +517,21 @@ export interface DocumentTemplate {
   updatedAt: string;
 }
 
+export interface SalesDocumentNumberSetting {
+  workspaceId: string;
+  objectKey: "quotes" | "salesorders" | "proformainvoices" | "commercialinvoices";
+  pattern: string;
+  sequencePadding: number;
+  updatedAt: string;
+}
+
+export interface SalesDocumentNumberPreview {
+  objectKey: SalesDocumentNumberSetting["objectKey"];
+  preview: string;
+  pattern: string;
+  sequencePadding: number;
+}
+
 export interface EmailAiSettings {
   workspaceId: string;
   features: Record<EmailAiFeature, boolean>;
@@ -1341,6 +1356,8 @@ export interface CrmSnapshot {
   recordChangeRequests?: RecordChangeRequest[];
   mediaAssets?: MediaAsset[];
   documentTemplates?: DocumentTemplate[];
+  salesDocumentNumberSettings?: SalesDocumentNumberSetting[];
+  salesDocumentDailySequences?: Array<{ workspaceId: string; objectKey: string; localDate: string; value: number }>;
   workflowDefinitions?: WorkflowDefinition[];
   workflowRuns?: WorkflowRun[];
   workflowResumes?: WorkflowResume[];

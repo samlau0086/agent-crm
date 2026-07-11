@@ -5,6 +5,7 @@ import { assertValidWebhookEvents, assertValidWebhookUrl, createWebhookSecret, e
 import { ApiError } from "@/lib/api-error";
 import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
+import { defaultSalesDocumentNumberSetting, previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "@/lib/crm/document-numbering";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { adminUserId, defaultWorkspaceId, seedData } from "@/lib/crm/seed";
 import { buildEmailAssistantContext, canRunEmailClassification, createDefaultEmailAiSettings, normalizeEmailAiFeatures } from "@/lib/email/assistant";
@@ -48,6 +49,8 @@ import type {
   CustomerLevel,
   DashboardSummary,
   DocumentTemplate,
+  SalesDocumentNumberSetting,
+  SalesDocumentNumberPreview,
   EmailAccount,
   EmailAttachment,
   EmailAiGenerationAuditInput,
@@ -108,7 +111,7 @@ import {
   normalizeSalesDocumentRecordData,
   salesDocumentNextObjectKey,
   salesDocumentNumberField,
-  salesDocumentNumberPrefixes,
+  salesDocumentObjectKeys,
   salesDocumentTitles,
   validateSalesDocumentRecordData,
   type SalesDocumentObjectKey
@@ -346,6 +349,45 @@ export class CrmStore {
 
   snapshot(): CrmSnapshot {
     return clone(this.data);
+  }
+
+  getSalesDocumentNumberSettings(context: RequestContext): SalesDocumentNumberSetting[] {
+    requirePermission(context, "crm.read");
+    return salesDocumentObjectKeys.map((objectKey) =>
+      clone(this.data.salesDocumentNumberSettings?.find((setting) => setting.workspaceId === context.workspaceId && setting.objectKey === objectKey)
+        ?? defaultSalesDocumentNumberSetting(context.workspaceId, objectKey))
+    );
+  }
+
+  updateSalesDocumentNumberSettings(context: RequestContext, settings: Array<Pick<SalesDocumentNumberSetting, "objectKey" | "pattern" | "sequencePadding">>): SalesDocumentNumberSetting[] {
+    requirePermission(context, "crm.admin");
+    settings.forEach((setting) => validateSalesDocumentNumberRule(setting.pattern, setting.sequencePadding));
+    this.data.salesDocumentNumberSettings ??= [];
+    const now = stamp();
+    settings.forEach((setting) => {
+      this.data.salesDocumentNumberSettings = this.data.salesDocumentNumberSettings!.filter((candidate) => !(candidate.workspaceId === context.workspaceId && candidate.objectKey === setting.objectKey));
+      this.data.salesDocumentNumberSettings.push({ workspaceId: context.workspaceId, objectKey: setting.objectKey, pattern: setting.pattern.trim(), sequencePadding: setting.sequencePadding, updatedAt: now });
+    });
+    return this.getSalesDocumentNumberSettings(context);
+  }
+
+  previewSalesDocumentNumber(context: RequestContext, objectKey: SalesDocumentObjectKey, now = new Date()): SalesDocumentNumberPreview {
+    requirePermission(context, "crm.write");
+    const setting = this.data.salesDocumentNumberSettings?.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey)
+      ?? defaultSalesDocumentNumberSetting(context.workspaceId, objectKey);
+    return { objectKey, preview: previewSalesDocumentNumber(setting, now), pattern: setting.pattern, sequencePadding: setting.sequencePadding };
+  }
+
+  private nextSalesDocumentSequence(context: RequestContext, objectKey: SalesDocumentObjectKey, now: Date): number {
+    this.data.salesDocumentDailySequences ??= [];
+    const localDate = salesDocumentLocalDate(now);
+    let row = this.data.salesDocumentDailySequences.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.localDate === localDate);
+    if (!row) {
+      row = { workspaceId: context.workspaceId, objectKey, localDate, value: 0 };
+      this.data.salesDocumentDailySequences.push(row);
+    }
+    row.value += 1;
+    return row.value;
   }
 
   getContext(userId = adminUserId): RequestContext {
@@ -3462,26 +3504,9 @@ export class CrmStore {
 
   generateSalesDocumentNumber(context: RequestContext, objectKey: SalesDocumentObjectKey, nowDate = new Date()): string {
     requirePermission(context, "crm.write");
-    const prefix = salesDocumentNumberPrefixes[objectKey];
-    const period = `${nowDate.getUTCFullYear()}${String(nowDate.getUTCMonth() + 1).padStart(2, "0")}`;
-    const field = salesDocumentNumberField(objectKey);
-    let sequence =
-      this.data.records.filter(
-        (record) =>
-          record.workspaceId === context.workspaceId &&
-          record.objectKey === objectKey &&
-          typeof record.data[field] === "string" &&
-          String(record.data[field]).startsWith(`${prefix}-${period}-`)
-      ).length + 1;
-    for (let attempt = 0; attempt < 1000; attempt += 1) {
-      const candidate = `${prefix}-${period}-${String(sequence).padStart(4, "0")}`;
-      const duplicate = this.data.records.some((record) => record.workspaceId === context.workspaceId && record.objectKey === objectKey && record.data[field] === candidate);
-      if (!duplicate) {
-        return candidate;
-      }
-      sequence += 1;
-    }
-    throw new Error("Unable to generate document number");
+    const setting = this.data.salesDocumentNumberSettings?.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey)
+      ?? defaultSalesDocumentNumberSetting(context.workspaceId, objectKey);
+    return renderSalesDocumentNumber(setting.pattern, setting.sequencePadding, { now: nowDate, recordId: createId("record"), sequence: this.nextSalesDocumentSequence(context, objectKey, nowDate) });
   }
 
   convertSalesDocument(context: RequestContext, objectKey: string, recordId: string, targetObjectKey: string): CrmRecord {
@@ -3494,13 +3519,13 @@ export class CrmStore {
       throw new ApiError(400, "VALIDATION_ERROR", `Cannot convert ${objectKey} to ${targetObjectKey}`);
     }
     const source = this.getRecord(context, objectKey, recordId);
-    const documentNumber = this.generateSalesDocumentNumber(context, targetObjectKey);
     const created = this.createRecord(context, targetObjectKey, {
       title: `${salesDocumentTitles[targetObjectKey]} - ${source.title}`,
       ownerId: source.ownerId,
       tags: source.tags,
       tagColors: source.tagColors,
-      data: buildSalesDocumentConversionData(source, targetObjectKey, documentNumber)
+      data: buildSalesDocumentConversionData(source, targetObjectKey, ""),
+      autoGenerateNumber: true
     });
     this.writeAuditLog(context, "create", "record_conversion", created.id, {
       objectKey: targetObjectKey,
@@ -3510,17 +3535,20 @@ export class CrmStore {
     return created;
   }
 
-  createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string> }): CrmRecord {
+  createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string>; autoGenerateNumber?: boolean }): CrmRecord {
     requirePermission(context, "crm.write");
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
     const existing = this.listRecordsForValidation(context, objectKey);
-    const data =
+    let data =
       isSalesDocumentObjectKey(objectKey)
         ? normalizeSalesDocumentRecordData(objectKey, input.data, this.listRecordsForValidation(context, "currencies"))
         : objectKey === "contacts"
           ? normalizeContactCustomerLevelData(input.data)
           : input.data;
+    const numberField = isSalesDocumentObjectKey(objectKey) ? salesDocumentNumberField(objectKey) : undefined;
+    const shouldGenerateNumber = Boolean(numberField && (input.autoGenerateNumber || !String(data[numberField] ?? "").trim()));
+    if (numberField && shouldGenerateNumber) data = { ...data, [numberField]: "pending-auto-number" };
     if (isSalesDocumentObjectKey(objectKey)) {
       validateSalesDocumentRecordData(objectKey, data, this.listRecordsForValidation(context, "products"));
     }
@@ -3528,8 +3556,30 @@ export class CrmStore {
     this.assertRecordReferences(context, fields, data, true);
 
     const tags = uniqueTags(input.tags ?? []);
+    const recordId = createId("record");
+    if (isSalesDocumentObjectKey(objectKey)) {
+      const nowDate = new Date();
+      const sequence = this.nextSalesDocumentSequence(context, objectKey, nowDate);
+      if (shouldGenerateNumber && numberField) {
+        const setting = this.data.salesDocumentNumberSettings?.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey)
+          ?? defaultSalesDocumentNumberSetting(context.workspaceId, objectKey);
+        data = { ...data, [numberField]: renderSalesDocumentNumber(setting.pattern, setting.sequencePadding, { now: nowDate, recordId, sequence }) };
+        try {
+          validateRecordPayload(fields, data, existing);
+        } catch (error) {
+          const sequenceRow = this.data.salesDocumentDailySequences?.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.localDate === salesDocumentLocalDate(nowDate));
+          if (sequenceRow) sequenceRow.value -= 1;
+          throw error;
+        }
+        if (this.data.records.some((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.data[numberField] === data[numberField])) {
+          const sequenceRow = this.data.salesDocumentDailySequences?.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.localDate === salesDocumentLocalDate(nowDate));
+          if (sequenceRow) sequenceRow.value -= 1;
+          throw new ApiError(409, "CONFLICT", "Generated document number already exists; update the numbering rule and try again");
+        }
+      }
+    }
     const record: CrmRecord = {
-      id: createId("record"),
+      id: recordId,
       workspaceId: context.workspaceId,
       objectKey,
       title: input.title,

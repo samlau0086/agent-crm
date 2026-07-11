@@ -146,6 +146,8 @@ export const recordWriteSchema = z
   })
   .strict();
 
+export const recordCreateSchema = recordWriteSchema.extend({ autoGenerateNumber: z.boolean().optional() }).strict();
+
 export const recordPatchSchema = recordWriteSchema.partial().strict();
 
 const changeReasonSchema = z.string().trim().min(1).max(1000);
@@ -198,6 +200,24 @@ export const documentTemplateUpdateSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
     message: "At least one template field is required"
+  });
+
+export const salesDocumentObjectKeySchema = z.enum(["quotes", "salesorders", "proformainvoices", "commercialinvoices"]);
+
+export const salesDocumentNumberSettingUpdateSchema = z
+  .object({
+    objectKey: salesDocumentObjectKeySchema,
+    pattern: z.string().trim().min(1).max(160),
+    sequencePadding: z.number().int().min(1).max(12)
+  })
+  .strict();
+
+export const salesDocumentNumberSettingsUpdateSchema = z
+  .object({ settings: z.array(salesDocumentNumberSettingUpdateSchema).min(1).max(4) })
+  .strict()
+  .refine((value) => new Set(value.settings.map((setting) => setting.objectKey)).size === value.settings.length, {
+    message: "Sales document number settings cannot contain duplicate object types",
+    path: ["settings"]
   });
 
 export const customerLevelSchema = z.enum(["A", "B", "C", "D"]);

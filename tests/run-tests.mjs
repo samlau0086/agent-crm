@@ -87,6 +87,7 @@ import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
 import { buildTemplateContext, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
+import { previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "../src/lib/crm/document-numbering.ts";
 import { buildPaymentTermSchedule, getPaymentTermDefinitions } from "../src/lib/crm/payment-terms.ts";
 import { salesDocumentNextObjectKey } from "../src/lib/crm/quotes.ts";
 import { generateWorkflowWithAiDesigner } from "../src/lib/workflows/ai-designer.ts";
@@ -9856,6 +9857,39 @@ await run("related records resolve through reference fields", () => {
   assert.equal(related.some((item) => item.record.id === "contact-lin"), true);
   assert.equal(related.some((item) => item.record.id === "deal-platform"), true);
   assert.equal(related.some((item) => item.record.id === "quote-acme-platform"), true);
+});
+
+await run("sales document number rules render supported variables in Shanghai time", () => {
+  const now = new Date("2026-07-11T16:05:06.000Z");
+  assert.equal(salesDocumentLocalDate(now), "2026-07-12");
+  assert.equal(
+    renderSalesDocumentNumber("Q-$Y$M$D-$h$m$s-$ID-$NUM", 4, { now, recordId: "record-42", sequence: 7 }),
+    "Q-20260712-000506-record-42-0007"
+  );
+  assert.match(previewSalesDocumentNumber({ workspaceId: defaultWorkspaceId, objectKey: "quotes", pattern: "Q-$ID-$NUM", sequencePadding: 4, updatedAt: now.toISOString() }, now), /保存后分配ID.*保存时序号/);
+  assert.throws(() => validateSalesDocumentNumberRule("Q-$UNKNOWN", 4), /Unknown number variable/);
+  assert.throws(() => validateSalesDocumentNumberRule("Q-$Y$M$D", 4), /must include \$NUM or \$ID/);
+  assert.throws(() => validateSalesDocumentNumberRule("Q-$NUM", 0), /Sequence padding/);
+});
+
+await run("sales document creation applies configured real id and independent daily sequence", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  store.updateSalesDocumentNumberSettings(context, [{ objectKey: "quotes", pattern: "Q-$ID-$NUM", sequencePadding: 3 }]);
+  const source = store.getRecord(context, "quotes", "quote-acme-platform");
+  const createQuote = (title, quoteNumber, autoGenerateNumber = false) => store.createRecord(context, "quotes", {
+    title,
+    autoGenerateNumber,
+    data: { ...source.data, quoteNumber }
+  });
+  const first = createQuote("Auto one", "", true);
+  assert.equal(first.data.quoteNumber, `Q-${first.id}-001`);
+  const manual = createQuote("Manual", "MANUAL-QUOTE");
+  assert.equal(manual.data.quoteNumber, "MANUAL-QUOTE");
+  const third = createQuote("Auto three", "");
+  assert.equal(third.data.quoteNumber, `Q-${third.id}-003`);
+  const orderPreview = store.previewSalesDocumentNumber(context, "salesorders");
+  assert.match(orderPreview.preview, /^SO-/);
 });
 
 await run("product and quote seed metadata supports company and contact associations", () => {

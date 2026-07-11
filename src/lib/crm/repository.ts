@@ -17,6 +17,7 @@ import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 import { ApiError } from "@/lib/api-error";
 import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
+import { defaultSalesDocumentNumberSetting, previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "@/lib/crm/document-numbering";
 import { AUDIT_DEFAULT_PAGE_SIZE, AUDIT_EXPORT_MAX_PAGE_SIZE, normalizePage, normalizePageSize, RECORD_DEFAULT_PAGE_SIZE, RECORD_MAX_PAGE_SIZE } from "@/lib/crm/pagination";
 import { isContactMethodsAdditionOnly, previousRecordApprovalPatch, stripRecordApprovalMetadata } from "@/lib/crm/record-approval";
 import { decryptAiProviderConfig, decryptAiProviderSettingsBundle, encryptAiProviderSettingsBundle, mergeAiProviderConfigSecrets, mergeAiProviderProfilesSecrets, normalizeAiProviderConfig, publicAiProviderConfig, publicAiProviderProfiles, resolveAiProviderConfigForAgent } from "@/lib/ai/provider-config";
@@ -73,6 +74,8 @@ import type {
   EmailAiSettings,
   EmailSyncSettings,
   DocumentTemplate,
+  SalesDocumentNumberSetting,
+  SalesDocumentNumberPreview,
   AiAgentRunLog,
   AiAgentRunResult,
   AiAgentSetting,
@@ -133,9 +136,9 @@ import {
   buildSalesDocumentConversionData,
   isSalesDocumentObjectKey,
   normalizeSalesDocumentRecordData,
+  salesDocumentObjectKeys,
   salesDocumentNextObjectKey,
   salesDocumentNumberField,
-  salesDocumentNumberPrefixes,
   salesDocumentTitles,
   validateSalesDocumentRecordData,
   type SalesDocumentObjectKey
@@ -2271,6 +2274,42 @@ export class PrismaCrmRepository {
       take: 100
     });
     return rows.map((row: Record<string, unknown>) => mapWorkflowApproval(row));
+  }
+
+  async getSalesDocumentNumberSettings(context: RequestContext): Promise<SalesDocumentNumberSetting[]> {
+    requirePermission(context, "crm.read");
+    const rows = await this.db.salesDocumentNumberSetting.findMany({ where: { workspaceId: context.workspaceId } });
+    return salesDocumentObjectKeys.map((objectKey) => {
+      const row = rows.find((candidate) => candidate.objectKey === objectKey);
+      return row
+        ? { workspaceId: row.workspaceId, objectKey, pattern: row.pattern, sequencePadding: row.sequencePadding, updatedAt: row.updatedAt.toISOString() }
+        : defaultSalesDocumentNumberSetting(context.workspaceId, objectKey);
+    });
+  }
+
+  async updateSalesDocumentNumberSettings(
+    context: RequestContext,
+    settings: Array<Pick<SalesDocumentNumberSetting, "objectKey" | "pattern" | "sequencePadding">>
+  ): Promise<SalesDocumentNumberSetting[]> {
+    requirePermission(context, "crm.admin");
+    settings.forEach((setting) => validateSalesDocumentNumberRule(setting.pattern, setting.sequencePadding));
+    await this.db.$transaction(
+      settings.map((setting) => this.db.salesDocumentNumberSetting.upsert({
+        where: { workspaceId_objectKey: { workspaceId: context.workspaceId, objectKey: setting.objectKey } },
+        create: { workspaceId: context.workspaceId, objectKey: setting.objectKey, pattern: setting.pattern.trim(), sequencePadding: setting.sequencePadding },
+        update: { pattern: setting.pattern.trim(), sequencePadding: setting.sequencePadding }
+      }))
+    );
+    return this.getSalesDocumentNumberSettings(context);
+  }
+
+  async previewSalesDocumentNumber(context: RequestContext, objectKey: SalesDocumentObjectKey, now = new Date()): Promise<SalesDocumentNumberPreview> {
+    requirePermission(context, "crm.write");
+    const row = await this.db.salesDocumentNumberSetting.findUnique({ where: { workspaceId_objectKey: { workspaceId: context.workspaceId, objectKey } } });
+    const setting = row
+      ? { workspaceId: row.workspaceId, objectKey, pattern: row.pattern, sequencePadding: row.sequencePadding, updatedAt: row.updatedAt.toISOString() } as SalesDocumentNumberSetting
+      : defaultSalesDocumentNumberSetting(context.workspaceId, objectKey);
+    return { objectKey, preview: previewSalesDocumentNumber(setting, now), pattern: setting.pattern, sequencePadding: setting.sequencePadding };
   }
 
   async listWorkflowResumes(context: RequestContext, workflowId?: string): Promise<WorkflowResume[]> {
@@ -6047,32 +6086,16 @@ export class PrismaCrmRepository {
 
   async generateSalesDocumentNumber(context: RequestContext, objectKey: SalesDocumentObjectKey, nowDate = new Date()): Promise<string> {
     requirePermission(context, "crm.write");
-    const prefix = salesDocumentNumberPrefixes[objectKey];
-    const period = `${nowDate.getUTCFullYear()}${String(nowDate.getUTCMonth() + 1).padStart(2, "0")}`;
-    const field = salesDocumentNumberField(objectKey);
-    const rows = await this.db.$queryRaw<Array<{ total: string | number | bigint }>>(Prisma.sql`
-      SELECT COUNT(*) AS total
-      FROM "CrmRecord"
-      WHERE "workspaceId" = ${context.workspaceId}
-        AND "objectKey" = ${objectKey}
-        AND "data"->>${field} LIKE ${`${prefix}-${period}-%`}
-    `);
-    let sequence = Number(rows[0]?.total ?? 0) + 1;
-    for (let attempt = 0; attempt < 1000; attempt += 1) {
-      const candidate = `${prefix}-${period}-${String(sequence).padStart(4, "0")}`;
-      const duplicateRows = await this.db.$queryRaw<Array<{ total: string | number | bigint }>>(Prisma.sql`
-        SELECT COUNT(*) AS total
-        FROM "CrmRecord"
-        WHERE "workspaceId" = ${context.workspaceId}
-          AND "objectKey" = ${objectKey}
-          AND "data"->>${field} = ${candidate}
-      `);
-      if (Number(duplicateRows[0]?.total ?? 0) === 0) {
-        return candidate;
-      }
-      sequence += 1;
-    }
-    throw new Error("Unable to generate document number");
+    const settingRow = await this.db.salesDocumentNumberSetting.findUnique({ where: { workspaceId_objectKey: { workspaceId: context.workspaceId, objectKey } } });
+    const setting = settingRow
+      ? { workspaceId: settingRow.workspaceId, objectKey, pattern: settingRow.pattern, sequencePadding: settingRow.sequencePadding, updatedAt: settingRow.updatedAt.toISOString() } as SalesDocumentNumberSetting
+      : defaultSalesDocumentNumberSetting(context.workspaceId, objectKey);
+    const sequence = await this.db.salesDocumentDailySequence.upsert({
+      where: { workspaceId_objectKey_localDate: { workspaceId: context.workspaceId, objectKey, localDate: salesDocumentLocalDate(nowDate) } },
+      create: { workspaceId: context.workspaceId, objectKey, localDate: salesDocumentLocalDate(nowDate), value: 1 },
+      update: { value: { increment: 1 } }
+    });
+    return renderSalesDocumentNumber(setting.pattern, setting.sequencePadding, { now: nowDate, recordId: randomUUID(), sequence: sequence.value });
   }
 
   async convertSalesDocument(context: RequestContext, objectKey: string, recordId: string, targetObjectKey: string): Promise<CrmRecord> {
@@ -6085,13 +6108,13 @@ export class PrismaCrmRepository {
       throw new ApiError(400, "VALIDATION_ERROR", `Cannot convert ${objectKey} to ${targetObjectKey}`);
     }
     const source = await this.getRecord(context, objectKey, recordId);
-    const documentNumber = await this.generateSalesDocumentNumber(context, targetObjectKey);
     const created = await this.createRecord(context, targetObjectKey, {
       title: `${salesDocumentTitles[targetObjectKey]} - ${source.title}`,
       ownerId: source.ownerId,
       tags: source.tags,
       tagColors: source.tagColors,
-      data: buildSalesDocumentConversionData(source, targetObjectKey, documentNumber)
+      data: buildSalesDocumentConversionData(source, targetObjectKey, ""),
+      autoGenerateNumber: true
     });
     await this.writeAuditLog(context, "create", "record_conversion", created.id, {
       objectKey: targetObjectKey,
@@ -6101,16 +6124,21 @@ export class PrismaCrmRepository {
     return created;
   }
 
-  async createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string> }): Promise<CrmRecord> {
+  async createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string>; autoGenerateNumber?: boolean }): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
-    const data =
+    let data =
       isSalesDocumentObjectKey(objectKey)
         ? normalizeSalesDocumentRecordData(objectKey, input.data, await this.listRecordsForValidation(context, "currencies"))
         : objectKey === "contacts"
           ? normalizeContactCustomerLevelData(input.data)
           : input.data;
+    const numberField = isSalesDocumentObjectKey(objectKey) ? salesDocumentNumberField(objectKey) : undefined;
+    const shouldGenerateNumber = Boolean(numberField && (input.autoGenerateNumber || !String(data[numberField] ?? "").trim()));
+    if (numberField && shouldGenerateNumber) {
+      data = { ...data, [numberField]: "pending-auto-number" };
+    }
     if (isSalesDocumentObjectKey(objectKey)) {
       validateSalesDocumentRecordData(objectKey, data, await this.listRecordsForValidation(context, "products"));
     }
@@ -6119,18 +6147,34 @@ export class PrismaCrmRepository {
     await this.assertRecordReferences(context, fields, data, true);
 
     const tags = uniqueTags(input.tags ?? []);
-    const record = await this.db.crmRecord.create({
-      data: {
-        workspaceId: context.workspaceId,
-        objectKey,
-        title: input.title,
-        stageKey: input.stageKey,
-        ownerId: canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id,
-        tags,
-        tagColors: normalizeTagColors(input.tagColors ?? {}, tags) as Prisma.InputJsonValue,
-        data: data as Prisma.InputJsonValue
-      }
-    });
+    const recordId = randomUUID();
+    const ownerId = canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id;
+    const tagColors = normalizeTagColors(input.tagColors ?? {}, tags);
+    const record = isSalesDocumentObjectKey(objectKey)
+      ? await this.db.$transaction(async (tx) => {
+          const now = new Date();
+          const localDate = salesDocumentLocalDate(now);
+          const sequence = await tx.salesDocumentDailySequence.upsert({
+            where: { workspaceId_objectKey_localDate: { workspaceId: context.workspaceId, objectKey, localDate } },
+            create: { workspaceId: context.workspaceId, objectKey, localDate, value: 1 },
+            update: { value: { increment: 1 } }
+          });
+          let finalData = data;
+          if (shouldGenerateNumber && numberField) {
+            const row = await tx.salesDocumentNumberSetting.findUnique({ where: { workspaceId_objectKey: { workspaceId: context.workspaceId, objectKey } } });
+            const setting = row
+              ? { workspaceId: row.workspaceId, objectKey, pattern: row.pattern, sequencePadding: row.sequencePadding, updatedAt: row.updatedAt.toISOString() } as SalesDocumentNumberSetting
+              : defaultSalesDocumentNumberSetting(context.workspaceId, objectKey);
+            finalData = { ...data, [numberField]: renderSalesDocumentNumber(setting.pattern, setting.sequencePadding, { now, recordId, sequence: sequence.value }) };
+            validateRecordPayload(fields, finalData, existing);
+            const duplicate = await tx.crmRecord.count({ where: { workspaceId: context.workspaceId, objectKey, data: { path: [numberField], equals: finalData[numberField] as string } } });
+            if (duplicate) throw new ApiError(409, "CONFLICT", "Generated document number already exists; update the numbering rule and try again");
+          }
+          return tx.crmRecord.create({ data: { id: recordId, workspaceId: context.workspaceId, objectKey, title: input.title, stageKey: input.stageKey, ownerId, tags, tagColors: tagColors as Prisma.InputJsonValue, data: finalData as Prisma.InputJsonValue } });
+        })
+      : await this.db.crmRecord.create({
+          data: { id: recordId, workspaceId: context.workspaceId, objectKey, title: input.title, stageKey: input.stageKey, ownerId, tags, tagColors: tagColors as Prisma.InputJsonValue, data: data as Prisma.InputJsonValue }
+        });
 
     await this.writeAuditLog(context, "create", "record", record.id, {
       objectKey,

@@ -50,6 +50,8 @@ model Workspace {
   poolSettings        CrmPoolSettings?
   mediaAssets         MediaAsset[]
   documentTemplates   DocumentTemplate[]
+  salesDocumentNumberSettings SalesDocumentNumberSetting[]
+  salesDocumentDailySequences SalesDocumentDailySequence[]
   recordChangeRequests RecordChangeRequest[]
   workflowDefinitions WorkflowDefinition[]
   workflowRuns        WorkflowRun[]
@@ -191,6 +193,34 @@ model CrmRecord {
   @@index([workspaceId, objectKey, ownerId])
   @@index([workspaceId, objectKey, stageKey])
   @@index([workspaceId, ownerId])
+}
+
+model SalesDocumentNumberSetting {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  objectKey       String
+  pattern         String
+  sequencePadding Int       @default(4)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, objectKey])
+  @@index([workspaceId])
+}
+
+model SalesDocumentDailySequence {
+  id          String    @id @default(cuid())
+  workspaceId String
+  objectKey   String
+  localDate   String
+  value       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, objectKey, localDate])
+  @@index([workspaceId, localDate])
 }
 
 model Pipeline {

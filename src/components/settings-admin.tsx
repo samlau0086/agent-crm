@@ -11,8 +11,9 @@ import { formatPaymentTermSummary, getPaymentTermDefinitions, normalizePaymentTe
 import { salesDocumentObjectKeys } from "@/lib/crm/quotes";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
+import { previewSalesDocumentNumber, salesDocumentNumberVariables } from "@/lib/crm/document-numbering";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SalesDocumentNumberSetting, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
@@ -44,6 +45,7 @@ interface SettingsAdminProps {
   poolSettings: CrmPoolSettings;
   smartReminderSettings: SmartReminderSettings;
   customerLevelSettings: CustomerLevelSettings;
+  salesDocumentNumberSettings: SalesDocumentNumberSetting[];
   recordChangeRequests: RecordChangeRequest[];
   workflows: WorkflowDefinition[];
   workflowRuns: WorkflowRun[];
@@ -51,6 +53,7 @@ interface SettingsAdminProps {
   onCurrentUserUpdated: (user: User) => void;
   onRecordsUpdated?: (records: CrmRecord[]) => void;
   onCustomerLevelSettingsUpdated?: (settings: CustomerLevelSettings) => void;
+  onSalesDocumentNumberSettingsUpdated?: (settings: SalesDocumentNumberSetting[]) => void;
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
   onCreateKnowledgeArticle: () => void;
   onUpdateKnowledgeArticle: (articleId: string, patch: Partial<Pick<KnowledgeArticle, "active">>) => void;
@@ -413,6 +416,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }));
   const [customerLevelSettingsDraft, setCustomerLevelSettingsDraft] = useState<CustomerLevelSettingsDraft>(() =>
     customerLevelSettingsToDraft(props.customerLevelSettings)
+  );
+  const [salesDocumentNumberSettingsDraft, setSalesDocumentNumberSettingsDraft] = useState<SalesDocumentNumberSetting[]>(() =>
+    props.salesDocumentNumberSettings.map((setting) => ({ ...setting }))
   );
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>(props.workflows);
   const [workflowRuns, setWorkflowRuns] = useState<WorkflowRun[]>(props.workflowRuns);
@@ -1964,6 +1970,16 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     );
   }
 
+  async function saveSalesDocumentNumberSettings() {
+    const updated = await fetchJson<SalesDocumentNumberSetting[]>("/api/sales-document-number-settings", {
+      method: "PATCH",
+      body: { settings: salesDocumentNumberSettingsDraft.map(({ objectKey, pattern, sequencePadding }) => ({ objectKey, pattern, sequencePadding })) }
+    });
+    setSalesDocumentNumberSettingsDraft(updated);
+    props.onSalesDocumentNumberSettingsUpdated?.(updated);
+    setMessage("销售单据编号规则已保存");
+  }
+
   async function saveDocumentTemplate() {
     const templateJson = parseDocumentTemplateJson(documentTemplateDraft.templateJsonText);
     if (selectedDocumentTemplate) {
@@ -2125,6 +2141,48 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
       {activeSettingsTab === "crm" ? (
         <div className="settings-tab-panel" role="tabpanel">
+          <section className="settings-panel" data-testid="settings-sales-document-numbering">
+            <div className="settings-panel-header">
+              <div>
+                <h2 className="page-title">销售单据编号</h2>
+                <div className="subtle">四类销售单据分别配置；日期时间按 Asia/Shanghai 生成。</div>
+              </div>
+              <button className="primary-button" data-testid="save-sales-document-number-settings" type="button" onClick={() => runAction(saveSalesDocumentNumberSettings)} disabled={isPending || !canManage}>
+                <Save size={16} /> 保存编号规则
+              </button>
+            </div>
+            <div className="toolbar" style={{ marginTop: 12 }}>
+              {salesDocumentNumberVariables.map((variable) => <span className="badge" key={variable}>{variable}</span>)}
+            </div>
+            <div className="settings-list" style={{ marginTop: 12 }}>
+              {salesDocumentNumberSettingsDraft.map((setting, index) => (
+                <div className="settings-item" key={setting.objectKey} data-testid={`number-setting-${setting.objectKey}`}>
+                  <div className="settings-panel-header">
+                    <strong>{props.objects.find((candidate) => candidate.key === setting.objectKey)?.label ?? setting.objectKey}</strong>
+                    <span className="badge">{setting.objectKey}</span>
+                  </div>
+                  <div className="form-grid" style={{ marginTop: 10 }}>
+                    <label className="wide">
+                      <span className="subtle">编号规则</span>
+                      <input className="input" value={setting.pattern} disabled={!canManage} onChange={(event) => setSalesDocumentNumberSettingsDraft((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, pattern: event.target.value } : candidate))} />
+                    </label>
+                    <div className="wide toolbar">
+                      {salesDocumentNumberVariables.map((variable) => (
+                        <button className="secondary-button compact-button" type="button" key={variable} disabled={!canManage} onClick={() => setSalesDocumentNumberSettingsDraft((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, pattern: `${candidate.pattern}${variable}` } : candidate))}>
+                          插入 {variable}
+                        </button>
+                      ))}
+                    </div>
+                    <label>
+                      <span className="subtle">$NUM 补零位数</span>
+                      <input className="input" type="number" min={1} max={12} value={setting.sequencePadding} disabled={!canManage} onChange={(event) => setSalesDocumentNumberSettingsDraft((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, sequencePadding: Number(event.target.value) } : candidate))} />
+                    </label>
+                    <div className="wide subtle">示例：{salesDocumentNumberRulePreview(setting)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
           <CurrencyAdminPanel
             currencies={currencyRecords}
             draft={currencyDraft}
@@ -5037,10 +5095,10 @@ function DocumentTemplateAdminPanel({
               保存模板
             </button>
             {previewRecord ? (
-              <a className="secondary-button" href={`/api/records/${previewRecord.objectKey}/${previewRecord.id}/pdf${selectedTemplate ? `?templateId=${encodeURIComponent(selectedTemplate.id)}` : ""}`} download>
+              <button className="secondary-button" type="button" onClick={() => window.location.assign(`/api/records/${previewRecord.objectKey}/${previewRecord.id}/pdf${selectedTemplate ? `?templateId=${encodeURIComponent(selectedTemplate.id)}` : ""}`)}>
                 <Download size={16} />
                 预览 PDF
-              </a>
+              </button>
             ) : null}
             {selectedTemplate ? (
               <button className="danger-button" type="button" onClick={onDelete} disabled={isPending}>
@@ -6645,6 +6703,14 @@ function notificationChannelDraftFromChannel(channel: NotificationChannel): Noti
       : "",
     accountId: typeof config.accountId === "string" ? config.accountId : ""
   };
+}
+
+function salesDocumentNumberRulePreview(setting: SalesDocumentNumberSetting): string {
+  try {
+    return previewSalesDocumentNumber(setting);
+  } catch (error) {
+    return error instanceof Error ? error.message : "规则暂时无法预览";
+  }
 }
 
 function customerLevelSettingsToDraft(settings: CustomerLevelSettings): CustomerLevelSettingsDraft {

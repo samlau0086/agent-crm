@@ -12,6 +12,15 @@ interface RouteParams {
 }
 
 async function downloadPdf(request: NextRequest, { params }: RouteParams) {
+  // Cloudflare Speed Brain can speculatively navigate to visible download links.
+  // Avoid doing the expensive PDF work until the user actually downloads it.
+  if (isPrefetchRequest(request)) {
+    return new NextResponse(null, {
+      status: 204,
+      headers: { "Cache-Control": "private, no-store" }
+    });
+  }
+
   try {
     const context = await getRequestContext(request);
     const repository = getCrmRepository();
@@ -49,6 +58,11 @@ async function downloadPdf(request: NextRequest, { params }: RouteParams) {
   } catch (error) {
     return handleApiError(error, request);
   }
+}
+
+function isPrefetchRequest(request: NextRequest): boolean {
+  return [request.headers.get("sec-purpose"), request.headers.get("purpose")]
+    .some((value) => value?.toLowerCase().split(/\s*;\s*/).includes("prefetch"));
 }
 
 async function getLinkedRecord(context: RequestContext, recordId: string, objectKey: string): Promise<CrmRecord | undefined> {
