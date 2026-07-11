@@ -2208,7 +2208,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /RUN_EMAIL_AI_PROVIDER_TEST/);
   assert.match(workflow, /RUN_EMAIL_SMOKE_TEST/);
   assert.match(workflow, /REQUIRE_LIVE_EMAIL_READINESS/);
-  assert.match(workflow, /if \[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \]; then[\s\S]*--require-live-readiness[\s\S]*else[\s\S]*RUN_EMAIL_CONNECTION_TESTS/);
+  assert.match(workflow, /\[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \] && email_verify_args="\$email_verify_args --require-live-readiness"/);
+  assert.match(workflow, /\[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \] \|\| \[ "\$\{RUN_EMAIL_CONNECTION_TESTS:-false\}" != "true" \]/);
   assert.match(workflow, /--require-live-readiness/);
   assert.match(workflow, /verify_stdout="\$\(mktemp\)"/);
   assert.match(workflow, /verify_stderr="\$\(mktemp\)"/);

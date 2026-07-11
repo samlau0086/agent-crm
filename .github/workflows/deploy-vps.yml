@@ -535,29 +535,17 @@ jobs:
             exit "$compose_up_code"
           fi
           docker compose ps
-          set +e
-          docker compose exec -T web node scripts/healthcheck.mjs
-          health_code="$?"
-          set -e
-          if [ "$health_code" -ne 0 ]; then
+          docker compose exec -T web node scripts/healthcheck.mjs || {
+            health_code="$?"
             dump_diagnostics
             exit "$health_code"
-          fi
+          }
           docker compose exec -T web node scripts/verify-crm-tags-schema.mjs
           email_verify_args=""
-          if [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ]; then
-            email_verify_args="$email_verify_args --require-live-readiness"
-          else
-            if [ "${RUN_EMAIL_CONNECTION_TESTS:-false}" = "true" ]; then
-              email_verify_args="$email_verify_args --test-connections"
-            fi
-            if [ "${RUN_EMAIL_AI_PROVIDER_TEST:-false}" = "true" ]; then
-              email_verify_args="$email_verify_args --test-ai-provider"
-            fi
-            if [ "${RUN_EMAIL_SMOKE_TEST:-false}" = "true" ]; then
-              email_verify_args="$email_verify_args --smoke"
-            fi
-          fi
+          [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ] && email_verify_args="$email_verify_args --require-live-readiness"
+          [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ] || [ "${RUN_EMAIL_CONNECTION_TESTS:-false}" != "true" ] || email_verify_args="$email_verify_args --test-connections"
+          [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ] || [ "${RUN_EMAIL_AI_PROVIDER_TEST:-false}" != "true" ] || email_verify_args="$email_verify_args --test-ai-provider"
+          [ "${REQUIRE_LIVE_EMAIL_READINESS:-false}" = "true" ] || [ "${RUN_EMAIL_SMOKE_TEST:-false}" != "true" ] || email_verify_args="$email_verify_args --smoke"
           verify_stdout="$(mktemp)"
           verify_stderr="$(mktemp)"
           rm -f email-verify-last.json email-verify-last-summary.txt
@@ -566,15 +554,15 @@ jobs:
           verify_code="$?"
           set -e
           cat "$verify_stderr" >&2
-          if [ -s "$verify_stderr" ]; then
+          [ ! -s "$verify_stderr" ] || {
             cp "$verify_stderr" email-verify-last-summary.txt
             chmod 600 email-verify-last-summary.txt
-          fi
-          if [ -s "$verify_stdout" ]; then
+          }
+          [ ! -s "$verify_stdout" ] || {
             cp "$verify_stdout" email-verify-last.json
             chmod 600 email-verify-last.json
             cat "$verify_stdout"
-          fi
+          }
           rm -f "$verify_stdout" "$verify_stderr"
           exit "$verify_code"
           REMOTE
