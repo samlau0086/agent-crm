@@ -280,7 +280,7 @@ function hasRecordUpdatePatchChanges(record: CrmRecord, patch: RecordApprovalPat
   return Object.entries(data).some(([key, nextValue]) => normalizeComparableRecordValue(nextValue) !== normalizeComparableRecordValue(record.data[key]));
 }
 
-type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "quotes" | "salesorders" | "proformainvoices" | "commercialinvoices" | "objects" | "records" | "tasks" | "activities" | "record-approvals" | "automation" | "email" | "settings";
+type NavKey = "dashboard" | "contacts" | "companies" | "deals" | "products" | "sales-documents" | "quotes" | "salesorders" | "proformainvoices" | "commercialinvoices" | "objects" | "records" | "tasks" | "activities" | "record-approvals" | "automation" | "email" | "settings";
 type RecordPanelMode = "closed" | "create" | "detail" | "import";
 type DealWorkspaceView = "pipeline" | "list";
 type EmailWorkspaceView = "mail" | "settings" | "ai";
@@ -614,10 +614,7 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
   { key: "companies", label: "公司", icon: Building2 },
   { key: "deals", label: "交易", icon: BadgeDollarSign },
   { key: "products", label: "产品", icon: Package },
-  { key: "quotes", label: "报价", icon: FileText },
-  { key: "salesorders", label: "Sales Orders", icon: ClipboardList },
-  { key: "proformainvoices", label: "Proforma Invoices", icon: FileText },
-  { key: "commercialinvoices", label: "Commercial Invoices", icon: ReceiptText },
+  { key: "sales-documents", label: "销售单据", icon: ReceiptText },
   { key: "objects", label: "对象", icon: LayoutList },
   { key: "tasks", label: "任务", icon: CheckCircle2 },
   { key: "activities", label: "活动", icon: ActivityIcon },
@@ -627,6 +624,12 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
 ];
 
 const coreObjects = new Set(["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"]);
+const salesDocumentTabItems = [
+  { objectKey: "quotes", label: "报价", icon: FileText },
+  { objectKey: "salesorders", label: "Sales Orders", icon: ClipboardList },
+  { objectKey: "proformainvoices", label: "Proforma Invoices", icon: FileText },
+  { objectKey: "commercialinvoices", label: "Commercial Invoices", icon: ReceiptText }
+] as const;
 const emailAiFeatureMeta: Record<keyof EmailAiSettings["features"], { label: string; description: string; dependsOn?: keyof EmailAiSettings["features"] }> = {
   draft: { label: "AI 写邮件", description: "基于客户背景、沟通历史和知识库生成邮件草稿" },
   translate: { label: "AI 翻译", description: "手动翻译邮件内容" },
@@ -737,6 +740,32 @@ function buildEmailRoutePath(patch: EmailRoutePatch): string {
   const query = params.toString();
   return query ? `${crmPathForNav("email")}?${query}` : crmPathForNav("email");
 }
+
+function navKeyForObjectKey(objectKey: string): NavKey {
+  if (isSalesDocumentObjectKey(objectKey)) {
+    return "sales-documents";
+  }
+  return coreObjects.has(objectKey) ? (objectKey as NavKey) : "records";
+}
+
+function buildObjectWorkspacePath(objectKey: string, params?: URLSearchParams): string {
+  const navKey = navKeyForObjectKey(objectKey);
+  const nextParams = new URLSearchParams(params?.toString() ?? "");
+  if (isSalesDocumentObjectKey(objectKey)) {
+    nextParams.set("type", objectKey);
+  }
+  const basePath = crmPathForNav(navKey, objectKey);
+  return nextParams.size ? `${basePath}?${nextParams.toString()}` : basePath;
+}
+
+function normalizeSalesDocumentRouteType(value: string | null): string {
+  return value && isSalesDocumentObjectKey(value) ? value : "quotes";
+}
+
+function objectIconForKey(objectKey: string): LucideIcon {
+  return salesDocumentTabItems.find((item) => item.objectKey === objectKey)?.icon ?? navItems.find((item) => item.key === objectKey)?.icon ?? LayoutList;
+}
+
 const noEmailSignatureId = "none";
 const inlineImageContentIdPrefix = "inline-image-";
 
@@ -1755,7 +1784,9 @@ function ModuleWorkspaceHeader({
   dealWorkspaceView,
   exportRecordsUrl,
   isRouteRefreshing,
+  moduleIcon,
   moduleActionsOpen,
+  moduleTitle,
   notificationMenuOpen,
   notifications,
   query,
@@ -1779,7 +1810,9 @@ function ModuleWorkspaceHeader({
   dealWorkspaceView: DealWorkspaceView;
   exportRecordsUrl: string;
   isRouteRefreshing: boolean;
+  moduleIcon?: LucideIcon;
   moduleActionsOpen: boolean;
+  moduleTitle?: string;
   notificationMenuOpen: boolean;
   notifications: HeaderNotification[];
   query: string;
@@ -1797,8 +1830,7 @@ function ModuleWorkspaceHeader({
   onToggleQuickAdd: () => void;
   onToggleTheme: () => void;
 }) {
-  const moduleIcon = navItems.find((item) => item.key === activeObject.key)?.icon ?? LayoutList;
-  const ModuleIcon = moduleIcon;
+  const ModuleIcon = moduleIcon ?? objectIconForKey(activeObject.key);
 
   return (
     <div className="module-topbar" data-testid={`module-header-${activeObject.key}`}>
@@ -1806,7 +1838,7 @@ function ModuleWorkspaceHeader({
         <AppSidebarToggleButton collapsed={appSidebarCollapsed} onToggle={onToggleAppSidebar} />
         <div className="module-title-block">
           <ModuleIcon size={18} />
-          <h1 className="module-title">{activeObject.pluralLabel}</h1>
+          <h1 className="module-title">{moduleTitle ?? activeObject.pluralLabel}</h1>
         </div>
       </div>
 
@@ -1840,7 +1872,7 @@ function ModuleWorkspaceHeader({
                 <Plus size={14} />
               </div>
               {quickAddObjects.map((object) => {
-                const Icon = navItems.find((item) => item.key === object.key)?.icon ?? LayoutList;
+                const Icon = objectIconForKey(object.key);
                 return (
                   <button key={object.key} type="button" onClick={() => onQuickCreate(object.key)}>
                     <Icon size={16} />
@@ -2119,6 +2151,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeCompanyId = searchParams.get("companyId") ?? "";
   const routeRecordPool = normalizeRecordPool(searchParams.get("pool"));
   const routeDealView = normalizeDealWorkspaceView(searchParams.get("view"));
+  const routeSalesDocumentType = normalizeSalesDocumentRouteType(searchParams.get("type"));
+  const routeHasSalesDocumentType = searchParams.has("type");
   const [currentUser, setCurrentUser] = useState<User>(props.contextUser);
   const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
@@ -2763,10 +2797,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
 
     const nextNav = route.navKey as NavKey;
+    const nextObjectKey = nextNav === "sales-documents" ? (routeHasSalesDocumentType ? routeSalesDocumentType : route.objectKey) : route.objectKey;
     setActiveNav(nextNav);
-    if (nextNav === "records" || coreObjects.has(nextNav)) {
+    if (nextNav === "records" || nextNav === "sales-documents" || coreObjects.has(nextNav)) {
       const pendingRecordOpen = pendingRecordOpenRef.current;
-      setActiveObjectKey(route.objectKey);
+      setActiveObjectKey(nextObjectKey);
       if (routeRecordId) {
         setSelectedRecordId(routeRecordId);
         setRecordReturnEmailThreadId(routeReturnEmailThreadId);
@@ -2776,7 +2811,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         setSelectedRecordId("");
         setRecordReturnEmailThreadId("");
         setRecordPanelMode("create");
-      } else if (pendingRecordOpen?.objectKey === route.objectKey) {
+      } else if (pendingRecordOpen?.objectKey === nextObjectKey) {
         setSelectedRecordId(pendingRecordOpen.recordId);
         setRecordReturnEmailThreadId(pendingRecordOpen.returnEmailThreadId);
         setRecordPanelMode("detail");
@@ -2795,7 +2830,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         setEmailDetailThreadId("");
       }
     }
-  }, [pathname, routeEmailThreadId, routeEmailView, routeObjectKeys, routeRecordId, routeReturnEmailThreadId, routeMode]);
+  }, [pathname, routeEmailThreadId, routeEmailView, routeObjectKeys, routeRecordId, routeReturnEmailThreadId, routeMode, routeHasSalesDocumentType, routeSalesDocumentType]);
 
   useEffect(() => {
     setRecordPool(routeRecordPool);
@@ -3265,9 +3300,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }, [selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
   function navigateToWorkspace(navKey: NavKey, objectKey?: string) {
-    const nextPath = crmPathForNav(navKey, objectKey);
+    const nextPath = navKey === "sales-documents" && objectKey ? buildObjectWorkspacePath(objectKey) : crmPathForNav(navKey, objectKey);
     setActiveNav(navKey);
-    if (pathname !== nextPath) {
+    const currentPath = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+    if (currentPath !== nextPath) {
       router.push(nextPath);
     }
   }
@@ -3280,7 +3316,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   function openObject(objectKey: string) {
-    const nextNav = coreObjects.has(objectKey) ? (objectKey as NavKey) : "records";
+    const nextNav = navKeyForObjectKey(objectKey);
     setActiveObjectKey(objectKey);
     navigateToWorkspace(nextNav, objectKey);
     setQuery("");
@@ -3321,9 +3357,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     router.replace(nextUrl);
   }
 
+  function changeSalesDocumentTab(objectKey: string) {
+    if (!isSalesDocumentObjectKey(objectKey) || objectKey === activeObject?.key) {
+      return;
+    }
+    const nextParams = new URLSearchParams();
+    setActiveNav("sales-documents");
+    setActiveObjectKey(objectKey);
+    setSelectedRecordId("");
+    setRecordReturnEmailThreadId("");
+    setRecordPanelMode("closed");
+    setShowListSettings(false);
+    setQuery("");
+    setMessage(null);
+    setError(null);
+    router.push(buildObjectWorkspacePath(objectKey, nextParams));
+  }
+
   function openRecord(record: CrmRecord, options: { returnEmailThreadId?: string } = {}) {
-    const nextNav = coreObjects.has(record.objectKey) ? (record.objectKey as NavKey) : "records";
-    const nextPath = crmPathForNav(nextNav, record.objectKey);
+    const nextNav = navKeyForObjectKey(record.objectKey);
     const detailParams = new URLSearchParams({ recordId: record.id });
     if (isPoolEnabledForObject(record.objectKey, props.poolSettings) && recordPool !== "all") {
       detailParams.set("pool", recordPool);
@@ -3334,7 +3386,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (options.returnEmailThreadId) {
       detailParams.set("returnEmailThreadId", options.returnEmailThreadId);
     }
-    const nextDetailPath = `${nextPath}?${detailParams.toString()}`;
+    const nextDetailPath = buildObjectWorkspacePath(record.objectKey, detailParams);
     setRecords((current) => mergeRecords(current, [record]));
     setActiveObjectKey(record.objectKey);
     setActiveNav(nextNav);
@@ -3422,12 +3474,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (reminder.kind === "portfolio_health") {
       nextParams.set("pool", "private");
     }
-    const nextNav = coreObjects.has(targetObjectKey) ? (targetObjectKey as NavKey) : "records";
+    const nextNav = navKeyForObjectKey(targetObjectKey);
     setActiveNav(nextNav);
     if (props.objects.some((object) => object.key === targetObjectKey)) {
       setActiveObjectKey(targetObjectKey);
     }
-    router.push(`${crmPathForNav(nextNav, targetObjectKey)}?${nextParams.toString()}`);
+    router.push(buildObjectWorkspacePath(targetObjectKey, nextParams));
     showToast({ intent: "info", message: "已打开相关模块，可按提醒条件继续筛选处理。" });
   }
 
@@ -3466,8 +3518,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       if (activeObject.key === "deals" && dealWorkspaceView !== "pipeline") {
         listParams.set("view", dealWorkspaceView);
       }
-      const listPath = crmPathForNav(coreObjects.has(activeObject.key) ? activeObject.key : "records", activeObject.key);
-      router.push(`${listPath}${listParams.toString() ? `?${listParams.toString()}` : ""}`);
+      router.push(buildObjectWorkspacePath(activeObject.key, listParams));
     }
   }
 
@@ -6166,8 +6217,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (!objectDefinition) {
       return;
     }
-    const nextNav = coreObjects.has(objectKey) ? (objectKey as NavKey) : "records";
-    const nextPath = `${crmPathForNav(nextNav, objectKey)}?mode=create`;
+    const nextNav = navKeyForObjectKey(objectKey);
+    const nextParams = new URLSearchParams({ mode: "create" });
+    const nextPath = buildObjectWorkspacePath(objectKey, nextParams);
     const nextFields = props.fields.filter((field) => field.objectKey === objectKey).sort((left, right) => left.position - right.position);
     setQuickAddMenuOpen(false);
     setModuleActionsOpen(false);
@@ -6199,7 +6251,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setExportDialogOpen(true);
   }
 
-  const showRecordWorkspace = coreObjects.has(activeNav) || activeNav === "records";
+  const showRecordWorkspace = activeNav === "sales-documents" || coreObjects.has(activeNav) || activeNav === "records";
 
   return (
     <div
@@ -6228,6 +6280,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 data-testid={`nav-${item.key}`}
                 type="button"
                 onClick={() => {
+                  if (item.key === "sales-documents") {
+                    openObject(isSalesDocumentObjectKey(activeObject?.key ?? "") ? activeObject.key : "quotes");
+                    return;
+                  }
                   if (coreObjects.has(item.key)) {
                     openObject(item.key);
                     return;
@@ -6283,7 +6339,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               dealWorkspaceView={dealWorkspaceView}
               exportRecordsUrl={exportRecordsUrl}
               isRouteRefreshing={isRouteRefreshing || isRouteRefreshPending}
+              moduleIcon={activeNav === "sales-documents" ? ReceiptText : undefined}
               moduleActionsOpen={moduleActionsOpen}
+              moduleTitle={activeNav === "sales-documents" ? "销售单据" : undefined}
               notificationMenuOpen={notificationMenuOpen}
               notifications={headerNotifications}
               query={query}
@@ -6445,6 +6503,29 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onSelect={toggleRecordApprovalSelection}
             onSelectAll={setAllRecordApprovalSelection}
           />
+        )}
+
+        {showRecordWorkspace && activeObject && activeNav === "sales-documents" && (
+          <div className="sales-document-tabs" role="tablist" aria-label="销售单据类型">
+            {salesDocumentTabItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeObject.key === item.objectKey;
+              return (
+                <button
+                  key={item.objectKey}
+                  className={`sales-document-tab ${isActive ? "active" : ""}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  data-testid={`sales-document-tab-${item.objectKey}`}
+                  onClick={() => changeSalesDocumentTab(item.objectKey)}
+                >
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
         )}
 
         {showRecordWorkspace && activeObject && (
@@ -16196,8 +16277,7 @@ function formatEditableFieldValue(field: FieldDefinition, value: string, allReco
 }
 
 function buildRecordDetailHref(record: CrmRecord): string {
-  const navKey = coreObjects.has(record.objectKey) ? record.objectKey : "records";
-  return `${crmPathForNav(navKey, record.objectKey)}?recordId=${encodeURIComponent(record.id)}`;
+  return buildObjectWorkspacePath(record.objectKey, new URLSearchParams({ recordId: record.id }));
 }
 
 function resolveReferenceFieldRecord(field: FieldDefinition, value: string, allRecords: CrmRecord[]): CrmRecord | undefined {
@@ -21766,6 +21846,9 @@ async function readFetchErrorMessage(response: Response): Promise<string> {
 }
 
 function titleFor(activeNav: NavKey, activeObjectLabel?: string): string {
+  if (activeNav === "sales-documents") {
+    return "销售单据";
+  }
   if (coreObjects.has(activeNav) || activeNav === "records") {
     return activeObjectLabel ?? "";
   }

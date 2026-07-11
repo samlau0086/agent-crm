@@ -2688,6 +2688,8 @@ await run("email full resync button submits without a blocking confirm dialog", 
 await run("crm workspace routes modules through stable paths", () => {
   assert.deepEqual(resolveCrmRoute([], ["contacts", "companies"]), { navKey: "dashboard", objectKey: "contacts", path: "/" });
   assert.deepEqual(resolveCrmRoute(["companies"], ["contacts", "companies"]), { navKey: "companies", objectKey: "companies", path: "/companies" });
+  assert.deepEqual(resolveCrmRoute(["sales-documents"], ["contacts", "quotes"]), { navKey: "sales-documents", objectKey: "quotes", path: "/sales-documents" });
+  assert.deepEqual(resolveCrmRoute(["salesorders"], ["contacts", "salesorders"]), { navKey: "sales-documents", objectKey: "salesorders", path: "/sales-documents" });
   assert.deepEqual(resolveCrmRoute(["email"], ["contacts", "companies"]), { navKey: "email", objectKey: "contacts", path: "/email" });
   assert.deepEqual(resolveCrmRoute(["automation"], ["contacts", "companies"]), { navKey: "automation", objectKey: "contacts", path: "/automation" });
   assert.deepEqual(resolveCrmRoute(["records", "partners"], ["contacts", "partners"]), { navKey: "records", objectKey: "partners", path: "/records/partners" });
@@ -2695,6 +2697,8 @@ await run("crm workspace routes modules through stable paths", () => {
   assert.equal(crmPathForNav("automation"), "/automation");
   assert.equal(crmPathForNav("settings"), "/settings");
   assert.equal(crmPathForNav("records", "partners"), "/records/partners");
+  assert.equal(crmPathForNav("sales-documents"), "/sales-documents");
+  assert.equal(crmPathForNav("salesorders"), "/sales-documents");
 
   const rootPage = readFileSync("src/app/page.tsx", "utf8");
   const modulePage = readFileSync("src/app/[...module]/page.tsx", "utf8");
@@ -3171,7 +3175,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /const preserveComposeDraft = Boolean\(emailComposeOpenRequestKey && !routeEmailThreadId\)/);
   assert.match(source, /if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\)/);
   assert.match(source, /if \(!routeEmailThreadId\) \{[\s\S]*return;[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*fetchJson<EmailMessage\[\]>\(`\/api\/email\/threads\/\$\{routeEmailThreadId\}\/messages`/);
-  assert.match(source, /pendingRecordOpen\?\.objectKey === route\.objectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
+  assert.match(source, /pendingRecordOpen\?\.objectKey === nextObjectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
   assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*void updateEmailThreadState\(threadId, \{ read: true \}\)/);
   assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*const nextEmailThreadPath = buildEmailRoutePath\(\{ mailbox: routeEmailMailbox, category: routeEmailCategory, accountId: routeEmailAccountId, label: routeEmailLabel, listDisplayMode: routeEmailListDisplayMode, search: routeEmailSearch, mailMode: "detail", threadId \}\)[\s\S]*selectEmailThread\(threadId\)[\s\S]*setEmailDetailThreadId\(threadId\)[\s\S]*pushEmailHistoryRoute\(nextEmailThreadPath\)[\s\S]*await loadEmailMessages\(threadId\)/);
@@ -3777,7 +3781,11 @@ await run("workspace exposes product and quote modules as first-class crm object
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(source, /key: "products", label: "产品", icon: Package/);
-  assert.match(source, /key: "quotes", label: "报价", icon: FileText/);
+  assert.match(source, /key: "sales-documents", label: "销售单据", icon: ReceiptText/);
+  assert.match(source, /salesDocumentTabItems = \[/);
+  assert.match(source, /objectKey: "quotes", label: "报价", icon: FileText/);
+  assert.match(source, /data-testid=\{`sales-document-tab-\$\{item\.objectKey\}`\}/);
+  assert.match(styles, /\.sales-document-tabs/);
   assert.match(source, /new Set\(\["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"\]\)/);
   assert.match(source, /objectKey === "products"[\s\S]*SKU-AI-SALES-STD/);
   assert.match(source, /objectKey === "quotes"[\s\S]*companyId,contactId,paymentTerm,totalAmount/);

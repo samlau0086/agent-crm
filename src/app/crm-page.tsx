@@ -3,7 +3,7 @@ import { CrmWorkspace } from "@/components/crm-workspace";
 import { requireAppContext } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import type { CrmRecord, FieldDefinition, RelationDefinition } from "@/lib/crm/types";
-import { resolveCrmRoute } from "@/lib/crm/navigation";
+import { isSalesDocumentRouteObjectKey, resolveCrmRoute } from "@/lib/crm/navigation";
 import { listBackupFiles } from "@/lib/ops/backups";
 
 type CrmPageProps = {
@@ -62,7 +62,11 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
   const workflowRuns = workflows.length > 0 ? await repository.listWorkflowRuns(context) : [];
   const workflowApprovals = workflows.length > 0 ? await repository.listWorkflowApprovals(context) : [];
   const views = await repository.listSavedViews(context);
-  const initialObjectKey = route.objectKey;
+  const requestedSalesDocumentObjectKey = getSingleSearchParam(searchParams.type);
+  const initialObjectKey =
+    route.navKey === "sales-documents" && isSalesDocumentRouteObjectKey(requestedSalesDocumentObjectKey) && objects.some((object) => object.key === requestedSalesDocumentObjectKey)
+      ? requestedSalesDocumentObjectKey
+      : route.objectKey;
   const initialRecordList = await repository.queryRecords(context, initialObjectKey, { page: 1, pageSize: 50 });
   const routeRecordId = getSingleSearchParam(searchParams.recordId);
   const selectedRecord = routeRecordId
