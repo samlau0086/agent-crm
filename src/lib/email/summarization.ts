@@ -26,7 +26,7 @@ interface EmailSummarizeRepository {
   updateEmailThreadSummary(context: RequestContext, threadId: string, summary: string): EmailThread | Promise<EmailThread>;
   createActivity?(
     context: RequestContext,
-    input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags"> & { tags?: string[] }
+    input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags" | "tagColors"> & { tags?: string[]; tagColors?: Record<string, string> }
   ): Activity | Promise<Activity>;
 }
 

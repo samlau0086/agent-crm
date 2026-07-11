@@ -1356,6 +1356,40 @@ await run("record approval patch splits empty-value additions from non-empty cha
   assert.deepEqual(stripRecordApprovalMetadata(patchWithMetadata), approvalPatch);
 });
 
+await run("record approval patch keeps tag additions and colors immediate but requires approval for deletions", () => {
+  const record = {
+    id: "record-1",
+    workspaceId: "workspace-1",
+    objectKey: "contacts",
+    title: "Tagged",
+    ownerId: "user-1",
+    tags: ["vip", "north"],
+    tagColors: { vip: "navy", north: "mint" },
+    data: {},
+    createdAt: "2026-06-30T00:00:00.000Z",
+    updatedAt: "2026-06-30T00:00:00.000Z"
+  };
+
+  const added = splitRecordApprovalPatch(record, {
+    tags: ["vip", "north", "priority"],
+    tagColors: { vip: "navy", north: "sky", priority: "amber" }
+  });
+  assert.deepEqual(added.approvalPatch, {});
+  assert.deepEqual(added.previousPatch, {});
+  assert.deepEqual(added.immediatePatch, {
+    tags: ["vip", "north", "priority"],
+    tagColors: { vip: "navy", north: "sky", priority: "amber" }
+  });
+
+  const removed = splitRecordApprovalPatch(record, {
+    tags: ["vip"],
+    tagColors: { vip: "navy" }
+  });
+  assert.deepEqual(removed.immediatePatch, {});
+  assert.deepEqual(removed.approvalPatch, { tags: ["vip"], tagColors: { vip: "navy" } });
+  assert.deepEqual(removed.previousPatch, { tags: ["vip", "north"], tagColors: { vip: "navy", north: "mint" } });
+});
+
 await run("record approval patch treats new contact methods as immediate additions", () => {
   const record = {
     id: "record-1",
@@ -1966,8 +2000,11 @@ await run("activity update schema accepts task archive state", () => {
 
 await run("crm tag schemas normalize validate and dedupe values", () => {
   assert.deepEqual(recordWriteSchema.parse({ title: "Tagged", data: {}, tags: [" VIP ", "vip", "重点"] }).tags, ["vip", "重点"]);
+  assert.deepEqual(recordWriteSchema.parse({ title: "Tagged", data: {}, tags: ["vip"], tagColors: { vip: "navy" } }).tagColors, { vip: "navy" });
   assert.deepEqual(activityCreateSchema.parse({ type: "task", title: "Tagged task", tags: [" Follow-Up ", "follow-up"] }).tags, ["follow-up"]);
+  assert.deepEqual(activityCreateSchema.parse({ type: "task", title: "Tagged task", tags: ["follow-up"], tagColors: { "follow-up": "amber" } }).tagColors, { "follow-up": "amber" });
   assert.throws(() => recordWriteSchema.parse({ title: "Too long", data: {}, tags: ["x".repeat(41)] }), z.ZodError);
+  assert.throws(() => recordWriteSchema.parse({ title: "Bad color", data: {}, tags: ["vip"], tagColors: { vip: "not-a-color" } }), z.ZodError);
   assert.throws(
     () => recordWriteSchema.parse({ title: "Too many", data: {}, tags: Array.from({ length: 51 }, (_, index) => `tag-${index}`) }),
     z.ZodError
@@ -9388,11 +9425,15 @@ await run("record tags can be created searched filtered sorted and exported", ()
   const tagged = store.createRecord(context, "contacts", {
     title: "Tagged Alpha",
     tags: [" VIP ", "vip", "North"],
+    tagColors: { vip: "navy", north: "mint", unused: "rose" },
     data: { email: "tagged-alpha@example.com" }
   });
   store.createRecord(context, "contacts", { title: "Plain Beta", tags: ["south"], data: { email: "plain-beta@example.com" } });
 
   assert.deepEqual(tagged.tags, ["vip", "north"]);
+  assert.deepEqual(tagged.tagColors, { vip: "navy", north: "mint" });
+  const recolored = store.updateRecord(context, "contacts", tagged.id, { tagColors: { vip: "amber", north: "sky", unused: "navy" } });
+  assert.deepEqual(recolored.tagColors, { vip: "amber", north: "sky" });
   assert.deepEqual(store.queryRecords(context, "contacts", { q: "north" }).records.map((record) => record.id), [tagged.id]);
   assert.deepEqual(store.queryRecords(context, "contacts", { tags: ["vip"] }).records.map((record) => record.id), [tagged.id]);
   assert.deepEqual(
@@ -9525,13 +9566,16 @@ await run("csv import maps record tags and task queries filter tags", () => {
     recordId: imported.id,
     type: "task",
     title: "Tagged task",
-    tags: ["Follow-Up", "vip"]
+    tags: ["Follow-Up", "vip"],
+    tagColors: { "follow-up": "amber", vip: "navy", unused: "rose" }
   });
   assert.deepEqual(task.tags, ["follow-up", "vip"]);
+  assert.deepEqual(task.tagColors, { "follow-up": "amber", vip: "navy" });
   assert.deepEqual(store.listActivities(context, { type: "task", tags: ["follow-up"] }).map((activity) => activity.id), [task.id]);
 
-  const updated = store.updateActivity(context, task.id, { tags: ["done"] });
+  const updated = store.updateActivity(context, task.id, { tags: ["done"], tagColors: { done: "slate", vip: "navy" } });
   assert.deepEqual(updated.tags, ["done"]);
+  assert.deepEqual(updated.tagColors, { done: "slate" });
 });
 
 await run("csv import field guide exports validation metadata", () => {

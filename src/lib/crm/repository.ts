@@ -1428,6 +1428,7 @@ function mapRecord(record: {
   stageKey: string | null;
   ownerId: string | null;
   tags: string[];
+  tagColors: Prisma.JsonValue;
   data: Prisma.JsonValue;
   createdAt: Date;
   updatedAt: Date;
@@ -1440,6 +1441,7 @@ function mapRecord(record: {
     stageKey: record.stageKey ?? undefined,
     ownerId: record.ownerId ?? undefined,
     tags: record.tags ?? [],
+    tagColors: normalizeTagColors(asRecord(record.tagColors), record.tags ?? []),
     data: asRecord(record.data),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString()
@@ -1472,6 +1474,7 @@ function mapActivity(activity: {
   title: string;
   body: string | null;
   tags: string[];
+  tagColors: Prisma.JsonValue;
   actorId: string | null;
   dueAt: Date | null;
   completedAt: Date | null;
@@ -1486,6 +1489,7 @@ function mapActivity(activity: {
     title: activity.title,
     body: activity.body ?? undefined,
     tags: activity.tags ?? [],
+    tagColors: normalizeTagColors(asRecord(activity.tagColors), activity.tags ?? []),
     actorId: activity.actorId ?? undefined,
     dueAt: activity.dueAt?.toISOString(),
     completedAt: activity.completedAt?.toISOString(),
@@ -5872,7 +5876,7 @@ export class PrismaCrmRepository {
     return mapRecord(record);
   }
 
-  async createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[] }): Promise<CrmRecord> {
+  async createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string> }): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
@@ -5889,6 +5893,7 @@ export class PrismaCrmRepository {
     validateRecordPayload(fields, data, existing);
     await this.assertRecordReferences(context, fields, data, true);
 
+    const tags = uniqueTags(input.tags ?? []);
     const record = await this.db.crmRecord.create({
       data: {
         workspaceId: context.workspaceId,
@@ -5896,7 +5901,8 @@ export class PrismaCrmRepository {
         title: input.title,
         stageKey: input.stageKey,
         ownerId: canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id,
-        tags: uniqueTags(input.tags ?? []),
+        tags,
+        tagColors: normalizeTagColors(input.tagColors ?? {}, tags) as Prisma.InputJsonValue,
         data: data as Prisma.InputJsonValue
       }
     });
@@ -5922,11 +5928,13 @@ export class PrismaCrmRepository {
     context: RequestContext,
     objectKey: string,
     recordId: string,
-    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>
+    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags" | "tagColors">>
   ): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     const current = await this.getRecord(context, objectKey, recordId);
     const { nextData } = await this.validateRecordPatch(context, objectKey, recordId, current, patch);
+    const nextTags = patch.tags !== undefined ? uniqueTags(patch.tags) : current.tags;
+    const nextTagColors = normalizeTagColors(patch.tagColors ?? current.tagColors ?? {}, nextTags);
 
     const updated = await this.db.crmRecord.update({
       where: { id: recordId },
@@ -5935,7 +5943,8 @@ export class PrismaCrmRepository {
         data: nextData as Prisma.InputJsonValue,
         ownerId: canManageAllRecords(context) ? patch.ownerId ?? current.ownerId : current.ownerId,
         stageKey: patch.stageKey ?? current.stageKey,
-        tags: patch.tags !== undefined ? uniqueTags(patch.tags) : undefined
+        tags: patch.tags !== undefined ? nextTags : undefined,
+        tagColors: patch.tags !== undefined || patch.tagColors !== undefined ? (nextTagColors as Prisma.InputJsonValue) : undefined
       }
     });
 
@@ -5975,10 +5984,13 @@ export class PrismaCrmRepository {
     objectKey: string,
     recordId: string,
     current: CrmRecord,
-    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>
+    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags" | "tagColors">>
   ): Promise<{ nextData: Record<string, unknown>; fields: FieldDefinition[] }> {
     if (patch.tags !== undefined) {
       uniqueTags(patch.tags);
+    }
+    if (patch.tagColors !== undefined) {
+      normalizeTagColors(patch.tagColors, patch.tags ?? current.tags);
     }
     const mergedData = { ...current.data, ...(patch.data ?? {}) };
     const nextData =
@@ -6393,6 +6405,7 @@ export class PrismaCrmRepository {
             title: activity.title,
             body: activity.body,
             tags: activity.tags,
+            tagColors: activity.tagColors,
             dueAt: activity.dueAt,
             completedAt: activity.completedAt,
             archivedAt: activity.archivedAt,
@@ -6517,7 +6530,7 @@ export class PrismaCrmRepository {
     objectKey: string;
     recordId: string;
     patch: Prisma.JsonValue | null;
-  }): Promise<Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>> {
+  }): Promise<Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags" | "tagColors">>> {
     const patch = stripRecordApprovalMetadata((request.patch ?? {}) as RecordChangeRequest["patch"]);
     if (request.objectKey !== "contacts" || !isJsonRecord(patch.data) || !Object.prototype.hasOwnProperty.call(patch.data, "contactMethods")) {
       return patch;
@@ -6712,7 +6725,7 @@ export class PrismaCrmRepository {
     return mapActivity(activity);
   }
 
-  async createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags"> & { tags?: string[] }): Promise<Activity> {
+  async createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags" | "tagColors"> & { tags?: string[]; tagColors?: Record<string, string> }): Promise<Activity> {
     requirePermission(context, "crm.write");
     if (input.recordId) {
       const record = await this.db.crmRecord.findFirst({
@@ -6727,6 +6740,7 @@ export class PrismaCrmRepository {
         throw new Error("Record not found");
       }
     }
+    const tags = uniqueTags(input.tags ?? []);
     const created = await this.db.activity.create({
       data: {
         workspaceId: context.workspaceId,
@@ -6734,7 +6748,8 @@ export class PrismaCrmRepository {
         type: input.type,
         title: input.title,
         body: input.body,
-        tags: uniqueTags(input.tags ?? []),
+        tags,
+        tagColors: normalizeTagColors(input.tagColors ?? {}, tags) as Prisma.InputJsonValue,
         actorId: context.user.id,
         dueAt: input.dueAt ? new Date(input.dueAt) : undefined,
         completedAt: input.completedAt ? new Date(input.completedAt) : undefined
@@ -6758,7 +6773,7 @@ export class PrismaCrmRepository {
   async updateActivity(
     context: RequestContext,
     activityId: string,
-    patch: Partial<Pick<Activity, "title" | "body" | "tags">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
+    patch: Partial<Pick<Activity, "title" | "body" | "tags" | "tagColors">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
   ): Promise<Activity> {
     requirePermission(context, "crm.write");
     const existing = await this.db.activity.findFirst({
@@ -6783,12 +6798,15 @@ export class PrismaCrmRepository {
       throw new Error("Activity not found");
     }
 
+    const nextTags = patch.tags !== undefined ? uniqueTags(patch.tags) : existing.tags;
+    const nextTagColors = normalizeTagColors(patch.tagColors ?? asRecord(existing.tagColors), nextTags);
     const updated = await this.db.activity.update({
       where: { id: activityId },
       data: {
         title: patch.title,
         body: patch.body,
-        tags: patch.tags !== undefined ? uniqueTags(patch.tags) : undefined,
+        tags: patch.tags !== undefined ? nextTags : undefined,
+        tagColors: patch.tags !== undefined || patch.tagColors !== undefined ? (nextTagColors as Prisma.InputJsonValue) : undefined,
         dueAt: patch.dueAt ? new Date(patch.dueAt) : patch.dueAt === null ? null : undefined,
         completedAt: patch.completedAt ? new Date(patch.completedAt) : patch.completedAt === null ? null : undefined,
         archivedAt: patch.archivedAt ? new Date(patch.archivedAt) : patch.archivedAt === null ? null : undefined
@@ -8144,6 +8162,7 @@ export class PrismaCrmRepository {
             objectKey,
             title: preparedRow.title,
             tags,
+            tagColors: normalizeTagColors({}, tags),
             ownerId: context.user.id,
             data,
             createdAt: new Date().toISOString(),
@@ -8605,7 +8624,7 @@ export class PrismaCrmRepository {
 
     const dataSql = recordDataProjectionSql(fields);
     return this.db.$queryRaw<Parameters<typeof mapRecord>[0][]>(Prisma.sql`
-      SELECT "id", "workspaceId", "objectKey", "title", "stageKey", "ownerId", "tags", ${dataSql} AS "data", "createdAt", "updatedAt"
+      SELECT "id", "workspaceId", "objectKey", "title", "stageKey", "ownerId", "tags", "tagColors", ${dataSql} AS "data", "createdAt", "updatedAt"
       FROM "CrmRecord"
       WHERE "id" IN (${Prisma.join(ids)})
     `);
@@ -10687,6 +10706,18 @@ function uniqueTags(values: string[]): string[] {
     throw new Error("Tags must include at most 50 values");
   }
   return uniqueTags;
+}
+
+const allowedTagColors = new Set(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"]);
+
+function normalizeTagColors(values: Record<string, unknown>, tags: string[]): Record<string, string> {
+  const normalizedTags = uniqueTags(tags);
+  const colors: Record<string, string> = {};
+  for (const tag of normalizedTags) {
+    const color = values[tag];
+    colors[tag] = typeof color === "string" && allowedTagColors.has(color) ? color : "robin";
+  }
+  return colors;
 }
 
 function normalizeIntegerLimit(value: number, min: number, max: number): number {

@@ -1,6 +1,6 @@
 import type { CrmRecord, RecordChangeRequest } from "@/lib/crm/types";
 
-export type RecordApprovalPatch = Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>;
+export type RecordApprovalPatch = Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags" | "tagColors">>;
 
 export function splitRecordApprovalPatch(record: CrmRecord, patch: RecordApprovalPatch): {
   approvalPatch: RecordApprovalPatch;
@@ -14,7 +14,7 @@ export function splitRecordApprovalPatch(record: CrmRecord, patch: RecordApprova
   splitScalarApprovalValue("title", record.title, patch.title, approvalPatch, immediatePatch, previousPatch);
   splitScalarApprovalValue("stageKey", record.stageKey, patch.stageKey, approvalPatch, immediatePatch, previousPatch);
   splitScalarApprovalValue("ownerId", record.ownerId, patch.ownerId, approvalPatch, immediatePatch, previousPatch);
-  splitArrayApprovalValue("tags", record.tags, patch.tags, approvalPatch, immediatePatch, previousPatch);
+  splitTagsApprovalValue(record.tags, record.tagColors, patch.tags, patch.tagColors, approvalPatch, immediatePatch, previousPatch);
 
   const approvalData: Record<string, unknown> = {};
   const immediateData: Record<string, unknown> = {};
@@ -69,6 +69,7 @@ export function hasRecordPatchChanges(patch: RecordApprovalPatch | undefined): b
     Object.prototype.hasOwnProperty.call(patch, "stageKey") ||
     Object.prototype.hasOwnProperty.call(patch, "ownerId") ||
     Object.prototype.hasOwnProperty.call(patch, "tags") ||
+    Object.prototype.hasOwnProperty.call(patch, "tagColors") ||
     (isApprovalRecord(patch.data) && Object.keys(patch.data).length > 0)
   );
 }
@@ -130,19 +131,45 @@ function splitScalarApprovalValue(
   previousPatch[key] = previousValue as string | undefined;
 }
 
-function splitArrayApprovalValue(
-  key: "tags",
-  previousValue: unknown,
-  nextValue: unknown,
+function splitTagsApprovalValue(
+  previousTagsValue: unknown,
+  previousColorsValue: unknown,
+  nextTagsValue: unknown,
+  nextColorsValue: unknown,
   approvalPatch: RecordApprovalPatch,
   immediatePatch: RecordApprovalPatch,
   previousPatch: RecordApprovalPatch
 ): void {
-  if (nextValue === undefined || approvalValueKey(previousValue) === approvalValueKey(nextValue)) {
+  const previousTags = Array.isArray(previousTagsValue) ? previousTagsValue.filter((item): item is string => typeof item === "string") : [];
+  const nextTags = Array.isArray(nextTagsValue) ? nextTagsValue.filter((item): item is string => typeof item === "string") : undefined;
+  const previousColors = isApprovalRecord(previousColorsValue) ? previousColorsValue as Record<string, string> : {};
+  const nextColors = isApprovalRecord(nextColorsValue) ? nextColorsValue as Record<string, string> : undefined;
+
+  if (nextTags === undefined) {
+    if (nextColors !== undefined && approvalValueKey(previousColors) !== approvalValueKey(nextColors)) {
+      immediatePatch.tagColors = nextColors;
+    }
     return;
   }
-  approvalPatch[key] = Array.isArray(nextValue) ? nextValue.filter((item): item is string => typeof item === "string") : [];
-  previousPatch[key] = Array.isArray(previousValue) ? previousValue.filter((item): item is string => typeof item === "string") : [];
+
+  if (approvalValueKey(previousTags) === approvalValueKey(nextTags) && approvalValueKey(previousColors) === approvalValueKey(nextColors ?? previousColors)) {
+    return;
+  }
+
+  const nextSet = new Set(nextTags);
+  const removedTag = previousTags.find((tag) => !nextSet.has(tag));
+  if (removedTag) {
+    approvalPatch.tags = nextTags;
+    approvalPatch.tagColors = nextColors ?? previousColors;
+    previousPatch.tags = previousTags;
+    previousPatch.tagColors = previousColors;
+    return;
+  }
+
+  immediatePatch.tags = nextTags;
+  if (nextColors !== undefined) {
+    immediatePatch.tagColors = nextColors;
+  }
 }
 
 function approvalValueKey(value: unknown): string {

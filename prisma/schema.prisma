@@ -177,6 +177,7 @@ model CrmRecord {
   stageKey    String?
   ownerId     String?
   tags        String[]   @default([])
+  tagColors   Json       @default("{}")
   data        Json
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -212,6 +213,7 @@ model Activity {
   title       String
   body        String?
   tags        String[]   @default([])
+  tagColors   Json       @default("{}")
   actorId     String?
   dueAt       DateTime?
   completedAt DateTime?

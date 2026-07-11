@@ -120,13 +120,13 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
       }
     });
 
-    await executeCrmMcpTool("crm_create_record", { objectKey: "contacts", title: "Tagged", data: {}, tags: ["VIP", "vip"] }, client);
-    await executeCrmMcpTool("crm_create_activity", { type: "task", title: "Tagged task", tags: ["follow-up"] }, client);
-    await executeCrmMcpTool("crm_update_activity", { activityId: "activity-1", tags: ["done"] }, client);
+    await executeCrmMcpTool("crm_create_record", { objectKey: "contacts", title: "Tagged", data: {}, tags: ["VIP", "vip"], tagColors: { vip: "navy" } }, client);
+    await executeCrmMcpTool("crm_create_activity", { type: "task", title: "Tagged task", tags: ["follow-up"], tagColors: { "follow-up": "amber" } }, client);
+    await executeCrmMcpTool("crm_update_activity", { activityId: "activity-1", tags: ["done"], tagColors: { done: "slate" } }, client);
 
-    assert.deepEqual(JSON.parse(String(requests[0].init.body)), { title: "Tagged", data: {}, tags: ["vip"] });
-    assert.deepEqual(JSON.parse(String(requests[1].init.body)), { type: "task", title: "Tagged task", tags: ["follow-up"] });
-    assert.deepEqual(JSON.parse(String(requests[2].init.body)), { tags: ["done"] });
+    assert.deepEqual(JSON.parse(String(requests[0].init.body)), { title: "Tagged", data: {}, tags: ["vip"], tagColors: { vip: "navy" } });
+    assert.deepEqual(JSON.parse(String(requests[1].init.body)), { type: "task", title: "Tagged task", tags: ["follow-up"], tagColors: { "follow-up": "amber" } });
+    assert.deepEqual(JSON.parse(String(requests[2].init.body)), { tags: ["done"], tagColors: { done: "slate" } });
   });
 
   await run("mcp activity list tool passes task filters", async () => {

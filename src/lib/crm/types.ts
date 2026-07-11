@@ -755,6 +755,7 @@ export interface CrmRecord {
   stageKey?: string;
   ownerId?: string;
   tags: string[];
+  tagColors: Record<string, string>;
   data: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -1141,6 +1142,7 @@ export interface Activity {
   title: string;
   body?: string;
   tags: string[];
+  tagColors: Record<string, string>;
   actorId?: string;
   dueAt?: string;
   completedAt?: string;

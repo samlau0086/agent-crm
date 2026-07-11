@@ -46,6 +46,8 @@ export const tagListSchema = z
     }
     return uniqueTags;
   });
+export const tagColorSchema = z.enum(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"]);
+export const tagColorsSchema = z.record(tagColorSchema).optional();
 
 export const fieldTypeSchema = z.enum(["text", "textarea", "number", "currency", "date", "select", "boolean", "user", "reference"]);
 
@@ -139,7 +141,8 @@ export const recordWriteSchema = z
     data: z.record(z.unknown()),
     stageKey: optionalIdSchema,
     ownerId: optionalIdSchema,
-    tags: tagListSchema
+    tags: tagListSchema,
+    tagColors: tagColorsSchema
   })
   .strict();
 
@@ -287,6 +290,7 @@ export const activityCreateSchema = z
     title: labelSchema,
     body: optionalTextSchema,
     tags: tagListSchema,
+    tagColors: tagColorsSchema,
     dueAt: z.string().trim().min(1).optional(),
     completedAt: z.string().trim().min(1).optional()
   })
@@ -297,6 +301,7 @@ export const activityUpdateSchema = z
     title: labelSchema.optional(),
     body: optionalTextSchema,
     tags: tagListSchema,
+    tagColors: tagColorsSchema,
     dueAt: z.union([z.string().trim().min(1), z.null()]).optional(),
     completedAt: z.union([z.string().trim().min(1), z.null()]).optional(),
     archivedAt: z.union([z.string().trim().min(1), z.null()]).optional()

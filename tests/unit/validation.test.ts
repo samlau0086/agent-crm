@@ -37,6 +37,7 @@ describe("field validation", () => {
           objectKey: "contacts",
           title: "Lin Xiao",
           tags: [],
+          tagColors: {},
           data: { email: "lin@example.com" },
           createdAt: "2026-06-17T00:00:00.000Z",
           updatedAt: "2026-06-17T00:00:00.000Z"

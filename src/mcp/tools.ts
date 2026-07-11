@@ -15,6 +15,7 @@ const tagListSchema = z
   .max(50)
   .optional()
   .transform((tags) => (tags ? Array.from(new Set(tags)) : undefined));
+const tagColorsSchema = z.record(z.enum(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"])).optional();
 const recordFilterSchema = z
   .object({
     field: z.string().trim().min(1),
@@ -34,6 +35,7 @@ const recordWriteSchema = z
     title: z.string().trim().min(1),
     data: z.record(z.unknown()),
     tags: tagListSchema,
+    tagColors: tagColorsSchema,
     stageKey: optionalIdSchema,
     ownerId: optionalIdSchema
   })
@@ -145,6 +147,7 @@ const schemas = {
       title: z.string().trim().min(1),
       body: z.string().trim().optional(),
       tags: tagListSchema,
+      tagColors: tagColorsSchema,
       dueAt: z.string().trim().min(1).optional(),
       completedAt: z.string().trim().min(1).optional()
     })
@@ -155,6 +158,7 @@ const schemas = {
       title: z.string().trim().min(1).optional(),
       body: z.string().trim().optional(),
       tags: tagListSchema,
+      tagColors: tagColorsSchema,
       dueAt: z.union([z.string().trim().min(1), z.null()]).optional(),
       completedAt: z.union([z.string().trim().min(1), z.null()]).optional(),
       archivedAt: z.union([z.string().trim().min(1), z.null()]).optional()
@@ -412,13 +416,13 @@ async function dispatchTool(name: BaseCrmMcpToolName, args: z.infer<(typeof sche
     }
     case "crm_create_record": {
       const input = args as z.infer<typeof schemas.crm_create_record>;
-      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}`, stripUndefined({ title: input.title, data: input.data, tags: input.tags, stageKey: input.stageKey, ownerId: input.ownerId }));
+      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}`, stripUndefined({ title: input.title, data: input.data, tags: input.tags, tagColors: input.tagColors, stageKey: input.stageKey, ownerId: input.ownerId }));
     }
     case "crm_update_record": {
       const input = args as z.infer<typeof schemas.crm_update_record>;
       return client.patch(
         `/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}`,
-        stripUndefined({ title: input.title, data: input.data, tags: input.tags, stageKey: input.stageKey, ownerId: input.ownerId, changeReason: input.changeReason })
+        stripUndefined({ title: input.title, data: input.data, tags: input.tags, tagColors: input.tagColors, stageKey: input.stageKey, ownerId: input.ownerId, changeReason: input.changeReason })
       );
     }
     case "crm_delete_record": {

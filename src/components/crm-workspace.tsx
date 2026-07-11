@@ -268,6 +268,13 @@ function hasRecordUpdatePatchChanges(record: CrmRecord, patch: RecordApprovalPat
   ) {
     return true;
   }
+  if (
+    Object.prototype.hasOwnProperty.call(patch, "tagColors") &&
+    JSON.stringify(normalizeUiTagColors(patch.tagColors ?? {}, patch.tags ?? record.tags ?? [])) !==
+      JSON.stringify(normalizeUiTagColors(record.tagColors ?? {}, record.tags ?? []))
+  ) {
+    return true;
+  }
   const data = patch.data && typeof patch.data === "object" && !Array.isArray(patch.data) ? patch.data : {};
   return Object.entries(data).some(([key, nextValue]) => normalizeComparableRecordValue(nextValue) !== normalizeComparableRecordValue(record.data[key]));
 }
@@ -582,6 +589,7 @@ type TaskEditDraft = {
   dueAt: string;
   text: string;
   tags: string[];
+  tagColors: Record<string, string>;
   attachments: ActivityAttachment[];
 };
 type ViewDraft = {
@@ -2152,10 +2160,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [createTitle, setCreateTitle] = useState("");
   const [createOwnerId, setCreateOwnerId] = useState(props.contextUser.id);
   const [createTags, setCreateTags] = useState<string[]>([]);
+  const [createTagColors, setCreateTagColors] = useState<Record<string, string>>({});
   const [createValues, setCreateValues] = useState<Record<string, string>>({});
   const [editTitle, setEditTitle] = useState("");
   const [editOwnerId, setEditOwnerId] = useState("");
   const [editTags, setEditTags] = useState<string[]>([]);
+  const [editTagColors, setEditTagColors] = useState<Record<string, string>>({});
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [dealCloseReason, setDealCloseReason] = useState("");
   const [importCsv, setImportCsv] = useState("title,email,phone\n王敏,wang@example.com,+86 139 0000 0000");
@@ -2626,11 +2636,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return {
       title: editTitle.trim(),
       tags: editTags,
+      tagColors: editTagColors,
       data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
       stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
       ownerId: editOwnerId || undefined
     };
-  }, [currencyRecords, editOwnerId, editTags, editTitle, editValues, selectedFields, selectedRecord]);
+  }, [currencyRecords, editOwnerId, editTagColors, editTags, editTitle, editValues, selectedFields, selectedRecord]);
   const selectedRecordApprovalSaveDisabled = useMemo(() => {
     if (!selectedRecord || !editApprovalObjectKeys.has(selectedRecord.objectKey)) {
       return false;
@@ -3194,9 +3205,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     previousCreateFormResetKey.current = createFormResetKey;
     const pendingRecordCreate = pendingRecordCreateRef.current;
     if (pendingRecordCreate?.objectKey === activeObject?.key) {
-    setCreateTitle("");
-    setCreateOwnerId(props.contextUser.id);
-    setCreateTags([]);
+      setCreateTitle("");
+      setCreateOwnerId(props.contextUser.id);
+      setCreateTags([]);
+      setCreateTagColors({});
     setCreateValues({ ...buildInitialValues(objectFields, activeObject?.key), ...pendingRecordCreate.values });
       setCreateFormObjectKey(activeObject?.key ?? "");
       setImportCsv(sampleCsvFor(activeObject?.key ?? "contacts", objectFields));
@@ -3207,6 +3219,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
     setCreateTags([]);
+    setCreateTagColors({});
     setCreateValues({
       ...buildInitialValues(objectFields, activeObject?.key),
       ...(routeMode === "create" && activeObject?.key === "contacts" && routeCompanyId ? { companyId: routeCompanyId } : {})
@@ -3225,6 +3238,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEditTitle("");
       setEditOwnerId("");
       setEditTags([]);
+      setEditTagColors({});
       setEditValues({});
       setDealCloseReason("");
       setContactDetailActivityTab("all");
@@ -3239,6 +3253,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditTitle(selectedRecord.title);
     setEditOwnerId(selectedRecord.ownerId ?? "");
     setEditTags(selectedRecord.tags ?? []);
+    setEditTagColors(normalizeUiTagColors(selectedRecord.tagColors ?? {}, selectedRecord.tags ?? []));
     setEditValues(buildRecordValues(selectedFields, selectedRecord));
     setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
     setContactDetailActivityTab("all");
@@ -3425,6 +3440,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
     setCreateTags([]);
+    setCreateTagColors({});
     setCreateValues({ ...buildInitialValues(contactFields, "contacts"), companyId: company.id });
     setRecordReturnEmailThreadId("");
     setRecordPanelMode("create");
@@ -3463,6 +3479,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         stageKey: activeObject.key === "deals" ? activePipeline?.stages[0]?.key : undefined,
         ownerId: createOwnerId || undefined,
         tags: createTags,
+        tagColors: createTagColors,
         data: parseFormValues(objectFields, createValues, activeObject.key, currencyRecords)
       }
     });
@@ -3470,6 +3487,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
     setCreateTags([]);
+    setCreateTagColors({});
     setCreateValues(buildInitialValues(objectFields, activeObject.key));
     openRecord(created);
     setMessage(`已创建${activeObject.label}：${created.title}`);
@@ -3539,6 +3557,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         setRecords((current) => mergeRecords(current, [result.record]));
         if (selectedRecord.id === result.record.id) {
           setEditTags(result.record.tags ?? []);
+          setEditTagColors(normalizeUiTagColors(result.record.tagColors ?? {}, result.record.tags ?? []));
           setEditValues(buildRecordValues(selectedFields, result.record));
         }
       }
@@ -3552,6 +3571,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditTitle(result.title);
     setEditOwnerId(result.ownerId ?? "");
     setEditTags(result.tags ?? []);
+    setEditTagColors(normalizeUiTagColors(result.tagColors ?? {}, result.tags ?? []));
     setMessage(successMessage);
     router.refresh();
   }
@@ -3570,6 +3590,57 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (selectedRecord.objectKey === "companies") {
       setCompanyAddressEditing(null);
     }
+  }
+
+  async function removeSelectedRecordTag(tag: string) {
+    if (!selectedRecord) {
+      return;
+    }
+    const normalizedTag = normalizeUiTag(tag);
+    const nextTags = editTags.filter((candidate) => candidate !== normalizedTag);
+    const nextTagColors = normalizeUiTagColors(omitUiTagColor(editTagColors, normalizedTag), nextTags);
+    const isPersistedTag = (selectedRecord.tags ?? []).includes(normalizedTag);
+    const requiresRemovalApproval = editApprovalObjectKeys.has(selectedRecord.objectKey) && isPersistedTag;
+    if (!requiresRemovalApproval) {
+      setEditTags(nextTags);
+      setEditTagColors(nextTagColors);
+      return;
+    }
+    const changeReason = await requestPrompt({
+      title: "删除标签审批",
+      message: `请填写删除“${selectedRecord.title}”标签“${normalizedTag}”的原因。管理员审核通过后才会正式删除。`,
+      placeholder: "例如：客户状态已变更，此标签不再适用",
+      confirmLabel: "提交删除申请"
+    });
+    if (!changeReason?.trim()) {
+      return;
+    }
+    const result = await fetchJson<CrmRecord | RecordChangeRequestResponse | RecordApprovalReasonRequiredResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
+      method: "PATCH",
+      body: {
+        tags: nextTags,
+        tagColors: nextTagColors,
+        changeReason: changeReason.trim()
+      }
+    });
+    if ("approvalReasonRequired" in result) {
+      setMessage("删除标签需要填写原因");
+      return;
+    }
+    if ("pendingApproval" in result) {
+      setRecordChangeRequests((current) => mergeRecordChangeRequests(current, [result.request]));
+      if (result.record) {
+        setRecords((current) => mergeRecords(current, [result.record]));
+      }
+      showSuccess("标签删除申请已提交，等待管理员审核");
+      router.refresh();
+      return;
+    }
+    setRecords((current) => mergeRecords(current, [result]));
+    setEditTags(result.tags ?? []);
+    setEditTagColors(normalizeUiTagColors(result.tagColors ?? {}, result.tags ?? []));
+    showSuccess("标签已删除");
+    router.refresh();
   }
 
   async function submitSingleRecordField(field: FieldDefinition, nextValue: string) {
@@ -4321,6 +4392,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         title: draft.title,
         body: serializeTaskDetails({ text: draft.text, attachments: draft.attachments }),
         tags: draft.tags,
+        tagColors: draft.tagColors,
         dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null
       }
     });
@@ -4336,6 +4408,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         type: "task",
         title: input.title,
         tags: input.tags ?? [],
+        tagColors: normalizeUiTagColors({}, input.tags ?? []),
         dueAt: input.dueAt || undefined
       }
     });
@@ -6594,11 +6667,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </>
                   ) : null}
                   <TagEditor
+                    colors={createTagColors}
                     label="标签"
                     suggestions={activeObjectTagSuggestions}
                     testId={`create-tags-${activeObject.key}`}
                     value={createTags}
-                    onChange={setCreateTags}
+                    onChange={(tags) => {
+                      setCreateTags(tags);
+                      setCreateTagColors((current) => normalizeUiTagColors(current, tags));
+                    }}
+                    onColorsChange={setCreateTagColors}
                   />
                 </div>
                 <div className="toolbar" style={{ marginTop: 12 }}>
@@ -6654,11 +6732,17 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     ) : null}
                     <div className="form-grid" style={{ marginTop: 12 }}>
                       <TagEditor
+                        colors={editTagColors}
                         label="标签"
                         suggestions={activeObjectTagSuggestions}
                         testId={`edit-tags-${selectedRecord.objectKey}`}
                         value={editTags}
-                        onChange={setEditTags}
+                        onChange={(tags) => {
+                          setEditTags(tags);
+                          setEditTagColors((current) => normalizeUiTagColors(current, tags));
+                        }}
+                        onColorsChange={setEditTagColors}
+                        onRemoveTag={(tag) => { void runImmediateAction(() => removeSelectedRecordTag(tag)); }}
                       />
                     </div>
                     {selectedRecord.objectKey === "contacts" ? (
@@ -13633,7 +13717,7 @@ function TaskList({
               {!completed && overdue && <span className="badge danger-badge">已逾期</span>}
             </div>
             <strong>{activity.title}</strong>
-            <TagList tags={activity.tags ?? []} compact />
+            <TagList colors={activity.tagColors ?? {}} tags={activity.tags ?? []} compact />
             {taskDetails.text && <div className="subtle">{taskDetails.text}</div>}
             <TaskAttachmentPreview attachments={taskDetails.attachments} mediaAssets={mediaAssets} />
             <div className="toolbar" style={{ marginTop: 10 }}>
@@ -13754,11 +13838,13 @@ function TaskEditDialog({
               <textarea className="textarea" data-testid="task-edit-body" value={draft.text} onChange={(event) => onChange({ ...draft, text: event.target.value })} />
             </label>
             <TagEditor
+              colors={draft.tagColors}
               label="标签"
               suggestions={tagSuggestions}
               testId="task-edit-tags"
               value={draft.tags}
-              onChange={(tags) => onChange({ ...draft, tags })}
+              onChange={(tags) => onChange({ ...draft, tags, tagColors: normalizeUiTagColors(draft.tagColors, tags) })}
+              onColorsChange={(tagColors) => onChange({ ...draft, tagColors })}
             />
           </div>
           <div className="task-attachment-panel">
@@ -17143,15 +17229,15 @@ function QuoteProductSearchDropdown({
   );
 }
 
-function TagList({ tags, compact = false }: { tags: string[]; compact?: boolean }) {
+function TagList({ colors = {}, tags, compact = false }: { colors?: Record<string, string>; tags: string[]; compact?: boolean }) {
   const normalizedTags = uniqueUiTags(tags);
   if (!normalizedTags.length) {
     return null;
   }
   return (
-    <span className={`crm-tag-list ${compact ? "compact" : ""}`}>
+    <span className={`crm-tag-cloud ${compact ? "compact" : ""}`}>
       {normalizedTags.map((tag) => (
-        <span className="crm-tag-chip" key={tag}>
+        <span className="crm-tag-chip" data-color={tagColorKey(colors[tag])} key={tag}>
           {tag}
         </span>
       ))}
@@ -17160,21 +17246,28 @@ function TagList({ tags, compact = false }: { tags: string[]; compact?: boolean 
 }
 
 function TagEditor({
+  colors,
   label,
   suggestions,
   testId,
   value,
-  onChange
+  onChange,
+  onColorsChange,
+  onRemoveTag
 }: {
+  colors: Record<string, string>;
   label: string;
   suggestions: string[];
   testId?: string;
   value: string[];
   onChange: (tags: string[]) => void;
+  onColorsChange: (colors: Record<string, string>) => void;
+  onRemoveTag?: (tag: string) => void;
 }) {
   const [input, setInput] = useState("");
   const [focused, setFocused] = useState(false);
   const normalizedValue = uniqueUiTags(value);
+  const normalizedColors = normalizeUiTagColors(colors, normalizedValue);
   const normalizedInput = input.trim().toLowerCase();
   const availableSuggestions = uniqueUiTags(suggestions)
     .filter((tag) => !normalizedValue.includes(tag))
@@ -17183,7 +17276,9 @@ function TagEditor({
   const showSuggestions = focused && availableSuggestions.length > 0;
 
   function applyTags(nextTags: string[]) {
-    onChange(uniqueUiTags(nextTags));
+    const normalizedTags = uniqueUiTags(nextTags);
+    onChange(normalizedTags);
+    onColorsChange(normalizeUiTagColors(normalizedColors, normalizedTags));
   }
 
   function addSuggestedTag(tag: string) {
@@ -17207,9 +17302,20 @@ function TagEditor({
       <span className="subtle">{label}</span>
       <div className="tag-select-input">
         {normalizedValue.map((tag) => (
-          <span className="tag-select-token" key={tag}>
+          <span className="tag-select-token" data-color={tagColorKey(normalizedColors[tag])} key={tag}>
             {tag}
-            <button type="button" aria-label={`移除标签 ${tag}`} onClick={() => applyTags(normalizedValue.filter((candidate) => candidate !== tag))}>
+            <select
+              aria-label={`修改标签 ${tag} 颜色`}
+              value={tagColorKey(normalizedColors[tag])}
+              onChange={(event) => onColorsChange(normalizeUiTagColors({ ...normalizedColors, [tag]: event.target.value }, normalizedValue))}
+            >
+              {tagColorOptions.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <button type="button" aria-label={`移除标签 ${tag}`} onClick={() => (onRemoveTag ? onRemoveTag(tag) : applyTags(normalizedValue.filter((candidate) => candidate !== tag)))}>
               <XCircle size={12} />
             </button>
           </span>
@@ -17266,11 +17372,40 @@ function TagEditor({
   );
 }
 
+const tagColorOptions = [
+  { key: "robin", label: "Robin" },
+  { key: "mint", label: "Mint" },
+  { key: "sky", label: "Sky" },
+  { key: "amber", label: "Amber" },
+  { key: "rose", label: "Rose" },
+  { key: "violet", label: "Violet" },
+  { key: "slate", label: "Slate" },
+  { key: "navy", label: "Navy" }
+] as const;
+
+function tagColorKey(value: unknown): string {
+  return typeof value === "string" && tagColorOptions.some((option) => option.key === value) ? value : "robin";
+}
+
+function normalizeUiTag(value: string): string {
+  return value.trim().toLowerCase().slice(0, 40);
+}
+
+function normalizeUiTagColors(colors: Record<string, unknown>, tags: string[]): Record<string, string> {
+  const normalizedTags = uniqueUiTags(tags);
+  return Object.fromEntries(normalizedTags.map((tag) => [tag, tagColorKey(colors[tag])]));
+}
+
+function omitUiTagColor(colors: Record<string, string>, tag: string): Record<string, string> {
+  const { [tag]: _removed, ...rest } = colors;
+  return rest;
+}
+
 function uniqueUiTags(tags: string[]): string[] {
   const normalized = tags
-    .map((tag) => tag.trim().toLowerCase())
+    .map(normalizeUiTag)
     .filter(Boolean)
-    .map((tag) => tag.slice(0, 40));
+    .filter(Boolean);
   return Array.from(new Set(normalized)).slice(0, 50);
 }
 
@@ -17286,7 +17421,7 @@ function RecordTitleButton({ record, onOpen }: { record: CrmRecord; onOpen: () =
       {hasImage && <RecordListImage imageUrl={imageUrl} title={record.title} objectKey={record.objectKey} />}
       <span className="record-title-text">
         <span>{record.title}</span>
-        <TagList tags={record.tags ?? []} compact />
+        <TagList colors={record.tagColors ?? {}} tags={record.tags ?? []} compact />
       </span>
     </button>
   );
@@ -17635,6 +17770,15 @@ function buildRecordUpdateDiffs(record: CrmRecord, request: RecordChangeRequest,
       label: "负责人",
       oldValue: ownerLabel(previousOwnerId, users),
       newValue: ownerLabel(typeof patch.ownerId === "string" ? patch.ownerId : undefined, users)
+    });
+  }
+  const previousTags = Array.isArray(previousPatch.tags) ? previousPatch.tags : record.tags ?? [];
+  if (Array.isArray(patch.tags) && recordChangeValueKey(patch.tags) !== recordChangeValueKey(previousTags)) {
+    diffs.push({
+      key: "tags",
+      label: "标签",
+      oldValue: previousTags.join("; "),
+      newValue: patch.tags.join("; ")
     });
   }
 
@@ -20422,7 +20566,7 @@ function displayTableColumnValue(column: TableColumn, record: CrmRecord, records
   }
 
   if (column.type === "tags") {
-    return <TagList tags={record.tags ?? []} />;
+    return <TagList colors={record.tagColors ?? {}} tags={record.tags ?? []} />;
   }
 
   if (record.objectKey === "products" && column.field.key === "mainImageUrl") {
@@ -20550,6 +20694,7 @@ function createTaskEditDraft(activity: Activity | null): TaskEditDraft {
     dueAt: toDateTimeLocalValue(activity?.dueAt),
     text: details.text,
     tags: activity?.tags ?? [],
+    tagColors: normalizeUiTagColors(activity?.tagColors ?? {}, activity?.tags ?? []),
     attachments: details.attachments
   };
 }

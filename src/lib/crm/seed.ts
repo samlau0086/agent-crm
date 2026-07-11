@@ -208,6 +208,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "currencies",
       tags: [],
+      tagColors: {},
       title: "CNY · 人民币",
       ownerId: adminUserId,
       data: { code: "CNY", label: "人民币", symbol: "¥", rateToBase: 1, isBase: true, active: true },
@@ -219,6 +220,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "currencies",
       tags: [],
+      tagColors: {},
       title: "USD · 美元",
       ownerId: adminUserId,
       data: { code: "USD", label: "美元", symbol: "$", rateToBase: 7.2, isBase: false, active: true },
@@ -230,6 +232,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "currencies",
       tags: [],
+      tagColors: {},
       title: "EUR · 欧元",
       ownerId: adminUserId,
       data: { code: "EUR", label: "欧元", symbol: "€", rateToBase: 7.8, isBase: false, active: true },
@@ -241,6 +244,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "companies",
       tags: [],
+      tagColors: {},
       title: "Acme China",
       ownerId: salesUserId,
       data: {
@@ -259,6 +263,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "contacts",
       tags: [],
+      tagColors: {},
       title: "林晓",
       ownerId: salesUserId,
       data: {
@@ -277,6 +282,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "deals",
       tags: [],
+      tagColors: {},
       title: "Acme 销售平台采购",
       stageKey: "proposal",
       ownerId: salesUserId,
@@ -289,6 +295,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "products",
       tags: [],
+      tagColors: {},
       title: "AI 销售助手标准版",
       ownerId: salesUserId,
       data: { sku: "SKU-AI-SALES-STD", mainImageUrl: "https://placehold.co/128x128/e0f2fe/0f172a?text=AI+CRM", unitPrice: 2999, unitPriceCurrency: "CNY", description: "年度订阅，包含销售邮件 AI 辅助、CRM 时间线和基础自动化。", billingCycle: "annual", active: true, attachments: [] },
@@ -300,6 +307,7 @@ export const seedData: CrmSnapshot = {
       workspaceId: defaultWorkspaceId,
       objectKey: "quotes",
       tags: [],
+      tagColors: {},
       title: "Acme 年度订阅报价",
       ownerId: salesUserId,
       data: {
@@ -347,8 +355,8 @@ export const seedData: CrmSnapshot = {
     }
   ],
   activities: [
-    { id: "act-1", workspaceId: defaultWorkspaceId, recordId: "deal-platform", type: "note", title: "客户关注私有化部署", tags: [], body: "需要 Docker Compose 交付，后续可能接入企业 SSO。", actorId: salesUserId, createdAt: now },
-    { id: "act-2", workspaceId: defaultWorkspaceId, recordId: "contact-lin", type: "task", title: "发送报价单", tags: [], body: "本周五前发送正式报价。", actorId: salesUserId, dueAt: "2026-06-19T10:00:00.000Z", createdAt: now }
+    { id: "act-1", workspaceId: defaultWorkspaceId, recordId: "deal-platform", type: "note", title: "客户关注私有化部署", tags: [], tagColors: {}, body: "需要 Docker Compose 交付，后续可能接入企业 SSO。", actorId: salesUserId, createdAt: now },
+    { id: "act-2", workspaceId: defaultWorkspaceId, recordId: "contact-lin", type: "task", title: "发送报价单", tags: [], tagColors: {}, body: "本周五前发送正式报价。", actorId: salesUserId, dueAt: "2026-06-19T10:00:00.000Z", createdAt: now }
   ],
   auditLogs: [],
   importJobs: [],

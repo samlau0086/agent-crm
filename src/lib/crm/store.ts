@@ -3341,7 +3341,7 @@ export class CrmStore {
     return clone(record);
   }
 
-  createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[] }): CrmRecord {
+  createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[]; tagColors?: Record<string, string> }): CrmRecord {
     requirePermission(context, "crm.write");
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
@@ -3358,6 +3358,7 @@ export class CrmStore {
     validateRecordPayload(fields, data, existing);
     this.assertRecordReferences(context, fields, data, true);
 
+    const tags = uniqueTags(input.tags ?? []);
     const record: CrmRecord = {
       id: createId("record"),
       workspaceId: context.workspaceId,
@@ -3365,7 +3366,8 @@ export class CrmStore {
       title: input.title,
       stageKey: input.stageKey,
       ownerId: canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id,
-      tags: uniqueTags(input.tags ?? []),
+      tags,
+      tagColors: normalizeTagColors(input.tagColors ?? {}, tags),
       data,
       createdAt: stamp(),
       updatedAt: stamp()
@@ -3386,7 +3388,7 @@ export class CrmStore {
     return clone(record);
   }
 
-  updateRecord(context: RequestContext, objectKey: string, recordId: string, patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>): CrmRecord {
+  updateRecord(context: RequestContext, objectKey: string, recordId: string, patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags" | "tagColors">>): CrmRecord {
     requirePermission(context, "crm.write");
     const record = this.data.records.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.id === recordId);
     if (!record || !this.canAccessRecord(context, record)) {
@@ -3395,6 +3397,9 @@ export class CrmStore {
     const previousStageKey = record.stageKey;
     if (patch.tags !== undefined) {
       uniqueTags(patch.tags);
+    }
+    if (patch.tagColors !== undefined) {
+      normalizeTagColors(patch.tagColors, patch.tags ?? record.tags);
     }
     const mergedData = { ...record.data, ...(patch.data ?? {}) };
     const nextData =
@@ -3414,7 +3419,8 @@ export class CrmStore {
       {
         ...patch,
         ownerId: canManageAllRecords(context) ? patch.ownerId ?? record.ownerId : record.ownerId,
-        tags: patch.tags !== undefined ? uniqueTags(patch.tags) : record.tags ?? []
+        tags: patch.tags !== undefined ? uniqueTags(patch.tags) : record.tags ?? [],
+        tagColors: patch.tags !== undefined || patch.tagColors !== undefined ? normalizeTagColors(patch.tagColors ?? record.tagColors ?? {}, patch.tags ?? record.tags ?? []) : record.tagColors ?? {}
       },
       { data: nextData, updatedAt: stamp() }
     );
@@ -3427,6 +3433,7 @@ export class CrmStore {
         title: `Stage changed: ${previousStageKey ?? "none"} -> ${patch.stageKey ?? "none"}`,
         actorId: context.user.id,
         tags: [],
+        tagColors: {},
         createdAt: stamp()
       });
     }
@@ -3758,7 +3765,7 @@ export class CrmStore {
     return clone(activity);
   }
 
-  createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags"> & { tags?: string[] }): Activity {
+  createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags" | "tagColors"> & { tags?: string[]; tagColors?: Record<string, string> }): Activity {
     requirePermission(context, "crm.write");
     if (input.recordId) {
       const record = this.data.records.find((candidate) => candidate.id === input.recordId && candidate.workspaceId === context.workspaceId);
@@ -3766,11 +3773,13 @@ export class CrmStore {
         throw new Error("Record not found");
       }
     }
+    const tags = uniqueTags(input.tags ?? []);
     const activity: Activity = {
       ...input,
       id: createId("activity"),
       workspaceId: context.workspaceId,
-      tags: uniqueTags(input.tags ?? []),
+      tags,
+      tagColors: normalizeTagColors(input.tagColors ?? {}, tags),
       actorId: context.user.id,
       createdAt: stamp()
     };
@@ -3792,7 +3801,7 @@ export class CrmStore {
   updateActivity(
     context: RequestContext,
     activityId: string,
-    patch: Partial<Pick<Activity, "title" | "body" | "tags">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
+    patch: Partial<Pick<Activity, "title" | "body" | "tags" | "tagColors">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
   ): Activity {
     requirePermission(context, "crm.write");
     const activity = this.data.activities.find((candidate) => candidate.id === activityId && candidate.workspaceId === context.workspaceId);
@@ -3816,6 +3825,9 @@ export class CrmStore {
     }
     if (patch.tags !== undefined) {
       activity.tags = uniqueTags(patch.tags);
+    }
+    if (patch.tags !== undefined || patch.tagColors !== undefined) {
+      activity.tagColors = normalizeTagColors(patch.tagColors ?? activity.tagColors ?? {}, activity.tags ?? []);
     }
     if (patch.dueAt !== undefined) {
       activity.dueAt = patch.dueAt ?? undefined;
@@ -4413,6 +4425,7 @@ export class CrmStore {
             objectKey,
             title,
             tags,
+            tagColors: normalizeTagColors({}, tags),
             ownerId: context.user.id,
             data,
             createdAt: stamp(),
@@ -5599,6 +5612,18 @@ function uniqueTags(values: string[]): string[] {
     throw new Error("Tags must include at most 50 values");
   }
   return uniqueTags;
+}
+
+const allowedTagColors = new Set(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"]);
+
+function normalizeTagColors(values: Record<string, unknown>, tags: string[]): Record<string, string> {
+  const normalizedTags = uniqueTags(tags);
+  const colors: Record<string, string> = {};
+  for (const tag of normalizedTags) {
+    const color = values[tag];
+    colors[tag] = typeof color === "string" && allowedTagColors.has(color) ? color : "robin";
+  }
+  return colors;
 }
 
 function buildImportTemplateExampleRow(fields: FieldDefinition[]): Record<string, unknown> {

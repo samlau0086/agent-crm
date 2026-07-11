@@ -11,9 +11,10 @@ const idSchema = z.string().trim().min(1).max(200);
 const smartReminderIdSchema = idSchema.refine((value) => /[A-Za-z_-]/.test(value), "Use a real reminderId returned by crm_get_today_best_actions or crm_list_smart_reminders; do not invent numeric ids.");
 const optionalIdSchema = z.union([idSchema, z.literal(""), z.null()]).optional();
 const tagListSchema = z.array(z.string().trim().min(1).max(40).transform((tag) => tag.toLowerCase())).max(50).optional().transform((tags) => (tags ? Array.from(new Set(tags)) : undefined));
+const tagColorsSchema = z.record(z.enum(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"])).optional();
 const recordFilterSchema = z.object({ field: z.string().trim().min(1), operator: z.enum(["contains", "equals"]), value: z.string() }).strict();
 const recordSortSchema = z.object({ field: z.string().trim().min(1), direction: z.enum(["asc", "desc"]) }).strict();
-const recordWriteSchema = z.object({ objectKey: objectKeySchema, title: z.string().trim().min(1), data: z.record(z.unknown()), tags: tagListSchema, stageKey: optionalIdSchema, ownerId: optionalIdSchema }).strict();
+const recordWriteSchema = z.object({ objectKey: objectKeySchema, title: z.string().trim().min(1), data: z.record(z.unknown()), tags: tagListSchema, tagColors: tagColorsSchema, stageKey: optionalIdSchema, ownerId: optionalIdSchema }).strict();
 const changeReasonSchema = z.string().trim().min(1).max(1000).optional();
 const metadataKeySchema = z.string().trim().regex(/^[a-z][a-z0-9_]*$/);
 const fieldOptionSchema = z.object({ label: z.string().trim().min(1), value: z.string().trim().min(1) }).strict();
@@ -79,8 +80,8 @@ const schemas = {
   crm_delete_record: z.object({ objectKey: objectKeySchema, recordId: idSchema, changeReason: changeReasonSchema }).strict(),
   crm_transfer_record: z.object({ objectKey: objectKeySchema, recordId: idSchema, ownerId: z.union([idSchema, z.null()]).optional() }).strict(),
   crm_list_activities: activityListSchema,
-  crm_create_activity: z.object({ recordId: optionalIdSchema, type: z.enum(["note", "call", "meeting", "task", "email"]), title: z.string().trim().min(1), body: z.string().trim().optional(), tags: tagListSchema, dueAt: z.string().trim().min(1).optional(), completedAt: z.string().trim().min(1).optional() }).strict(),
-  crm_update_activity: z.object({ activityId: idSchema, title: z.string().trim().min(1).optional(), body: z.string().trim().optional(), tags: tagListSchema, dueAt: z.union([z.string().trim().min(1), z.null()]).optional(), completedAt: z.union([z.string().trim().min(1), z.null()]).optional(), archivedAt: z.union([z.string().trim().min(1), z.null()]).optional() }).strict(),
+  crm_create_activity: z.object({ recordId: optionalIdSchema, type: z.enum(["note", "call", "meeting", "task", "email"]), title: z.string().trim().min(1), body: z.string().trim().optional(), tags: tagListSchema, tagColors: tagColorsSchema, dueAt: z.string().trim().min(1).optional(), completedAt: z.string().trim().min(1).optional() }).strict(),
+  crm_update_activity: z.object({ activityId: idSchema, title: z.string().trim().min(1).optional(), body: z.string().trim().optional(), tags: tagListSchema, tagColors: tagColorsSchema, dueAt: z.union([z.string().trim().min(1), z.null()]).optional(), completedAt: z.union([z.string().trim().min(1), z.null()]).optional(), archivedAt: z.union([z.string().trim().min(1), z.null()]).optional() }).strict(),
   crm_complete_task: z.object({ activityId: idSchema }).strict(),
   crm_delete_activity: z.object({ activityId: idSchema, changeReason: changeReasonSchema }).strict(),
   crm_list_smart_reminders: z
@@ -266,11 +267,11 @@ async function dispatchTool(name: BaseCrmMcpToolName, args: z.infer<(typeof sche
     }
     case "crm_create_record": {
       const input = args as z.infer<typeof schemas.crm_create_record>;
-      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}`, stripUndefined({ title: input.title, data: input.data, tags: input.tags, stageKey: input.stageKey, ownerId: input.ownerId }));
+      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}`, stripUndefined({ title: input.title, data: input.data, tags: input.tags, tagColors: input.tagColors, stageKey: input.stageKey, ownerId: input.ownerId }));
     }
     case "crm_update_record": {
       const input = args as z.infer<typeof schemas.crm_update_record>;
-      return client.patch(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}`, stripUndefined({ title: input.title, data: input.data, tags: input.tags, stageKey: input.stageKey, ownerId: input.ownerId, changeReason: input.changeReason }));
+      return client.patch(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}`, stripUndefined({ title: input.title, data: input.data, tags: input.tags, tagColors: input.tagColors, stageKey: input.stageKey, ownerId: input.ownerId, changeReason: input.changeReason }));
     }
     case "crm_delete_record": {
       const input = args as z.infer<typeof schemas.crm_delete_record>;
