@@ -535,9 +535,8 @@ jobs:
             exit "$compose_up_code"
           fi
           docker compose ps
-          port="$(grep -E '^APP_PORT=' .env | sed -E "s/^APP_PORT='?([^']*)'?.*/\1/")"
           set +e
-          curl --fail --retry 30 --retry-delay 3 --retry-connrefused "http://127.0.0.1:${port:-3000}/api/health"
+          docker compose exec -T web node scripts/healthcheck.mjs
           health_code="$?"
           set -e
           if [ "$health_code" -ne 0 ]; then

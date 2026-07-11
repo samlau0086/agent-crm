@@ -2202,7 +2202,8 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /Postgres schema permission denied/);
   assert.match(workflow, /docker compose pull/);
   assert.match(workflow, /docker compose up -d --remove-orphans/);
-  assert.match(workflow, /curl --fail --retry 30/);
+  assert.match(workflow, /docker compose exec -T web node scripts\/healthcheck\.mjs/);
+  assert.doesNotMatch(workflow, /curl --fail --retry/);
   assert.match(workflow, /RUN_EMAIL_CONNECTION_TESTS/);
   assert.match(workflow, /RUN_EMAIL_AI_PROVIDER_TEST/);
   assert.match(workflow, /RUN_EMAIL_SMOKE_TEST/);
