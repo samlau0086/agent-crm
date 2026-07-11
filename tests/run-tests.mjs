@@ -2115,6 +2115,7 @@ await run("email verification report summarizes saved readiness json", async () 
 
 await run("github actions vps deployment publishes ghcr image and deploys compose under opt", () => {
   const workflow = readFileSync(".github/workflows/deploy-vps.yml", "utf8");
+  const remoteDeploy = readFileSync("deploy/vps-remote-deploy.sh", "utf8");
   const compose = readFileSync("deploy/docker-compose.vps.yml", "utf8");
   const envExample = readFileSync("deploy/vps.env.example", "utf8");
   const docs = readFileSync("docs/vps-github-actions-deploy.md", "utf8");
@@ -2196,31 +2197,33 @@ await run("github actions vps deployment publishes ghcr image and deploys compos
   assert.match(workflow, /NODE_ENV: production/);
   assert.match(workflow, /node scripts\/validate-env\.mjs --env-file vps\.env/);
   assert.match(workflow, /scp .*deploy\/docker-compose\.vps\.yml/);
-  assert.match(workflow, /if \[ "\$\{postgres_host:-postgres\}" != "postgres" \]; then/);
-  assert.match(workflow, /docker run --rm --add-host=host\.docker\.internal:host-gateway alpine:3\.20/);
-  assert.match(workflow, /nc -z -w 5/);
-  assert.match(workflow, /Postgres schema permission denied/);
-  assert.match(workflow, /docker compose pull/);
-  assert.match(workflow, /docker compose up -d --remove-orphans/);
-  assert.match(workflow, /docker compose exec -T web node scripts\/healthcheck\.mjs/);
-  assert.doesNotMatch(workflow, /curl --fail --retry/);
+  assert.match(workflow, /scp .*deploy\/vps-remote-deploy\.sh/);
+  assert.match(workflow, /sh '\$DEPLOY_PATH\/vps-remote-deploy\.sh'/);
+  assert.match(remoteDeploy, /if \[ "\$\{postgres_host:-postgres\}" != "postgres" \]; then/);
+  assert.match(remoteDeploy, /docker run --rm --add-host=host\.docker\.internal:host-gateway alpine:3\.20/);
+  assert.match(remoteDeploy, /nc -z -w 5/);
+  assert.match(remoteDeploy, /Postgres schema permission denied/);
+  assert.match(remoteDeploy, /docker compose pull/);
+  assert.match(remoteDeploy, /docker compose up -d --remove-orphans/);
+  assert.match(remoteDeploy, /docker compose exec -T web node scripts\/healthcheck\.mjs/);
+  assert.doesNotMatch(remoteDeploy, /curl --fail --retry/);
   assert.match(workflow, /RUN_EMAIL_CONNECTION_TESTS/);
   assert.match(workflow, /RUN_EMAIL_AI_PROVIDER_TEST/);
   assert.match(workflow, /RUN_EMAIL_SMOKE_TEST/);
   assert.match(workflow, /REQUIRE_LIVE_EMAIL_READINESS/);
-  assert.match(workflow, /\[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \] && email_verify_args="\$email_verify_args --require-live-readiness"/);
-  assert.match(workflow, /\[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \] \|\| \[ "\$\{RUN_EMAIL_CONNECTION_TESTS:-false\}" != "true" \]/);
-  assert.match(workflow, /--require-live-readiness/);
-  assert.match(workflow, /verify_stdout="\$\(mktemp\)"/);
-  assert.match(workflow, /verify_stderr="\$\(mktemp\)"/);
-  assert.match(workflow, /rm -f email-verify-last\.json email-verify-last-summary\.txt/);
-  assert.match(workflow, /scripts\/email-verify\.ts \$email_verify_args >"\$verify_stdout" 2>"\$verify_stderr"/);
-  assert.match(workflow, /cp "\$verify_stderr" email-verify-last-summary\.txt/);
-  assert.match(workflow, /chmod 600 email-verify-last-summary\.txt/);
-  assert.match(workflow, /cp "\$verify_stdout" email-verify-last\.json/);
-  assert.match(workflow, /chmod 600 email-verify-last\.json/);
-  assert.match(workflow, /cat "\$verify_stdout"/);
-  assert.match(workflow, /scripts\/email-verify\.ts \$email_verify_args/);
+  assert.match(remoteDeploy, /\[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \] && email_verify_args="\$email_verify_args --require-live-readiness"/);
+  assert.match(remoteDeploy, /\[ "\$\{REQUIRE_LIVE_EMAIL_READINESS:-false\}" = "true" \] \|\| \[ "\$\{RUN_EMAIL_CONNECTION_TESTS:-false\}" != "true" \]/);
+  assert.match(remoteDeploy, /--require-live-readiness/);
+  assert.match(remoteDeploy, /verify_stdout="\$\(mktemp\)"/);
+  assert.match(remoteDeploy, /verify_stderr="\$\(mktemp\)"/);
+  assert.match(remoteDeploy, /rm -f email-verify-last\.json email-verify-last-summary\.txt/);
+  assert.match(remoteDeploy, /scripts\/email-verify\.ts \$email_verify_args >"\$verify_stdout" 2>"\$verify_stderr"/);
+  assert.match(remoteDeploy, /cp "\$verify_stderr" email-verify-last-summary\.txt/);
+  assert.match(remoteDeploy, /chmod 600 email-verify-last-summary\.txt/);
+  assert.match(remoteDeploy, /cp "\$verify_stdout" email-verify-last\.json/);
+  assert.match(remoteDeploy, /chmod 600 email-verify-last\.json/);
+  assert.match(remoteDeploy, /cat "\$verify_stdout"/);
+  assert.match(remoteDeploy, /scripts\/email-verify\.ts \$email_verify_args/);
 
   assert.match(compose, /image: \$\{CRM_IMAGE:\?Set CRM_IMAGE\}/);
   assert.match(compose, /DATABASE_URL: \$\{DATABASE_URL:\?Set DATABASE_URL\}/);
@@ -3358,6 +3361,7 @@ await run("tag migration is idempotent and included in VPS failed-migration reco
   const recoveryScript = readFileSync("scripts/recover-known-failed-migrations.mjs", "utf8");
   const verifyScript = readFileSync("scripts/verify-crm-tags-schema.mjs", "utf8");
   const deployWorkflow = readFileSync(".github/workflows/deploy-vps.yml", "utf8");
+  const remoteDeploy = readFileSync("deploy/vps-remote-deploy.sh", "utf8");
 
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "tags"/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "tagColors"/);
@@ -3371,10 +3375,11 @@ await run("tag migration is idempotent and included in VPS failed-migration reco
   assert.match(recoveryScript, /20260711143000_ensure_record_activity_tags/);
   assert.match(verifyScript, /CrmRecord\.tagColors/);
   assert.match(verifyScript, /Activity\.tagColors/);
-  assert.match(deployWorkflow, /20260711130000_record_activity_tags/);
-  assert.match(deployWorkflow, /20260711143000_ensure_record_activity_tags/);
-  assert.match(deployWorkflow, /ADD COLUMN IF NOT EXISTS "tagColors"/);
-  assert.match(deployWorkflow, /verify-crm-tags-schema\.mjs/);
+  assert.match(deployWorkflow, /deploy\/vps-remote-deploy\.sh/);
+  assert.match(remoteDeploy, /20260711130000_record_activity_tags/);
+  assert.match(remoteDeploy, /20260711143000_ensure_record_activity_tags/);
+  assert.match(remoteDeploy, /ADD COLUMN IF NOT EXISTS "tagColors"/);
+  assert.match(remoteDeploy, /verify-crm-tags-schema\.mjs/);
 });
 
 await run("record create and detail panels render full width in the main content flow", () => {
