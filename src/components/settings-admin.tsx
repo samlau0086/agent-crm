@@ -4,15 +4,17 @@ import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBran
 import { useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
+import { isImageMediaAsset, MediaLibraryModal, mediaAssetDataUrl } from "@/components/media-library";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
 interface SettingsAdminProps {
+  currentUser: User;
   role: Role;
   objects: ObjectDefinition[];
   fields: FieldDefinition[];
@@ -29,6 +31,7 @@ interface SettingsAdminProps {
   notificationChannels: NotificationChannel[];
   emailAccounts: EmailAccount[];
   emailAiSettings: EmailAiSettings;
+  mediaAssets: MediaAsset[];
   knowledgeArticles: KnowledgeArticle[];
   knowledgeVectorSettings: KnowledgeVectorSettings;
   knowledgeVectorActionKey?: string | null;
@@ -43,6 +46,7 @@ interface SettingsAdminProps {
   workflows: WorkflowDefinition[];
   workflowRuns: WorkflowRun[];
   workflowApprovals: WorkflowActionApproval[];
+  onCurrentUserUpdated: (user: User) => void;
   onRecordsUpdated?: (records: CrmRecord[]) => void;
   onCustomerLevelSettingsUpdated?: (settings: CustomerLevelSettings) => void;
   onKnowledgeDraftChange: (draft: KnowledgeArticleDraft) => void;
@@ -52,6 +56,7 @@ interface SettingsAdminProps {
   onSaveKnowledgeVectorSettings: (patch: Partial<Omit<KnowledgeVectorSettings, "workspaceId" | "updatedAt">>) => void;
   onVectorizeKnowledgeArticle: (articleId: string) => void;
   onVectorizeKnowledge: () => void;
+  onUploadCurrentUserAvatarAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
 }
 
 type ObjectDraft = {
@@ -112,6 +117,17 @@ type UserDraft = {
   teamId: string;
   password: string;
   active: boolean;
+};
+
+type ProfileDraft = {
+  name: string;
+  avatarMediaAssetId: string;
+};
+
+type PasswordDraft = {
+  currentPassword: string;
+  newPassword: string;
+  newPasswordConfirm: string;
 };
 
 type TeamDraft = {
@@ -211,13 +227,14 @@ const fieldTypes: FieldDefinition["type"][] = [
   "reference"
 ];
 
-type SettingsTabKey = "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations";
+type SettingsTabKey = "profile" | "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations";
 type AiAgentConfigTabKey = "providers" | "agents" | "knowledge";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[]; providerProfiles: AiProviderProfile[] };
 type TagSelectOption = { value: string; label: string; description?: string };
 
 const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: string }> = [
+  { key: "profile", label: "个人资料", description: "头像、显示名称与登录密码" },
   { key: "access", label: "成员权限", description: "用户、团队、角色与权限矩阵" },
   { key: "crm", label: "CRM 配置", description: "对象、字段、关系、管道、视图与货币" },
   { key: "aiAgents", label: "AI Agents", description: "agent.md、模型、上下文、工具权限与测试运行" },
@@ -226,6 +243,7 @@ const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: str
 ];
 
 const settingsTabSlugs: Record<SettingsTabKey, string> = {
+  profile: "profile",
   access: "access",
   crm: "crm",
   pool: "pool",
@@ -300,6 +318,15 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [selectedRoleId, setSelectedRoleId] = useState("");
   const [selectedUserId, setSelectedUserId] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
+  const [profileDraft, setProfileDraft] = useState<ProfileDraft>(() => ({
+    name: props.currentUser.name,
+    avatarMediaAssetId: props.currentUser.avatarMediaAssetId ?? ""
+  }));
+  const [passwordDraft, setPasswordDraft] = useState<PasswordDraft>({
+    currentPassword: "",
+    newPassword: "",
+    newPasswordConfirm: ""
+  });
   const [objectDraft, setObjectDraft] = useState<ObjectDraft>(emptyObjectDraft());
   const [fieldDraft, setFieldDraft] = useState<FieldDraft>(emptyFieldDraft(props.objects[0]?.key ?? ""));
   const [relationDraft, setRelationDraft] = useState<RelationDraft>(emptyRelationDraft(props.objects[0]?.key ?? ""));
@@ -487,6 +514,13 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   useEffect(() => {
     setSelectedUserId((current) => (props.users.some((user) => user.id === current) ? current : props.users[0]?.id ?? ""));
   }, [props.users]);
+
+  useEffect(() => {
+    setProfileDraft({
+      name: props.currentUser.name,
+      avatarMediaAssetId: props.currentUser.avatarMediaAssetId ?? ""
+    });
+  }, [props.currentUser]);
 
   useEffect(() => {
     setSelectedTeamId((current) => (props.teams.some((team) => team.id === current) ? current : props.teams[0]?.id ?? ""));
@@ -812,6 +846,36 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       .finally(() => {
         setActionPending(false);
       });
+  }
+
+  async function saveCurrentUserProfile() {
+    const user = await fetchJson<User>("/api/users/me/profile", {
+      method: "PATCH",
+      body: {
+        name: profileDraft.name,
+        avatarMediaAssetId: profileDraft.avatarMediaAssetId || null
+      }
+    });
+    props.onCurrentUserUpdated(user);
+    setProfileDraft({
+      name: user.name,
+      avatarMediaAssetId: user.avatarMediaAssetId ?? ""
+    });
+    setMessage("个人资料已保存");
+  }
+
+  async function saveCurrentUserPassword() {
+    const user = await fetchJson<User>("/api/users/me/password", {
+      method: "PATCH",
+      body: passwordDraft
+    });
+    props.onCurrentUserUpdated(user);
+    setPasswordDraft({
+      currentPassword: "",
+      newPassword: "",
+      newPasswordConfirm: ""
+    });
+    setMessage("密码已更新，其他设备上的会话已失效");
   }
 
   async function runWebhookAction(actionKey: string, action: () => Promise<void>) {
@@ -1737,6 +1801,34 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   if (!canManage) {
     return (
+      <div className="settings-stack">
+        <section className="settings-tabs-shell" aria-label="设置分类">
+          <div className="settings-tab-list" role="tablist" aria-label="设置分类">
+            <button className="settings-tab-button active" type="button" role="tab" aria-selected="true">
+              <strong>个人资料</strong>
+              <span>头像、显示名称与登录密码</span>
+            </button>
+          </div>
+        </section>
+        <ProfileSettingsPanel
+          currentUser={props.currentUser}
+          role={props.role}
+          mediaAssets={props.mediaAssets}
+          profileDraft={profileDraft}
+          passwordDraft={passwordDraft}
+          isPending={isPending}
+          onProfileDraftChange={(patch) => setProfileDraft((current) => ({ ...current, ...patch }))}
+          onPasswordDraftChange={(patch) => setPasswordDraft((current) => ({ ...current, ...patch }))}
+          onSaveProfile={() => runAction(saveCurrentUserProfile)}
+          onSavePassword={() => runAction(saveCurrentUserPassword)}
+          onUploadAvatarAssets={props.onUploadCurrentUserAvatarAssets}
+        />
+      </div>
+    );
+  }
+
+  if (!canManage && activeSettingsTab !== "profile") {
+    return (
       <section className="settings-panel">
         <h2 className="page-title">管理员设置</h2>
         <div className="empty-state">当前账号没有 crm.admin 权限，不能配置对象、字段、关系、管道和视图。</div>
@@ -1778,6 +1870,22 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           </button>
         </div>
       </section>
+
+      {activeSettingsTab === "profile" ? (
+        <ProfileSettingsPanel
+          currentUser={props.currentUser}
+          role={props.role}
+          mediaAssets={props.mediaAssets}
+          profileDraft={profileDraft}
+          passwordDraft={passwordDraft}
+          isPending={isPending}
+          onProfileDraftChange={(patch) => setProfileDraft((current) => ({ ...current, ...patch }))}
+          onPasswordDraftChange={(patch) => setPasswordDraft((current) => ({ ...current, ...patch }))}
+          onSaveProfile={() => runAction(saveCurrentUserProfile)}
+          onSavePassword={() => runAction(saveCurrentUserPassword)}
+          onUploadAvatarAssets={props.onUploadCurrentUserAvatarAssets}
+        />
+      ) : null}
 
       {activeSettingsTab === "access" ? (
         <div className="settings-tab-panel" role="tabpanel">
@@ -3929,6 +4037,160 @@ function ConfirmDialog({
       </div>
     </div>
   );
+}
+
+function ProfileSettingsPanel({
+  currentUser,
+  role,
+  mediaAssets,
+  profileDraft,
+  passwordDraft,
+  isPending,
+  onProfileDraftChange,
+  onPasswordDraftChange,
+  onSaveProfile,
+  onSavePassword,
+  onUploadAvatarAssets
+}: {
+  currentUser: User;
+  role: Role;
+  mediaAssets: MediaAsset[];
+  profileDraft: ProfileDraft;
+  passwordDraft: PasswordDraft;
+  isPending: boolean;
+  onProfileDraftChange: (patch: Partial<ProfileDraft>) => void;
+  onPasswordDraftChange: (patch: Partial<PasswordDraft>) => void;
+  onSaveProfile: () => void;
+  onSavePassword: () => void;
+  onUploadAvatarAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+}) {
+  const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+  const avatarAsset = profileDraft.avatarMediaAssetId ? mediaAssets.find((asset) => asset.id === profileDraft.avatarMediaAssetId) : undefined;
+  const avatarUrl = avatarAsset ? mediaAssetDataUrl(avatarAsset) : "";
+  const passwordReady =
+    Boolean(passwordDraft.currentPassword) &&
+    passwordDraft.newPassword.length >= 8 &&
+    Boolean(passwordDraft.newPasswordConfirm) &&
+    passwordDraft.newPassword === passwordDraft.newPasswordConfirm;
+
+  return (
+    <div className="settings-tab-panel" role="tabpanel" data-testid="profile-settings-panel">
+      <section className="settings-panel profile-settings-panel">
+        <div className="settings-panel-header">
+          <div>
+            <h2 className="page-title">个人资料</h2>
+            <div className="subtle">管理你的头像、显示名称和登录密码。</div>
+          </div>
+        </div>
+        <div className="profile-settings-layout">
+          <div className="profile-avatar-block">
+            <button
+              className="profile-avatar-button"
+              type="button"
+              onClick={() => setMediaLibraryOpen(true)}
+              style={avatarUrl ? { backgroundImage: `url("${avatarUrl.replace(/"/g, "%22")}")` } : undefined}
+              aria-label="选择个人头像"
+            >
+              {avatarUrl ? null : profileInitials(profileDraft.name || currentUser.email)}
+            </button>
+            <div className="toolbar compact-toolbar">
+              <button className="secondary-button" type="button" onClick={() => setMediaLibraryOpen(true)} disabled={isPending}>
+                更换头像
+              </button>
+              {profileDraft.avatarMediaAssetId ? (
+                <button className="secondary-button" type="button" onClick={() => onProfileDraftChange({ avatarMediaAssetId: "" })} disabled={isPending}>
+                  <XCircle size={15} />
+                  清除
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <div className="profile-form-stack">
+            <div className="form-grid">
+              <label>
+                <span className="subtle">显示名称</span>
+                <input className="input" data-testid="profile-name-input" value={profileDraft.name} onChange={(event) => onProfileDraftChange({ name: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">邮箱</span>
+                <input className="input" value={currentUser.email} readOnly />
+              </label>
+              <label>
+                <span className="subtle">角色</span>
+                <input className="input" value={role.name} readOnly />
+              </label>
+            </div>
+            <div className="toolbar">
+              <button className="primary-button" data-testid="profile-save" type="button" onClick={onSaveProfile} disabled={isPending || !profileDraft.name.trim()}>
+                <Save size={16} />
+                保存资料
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-panel profile-password-panel">
+        <div className="settings-panel-header">
+          <div>
+            <h2 className="page-title">修改密码</h2>
+            <div className="subtle">修改后当前登录保持有效，其他设备上的会话会失效。</div>
+          </div>
+        </div>
+        <div className="form-grid">
+          <label>
+            <span className="subtle">当前密码</span>
+            <input className="input" data-testid="profile-current-password" type="password" value={passwordDraft.currentPassword} onChange={(event) => onPasswordDraftChange({ currentPassword: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">新密码</span>
+            <input className="input" data-testid="profile-new-password" type="password" value={passwordDraft.newPassword} onChange={(event) => onPasswordDraftChange({ newPassword: event.target.value })} />
+          </label>
+          <label>
+            <span className="subtle">确认新密码</span>
+            <input className="input" data-testid="profile-new-password-confirm" type="password" value={passwordDraft.newPasswordConfirm} onChange={(event) => onPasswordDraftChange({ newPasswordConfirm: event.target.value })} />
+          </label>
+        </div>
+        <div className="toolbar" style={{ marginTop: 12 }}>
+          <button className="primary-button" data-testid="profile-password-save" type="button" onClick={onSavePassword} disabled={isPending || !passwordReady}>
+            <Save size={16} />
+            更新密码
+          </button>
+        </div>
+      </section>
+
+      {mediaLibraryOpen ? (
+        <MediaLibraryModal
+          accept="image/*"
+          canSelectAsset={isImageMediaAsset}
+          description="选择图片作为个人头像，也可拖拽上传新图片。"
+          mediaAssets={mediaAssets}
+          onClose={() => setMediaLibraryOpen(false)}
+          onSelect={(asset) => {
+            onProfileDraftChange({ avatarMediaAssetId: asset.id });
+            setMediaLibraryOpen(false);
+          }}
+          onUploadMediaAssets={onUploadAvatarAssets}
+          selectFirstUploaded
+          selectLabel="使用"
+          testId="profile-avatar-media-library-modal"
+          title="头像媒体库"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function profileInitials(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return "?";
+  }
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
+  }
+  return trimmed.slice(0, 2).toUpperCase();
 }
 
 function UserTeamAdminPanel({

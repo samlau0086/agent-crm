@@ -66,6 +66,7 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
         filters: [{ field: "email", operator: "contains", value: "@example.com" }],
         sort: { field: "updatedAt", direction: "desc" },
         fields: ["email", "phone"],
+        tags: ["vip", "north"],
         pool: "all"
       },
       client
@@ -80,6 +81,7 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.equal(url.searchParams.get("sortField"), "updatedAt");
     assert.equal(url.searchParams.get("sortDirection"), "desc");
     assert.equal(url.searchParams.get("fields"), "email,phone");
+    assert.equal(url.searchParams.get("tags"), "vip,north");
     assert.equal(url.searchParams.get("pool"), "all");
   });
 
@@ -107,6 +109,26 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.deepEqual(result.structuredContent, { pendingApproval: true, request: { id: "approval-1" }, record: { id: "contact-1" } });
   });
 
+  await run("mcp record and activity tools pass tags in write bodies", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    await executeCrmMcpTool("crm_create_record", { objectKey: "contacts", title: "Tagged", data: {}, tags: ["VIP", "vip"] }, client);
+    await executeCrmMcpTool("crm_create_activity", { type: "task", title: "Tagged task", tags: ["follow-up"] }, client);
+    await executeCrmMcpTool("crm_update_activity", { activityId: "activity-1", tags: ["done"] }, client);
+
+    assert.deepEqual(JSON.parse(String(requests[0].init.body)), { title: "Tagged", data: {}, tags: ["vip"] });
+    assert.deepEqual(JSON.parse(String(requests[1].init.body)), { type: "task", title: "Tagged task", tags: ["follow-up"] });
+    assert.deepEqual(JSON.parse(String(requests[2].init.body)), { tags: ["done"] });
+  });
+
   await run("mcp activity list tool passes task filters", async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const client = new CrmMcpClient({
@@ -124,6 +146,7 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
         type: "task",
         completed: false,
         archived: false,
+        tags: ["follow-up"],
         dueFrom: "2026-07-10T00:00:00.000+08:00",
         dueTo: "2026-07-10T23:59:59.999+08:00"
       },
@@ -136,6 +159,7 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.equal(url.searchParams.get("type"), "task");
     assert.equal(url.searchParams.get("completed"), "false");
     assert.equal(url.searchParams.get("archived"), "false");
+    assert.equal(url.searchParams.get("tags"), "follow-up");
     assert.equal(url.searchParams.get("dueFrom"), "2026-07-10T00:00:00.000+08:00");
     assert.equal(url.searchParams.get("dueTo"), "2026-07-10T23:59:59.999+08:00");
   });

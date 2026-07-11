@@ -47,6 +47,7 @@ export interface User {
   workspaceId: string;
   email: string;
   name: string;
+  avatarMediaAssetId?: string;
   roleId: string;
   teamId?: string;
   emailListDisplayMode: "thread" | "message";
@@ -567,9 +568,9 @@ export interface RecordChangeRequest {
   requestedById: string;
   reviewedById?: string;
   reviewNote?: string;
-  patch?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">> & {
-    previous?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>;
-    activity?: Partial<Pick<Activity, "recordId" | "type" | "title" | "body" | "dueAt" | "completedAt" | "archivedAt" | "createdAt">>;
+  patch?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">> & {
+    previous?: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>;
+    activity?: Partial<Pick<Activity, "recordId" | "type" | "title" | "body" | "tags" | "dueAt" | "completedAt" | "archivedAt" | "createdAt">>;
     smartReminder?: Partial<
       Pick<SmartReminder, "kind" | "priority" | "title" | "body" | "actionLabel" | "dueAt" | "status" | "snoozedUntil" | "sources" | "createdAt">
     >;
@@ -753,6 +754,7 @@ export interface CrmRecord {
   title: string;
   stageKey?: string;
   ownerId?: string;
+  tags: string[];
   data: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -817,6 +819,7 @@ export interface RecordListQuery {
   keyset?: boolean;
   fields?: string[];
   pool?: RecordPool;
+  tags?: string[];
 }
 
 export interface RecordListResult {
@@ -1137,6 +1140,7 @@ export interface Activity {
   type: ActivityType;
   title: string;
   body?: string;
+  tags: string[];
   actorId?: string;
   dueAt?: string;
   completedAt?: string;
@@ -1151,6 +1155,7 @@ export interface ActivityListQuery {
   archived?: boolean;
   dueFrom?: string;
   dueTo?: string;
+  tags?: string[];
 }
 
 export interface AuditLog {

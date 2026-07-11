@@ -22,11 +22,15 @@ import { describePermission, permissionCatalog } from "../src/lib/auth/permissio
 import { crmPathForNav, resolveCrmRoute } from "../src/lib/crm/navigation.ts";
 import {
   activityUpdateSchema,
+  activityCreateSchema,
   aiTalkRequestSchema,
   customerLevelChangeRequestSchema,
   customerLevelSettingsUpdateSchema,
   customerLevelSuggestionGenerateSchema,
   csvImportSchema,
+  currentUserAvatarMediaAssetCreateSchema,
+  currentUserPasswordUpdateSchema,
+  currentUserProfileUpdateSchema,
   emailAccountCreateSchema,
   emailAccountUpdateSchema,
   emailAiGenerateSchema,
@@ -49,6 +53,7 @@ import {
   MAX_SAVED_VIEW_FILTERS,
   poolSettingsUpdateSchema,
   recordDeleteRequestSchema,
+  recordWriteSchema,
   recordPatchWithReasonSchema,
   savedViewCreateSchema,
   workflowCreateSchema
@@ -1959,6 +1964,16 @@ await run("activity update schema accepts task archive state", () => {
   assert.throws(() => activityUpdateSchema.parse({ archivedAt: "" }), z.ZodError);
 });
 
+await run("crm tag schemas normalize validate and dedupe values", () => {
+  assert.deepEqual(recordWriteSchema.parse({ title: "Tagged", data: {}, tags: [" VIP ", "vip", "重点"] }).tags, ["vip", "重点"]);
+  assert.deepEqual(activityCreateSchema.parse({ type: "task", title: "Tagged task", tags: [" Follow-Up ", "follow-up"] }).tags, ["follow-up"]);
+  assert.throws(() => recordWriteSchema.parse({ title: "Too long", data: {}, tags: ["x".repeat(41)] }), z.ZodError);
+  assert.throws(
+    () => recordWriteSchema.parse({ title: "Too many", data: {}, tags: Array.from({ length: 51 }, (_, index) => `tag-${index}`) }),
+    z.ZodError
+  );
+});
+
 await run("next production build defaults to standard output with guarded artifact checks", () => {
   const config = readFileSync("next.config.mjs", "utf8");
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
@@ -2600,6 +2615,7 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
 
 await run("email workspace treats queued sync as background work and polls for imported mail", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const mediaLibrary = readFileSync("src/components/media-library.tsx", "utf8");
   assert.match(source, /result\.status === "queued"/);
   assert.match(source, /lastSyncStatus:\s*"running"/);
   assert.match(source, /accountActionKey === `sync:\$\{account\.id\}`/);
@@ -2824,7 +2840,7 @@ await run("settings admin groups configuration panels by tabs", () => {
   const source = readFileSync("src/components/settings-admin.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /type SettingsTabKey = "access" \| "crm" \| "pool" \| "smartReminders" \| "aiAgents" \| "workflows" \| "integrations" \| "operations"/);
+  assert.match(source, /type SettingsTabKey = "profile" \| "access" \| "crm" \| "pool" \| "smartReminders" \| "aiAgents" \| "workflows" \| "integrations" \| "operations"/);
   assert.match(source, /const settingsTabs/);
   assert.match(source, /AI Agents/);
   assert.match(source, /type AiAgentConfigTabKey = "providers" \| "agents" \| "knowledge"/);
@@ -4162,6 +4178,7 @@ await run("media library stores reusable images for product main images and emai
   const store = readFileSync("src/lib/crm/store.ts", "utf8");
   const page = readFileSync("src/app/crm-page.tsx", "utf8");
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const mediaLibrary = readFileSync("src/components/media-library.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(schema, /model MediaAsset/);
   assert.match(migration, /CREATE TABLE "MediaAsset"/);
@@ -4182,22 +4199,23 @@ await run("media library stores reusable images for product main images and emai
   assert.match(source, /async function deleteMediaAsset/);
   assert.match(source, /function MediaImageFieldInput/);
   assert.match(source, /field\.objectKey === "products" && field\.key === "mainImageUrl"/);
-  assert.match(source, /function MediaLibraryModal/);
-  assert.match(source, /canSelectAsset\?: \(asset: MediaAsset\) => boolean/);
-  assert.match(source, /function MediaAssetPreview/);
+  assert.match(source, /import \{ MediaAssetPreview, MediaLibraryModal \} from "@\/components\/media-library"/);
+  assert.match(mediaLibrary, /function MediaLibraryModal/);
+  assert.match(mediaLibrary, /canSelectAsset\?: \(asset: MediaAsset\) => boolean/);
+  assert.match(mediaLibrary, /function MediaAssetPreview/);
   assert.match(source, /function isImageMediaAsset/);
   assert.match(source, /testId="email-media-library-modal"/);
   assert.match(source, /testId=\{testId \? `\$\{testId\}-media-library-modal` : "record-media-library-modal"\}/);
   assert.match(source, /function insertMediaAssetInline\(asset: MediaAsset\)/);
-  assert.match(source, /data-testid=\{`media-asset-edit-\$\{asset\.id\}`\}/);
-  assert.match(source, /data-testid=\{`media-asset-delete-\$\{asset\.id\}`\}/);
-  assert.match(source, /function saveEditingAssetName/);
-  assert.match(source, /function replaceEditingAsset/);
-  assert.match(source, /onDrop=\{\(event\) => \{/);
+  assert.match(mediaLibrary, /data-testid=\{`media-asset-edit-\$\{asset\.id\}`\}/);
+  assert.match(mediaLibrary, /data-testid=\{`media-asset-delete-\$\{asset\.id\}`\}/);
+  assert.match(mediaLibrary, /function saveEditingAssetName/);
+  assert.match(mediaLibrary, /function replaceEditingAsset/);
+  assert.match(mediaLibrary, /onDrop=\{\(event\) => \{/);
   assert.match(source, /selectFirstUploaded/);
   assert.match(source, /onDeleteMediaAsset=\{\(asset\) => \{ void runImmediateAction\(\(\) => deleteMediaAsset\(asset\)\); \}\}/);
   assert.match(source, /onUpdateMediaAsset=\{\(assetId, patch\) => runAction\(\(\) => updateMediaAsset\(assetId, patch\)\)\}/);
-  assert.match(source, /event\.stopPropagation\(\);[\s\S]*onDeleteMediaAsset\?\.\(asset\)/);
+  assert.match(mediaLibrary, /event\.stopPropagation\(\);[\s\S]*onDeleteMediaAsset\?\.\(asset\)/);
   assert.match(styles, /\.media-library-grid/);
   assert.match(styles, /\.media-library-card/);
   assert.match(styles, /\.media-library-select/);
@@ -4292,6 +4310,46 @@ await run("quick contact actions open follow-up dialogs and save timeline activi
   assert.match(source, /<ActivityTimeline[\s\S]*testIdPrefix="record-activity"/);
   assert.match(source, /<span className="subtle"> - \{formatDateTimeSeconds\(activity\.createdAt\)\}<\/span>/);
   assert.match(source, /Associated with <span>\{linkedRecord\.title\}<\/span>/);
+});
+
+await run("current user profile settings support avatar name and password updates", () => {
+  assert.deepEqual(currentUserProfileUpdateSchema.parse({ name: "Sam", avatarMediaAssetId: "" }), { name: "Sam", avatarMediaAssetId: "" });
+  assert.throws(() => currentUserProfileUpdateSchema.parse({}), z.ZodError);
+  assert.equal(currentUserPasswordUpdateSchema.parse({ currentPassword: "old-password", newPassword: "new-password", newPasswordConfirm: "new-password" }).newPassword, "new-password");
+  assert.throws(() => currentUserPasswordUpdateSchema.parse({ currentPassword: "old", newPassword: "new-password", newPasswordConfirm: "mismatch" }), z.ZodError);
+  assert.equal(currentUserAvatarMediaAssetCreateSchema.parse({ name: "avatar.png", contentType: "image/png", size: 4, contentBase64: "dGVzdA==" }).contentType, "image/png");
+  assert.throws(() => currentUserAvatarMediaAssetCreateSchema.parse({ name: "file.txt", contentType: "text/plain", size: 4, contentBase64: "dGVzdA==" }), z.ZodError);
+
+  const schema = readFileSync("prisma/schema.prisma", "utf8");
+  const migration = readFileSync("prisma/migrations/20260711110000_user_profile_avatar/migration.sql", "utf8");
+  const types = readFileSync("src/lib/crm/types.ts", "utf8");
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+  const profileRoute = readFileSync("src/app/api/users/me/profile/route.ts", "utf8");
+  const passwordRoute = readFileSync("src/app/api/users/me/password/route.ts", "utf8");
+  const avatarRoute = readFileSync("src/app/api/users/me/avatar-assets/route.ts", "utf8");
+  const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+  const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const page = readFileSync("src/app/crm-page.tsx", "utf8");
+  assert.match(schema, /avatarMediaAssetId\s+String\?/);
+  assert.match(schema, /avatarMediaAsset\s+MediaAsset\?/);
+  assert.match(migration, /"avatarMediaAssetId" TEXT/);
+  assert.match(types, /avatarMediaAssetId\?: string/);
+  assert.match(repository, /async updateCurrentUserProfile/);
+  assert.match(repository, /asset\.contentType\.toLowerCase\(\)\.startsWith\("image\/"\)/);
+  assert.match(repository, /async updateCurrentUserPassword/);
+  assert.match(repository, /verifyPassword\(input\.currentPassword/);
+  assert.match(repository, /destroyOtherSessionsForUser/);
+  assert.match(repository, /async createCurrentUserAvatarMediaAsset/);
+  assert.match(profileRoute, /PATCH \/api\/users\/me\/profile/);
+  assert.match(passwordRoute, /SESSION_COOKIE_NAME/);
+  assert.match(avatarRoute, /currentUserAvatarMediaAssetCreateSchema/);
+  assert.match(settings, /function ProfileSettingsPanel/);
+  assert.match(settings, /data-testid="profile-settings-panel"/);
+  assert.match(settings, /data-testid="profile-password-save"/);
+  assert.match(workspace, /className="user-strip-profile"/);
+  assert.match(workspace, /router\.push\("\/settings\/profile"\)/);
+  assert.match(workspace, /uploadCurrentUserAvatarAssets/);
+  assert.match(page, /currentUserAvatarAsset/);
 });
 
 await run("client date rendering stays deterministic during hydration", () => {
@@ -9319,6 +9377,31 @@ await run("record list query filters searches sorts and paginates records", () =
   );
 });
 
+await run("record tags can be created searched filtered sorted and exported", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const tagged = store.createRecord(context, "contacts", {
+    title: "Tagged Alpha",
+    tags: [" VIP ", "vip", "North"],
+    data: { email: "tagged-alpha@example.com" }
+  });
+  store.createRecord(context, "contacts", { title: "Plain Beta", tags: ["south"], data: { email: "plain-beta@example.com" } });
+
+  assert.deepEqual(tagged.tags, ["vip", "north"]);
+  assert.deepEqual(store.queryRecords(context, "contacts", { q: "north" }).records.map((record) => record.id), [tagged.id]);
+  assert.deepEqual(store.queryRecords(context, "contacts", { tags: ["vip"] }).records.map((record) => record.id), [tagged.id]);
+  assert.deepEqual(
+    store.queryRecords(context, "contacts", { filters: [{ field: "tags", operator: "contains", value: "nor" }] }).records.map((record) => record.id),
+    [tagged.id]
+  );
+  assert.deepEqual(
+    store.queryRecords(context, "contacts", { sort: { field: "tags", direction: "asc" }, pageSize: 10 }).records.some((record) => record.id === tagged.id),
+    true
+  );
+  assert.match(store.exportRecordsCsv(context, "contacts", { tags: ["vip"] }), /^id,title,tags,stageKey,ownerId,createdAt,updatedAt/m);
+  assert.match(store.exportRecordsCsv(context, "contacts", { tags: ["vip"] }), /vip; north/);
+});
+
 await run("record list query normalizes unsafe pagination values at the store boundary", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
@@ -9408,7 +9491,7 @@ await run("record csv export uses filters and RBAC visibility", () => {
   const filteredCsv = store.exportRecordsCsv(adminContext, "contacts", { q: "Export Owned" });
   const salesCsv = store.exportRecordsCsv(salesContext, "contacts", { q: "Export" });
 
-  assert.match(filteredCsv, /^id,title,stageKey,ownerId,createdAt,updatedAt,email,phone/m);
+  assert.match(filteredCsv, /^id,title,tags,stageKey,ownerId,createdAt,updatedAt,email,phone/m);
   assert.match(filteredCsv, /contact-export-owned,Export Owned/);
   assert.match(filteredCsv, /"139,quoted"/);
   assert.doesNotMatch(filteredCsv, /contact-export-hidden/);
@@ -9421,9 +9504,29 @@ await run("csv import template exports object field headers and examples", () =>
   const context = store.getContext("user-admin");
   const csv = store.exportImportTemplateCsv(context, "contacts");
 
-  assert.match(csv, /^title,email,phone,companyId/m);
+  assert.match(csv, /^title,tags,email,phone,companyId/m);
   assert.match(csv, /Example record/);
   assert.throws(() => store.exportImportTemplateCsv(store.getContext("user-sales"), "contacts"), /crm\.import/);
+});
+
+await run("csv import maps record tags and task queries filter tags", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const importResult = store.importCsv(context, "contacts", "title,tags,email\nTagged Import,\"VIP; Import\",tag-import@example.com");
+  const imported = importResult.created[0];
+  assert.deepEqual(imported.tags, ["vip", "import"]);
+
+  const task = store.createActivity(context, {
+    recordId: imported.id,
+    type: "task",
+    title: "Tagged task",
+    tags: ["Follow-Up", "vip"]
+  });
+  assert.deepEqual(task.tags, ["follow-up", "vip"]);
+  assert.deepEqual(store.listActivities(context, { type: "task", tags: ["follow-up"] }).map((activity) => activity.id), [task.id]);
+
+  const updated = store.updateActivity(context, task.id, { tags: ["done"] });
+  assert.deepEqual(updated.tags, ["done"]);
 });
 
 await run("csv import field guide exports validation metadata", () => {

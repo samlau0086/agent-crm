@@ -18,7 +18,8 @@ export function parseRecordListQuery(request: NextRequest): RecordListQuery {
     cursor: normalizeCursor(searchParams.get("cursor")),
     keyset: searchParams.get("keyset") === "1" || searchParams.get("pagination") === "keyset",
     fields: parseFields(searchParams.get("fields")),
-    pool: parsePool(searchParams.get("pool"))
+    pool: parsePool(searchParams.get("pool")),
+    tags: parseTags(searchParams.get("tags"))
   };
 }
 
@@ -64,4 +65,15 @@ function parsePool(value: string | null): RecordListQuery["pool"] {
     return value;
   }
   return undefined;
+}
+
+function parseTags(value: string | null): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const tags = value
+    .split(/[,;\uFF1B\uFF0C]/)
+    .map((tag) => tag.trim().toLowerCase())
+    .filter(Boolean);
+  return tags.length > 0 ? Array.from(new Set(tags)).slice(0, 50) : undefined;
 }

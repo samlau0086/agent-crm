@@ -1,6 +1,6 @@
 import type { CrmRecord, RecordChangeRequest } from "@/lib/crm/types";
 
-export type RecordApprovalPatch = Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>;
+export type RecordApprovalPatch = Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>;
 
 export function splitRecordApprovalPatch(record: CrmRecord, patch: RecordApprovalPatch): {
   approvalPatch: RecordApprovalPatch;
@@ -14,6 +14,7 @@ export function splitRecordApprovalPatch(record: CrmRecord, patch: RecordApprova
   splitScalarApprovalValue("title", record.title, patch.title, approvalPatch, immediatePatch, previousPatch);
   splitScalarApprovalValue("stageKey", record.stageKey, patch.stageKey, approvalPatch, immediatePatch, previousPatch);
   splitScalarApprovalValue("ownerId", record.ownerId, patch.ownerId, approvalPatch, immediatePatch, previousPatch);
+  splitArrayApprovalValue("tags", record.tags, patch.tags, approvalPatch, immediatePatch, previousPatch);
 
   const approvalData: Record<string, unknown> = {};
   const immediateData: Record<string, unknown> = {};
@@ -67,6 +68,7 @@ export function hasRecordPatchChanges(patch: RecordApprovalPatch | undefined): b
     Object.prototype.hasOwnProperty.call(patch, "title") ||
     Object.prototype.hasOwnProperty.call(patch, "stageKey") ||
     Object.prototype.hasOwnProperty.call(patch, "ownerId") ||
+    Object.prototype.hasOwnProperty.call(patch, "tags") ||
     (isApprovalRecord(patch.data) && Object.keys(patch.data).length > 0)
   );
 }
@@ -126,6 +128,21 @@ function splitScalarApprovalValue(
   }
   approvalPatch[key] = nextValue as string | undefined;
   previousPatch[key] = previousValue as string | undefined;
+}
+
+function splitArrayApprovalValue(
+  key: "tags",
+  previousValue: unknown,
+  nextValue: unknown,
+  approvalPatch: RecordApprovalPatch,
+  immediatePatch: RecordApprovalPatch,
+  previousPatch: RecordApprovalPatch
+): void {
+  if (nextValue === undefined || approvalValueKey(previousValue) === approvalValueKey(nextValue)) {
+    return;
+  }
+  approvalPatch[key] = Array.isArray(nextValue) ? nextValue.filter((item): item is string => typeof item === "string") : [];
+  previousPatch[key] = Array.isArray(previousValue) ? previousValue.filter((item): item is string => typeof item === "string") : [];
 }
 
 function approvalValueKey(value: unknown): string {

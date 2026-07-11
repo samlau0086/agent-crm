@@ -62,6 +62,7 @@ model User {
   email               String
   name                String
   passwordHash        String
+  avatarMediaAssetId  String?
   roleId              String?
   teamId              String?
   emailListDisplayMode String              @default("thread")
@@ -70,6 +71,7 @@ model User {
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   workspace           Workspace            @relation(fields: [workspaceId], references: [id])
+  avatarMediaAsset    MediaAsset?          @relation("UserAvatarMediaAsset", fields: [avatarMediaAssetId], references: [id], onDelete: SetNull)
   role                Role?                @relation(fields: [roleId], references: [id])
   team                Team?                @relation(fields: [teamId], references: [id])
   sessions            Session[]
@@ -85,6 +87,7 @@ model User {
   smartReminderRuns   SmartReminderRun[]
 
   @@unique([workspaceId, email])
+  @@index([workspaceId, avatarMediaAssetId])
   @@index([workspaceId, teamId])
   @@index([workspaceId, roleId])
   @@index([workspaceId, active])
@@ -173,6 +176,7 @@ model CrmRecord {
   title       String
   stageKey    String?
   ownerId     String?
+  tags        String[]   @default([])
   data        Json
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -207,6 +211,7 @@ model Activity {
   type        String
   title       String
   body        String?
+  tags        String[]   @default([])
   actorId     String?
   dueAt       DateTime?
   completedAt DateTime?
@@ -886,6 +891,7 @@ model MediaAsset {
   updatedAt     DateTime  @updatedAt
   workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy     User      @relation(fields: [createdById], references: [id])
+  avatarUsers   User[]    @relation("UserAvatarMediaAsset")
 
   @@index([workspaceId, createdAt])
   @@index([workspaceId, contentType])

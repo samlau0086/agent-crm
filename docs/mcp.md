@@ -105,3 +105,13 @@ v1 MCP server 有意不暴露以下高风险能力：
 - 直接连接数据库或绕过 CRM REST API。
 
 所有写操作都依赖远程 CRM 的 API key 权限。对于联系人、公司、交易等触发审批的记录变更，MCP 只返回审批状态，不会绕过现有审批流。
+
+## Tags
+
+MCP tools support CRM tags on records and tasks:
+
+- `crm_search_records` and `crm_list_contacts` accept `tags?: string[]`; the MCP client sends them to REST as a comma-separated `tags` query parameter.
+- `crm_create_record` and `crm_update_record` accept `tags?: string[]`.
+- `crm_list_activities`, `crm_create_activity`, and `crm_update_activity` accept `tags?: string[]`.
+- Tags are normalized to lowercase, trimmed, de-duplicated, capped at 50 unique values, and each tag is capped at 40 characters.
+- For contacts, companies, and deals, tag updates use the same approval response behavior as other protected record edits.

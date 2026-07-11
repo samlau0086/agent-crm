@@ -27,6 +27,19 @@ CSV import payloads and metadata-heavy configuration endpoints also enforce stru
 
 Large imports should be split into smaller files so validation errors stay readable and retries remain cheap.
 
+## CRM Tags
+
+CRM records and tasks support free-form `tags`.
+
+- Record create/update payloads accept `tags?: string[]` for contacts, companies, deals, products, quotes, and other CRM objects.
+- Activity create/update payloads accept `tags?: string[]`; the product UI currently exposes this for tasks.
+- Tags are normalized by trimming whitespace, lowercasing, removing empty values, and de-duplicating. A payload may include at most `50` unique tags, and each tag may contain at most `40` characters.
+- Record list `q` search matches record title, record data, and tags.
+- Record list filters can use `field: "tags"` with `operator: "equals"` for exact tag membership or `operator: "contains"` for substring matching within any tag.
+- Record and activity list endpoints accept a `tags` query parameter. Pass comma- or semicolon-separated values, for example `?tags=vip;renewal`; all listed tags must be present.
+- CSV record export includes a `tags` column joined with `; `. CSV import and templates recognize the same `tags` column.
+- Contact, company, and deal tag changes follow the existing record-change approval flow. Other objects save tag changes directly according to their normal permissions.
+
 ## Email And AI Mail
 
 Email endpoints follow the same workspace, RBAC, and audit rules as the rest of the CRM API. Browser sessions and Bearer API keys can call these endpoints when the credential has the required permission.

@@ -44,7 +44,12 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
   const recordChangeRequests = await repository.listRecordChangeRequests(context, "pending");
   const knowledgeArticles = await repository.listKnowledgeArticles(context);
   const knowledgeVectorSettings = await repository.getKnowledgeVectorSettings(context);
-  const mediaAssets = await repository.listMediaAssets(context);
+  const listedMediaAssets = await repository.listMediaAssets(context);
+  const currentUserAvatarAsset =
+    context.user.avatarMediaAssetId && !listedMediaAssets.some((asset) => asset.id === context.user.avatarMediaAssetId)
+      ? await repository.getMediaAsset(context, context.user.avatarMediaAssetId).catch(() => undefined)
+      : undefined;
+  const mediaAssets = currentUserAvatarAsset ? [currentUserAvatarAsset, ...listedMediaAssets] : listedMediaAssets;
   const dashboardSummary = await repository.getDashboardSummary(context);
   const auditLogs = context.role.permissions.includes("crm.admin") ? await repository.listAuditLogs(context) : [];
   const backupFiles = context.role.permissions.includes("crm.admin") ? await listBackupFiles() : [];

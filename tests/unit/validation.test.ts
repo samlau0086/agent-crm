@@ -36,6 +36,7 @@ describe("field validation", () => {
           workspaceId: "workspace-private",
           objectKey: "contacts",
           title: "Lin Xiao",
+          tags: [],
           data: { email: "lin@example.com" },
           createdAt: "2026-06-17T00:00:00.000Z",
           updatedAt: "2026-06-17T00:00:00.000Z"

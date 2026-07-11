@@ -26,6 +26,7 @@ import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
 import type {
   Activity,
+  ActivityListQuery,
   ApiKey,
   AuditAction,
   AuditLog,
@@ -1964,10 +1965,11 @@ export class CrmStore {
       payload.fields = fields.map((field) => ({ key: field.key, label: field.label, type: field.type }));
       payload.activities = activities.slice(0, 12).map((activity) => ({
         id: activity.id,
-        type: activity.type,
-        title: activity.title,
-        body: activity.body,
-        dueAt: activity.dueAt,
+            type: activity.type,
+            title: activity.title,
+            body: activity.body,
+            tags: activity.tags,
+            dueAt: activity.dueAt,
         completedAt: activity.completedAt,
         createdAt: activity.createdAt
       }));
@@ -3271,8 +3273,10 @@ export class CrmStore {
     const page = normalizePage(query.page);
     const pageSize = normalizePageSize(query.pageSize, { defaultSize: RECORD_DEFAULT_PAGE_SIZE, maxSize: RECORD_MAX_PAGE_SIZE });
     const view = buildQueryView(context.workspaceId, objectKey, query);
+    const queryTags = uniqueTags(query.tags ?? []);
     const sorted = this.listRecords(context, objectKey)
       .filter((record) => this.matchesRecordPool(context, record, query.pool))
+      .filter((record) => queryTags.every((tag) => (record.tags ?? []).includes(tag)))
       .filter((record) => matchesSavedView(record, view))
       .filter((record) => matchesRecordSearch(record, query.q))
       .sort((left, right) => (query.sort ? compareRecords(left, right, query.sort) : right.updatedAt.localeCompare(left.updatedAt)));
@@ -3296,12 +3300,13 @@ export class CrmStore {
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
     const result = this.queryRecords(context, objectKey, { ...query, page: 1, pageSize: 200 });
-    const headers = ["id", "title", "stageKey", "ownerId", "createdAt", "updatedAt", ...fields.map((field) => field.key)];
+    const headers = ["id", "title", "tags", "stageKey", "ownerId", "createdAt", "updatedAt", ...fields.map((field) => field.key)];
     return buildCsv(
       headers,
       result.records.map((record) => ({
         id: record.id,
         title: record.title,
+        tags: (record.tags ?? []).join("; "),
         stageKey: record.stageKey,
         ownerId: record.ownerId,
         createdAt: record.createdAt,
@@ -3315,7 +3320,7 @@ export class CrmStore {
     requirePermission(context, "crm.import");
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
-    const headers = ["title", ...fields.map((field) => field.key)];
+    const headers = ["title", "tags", ...fields.map((field) => field.key)];
     return buildCsv(headers, [buildImportTemplateExampleRow(fields)]);
   }
 
@@ -3336,7 +3341,7 @@ export class CrmStore {
     return clone(record);
   }
 
-  createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">): CrmRecord {
+  createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[] }): CrmRecord {
     requirePermission(context, "crm.write");
     this.assertObject(context, objectKey);
     const fields = this.listFieldDefinitions(context, objectKey);
@@ -3360,6 +3365,7 @@ export class CrmStore {
       title: input.title,
       stageKey: input.stageKey,
       ownerId: canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id,
+      tags: uniqueTags(input.tags ?? []),
       data,
       createdAt: stamp(),
       updatedAt: stamp()
@@ -3368,24 +3374,28 @@ export class CrmStore {
     this.writeAuditLog(context, "create", "record", record.id, {
       objectKey,
       summary: `Created ${objectKey} record ${record.title}`,
-      details: { title: record.title, ownerId: record.ownerId, stageKey: record.stageKey }
+      details: { title: record.title, ownerId: record.ownerId, stageKey: record.stageKey, tags: record.tags }
     });
     this.deliverWebhookEvent(context, "record.created", {
       recordId: record.id,
       objectKey: record.objectKey,
       title: record.title,
-      ownerId: record.ownerId
+      ownerId: record.ownerId,
+      tags: record.tags
     });
     return clone(record);
   }
 
-  updateRecord(context: RequestContext, objectKey: string, recordId: string, patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>): CrmRecord {
+  updateRecord(context: RequestContext, objectKey: string, recordId: string, patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>): CrmRecord {
     requirePermission(context, "crm.write");
     const record = this.data.records.find((candidate) => candidate.workspaceId === context.workspaceId && candidate.objectKey === objectKey && candidate.id === recordId);
     if (!record || !this.canAccessRecord(context, record)) {
       throw new Error("记录不存在");
     }
     const previousStageKey = record.stageKey;
+    if (patch.tags !== undefined) {
+      uniqueTags(patch.tags);
+    }
     const mergedData = { ...record.data, ...(patch.data ?? {}) };
     const nextData =
       objectKey === "quotes"
@@ -3399,7 +3409,15 @@ export class CrmStore {
     }
     validateRecordPayload(fields, nextData, this.listRecordsForValidation(context, objectKey), recordId);
     this.assertRecordReferences(context, fields, nextData, true);
-    Object.assign(record, { ...patch, ownerId: canManageAllRecords(context) ? patch.ownerId ?? record.ownerId : record.ownerId }, { data: nextData, updatedAt: stamp() });
+    Object.assign(
+      record,
+      {
+        ...patch,
+        ownerId: canManageAllRecords(context) ? patch.ownerId ?? record.ownerId : record.ownerId,
+        tags: patch.tags !== undefined ? uniqueTags(patch.tags) : record.tags ?? []
+      },
+      { data: nextData, updatedAt: stamp() }
+    );
     if (objectKey === "deals" && patch.stageKey !== undefined && patch.stageKey !== previousStageKey) {
       this.data.activities.push({
         id: createId("activity"),
@@ -3408,13 +3426,14 @@ export class CrmStore {
         type: "stage_change",
         title: `Stage changed: ${previousStageKey ?? "none"} -> ${patch.stageKey ?? "none"}`,
         actorId: context.user.id,
+        tags: [],
         createdAt: stamp()
       });
     }
     this.writeAuditLog(context, "update", "record", record.id, {
       objectKey,
       summary: `Updated ${objectKey} record ${record.title}`,
-      details: { patch, previousStageKey, nextStageKey: record.stageKey }
+      details: { patch, previousStageKey, nextStageKey: record.stageKey, tags: record.tags }
     });
     this.deliverWebhookEvent(context, "record.updated", {
       recordId: record.id,
@@ -3422,7 +3441,8 @@ export class CrmStore {
       title: record.title,
       previousStageKey,
       nextStageKey: record.stageKey,
-      ownerId: record.ownerId
+      ownerId: record.ownerId,
+      tags: record.tags
     });
     return clone(record);
   }
@@ -3692,8 +3712,13 @@ export class CrmStore {
     });
   }
 
-  listActivities(context: RequestContext, recordId?: string): Activity[] {
+  listActivities(context: RequestContext, input: string | ActivityListQuery = {}): Activity[] {
     requirePermission(context, "crm.read");
+    const query = typeof input === "string" ? { recordId: input } : input;
+    const recordId = query.recordId;
+    const tags = uniqueTags(query.tags ?? []);
+    const dueFrom = query.dueFrom ? new Date(query.dueFrom).getTime() : undefined;
+    const dueTo = query.dueTo ? new Date(query.dueTo).getTime() : undefined;
     if (recordId) {
       const record = this.data.records.find((candidate) => candidate.id === recordId && candidate.workspaceId === context.workspaceId);
       if (record && !this.canAccessRecord(context, record)) {
@@ -3703,6 +3728,16 @@ export class CrmStore {
     return clone(
       this.data.activities
         .filter((activity) => activity.workspaceId === context.workspaceId && (!recordId || activity.recordId === recordId))
+        .filter((activity) => !query.type || activity.type === query.type)
+        .filter((activity) => query.completed === undefined || (query.completed ? Boolean(activity.completedAt) : !activity.completedAt))
+        .filter((activity) => query.archived === undefined || (query.archived ? Boolean(activity.archivedAt) : !activity.archivedAt))
+        .filter((activity) => {
+          const dueAt = activity.dueAt ? new Date(activity.dueAt).getTime() : undefined;
+          if (dueFrom !== undefined && (dueAt === undefined || dueAt < dueFrom)) return false;
+          if (dueTo !== undefined && (dueAt === undefined || dueAt > dueTo)) return false;
+          return true;
+        })
+        .filter((activity) => tags.every((tag) => (activity.tags ?? []).includes(tag)))
         .filter((activity) => {
           if (!activity.recordId) {
             return canManageAllRecords(context) || activity.actorId === context.user.id;
@@ -3723,7 +3758,7 @@ export class CrmStore {
     return clone(activity);
   }
 
-  createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId">): Activity {
+  createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags"> & { tags?: string[] }): Activity {
     requirePermission(context, "crm.write");
     if (input.recordId) {
       const record = this.data.records.find((candidate) => candidate.id === input.recordId && candidate.workspaceId === context.workspaceId);
@@ -3735,19 +3770,21 @@ export class CrmStore {
       ...input,
       id: createId("activity"),
       workspaceId: context.workspaceId,
+      tags: uniqueTags(input.tags ?? []),
       actorId: context.user.id,
       createdAt: stamp()
     };
     this.data.activities.push(activity);
     this.writeAuditLog(context, "create", "activity", activity.id, {
       summary: `Created ${activity.type} activity ${activity.title}`,
-      details: { recordId: activity.recordId, type: activity.type, title: activity.title }
+      details: { recordId: activity.recordId, type: activity.type, title: activity.title, tags: activity.tags }
     });
     this.deliverWebhookEvent(context, "activity.created", {
       activityId: activity.id,
       recordId: activity.recordId,
       type: activity.type,
-      title: activity.title
+      title: activity.title,
+      tags: activity.tags
     });
     return clone(activity);
   }
@@ -3755,7 +3792,7 @@ export class CrmStore {
   updateActivity(
     context: RequestContext,
     activityId: string,
-    patch: Partial<Pick<Activity, "title" | "body">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
+    patch: Partial<Pick<Activity, "title" | "body" | "tags">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
   ): Activity {
     requirePermission(context, "crm.write");
     const activity = this.data.activities.find((candidate) => candidate.id === activityId && candidate.workspaceId === context.workspaceId);
@@ -3776,6 +3813,9 @@ export class CrmStore {
     }
     if (patch.body !== undefined) {
       activity.body = patch.body;
+    }
+    if (patch.tags !== undefined) {
+      activity.tags = uniqueTags(patch.tags);
     }
     if (patch.dueAt !== undefined) {
       activity.dueAt = patch.dueAt ?? undefined;
@@ -3908,7 +3948,7 @@ export class CrmStore {
       preview.rows.forEach((row) => {
         if (row.status === "ready") {
           const data = coerceRow(row.values, this.listFieldDefinitions(context, objectKey));
-          created.push(this.createRecord(context, objectKey, { title: row.title, data }));
+          created.push(this.createRecord(context, objectKey, { title: row.title, tags: parseTagsCell(row.values.tags), data }));
           return;
         }
 
@@ -3916,7 +3956,7 @@ export class CrmStore {
           const existingRecordId = getSingleConflictRecordId(row.conflicts);
           if (existingRecordId) {
             const data = coerceRow(row.values, this.listFieldDefinitions(context, objectKey));
-            updated.push(this.updateRecord(context, objectKey, existingRecordId, { title: row.title, data }));
+            updated.push(this.updateRecord(context, objectKey, existingRecordId, { title: row.title, tags: parseTagsCell(row.values.tags), data }));
             return;
           }
         }
@@ -4324,7 +4364,7 @@ export class CrmStore {
           throw new Error("缺少 title/name 列");
         }
         const data = coerceRow(row, this.listFieldDefinitions(context, objectKey));
-        created.push(this.createRecord(context, objectKey, { title, data }));
+        created.push(this.createRecord(context, objectKey, { title, tags: parseTagsCell(row.tags), data }));
       } catch (error) {
         errors.push(`第 ${index + 2} 行: ${error instanceof Error ? error.message : "导入失败"}`);
       }
@@ -4360,16 +4400,19 @@ export class CrmStore {
         if (!title) {
           throw new Error("Missing title or name column");
         }
+        parseTagsCell(mappedRow.tags);
         const data = coerceRow(mappedRow, fields);
         rowConflicts.push(...findCsvImportConflicts(rowNumber, fields, data, existing));
         validateRecordPayload(fields, data, draftRecords);
         this.assertRecordReferences(context, fields, data, true);
         if (rowConflicts.length === 0) {
+          const tags = parseTagsCell(mappedRow.tags);
           draftRecords.push({
             id: `csv-row-${rowNumber}`,
             workspaceId: context.workspaceId,
             objectKey,
             title,
+            tags,
             ownerId: context.user.id,
             data,
             createdAt: stamp(),
@@ -4601,8 +4644,8 @@ export class CrmStore {
 
   private assertSavedViewFields(context: RequestContext, view: Pick<SavedView, "objectKey" | "columns" | "filters" | "sort">): void {
     const fieldKeys = new Set(this.listFieldDefinitions(context, view.objectKey).map((field) => field.key));
-    const columnKeys = new Set(["title", "ownerId", "stageKey", ...fieldKeys]);
-    const queryKeys = new Set(["title", "ownerId", "stageKey", "createdAt", "updatedAt", ...fieldKeys]);
+    const columnKeys = new Set(["title", "ownerId", "stageKey", "tags", ...fieldKeys]);
+    const queryKeys = new Set(["title", "ownerId", "stageKey", "tags", "createdAt", "updatedAt", ...fieldKeys]);
 
     for (const column of view.columns) {
       if (!columnKeys.has(column)) {
@@ -5538,9 +5581,30 @@ function coerceRow(row: Record<string, string>, fields: FieldDefinition[]): Reco
   }, {});
 }
 
+function parseTagsCell(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return uniqueTags(value.split(/[,;\uFF1B\uFF0C]/));
+}
+
+function uniqueTags(values: string[]): string[] {
+  const tags = values.map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+  const tooLong = tags.find((tag) => tag.length > 40);
+  if (tooLong) {
+    throw new Error("Tags must be at most 40 characters");
+  }
+  const uniqueTags = Array.from(new Set(tags));
+  if (uniqueTags.length > 50) {
+    throw new Error("Tags must include at most 50 values");
+  }
+  return uniqueTags;
+}
+
 function buildImportTemplateExampleRow(fields: FieldDefinition[]): Record<string, unknown> {
   return {
     title: "Example record",
+    tags: "vip; prospect",
     ...Object.fromEntries(fields.map((field) => [field.key, importTemplateExampleValue(field)]))
   };
 }
@@ -5661,7 +5725,7 @@ function normalizeImportPresetName(name: string): string {
 }
 
 function isIgnoredCsvImportHeader(header: string): boolean {
-  return ["title", "name", "rowNumber", "status", "issues"].includes(header);
+  return ["title", "name", "tags", "rowNumber", "status", "issues"].includes(header);
 }
 
 function applyCsvImportMapping(row: Record<string, string>, mapping?: CsvImportMapping): Record<string, string> {
@@ -5756,6 +5820,7 @@ function buildQueryView(workspaceId: string, objectKey: string, query: RecordLis
 }
 
 function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize: number): RecordListQuery {
+  const tags = uniqueTags(query.tags ?? []);
   return {
     page,
     pageSize,
@@ -5765,7 +5830,8 @@ function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize
     cursor: query.cursor?.trim() || undefined,
     keyset: Boolean(query.keyset || query.cursor),
     fields: query.fields?.filter((field) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(field)),
-    pool: query.pool === "public" || query.pool === "private" || query.pool === "all" ? query.pool : undefined
+    pool: query.pool === "public" || query.pool === "private" || query.pool === "all" ? query.pool : undefined,
+    tags: tags.length ? tags : undefined
   };
 }
 

@@ -50,6 +50,15 @@ export async function destroySessionsForUser(userId: string): Promise<void> {
   });
 }
 
+export async function destroyOtherSessionsForUser(userId: string, currentToken: string): Promise<void> {
+  await prisma.session.deleteMany({
+    where: {
+      userId,
+      token: { not: hashSessionToken(currentToken) }
+    }
+  });
+}
+
 export async function getSessionUserId(token: string): Promise<string | null> {
   const session = await prisma.session.findFirst({
     where: {

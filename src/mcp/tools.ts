@@ -10,6 +10,11 @@ const objectKeySchema = z.string().trim().regex(/^[a-z][a-z0-9-]*s$/);
 const idSchema = z.string().trim().min(1).max(200);
 const smartReminderIdSchema = idSchema.refine((value) => /[A-Za-z_-]/.test(value), "Use a real reminderId returned by crm_get_today_best_actions or crm_list_smart_reminders; do not invent numeric ids.");
 const optionalIdSchema = z.union([idSchema, z.literal(""), z.null()]).optional();
+const tagListSchema = z
+  .array(z.string().trim().min(1).max(40).transform((tag) => tag.toLowerCase()))
+  .max(50)
+  .optional()
+  .transform((tags) => (tags ? Array.from(new Set(tags)) : undefined));
 const recordFilterSchema = z
   .object({
     field: z.string().trim().min(1),
@@ -28,6 +33,7 @@ const recordWriteSchema = z
     objectKey: objectKeySchema,
     title: z.string().trim().min(1),
     data: z.record(z.unknown()),
+    tags: tagListSchema,
     stageKey: optionalIdSchema,
     ownerId: optionalIdSchema
   })
@@ -51,7 +57,8 @@ const activityListSchema = z
     completed: z.boolean().optional(),
     archived: z.boolean().optional(),
     dueFrom: z.string().trim().min(1).optional(),
-    dueTo: z.string().trim().min(1).optional()
+    dueTo: z.string().trim().min(1).optional(),
+    tags: tagListSchema
   })
   .strict();
 const emailAddressSchema = z.string().trim().email();
@@ -99,6 +106,7 @@ const schemas = {
       q: z.string().trim().optional(),
       page: z.number().int().min(1).optional(),
       pageSize: z.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
+      tags: tagListSchema,
       pool: z.enum(["public", "private", "all"]).optional()
     })
     .strict(),
@@ -111,6 +119,7 @@ const schemas = {
       filters: z.array(recordFilterSchema).max(50).optional(),
       sort: recordSortSchema.optional(),
       fields: z.array(z.string().trim().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/)).max(100).optional(),
+      tags: tagListSchema,
       pool: z.enum(["public", "private", "all"]).optional(),
       cursor: z.string().trim().min(1).optional(),
       keyset: z.boolean().optional()
@@ -135,6 +144,7 @@ const schemas = {
       type: z.enum(["note", "call", "meeting", "task", "email"]),
       title: z.string().trim().min(1),
       body: z.string().trim().optional(),
+      tags: tagListSchema,
       dueAt: z.string().trim().min(1).optional(),
       completedAt: z.string().trim().min(1).optional()
     })
@@ -144,6 +154,7 @@ const schemas = {
       activityId: idSchema,
       title: z.string().trim().min(1).optional(),
       body: z.string().trim().optional(),
+      tags: tagListSchema,
       dueAt: z.union([z.string().trim().min(1), z.null()]).optional(),
       completedAt: z.union([z.string().trim().min(1), z.null()]).optional(),
       archivedAt: z.union([z.string().trim().min(1), z.null()]).optional()
@@ -401,13 +412,13 @@ async function dispatchTool(name: BaseCrmMcpToolName, args: z.infer<(typeof sche
     }
     case "crm_create_record": {
       const input = args as z.infer<typeof schemas.crm_create_record>;
-      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}`, stripUndefined({ title: input.title, data: input.data, stageKey: input.stageKey, ownerId: input.ownerId }));
+      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}`, stripUndefined({ title: input.title, data: input.data, tags: input.tags, stageKey: input.stageKey, ownerId: input.ownerId }));
     }
     case "crm_update_record": {
       const input = args as z.infer<typeof schemas.crm_update_record>;
       return client.patch(
         `/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}`,
-        stripUndefined({ title: input.title, data: input.data, stageKey: input.stageKey, ownerId: input.ownerId, changeReason: input.changeReason })
+        stripUndefined({ title: input.title, data: input.data, tags: input.tags, stageKey: input.stageKey, ownerId: input.ownerId, changeReason: input.changeReason })
       );
     }
     case "crm_delete_record": {
@@ -648,6 +659,7 @@ function listContacts(client: CrmMcpClient, input: z.infer<typeof schemas.crm_li
       q: input.q,
       page: input.page,
       pageSize: input.pageSize ?? defaultPageSize(),
+      tags: input.tags,
       pool: input.pool ?? "all",
       fields: ["email", "phone", "company", "companyId", "contactMethods", "jobTitle", "country"]
     }
@@ -758,6 +770,7 @@ function searchRecords(client: CrmMcpClient, input: z.infer<typeof schemas.crm_s
       sortField: input.sort?.field,
       sortDirection: input.sort?.direction,
       fields: input.fields,
+      tags: input.tags,
       pool: input.pool,
       cursor: input.cursor,
       keyset: input.keyset ? "1" : undefined

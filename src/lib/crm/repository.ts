@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { createApiKeyToken, getApiKeyTokenPrefix, hashApiKeyToken } from "@/lib/auth/api-key";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { assertValidWebhookEvents, assertValidWebhookUrl, assertWebhookDeliveryTarget, buildWebhookSignatureHeader, createWebhookSecret, expandWebhookEventsForPayload, getWebhookSecretPrefix } from "@/lib/integrations/webhook";
-import { hashPassword } from "@/lib/auth/password";
+import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import {
   createPasswordSetupToken,
   hashPasswordSetupToken,
@@ -11,7 +11,7 @@ import {
   type PasswordSetupPurpose
 } from "@/lib/auth/password-setup";
 import { canManageAllRecords, requirePermission } from "@/lib/auth/rbac";
-import { destroySessionsForUser } from "@/lib/auth/session";
+import { destroyOtherSessionsForUser, destroySessionsForUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 import { ApiError } from "@/lib/api-error";
@@ -496,6 +496,7 @@ function mapUser(user: {
   workspaceId: string;
   email: string;
   name: string;
+  avatarMediaAssetId?: string | null;
   roleId: string | null;
   teamId: string | null;
   emailListDisplayMode?: string | null;
@@ -507,6 +508,7 @@ function mapUser(user: {
     workspaceId: user.workspaceId,
     email: user.email,
     name: user.name,
+    avatarMediaAssetId: user.avatarMediaAssetId ?? undefined,
     roleId: user.roleId ?? "",
     teamId: user.teamId ?? undefined,
     emailListDisplayMode: user.emailListDisplayMode === "message" ? "message" : "thread",
@@ -1425,6 +1427,7 @@ function mapRecord(record: {
   title: string;
   stageKey: string | null;
   ownerId: string | null;
+  tags: string[];
   data: Prisma.JsonValue;
   createdAt: Date;
   updatedAt: Date;
@@ -1436,6 +1439,7 @@ function mapRecord(record: {
     title: record.title,
     stageKey: record.stageKey ?? undefined,
     ownerId: record.ownerId ?? undefined,
+    tags: record.tags ?? [],
     data: asRecord(record.data),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString()
@@ -1467,6 +1471,7 @@ function mapActivity(activity: {
   type: string;
   title: string;
   body: string | null;
+  tags: string[];
   actorId: string | null;
   dueAt: Date | null;
   completedAt: Date | null;
@@ -1480,6 +1485,7 @@ function mapActivity(activity: {
     type: activity.type as Activity["type"],
     title: activity.title,
     body: activity.body ?? undefined,
+    tags: activity.tags ?? [],
     actorId: activity.actorId ?? undefined,
     dueAt: activity.dueAt?.toISOString(),
     completedAt: activity.completedAt?.toISOString(),
@@ -3939,6 +3945,14 @@ export class PrismaCrmRepository {
     return assets.map(mapMediaAsset);
   }
 
+  async getMediaAsset(context: RequestContext, assetId: string): Promise<MediaAsset | undefined> {
+    requirePermission(context, "crm.read");
+    const asset = await this.db.mediaAsset.findFirst({
+      where: { id: assetId, workspaceId: context.workspaceId }
+    });
+    return asset ? mapMediaAsset(asset) : undefined;
+  }
+
   async createMediaAsset(
     context: RequestContext,
     input: Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">
@@ -3957,6 +3971,30 @@ export class PrismaCrmRepository {
     await this.writeAuditLog(context, "create", "media_asset", asset.id, {
       summary: `Created media asset ${asset.name}`,
       details: { contentType: asset.contentType, size: asset.size }
+    });
+    return mapMediaAsset(asset);
+  }
+
+  async createCurrentUserAvatarMediaAsset(
+    context: RequestContext,
+    input: Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">
+  ): Promise<MediaAsset> {
+    if (!input.contentType.toLowerCase().startsWith("image/")) {
+      throw new ApiError(400, "VALIDATION_ERROR", "Avatar must be an image");
+    }
+    const asset = await this.db.mediaAsset.create({
+      data: {
+        workspaceId: context.workspaceId,
+        name: normalizeRequiredText(input.name, "Avatar name"),
+        contentType: input.contentType,
+        size: input.size,
+        contentBase64: input.contentBase64,
+        createdById: context.user.id
+      }
+    });
+    await this.writeAuditLog(context, "create", "media_asset", asset.id, {
+      summary: `Uploaded avatar asset ${asset.name}`,
+      details: { contentType: asset.contentType, size: asset.size, purpose: "user_avatar" }
     });
     return mapMediaAsset(asset);
   }
@@ -4521,6 +4559,73 @@ export class PrismaCrmRepository {
       }
     });
     return mapUser(user);
+  }
+
+  async updateCurrentUserProfile(
+    context: RequestContext,
+    patch: Partial<Pick<User, "name">> & { avatarMediaAssetId?: string | null }
+  ): Promise<User> {
+    const data: { name?: string; avatarMediaAssetId?: string | null } = {};
+    if (patch.name !== undefined) {
+      data.name = normalizeRequiredText(patch.name, "User name");
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "avatarMediaAssetId")) {
+      const avatarMediaAssetId = patch.avatarMediaAssetId?.trim() || null;
+      if (avatarMediaAssetId) {
+        const asset = await this.db.mediaAsset.findFirst({
+          where: { id: avatarMediaAssetId, workspaceId: context.workspaceId }
+        });
+        if (!asset) {
+          throw new Error("Avatar media asset not found");
+        }
+        if (!asset.contentType.toLowerCase().startsWith("image/")) {
+          throw new ApiError(400, "VALIDATION_ERROR", "Avatar must be an image");
+        }
+      }
+      data.avatarMediaAssetId = avatarMediaAssetId;
+    }
+    if (Object.keys(data).length === 0) {
+      return context.user;
+    }
+    const user = await this.db.user.update({
+      where: { id: context.user.id },
+      data
+    });
+    await this.writeAuditLog(context, "update", "user", user.id, {
+      summary: "Updated own profile",
+      details: { name: user.name, avatarMediaAssetId: user.avatarMediaAssetId }
+    });
+    return mapUser(user);
+  }
+
+  async updateCurrentUserPassword(
+    context: RequestContext,
+    input: { currentPassword: string; newPassword: string },
+    currentSessionToken: string
+  ): Promise<User> {
+    const user = await this.db.user.findFirst({
+      where: { id: context.user.id, workspaceId: context.workspaceId },
+      select: { id: true, passwordHash: true }
+    });
+    if (!user) {
+      throw new Error("User not found");
+    }
+    if (!verifyPassword(input.currentPassword, user.passwordHash)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "Current password is incorrect");
+    }
+    if (input.newPassword.trim().length < 8) {
+      throw new ApiError(400, "VALIDATION_ERROR", "Password must be at least 8 characters");
+    }
+    const updated = await this.db.user.update({
+      where: { id: context.user.id },
+      data: { passwordHash: hashPassword(input.newPassword) }
+    });
+    await destroyOtherSessionsForUser(context.user.id, currentSessionToken);
+    await this.writeAuditLog(context, "update", "user", user.id, {
+      summary: "Changed own password",
+      details: { passwordChanged: true, otherSessionsRevoked: true }
+    });
+    return mapUser(updated);
   }
 
   async createPasswordSetupLink(
@@ -5719,12 +5824,13 @@ export class PrismaCrmRepository {
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
     const result = await this.queryRecords(context, objectKey, { ...query, page: 1, pageSize: 200 });
-    const headers = ["id", "title", "stageKey", "ownerId", "createdAt", "updatedAt", ...fields.map((field) => field.key)];
+    const headers = ["id", "title", "tags", "stageKey", "ownerId", "createdAt", "updatedAt", ...fields.map((field) => field.key)];
     return buildCsv(
       headers,
       result.records.map((record) => ({
         id: record.id,
         title: record.title,
+        tags: record.tags.join("; "),
         stageKey: record.stageKey,
         ownerId: record.ownerId,
         createdAt: record.createdAt,
@@ -5738,7 +5844,7 @@ export class PrismaCrmRepository {
     requirePermission(context, "crm.import");
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
-    const headers = ["title", ...fields.map((field) => field.key)];
+    const headers = ["title", "tags", ...fields.map((field) => field.key)];
     return buildCsv(headers, [buildImportTemplateExampleRow(fields)]);
   }
 
@@ -5766,7 +5872,7 @@ export class PrismaCrmRepository {
     return mapRecord(record);
   }
 
-  async createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">): Promise<CrmRecord> {
+  async createRecord(context: RequestContext, objectKey: string, input: Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId"> & { tags?: string[] }): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     await this.requireObject(context, objectKey);
     const fields = await this.listFieldDefinitions(context, objectKey);
@@ -5790,6 +5896,7 @@ export class PrismaCrmRepository {
         title: input.title,
         stageKey: input.stageKey,
         ownerId: canManageAllRecords(context) ? input.ownerId ?? context.user.id : context.user.id,
+        tags: uniqueTags(input.tags ?? []),
         data: data as Prisma.InputJsonValue
       }
     });
@@ -5797,15 +5904,16 @@ export class PrismaCrmRepository {
     await this.writeAuditLog(context, "create", "record", record.id, {
       objectKey,
       summary: `Created ${objectKey} record ${record.title}`,
-      details: { title: record.title, ownerId: record.ownerId, stageKey: record.stageKey }
+      details: { title: record.title, ownerId: record.ownerId, stageKey: record.stageKey, tags: record.tags }
     });
 
     const mapped = mapRecord(record);
     this.emitWebhookEvent(context, "record.created", {
       recordId: mapped.id,
       objectKey: mapped.objectKey,
-      title: mapped.title,
-      ownerId: mapped.ownerId
+    title: mapped.title,
+      ownerId: mapped.ownerId,
+      tags: mapped.tags
     });
     return mapped;
   }
@@ -5814,7 +5922,7 @@ export class PrismaCrmRepository {
     context: RequestContext,
     objectKey: string,
     recordId: string,
-    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>
+    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>
   ): Promise<CrmRecord> {
     requirePermission(context, "crm.write");
     const current = await this.getRecord(context, objectKey, recordId);
@@ -5826,7 +5934,8 @@ export class PrismaCrmRepository {
         title: patch.title ?? current.title,
         data: nextData as Prisma.InputJsonValue,
         ownerId: canManageAllRecords(context) ? patch.ownerId ?? current.ownerId : current.ownerId,
-        stageKey: patch.stageKey ?? current.stageKey
+        stageKey: patch.stageKey ?? current.stageKey,
+        tags: patch.tags !== undefined ? uniqueTags(patch.tags) : undefined
       }
     });
 
@@ -5845,7 +5954,7 @@ export class PrismaCrmRepository {
     await this.writeAuditLog(context, "update", "record", recordId, {
       objectKey,
       summary: `Updated ${objectKey} record ${updated.title}`,
-      details: { patch, previousStageKey: current.stageKey, nextStageKey: updated.stageKey }
+      details: { patch, previousStageKey: current.stageKey, nextStageKey: updated.stageKey, previousTags: current.tags, nextTags: updated.tags }
     });
 
     const mapped = mapRecord(updated);
@@ -5855,7 +5964,8 @@ export class PrismaCrmRepository {
       title: mapped.title,
       previousStageKey: current.stageKey,
       nextStageKey: mapped.stageKey,
-      ownerId: mapped.ownerId
+      ownerId: mapped.ownerId,
+      tags: mapped.tags
     });
     return mapped;
   }
@@ -5865,8 +5975,11 @@ export class PrismaCrmRepository {
     objectKey: string,
     recordId: string,
     current: CrmRecord,
-    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>
+    patch: Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>
   ): Promise<{ nextData: Record<string, unknown>; fields: FieldDefinition[] }> {
+    if (patch.tags !== undefined) {
+      uniqueTags(patch.tags);
+    }
     const mergedData = { ...current.data, ...(patch.data ?? {}) };
     const nextData =
       objectKey === "quotes"
@@ -6279,6 +6392,7 @@ export class PrismaCrmRepository {
             type: activity.type,
             title: activity.title,
             body: activity.body,
+            tags: activity.tags,
             dueAt: activity.dueAt,
             completedAt: activity.completedAt,
             archivedAt: activity.archivedAt,
@@ -6403,7 +6517,7 @@ export class PrismaCrmRepository {
     objectKey: string;
     recordId: string;
     patch: Prisma.JsonValue | null;
-  }): Promise<Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId">>> {
+  }): Promise<Partial<Pick<CrmRecord, "title" | "data" | "stageKey" | "ownerId" | "tags">>> {
     const patch = stripRecordApprovalMetadata((request.patch ?? {}) as RecordChangeRequest["patch"]);
     if (request.objectKey !== "contacts" || !isJsonRecord(patch.data) || !Object.prototype.hasOwnProperty.call(patch.data, "contactMethods")) {
       return patch;
@@ -6561,6 +6675,7 @@ export class PrismaCrmRepository {
         ...(query.type ? { type: query.type } : {}),
         ...(query.completed === true ? { completedAt: { not: null } } : query.completed === false ? { completedAt: null } : {}),
         ...(query.archived === true ? { archivedAt: { not: null } } : query.archived === false ? { archivedAt: null } : {}),
+        ...(query.tags?.length ? { tags: { hasEvery: uniqueTags(query.tags) } } : {}),
         ...(dueFrom || dueTo
           ? {
               dueAt: {
@@ -6597,7 +6712,7 @@ export class PrismaCrmRepository {
     return mapActivity(activity);
   }
 
-  async createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId">): Promise<Activity> {
+  async createActivity(context: RequestContext, input: Omit<Activity, "id" | "workspaceId" | "createdAt" | "actorId" | "tags"> & { tags?: string[] }): Promise<Activity> {
     requirePermission(context, "crm.write");
     if (input.recordId) {
       const record = await this.db.crmRecord.findFirst({
@@ -6619,6 +6734,7 @@ export class PrismaCrmRepository {
         type: input.type,
         title: input.title,
         body: input.body,
+        tags: uniqueTags(input.tags ?? []),
         actorId: context.user.id,
         dueAt: input.dueAt ? new Date(input.dueAt) : undefined,
         completedAt: input.completedAt ? new Date(input.completedAt) : undefined
@@ -6626,14 +6742,15 @@ export class PrismaCrmRepository {
     });
     await this.writeAuditLog(context, "create", "activity", created.id, {
       summary: `Created ${created.type} activity ${created.title}`,
-      details: { recordId: created.recordId, type: created.type, title: created.title }
+      details: { recordId: created.recordId, type: created.type, title: created.title, tags: created.tags }
     });
     const mapped = mapActivity(created);
     this.emitWebhookEvent(context, "activity.created", {
       activityId: mapped.id,
       recordId: mapped.recordId,
       type: mapped.type,
-      title: mapped.title
+      title: mapped.title,
+      tags: mapped.tags
     });
     return mapped;
   }
@@ -6641,7 +6758,7 @@ export class PrismaCrmRepository {
   async updateActivity(
     context: RequestContext,
     activityId: string,
-    patch: Partial<Pick<Activity, "title" | "body">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
+    patch: Partial<Pick<Activity, "title" | "body" | "tags">> & { dueAt?: string | null; completedAt?: string | null; archivedAt?: string | null }
   ): Promise<Activity> {
     requirePermission(context, "crm.write");
     const existing = await this.db.activity.findFirst({
@@ -6671,6 +6788,7 @@ export class PrismaCrmRepository {
       data: {
         title: patch.title,
         body: patch.body,
+        tags: patch.tags !== undefined ? uniqueTags(patch.tags) : undefined,
         dueAt: patch.dueAt ? new Date(patch.dueAt) : patch.dueAt === null ? null : undefined,
         completedAt: patch.completedAt ? new Date(patch.completedAt) : patch.completedAt === null ? null : undefined,
         archivedAt: patch.archivedAt ? new Date(patch.archivedAt) : patch.archivedAt === null ? null : undefined
@@ -6851,7 +6969,7 @@ export class PrismaCrmRepository {
       for (const row of preview.rows) {
         if (row.status === "ready") {
           const data = coerceRow(row.values, fields);
-          created.push(await this.createRecord(context, objectKey, { title: row.title, data }));
+          created.push(await this.createRecord(context, objectKey, { title: row.title, tags: parseTagsCell(row.values.tags), data }));
           continue;
         }
 
@@ -6859,7 +6977,7 @@ export class PrismaCrmRepository {
           const existingRecordId = getSingleConflictRecordId(row.conflicts);
           if (existingRecordId) {
             const data = coerceRow(row.values, fields);
-            updated.push(await this.updateRecord(context, objectKey, existingRecordId, { title: row.title, data }));
+            updated.push(await this.updateRecord(context, objectKey, existingRecordId, { title: row.title, tags: parseTagsCell(row.values.tags), data }));
             continue;
           }
         }
@@ -7982,6 +8100,7 @@ export class PrismaCrmRepository {
         if (!title) {
           throw new Error("Missing title or name column");
         }
+        parseTagsCell(mappedRow.tags);
         data = coerceRow(mappedRow, fields);
       } catch (error) {
         rowErrors.push(error instanceof Error ? error.message : "Import failed");
@@ -8018,11 +8137,13 @@ export class PrismaCrmRepository {
         validateRecordPayload(fields, data, draftRecords);
         await this.assertRecordReferences(context, fields, data, true);
         if (rowConflicts.length === 0) {
+          const tags = parseTagsCell(preparedRow.mappedRow.tags);
           draftRecords.push({
             id: `csv-row-${preparedRow.rowNumber}`,
             workspaceId: context.workspaceId,
             objectKey,
             title: preparedRow.title,
+            tags,
             ownerId: context.user.id,
             data,
             createdAt: new Date().toISOString(),
@@ -8410,6 +8531,11 @@ export class PrismaCrmRepository {
       clauses.push(recordFilterSql(objectKey, filter.field, filter.operator, filter.value));
     }
 
+    const tagFilters = uniqueTags(query.tags ?? []);
+    if (tagFilters.length > 0) {
+      clauses.push(Prisma.sql`"tags" @> ${tagFilters}::text[]`);
+    }
+
     const search = query.q?.trim();
     if (search) {
       clauses.push(recordSearchSql(objectKey, search));
@@ -8479,7 +8605,7 @@ export class PrismaCrmRepository {
 
     const dataSql = recordDataProjectionSql(fields);
     return this.db.$queryRaw<Parameters<typeof mapRecord>[0][]>(Prisma.sql`
-      SELECT "id", "workspaceId", "objectKey", "title", "stageKey", "ownerId", ${dataSql} AS "data", "createdAt", "updatedAt"
+      SELECT "id", "workspaceId", "objectKey", "title", "stageKey", "ownerId", "tags", ${dataSql} AS "data", "createdAt", "updatedAt"
       FROM "CrmRecord"
       WHERE "id" IN (${Prisma.join(ids)})
     `);
@@ -9523,8 +9649,8 @@ export class PrismaCrmRepository {
 
   private async assertSavedViewFields(context: RequestContext, view: Pick<SavedView, "objectKey" | "columns" | "filters" | "sort">): Promise<void> {
     const fieldKeys = new Set((await this.listFieldDefinitions(context, view.objectKey)).map((field) => field.key));
-    const columnKeys = new Set(["title", "ownerId", "stageKey", ...fieldKeys]);
-    const queryKeys = new Set(["title", "ownerId", "stageKey", "createdAt", "updatedAt", ...fieldKeys]);
+    const columnKeys = new Set(["title", "ownerId", "stageKey", "tags", ...fieldKeys]);
+    const queryKeys = new Set(["title", "ownerId", "stageKey", "tags", "createdAt", "updatedAt", ...fieldKeys]);
 
     for (const column of view.columns) {
       if (!columnKeys.has(column)) {
@@ -10165,6 +10291,12 @@ function sortDirectionSql(direction: "asc" | "desc"): Prisma.Sql {
 
 function recordFilterSql(objectKey: string, field: string, operator: "contains" | "equals", value: string): Prisma.Sql {
   const normalized = value.trim();
+  if (field === "tags") {
+    const tag = normalized.toLowerCase();
+    return operator === "equals"
+      ? Prisma.sql`${tag} = ANY("tags")`
+      : Prisma.sql`EXISTS (SELECT 1 FROM unnest("tags") AS record_tag WHERE lower(record_tag) LIKE '%' || lower(${normalized}) || '%')`;
+  }
   if (field === "title" || field === "stageKey" || field === "ownerId") {
     const column = Prisma.raw(`"${field}"`);
     return operator === "equals"
@@ -10191,7 +10323,10 @@ function recordFilterSql(objectKey: string, field: string, operator: "contains" 
 }
 
 function recordSearchSql(objectKey: string, search: string): Prisma.Sql {
-  const clauses: Prisma.Sql[] = [Prisma.sql`lower("title") LIKE '%' || lower(${search}) || '%'`];
+  const clauses: Prisma.Sql[] = [
+    Prisma.sql`lower("title") LIKE '%' || lower(${search}) || '%'`,
+    Prisma.sql`EXISTS (SELECT 1 FROM unnest("tags") AS record_tag WHERE lower(record_tag) LIKE '%' || lower(${search}) || '%')`
+  ];
 
   if (objectKey === "contacts") {
     clauses.push(Prisma.sql`lower("data"->>'email') LIKE '%' || lower(${search}) || '%'`);
@@ -10230,7 +10365,7 @@ function recordJsonTextSql(field: string): Prisma.Sql {
 }
 
 function recordDataProjectionSql(fields?: string[]): Prisma.Sql {
-  const projectedFields = normalizeProjectedRecordFields(fields).filter((field) => field !== "title");
+  const projectedFields = normalizeProjectedRecordFields(fields).filter((field) => field !== "title" && field !== "tags");
   if (projectedFields.length === 0) {
     return Prisma.sql`"data"`;
   }
@@ -10281,6 +10416,9 @@ function recordOrderBySql(sort: RecordListQuery["sort"]): Prisma.Sql {
   if (sort.field === "createdAt" || sort.field === "updatedAt") {
     return Prisma.sql`${Prisma.raw(`"${sort.field}"`)} ${sortDirectionSql(sort.direction)}, "title" ${sortDirectionSql(sort.direction)}, "id" ASC`;
   }
+  if (sort.field === "tags") {
+    return Prisma.sql`lower(array_to_string("tags", ' ')) ${sortDirectionSql(sort.direction)}, lower("title") ${sortDirectionSql(sort.direction)}, "id" ASC`;
+  }
   if (sort.field === "title" || sort.field === "stageKey" || sort.field === "ownerId") {
     return Prisma.sql`lower(${Prisma.raw(`"${sort.field}"`)}) ${sortDirectionSql(sort.direction)}, lower("title") ${sortDirectionSql(sort.direction)}, "id" ASC`;
   }
@@ -10299,6 +10437,7 @@ function recordOrderBySql(sort: RecordListQuery["sort"]): Prisma.Sql {
 }
 
 function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize: number): RecordListQuery {
+  const tags = uniqueTags(query.tags ?? []);
   return {
     page,
     pageSize,
@@ -10308,7 +10447,8 @@ function normalizeRecordListQuery(query: RecordListQuery, page: number, pageSize
     cursor: query.cursor?.trim() || undefined,
     keyset: Boolean(query.keyset || query.cursor),
     fields: normalizeProjectedRecordFields(query.fields),
-    pool: query.pool === "public" || query.pool === "private" || query.pool === "all" ? query.pool : undefined
+    pool: query.pool === "public" || query.pool === "private" || query.pool === "all" ? query.pool : undefined,
+    tags: tags.length ? tags : undefined
   };
 }
 
@@ -10349,7 +10489,7 @@ function normalizeImportPresetName(name: string): string {
 }
 
 function isIgnoredCsvImportHeader(header: string): boolean {
-  return ["title", "name", "rowNumber", "status", "issues"].includes(header);
+  return ["title", "name", "tags", "rowNumber", "status", "issues"].includes(header);
 }
 
 function applyCsvImportMapping(row: Record<string, string>, mapping?: CsvImportMapping): Record<string, string> {
@@ -10537,7 +10677,16 @@ function normalizeEmailSubject(value: string): string {
 }
 
 function uniqueTags(values: string[]): string[] {
-  return Array.from(new Set(values.map((tag) => tag.trim().toLowerCase()).filter(Boolean))).slice(0, 50);
+  const tags = values.map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+  const tooLong = tags.find((tag) => tag.length > 40);
+  if (tooLong) {
+    throw new Error("Tags must be at most 40 characters");
+  }
+  const uniqueTags = Array.from(new Set(tags));
+  if (uniqueTags.length > 50) {
+    throw new Error("Tags must include at most 50 values");
+  }
+  return uniqueTags;
 }
 
 function normalizeIntegerLimit(value: number, min: number, max: number): number {
@@ -10878,9 +11027,17 @@ function coerceRow(row: Record<string, string>, fields: FieldDefinition[]): Reco
   }, {});
 }
 
+function parseTagsCell(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return uniqueTags(value.split(/[,;\uFF1B\uFF0C]/));
+}
+
 function buildImportTemplateExampleRow(fields: FieldDefinition[]): Record<string, unknown> {
   return {
     title: "Example record",
+    tags: "vip; prospect",
     ...Object.fromEntries(fields.map((field) => [field.key, importTemplateExampleValue(field)]))
   };
 }

@@ -26,6 +26,26 @@ const mediaAssetContentTypeSchema = z
   .min(1)
   .max(120)
   .regex(/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/i, "contentType must be a valid MIME type");
+export const tagListSchema = z
+  .array(z.string())
+  .optional()
+  .transform((tags, context) => {
+    if (!tags) {
+      return undefined;
+    }
+    const normalized = tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+    const tooLong = normalized.find((tag) => tag.length > 40);
+    if (tooLong) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Tags must be at most 40 characters" });
+      return z.NEVER;
+    }
+    const uniqueTags = Array.from(new Set(normalized));
+    if (uniqueTags.length > 50) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Tags must include at most 50 values" });
+      return z.NEVER;
+    }
+    return uniqueTags;
+  });
 
 export const fieldTypeSchema = z.enum(["text", "textarea", "number", "currency", "date", "select", "boolean", "user", "reference"]);
 
@@ -118,7 +138,8 @@ export const recordWriteSchema = z
     title: labelSchema,
     data: z.record(z.unknown()),
     stageKey: optionalIdSchema,
-    ownerId: optionalIdSchema
+    ownerId: optionalIdSchema,
+    tags: tagListSchema
   })
   .strict();
 
@@ -265,6 +286,7 @@ export const activityCreateSchema = z
     type: activityTypeSchema,
     title: labelSchema,
     body: optionalTextSchema,
+    tags: tagListSchema,
     dueAt: z.string().trim().min(1).optional(),
     completedAt: z.string().trim().min(1).optional()
   })
@@ -274,6 +296,7 @@ export const activityUpdateSchema = z
   .object({
     title: labelSchema.optional(),
     body: optionalTextSchema,
+    tags: tagListSchema,
     dueAt: z.union([z.string().trim().min(1), z.null()]).optional(),
     completedAt: z.union([z.string().trim().min(1), z.null()]).optional(),
     archivedAt: z.union([z.string().trim().min(1), z.null()]).optional()
@@ -414,6 +437,28 @@ export const userPreferencesUpdateSchema = z
     emailListDisplayMode: z.enum(["thread", "message"]).optional()
   })
   .strict();
+
+export const currentUserProfileUpdateSchema = z
+  .object({
+    name: labelSchema.max(120).optional(),
+    avatarMediaAssetId: z.union([z.string().trim().min(1), z.literal(""), z.null()]).optional()
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one profile field is required"
+  });
+
+export const currentUserPasswordUpdateSchema = z
+  .object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(8),
+    newPasswordConfirm: z.string().min(1)
+  })
+  .strict()
+  .refine((value) => value.newPassword === value.newPasswordConfirm, {
+    path: ["newPasswordConfirm"],
+    message: "New password confirmation does not match"
+  });
 
 export const workflowTriggerSchema = z
   .object({
@@ -1166,6 +1211,11 @@ export const mediaAssetCreateSchema = mediaAssetPayloadSchema
     path: ["contentBase64"],
     message: `Media asset must be at most ${MAX_MEDIA_ASSET_BYTES} bytes`
   });
+
+export const currentUserAvatarMediaAssetCreateSchema = mediaAssetCreateSchema.refine((value) => value.contentType.toLowerCase().startsWith("image/"), {
+  path: ["contentType"],
+  message: "Avatar media asset must be an image"
+});
 
 export const mediaAssetUpdateSchema = mediaAssetPayloadSchema
   .partial()

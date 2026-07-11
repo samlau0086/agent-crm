@@ -44,7 +44,8 @@ function parseActivityListQuery(request: NextRequest): ActivityListQuery {
     completed: parseOptionalBoolean(searchParams.get("completed"), "completed"),
     archived: parseOptionalBoolean(searchParams.get("archived"), "archived"),
     dueFrom: parseOptionalDate(searchParams.get("dueFrom"), "dueFrom"),
-    dueTo: parseOptionalDate(searchParams.get("dueTo"), "dueTo")
+    dueTo: parseOptionalDate(searchParams.get("dueTo"), "dueTo"),
+    tags: parseTags(searchParams.get("tags"))
   };
 }
 
@@ -71,4 +72,15 @@ function parseOptionalDate(value: string | null, field: string): string | undefi
     throw new ApiError(400, "VALIDATION_ERROR", `${field} must be a valid date`);
   }
   return date.toISOString();
+}
+
+function parseTags(value: string | null): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const tags = value
+    .split(/[,;\uFF1B\uFF0C]/)
+    .map((tag) => tag.trim().toLowerCase())
+    .filter(Boolean);
+  return tags.length > 0 ? Array.from(new Set(tags)).slice(0, 50) : undefined;
 }

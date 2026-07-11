@@ -81,6 +81,7 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
+import { MediaAssetPreview, MediaLibraryModal } from "@/components/media-library";
 import { formatParsedAddressText, parseAddressWithLocalAi, type ParsedAddressDraft } from "@/lib/crm/address-parser";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "@/lib/crm/languages";
@@ -259,6 +260,12 @@ function hasRecordUpdatePatchChanges(record: CrmRecord, patch: RecordApprovalPat
     }
   }
   if (typeof patch.stageKey === "string" && patch.stageKey !== (record.stageKey ?? "")) {
+    return true;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(patch, "tags") &&
+    JSON.stringify(uniqueUiTags(patch.tags ?? [])) !== JSON.stringify(uniqueUiTags(record.tags ?? []))
+  ) {
     return true;
   }
   const data = patch.data && typeof patch.data === "object" && !Array.isArray(patch.data) ? patch.data : {};
@@ -547,6 +554,7 @@ type TaskCalendarView = "list" | "month" | "week" | "day";
 type TaskCreateInput = {
   title: string;
   dueAt?: string;
+  tags?: string[];
 };
 type TaskAttachment = {
   id: string;
@@ -573,6 +581,7 @@ type TaskEditDraft = {
   title: string;
   dueAt: string;
   text: string;
+  tags: string[];
   attachments: ActivityAttachment[];
 };
 type ViewDraft = {
@@ -587,6 +596,7 @@ type ViewDraft = {
 };
 type TableColumn =
   | { key: "ownerId"; label: string; type: "owner" }
+  | { key: "tags"; label: string; type: "tags" }
   | { key: string; label: string; type: "field"; field: FieldDefinition };
 
 const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: LucideIcon }> = [
@@ -2097,6 +2107,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const routeCompanyId = searchParams.get("companyId") ?? "";
   const routeRecordPool = normalizeRecordPool(searchParams.get("pool"));
   const routeDealView = normalizeDealWorkspaceView(searchParams.get("view"));
+  const [currentUser, setCurrentUser] = useState<User>(props.contextUser);
   const [activeNav, setActiveNav] = useState<NavKey>(props.initialNavKey);
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(false);
   const [activeObjectKey, setActiveObjectKey] = useState(props.initialObjectKey);
@@ -2140,9 +2151,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [createFormObjectKey, setCreateFormObjectKey] = useState(props.initialObjectKey);
   const [createTitle, setCreateTitle] = useState("");
   const [createOwnerId, setCreateOwnerId] = useState(props.contextUser.id);
+  const [createTags, setCreateTags] = useState<string[]>([]);
   const [createValues, setCreateValues] = useState<Record<string, string>>({});
   const [editTitle, setEditTitle] = useState("");
   const [editOwnerId, setEditOwnerId] = useState("");
+  const [editTags, setEditTags] = useState<string[]>([]);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [dealCloseReason, setDealCloseReason] = useState("");
   const [importCsv, setImportCsv] = useState("title,email,phone\n王敏,wang@example.com,+86 139 0000 0000");
@@ -2201,6 +2214,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [knowledgeVectorSettings, setKnowledgeVectorSettings] = useState<KnowledgeVectorSettings>(props.knowledgeVectorSettings);
   const [knowledgeVectorActionKey, setKnowledgeVectorActionKey] = useState<string | null>(null);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>(props.mediaAssets);
+  const workspaceUsers = useMemo(() => {
+    const usersById = new Map(props.users.map((user) => [user.id, user]));
+    usersById.set(currentUser.id, { ...(usersById.get(currentUser.id) ?? currentUser), ...currentUser });
+    return [...usersById.values()];
+  }, [currentUser, props.users]);
+  const currentUserAvatarAsset = currentUser.avatarMediaAssetId ? mediaAssets.find((asset) => asset.id === currentUser.avatarMediaAssetId) : undefined;
+  const currentUserAvatarUrl = currentUserAvatarAsset ? mediaAssetDataUrl(currentUserAvatarAsset) : "";
   const [smartReminders, setSmartReminders] = useState<SmartReminder[]>(props.dashboardSummary.smartReminders);
   const [isGeneratingSmartReminders, setIsGeneratingSmartReminders] = useState(false);
   const [recordChangeRequests, setRecordChangeRequests] = useState<RecordChangeRequest[]>(props.recordChangeRequests);
@@ -2251,6 +2271,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     };
   }, []);
+
+  useEffect(() => {
+    setCurrentUser(props.contextUser);
+  }, [props.contextUser]);
 
   function showToast(nextToast: ToastState) {
     setToast(nextToast);
@@ -2360,6 +2384,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       .map((key) => {
         if (key === "ownerId") {
           return { key, label: "负责人", type: "owner" } satisfies TableColumn;
+        }
+        if (key === "tags") {
+          return { key, label: "标签", type: "tags" } satisfies TableColumn;
         }
         const field = objectFields.find((item) => item.key === key);
         return field ? ({ key, label: field.label, type: "field", field } satisfies TableColumn) : undefined;
@@ -2543,12 +2570,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     return taskActivities.filter((activity) => {
       const details = parseTaskDetails(activity.body);
-      const owner = props.users.find((user) => user.id === activity.actorId);
-      return [activity.title, details.text, activity.dueAt, owner?.name, owner?.email]
+      const owner = workspaceUsers.find((user) => user.id === activity.actorId);
+      return [activity.title, details.text, (activity.tags ?? []).join(" "), activity.dueAt, owner?.name, owner?.email]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedQuery));
     });
-  }, [props.users, taskActivities, taskQuery]);
+  }, [workspaceUsers, taskActivities, taskQuery]);
   const filteredActivities = useMemo(() => {
     const normalizedQuery = activityQuery.trim().toLowerCase();
     const visibleActivities = activities
@@ -2560,12 +2587,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return visibleActivities.filter((activity) => {
       const details = parseActivityDetails(activity.body);
       const linkedRecord = records.find((record) => record.id === activity.recordId);
-      const owner = props.users.find((user) => user.id === activity.actorId);
+      const owner = workspaceUsers.find((user) => user.id === activity.actorId);
       return [formatActivityType(activity.type), activityTimelineTitle(activity), activity.title, details.text, linkedRecord?.title, owner?.name, owner?.email]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedQuery));
     });
-  }, [activities, activityQuery, deletedActivityIds, props.users, records]);
+  }, [activities, activityQuery, deletedActivityIds, workspaceUsers, records]);
   const headerNotifications = useMemo(
     () =>
       buildHeaderNotifications({
@@ -2584,17 +2611,26 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
   const currencies = useMemo(() => getCurrencyDefinitions(currencyRecords), [currencyRecords]);
+  const activeObjectTagSuggestions = useMemo(
+    () => uniqueUiTags(records.filter((record) => record.objectKey === activeObject?.key).flatMap((record) => record.tags ?? [])),
+    [activeObject?.key, records]
+  );
+  const taskTagSuggestions = useMemo(
+    () => uniqueUiTags(activities.filter((activity) => activity.type === "task").flatMap((activity) => activity.tags ?? [])),
+    [activities]
+  );
   const selectedRecordUpdatePatch = useMemo<RecordApprovalPatch>(() => {
     if (!selectedRecord) {
       return {};
     }
     return {
       title: editTitle.trim(),
+      tags: editTags,
       data: parseFormValues(selectedFields, editValues, selectedRecord.objectKey, currencyRecords),
       stageKey: selectedRecord.objectKey === "deals" ? String(editValues.__stageKey ?? selectedRecord.stageKey ?? "") : undefined,
       ownerId: editOwnerId || undefined
     };
-  }, [currencyRecords, editOwnerId, editTitle, editValues, selectedFields, selectedRecord]);
+  }, [currencyRecords, editOwnerId, editTags, editTitle, editValues, selectedFields, selectedRecord]);
   const selectedRecordApprovalSaveDisabled = useMemo(() => {
     if (!selectedRecord || !editApprovalObjectKeys.has(selectedRecord.objectKey)) {
       return false;
@@ -3158,9 +3194,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     previousCreateFormResetKey.current = createFormResetKey;
     const pendingRecordCreate = pendingRecordCreateRef.current;
     if (pendingRecordCreate?.objectKey === activeObject?.key) {
-      setCreateTitle("");
-      setCreateOwnerId(props.contextUser.id);
-      setCreateValues({ ...buildInitialValues(objectFields, activeObject?.key), ...pendingRecordCreate.values });
+    setCreateTitle("");
+    setCreateOwnerId(props.contextUser.id);
+    setCreateTags([]);
+    setCreateValues({ ...buildInitialValues(objectFields, activeObject?.key), ...pendingRecordCreate.values });
       setCreateFormObjectKey(activeObject?.key ?? "");
       setImportCsv(sampleCsvFor(activeObject?.key ?? "contacts", objectFields));
       setImportPreview(null);
@@ -3169,6 +3206,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
+    setCreateTags([]);
     setCreateValues({
       ...buildInitialValues(objectFields, activeObject?.key),
       ...(routeMode === "create" && activeObject?.key === "contacts" && routeCompanyId ? { companyId: routeCompanyId } : {})
@@ -3186,6 +3224,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       previousEditFormResetKey.current = "";
       setEditTitle("");
       setEditOwnerId("");
+      setEditTags([]);
       setEditValues({});
       setDealCloseReason("");
       setContactDetailActivityTab("all");
@@ -3199,6 +3238,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     previousEditFormResetKey.current = selectedRecordFormResetKey;
     setEditTitle(selectedRecord.title);
     setEditOwnerId(selectedRecord.ownerId ?? "");
+    setEditTags(selectedRecord.tags ?? []);
     setEditValues(buildRecordValues(selectedFields, selectedRecord));
     setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
     setContactDetailActivityTab("all");
@@ -3384,6 +3424,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setSelectedRecordId("");
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
+    setCreateTags([]);
     setCreateValues({ ...buildInitialValues(contactFields, "contacts"), companyId: company.id });
     setRecordReturnEmailThreadId("");
     setRecordPanelMode("create");
@@ -3421,12 +3462,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         title: createTitle.trim(),
         stageKey: activeObject.key === "deals" ? activePipeline?.stages[0]?.key : undefined,
         ownerId: createOwnerId || undefined,
+        tags: createTags,
         data: parseFormValues(objectFields, createValues, activeObject.key, currencyRecords)
       }
     });
 
     setCreateTitle("");
     setCreateOwnerId(props.contextUser.id);
+    setCreateTags([]);
     setCreateValues(buildInitialValues(objectFields, activeObject.key));
     openRecord(created);
     setMessage(`已创建${activeObject.label}：${created.title}`);
@@ -3495,6 +3538,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       if (result.record) {
         setRecords((current) => mergeRecords(current, [result.record]));
         if (selectedRecord.id === result.record.id) {
+          setEditTags(result.record.tags ?? []);
           setEditValues(buildRecordValues(selectedFields, result.record));
         }
       }
@@ -3507,6 +3551,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditValues(buildRecordValues(selectedFields, result));
     setEditTitle(result.title);
     setEditOwnerId(result.ownerId ?? "");
+    setEditTags(result.tags ?? []);
     setMessage(successMessage);
     router.refresh();
   }
@@ -4275,6 +4320,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: {
         title: draft.title,
         body: serializeTaskDetails({ text: draft.text, attachments: draft.attachments }),
+        tags: draft.tags,
         dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : null
       }
     });
@@ -4289,6 +4335,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: {
         type: "task",
         title: input.title,
+        tags: input.tags ?? [],
         dueAt: input.dueAt || undefined
       }
     });
@@ -4336,7 +4383,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   function exportStandaloneActivitiesCsv(kind: StandaloneModuleKey) {
     const sourceActivities = kind === "tasks" ? filteredTaskActivities : filteredActivities;
-    const csv = buildActivitiesCsv(sourceActivities, records, props.users);
+    const csv = buildActivitiesCsv(sourceActivities, records, workspaceUsers);
     downloadTextFile(`${kind}-export.csv`, csv, "text/csv;charset=utf-8");
     setModuleActionsOpen(false);
     showSuccess(`已导出${kind === "tasks" ? "任务" : "活动"} CSV`);
@@ -5520,6 +5567,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       body: patch
     });
     setEmailListDisplayModePreference(user.emailListDisplayMode);
+    setCurrentUser((current) => ({ ...current, ...user }));
   }
 
   async function saveEmailSignatureFromDraft() {
@@ -5764,6 +5812,40 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (createdAssets.length) {
       setMediaAssets((current) => mergeMediaAssets(createdAssets, current));
       showSuccess(`已上传 ${createdAssets.length} 个文件到媒体库`);
+    }
+    return createdAssets;
+  }
+
+  async function uploadCurrentUserAvatarAssets(files: FileList | File[] | null): Promise<MediaAsset[]> {
+    const uploadFiles = Array.from(files ?? []);
+    if (!uploadFiles.length) {
+      showToast({ intent: "info", message: "请选择头像图片。" });
+      return [];
+    }
+    const createdAssets: MediaAsset[] = [];
+    for (const file of uploadFiles.slice(0, 10)) {
+      if (!file.type.toLowerCase().startsWith("image/")) {
+        showToast({ intent: "error", message: `${file.name} 不是图片文件，已跳过。` });
+        continue;
+      }
+      if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
+        showToast({ intent: "error", message: `${file.name} 超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}，已跳过。` });
+        continue;
+      }
+      const asset = await fetchJson<MediaAsset>("/api/users/me/avatar-assets", {
+        method: "POST",
+        body: {
+          name: file.name,
+          contentType: file.type || "image/png",
+          size: file.size,
+          contentBase64: await readFileAsBase64(file)
+        }
+      });
+      createdAssets.push(asset);
+    }
+    if (createdAssets.length) {
+      setMediaAssets((current) => mergeMediaAssets(createdAssets, current));
+      showSuccess(`已上传 ${createdAssets.length} 张头像图片`);
     }
     return createdAssets;
   }
@@ -6070,10 +6152,28 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         </nav>
 
         <div className="user-strip">
-          <strong>{props.contextUser.name}</strong>
-          <div>
-            {props.role.name} · {props.contextUser.email}
-          </div>
+          <button
+            className="user-strip-profile"
+            type="button"
+            onClick={() => {
+              setActiveNav("settings");
+              router.push("/settings/profile");
+            }}
+          >
+            <span
+              className="user-strip-avatar"
+              style={currentUserAvatarUrl ? { backgroundImage: `url("${currentUserAvatarUrl.replace(/"/g, "%22")}")` } : undefined}
+              aria-hidden="true"
+            >
+              {currentUserAvatarUrl ? null : contactInitials(currentUser.name)}
+            </span>
+            <span className="user-strip-identity">
+              <strong>{currentUser.name}</strong>
+              <span>
+                {props.role.name} · {currentUser.email}
+              </span>
+            </span>
+          </button>
           <form action="/api/auth/logout" method="post" style={{ marginTop: 12 }}>
             <button className="secondary-button" type="submit" style={{ width: "100%" }}>
               退出登录
@@ -6246,7 +6346,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             requests={pendingRecordApprovalRequests}
             selectedRequestIds={selectedRecordApprovalIds}
             reviewingRequestIds={reviewingRecordApprovalIds}
-            users={props.users}
+            users={workspaceUsers}
             onApprove={(request) => { void runImmediateAction(() => reviewRecordChangeRequests([request], "approve")); }}
             onReject={(request) => { void runImmediateAction(() => reviewRecordChangeRequests([request], "reject")); }}
             onBatchApprove={(requests) => { void runImmediateAction(() => reviewRecordChangeRequests(requests, "approve")); }}
@@ -6268,7 +6368,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   disabled={false}
                   pipeline={activePipeline}
                   stages={activePipelineStages}
-                  users={props.users}
+                  users={workspaceUsers}
                   onCreateActivity={openPipelineDealActivityDialog}
                   onCreateDeal={() => setRecordPanelMode("create")}
                   onMoveDealStage={(deal, stageKey, pipelineOrder) =>
@@ -6366,7 +6466,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   onRecordsLoaded={mergeLoadedRecords}
                   onReset={() => setViewDraft(createViewDraft(activeView, objectFields))}
                   onUpdate={() => runAction(submitUpdateSavedView)}
-                  users={props.users}
+                  users={workspaceUsers}
                 />
               ) : null}
               <div style={{ overflowX: "auto" }}>
@@ -6388,13 +6488,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             <RecordTitleButton record={record} onOpen={() => openRecord(record)} />
                             {activeObjectUsesPool ? (
                               <span className={`record-owner-meta ${record.ownerId ? "" : "public"}`}>
-                                {recordPoolLabel(record, props.users)}
+                                {recordPoolLabel(record, workspaceUsers)}
                               </span>
                             ) : null}
                           </div>
                         </td>
                         {visibleTableColumns.map((column) => (
-                          <td key={column.key}>{displayTableColumnValue(column, record, records, props.users, currencies)}</td>
+                          <td key={column.key}>{displayTableColumnValue(column, record, records, workspaceUsers, currencies)}</td>
                         ))}
                         <td>{formatDate(record.updatedAt)}</td>
                       </tr>
@@ -6440,7 +6540,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                   <OwnerSelect
                     disabled={!canManageViews}
                     testId={`create-owner-${activeObject.key}`}
-                    users={props.users}
+                    users={workspaceUsers}
                     value={createOwnerId}
                     onChange={setCreateOwnerId}
                   />
@@ -6451,7 +6551,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       value={createValues[field.key] ?? ""}
                       allRecords={records}
                       mediaAssets={mediaAssets}
-                      users={props.users}
+                      users={workspaceUsers}
                       testId={`create-field-${activeObject.key}-${field.key}`}
                       onRecordsLoaded={mergeLoadedRecords}
                       onUploadMediaAssets={uploadMediaAssets}
@@ -6493,6 +6593,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       />
                     </>
                   ) : null}
+                  <TagEditor
+                    label="标签"
+                    suggestions={activeObjectTagSuggestions}
+                    testId={`create-tags-${activeObject.key}`}
+                    value={createTags}
+                    onChange={setCreateTags}
+                  />
                 </div>
                 <div className="toolbar" style={{ marginTop: 12 }}>
                   <button
@@ -6521,7 +6628,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         currentUserId={props.contextUser.id}
                         disabled={isPending}
                         record={selectedRecord}
-                        users={props.users}
+                        users={workspaceUsers}
                         canManagePool={props.role.permissions.includes("crm.pool.manage")}
                         onClaim={() => runAction(() => applyRecordPoolAction("claim", selectedRecord))}
                         onRelease={() => runAction(() => applyRecordPoolAction("release", selectedRecord))}
@@ -6540,11 +6647,20 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         fields={selectedFields}
                         record={selectedRecord}
                         request={selectedRecordPendingUpdateRequest}
-                        users={props.users}
+                        users={workspaceUsers}
                         onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
                         disabled={isPending || isRecordSavePending}
                       />
                     ) : null}
+                    <div className="form-grid" style={{ marginTop: 12 }}>
+                      <TagEditor
+                        label="标签"
+                        suggestions={activeObjectTagSuggestions}
+                        testId={`edit-tags-${selectedRecord.objectKey}`}
+                        value={editTags}
+                        onChange={setEditTags}
+                      />
+                    </div>
                     {selectedRecord.objectKey === "contacts" ? (
                       <>
                         <ContactProfileEditor
@@ -6563,7 +6679,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           saveDisabled={selectedRecordApprovalSaveDisabled}
                           saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                           title={editTitle}
-                          users={props.users}
+                          users={workspaceUsers}
                           values={editValues}
                           onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
                           onContactMethodsChange={(methods) => setEditValues((current) => withContactMethodValues(current, methods))}
@@ -6616,7 +6732,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           shippingAddressEditingId={companyAddressEditing?.valueKey === companyShippingAddressesValueKey ? companyAddressEditing.addressId : ""}
                           shippingAddressValue={editValues[companyShippingAddressesValueKey] ?? ""}
                           title={editTitle}
-                          users={props.users}
+                          users={workspaceUsers}
                           values={editValues}
                           onAddBillingAddress={() => setCompanyAddressEditing({ valueKey: companyBillingAddressesValueKey, addressId: createCompanyAddressId() })}
                           onAddShippingAddress={() => setCompanyAddressEditing({ valueKey: companyShippingAddressesValueKey, addressId: createCompanyAddressId() })}
@@ -6681,7 +6797,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存"}
                           stages={activePipelineStages}
                           title={editTitle}
-                          users={props.users}
+                          users={workspaceUsers}
                           values={editValues}
                           onCancelDeleteRequest={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
                           onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
@@ -6718,9 +6834,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         canEdit={canManageViews}
                         disabled={!canManageViews}
                         isPending={isPending || isRecordSavePending}
-                        ownerName={ownerLabel(editOwnerId || undefined, props.users)}
+                        ownerName={ownerLabel(editOwnerId || undefined, workspaceUsers)}
                         testId="edit-record-owner"
-                        users={props.users}
+                        users={workspaceUsers}
                         value={editOwnerId}
                         onChange={setEditOwnerId}
                         onSave={submitSingleRecordOwner}
@@ -6749,7 +6865,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           value={editValues[field.key] ?? ""}
                           allRecords={records}
                           mediaAssets={mediaAssets}
-                          users={props.users}
+                          users={workspaceUsers}
                           testId={`edit-field-${selectedRecord.objectKey}-${field.key}`}
                           onRecordsLoaded={mergeLoadedRecords}
                           onUploadMediaAssets={uploadMediaAssets}
@@ -7106,7 +7222,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           mediaAssets={mediaAssets}
                           pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
                           testIdPrefix="record-task"
-                          users={props.users}
+                          users={workspaceUsers}
                           onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
                           onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
                           onEdit={(activity) => {
@@ -7276,7 +7392,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         question={aiQuestion}
                         setQuestion={setAiQuestion}
                         allRecords={records}
-                        users={props.users}
+                        users={workspaceUsers}
                         onOpenRecord={openRecord}
                       />
                     )}
@@ -7413,7 +7529,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     {importPreview && <CsvPreviewDetailed preview={importPreview} strategy={importStrategy} />}
                     <ImportJobList
                       jobs={activeImportJobs.slice(0, 5)}
-                      users={props.users}
+                      users={workspaceUsers}
                       disabled={isPending}
                       selectedJobId={selectedActiveImportJob?.id}
                       onViewDetails={(job) => runAction(() => loadImportJobDetails(job))}
@@ -7588,7 +7704,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             activities={filteredTaskActivities}
             mediaAssets={mediaAssets}
             pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
-            users={props.users}
+            tagSuggestions={taskTagSuggestions}
+            users={workspaceUsers}
             view={taskWorkspaceView}
             onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
             onArchive={(activity, archived) => runAction(() => toggleTaskArchive(activity, archived))}
@@ -7616,11 +7733,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             workflowApprovals={props.workflowApprovals}
             records={records}
             emailAccounts={props.emailAccounts}
-            users={props.users}
+            users={workspaceUsers}
           />
         )}
         {activeNav === "settings" && (
           <SettingsAdmin
+            currentUser={currentUser}
             role={props.role}
             objects={props.objects}
             fields={props.fields}
@@ -7630,13 +7748,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             records={records}
             activities={activities}
             roles={props.roles}
-            users={props.users}
+            users={workspaceUsers}
             teams={props.teams}
             apiKeys={props.apiKeys}
             webhooks={props.webhooks}
             notificationChannels={props.notificationChannels}
             emailAccounts={props.emailAccounts}
             emailAiSettings={emailAiSettings}
+            mediaAssets={mediaAssets}
             knowledgeArticles={knowledgeArticles}
             knowledgeVectorSettings={knowledgeVectorSettings}
             knowledgeVectorActionKey={knowledgeVectorActionKey}
@@ -7651,6 +7770,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             workflows={props.workflows}
             workflowRuns={props.workflowRuns}
             workflowApprovals={props.workflowApprovals}
+            onCurrentUserUpdated={(user) => setCurrentUser((current) => ({ ...current, ...user }))}
             onRecordsUpdated={mergeLoadedRecords}
             onCustomerLevelSettingsUpdated={setCustomerLevelSettings}
             onKnowledgeDraftChange={setKnowledgeDraft}
@@ -7660,6 +7780,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onSaveKnowledgeVectorSettings={(patch) => runAction(() => saveKnowledgeVectorSettings(patch))}
             onVectorizeKnowledgeArticle={(articleId) => runAction(() => vectorizeKnowledgeArticle(articleId))}
             onVectorizeKnowledge={() => runAction(vectorizeKnowledge)}
+            onUploadCurrentUserAvatarAssets={uploadCurrentUserAvatarAssets}
           />
         )}
 
@@ -13208,6 +13329,7 @@ function TaskView({
   activities,
   mediaAssets,
   pendingDeleteRequestsById,
+  tagSuggestions,
   users,
   view,
   onToggle,
@@ -13222,6 +13344,7 @@ function TaskView({
   activities: Activity[];
   mediaAssets: MediaAsset[];
   pendingDeleteRequestsById: Map<string, RecordChangeRequest>;
+  tagSuggestions: string[];
   users: User[];
   view: TaskCalendarView;
   onToggle: (activity: Activity, completed: boolean) => void;
@@ -13432,6 +13555,7 @@ function TaskView({
           draft={editDraft}
           isUploading={isUploadingTaskImage}
           mediaAssets={mediaAssets}
+          tagSuggestions={tagSuggestions}
           task={editingTask}
           onAddMediaAsset={(asset) =>
             setEditDraft((current) => ({
@@ -13507,6 +13631,7 @@ function TaskList({
               {!completed && overdue && <span className="badge danger-badge">已逾期</span>}
             </div>
             <strong>{activity.title}</strong>
+            <TagList tags={activity.tags ?? []} compact />
             {taskDetails.text && <div className="subtle">{taskDetails.text}</div>}
             <TaskAttachmentPreview attachments={taskDetails.attachments} mediaAssets={mediaAssets} />
             <div className="toolbar" style={{ marginTop: 10 }}>
@@ -13566,6 +13691,7 @@ function TaskEditDialog({
   draft,
   isUploading,
   mediaAssets,
+  tagSuggestions,
   task,
   onAddMediaAsset,
   onCancel,
@@ -13577,6 +13703,7 @@ function TaskEditDialog({
   draft: TaskEditDraft;
   isUploading: boolean;
   mediaAssets: MediaAsset[];
+  tagSuggestions: string[];
   task: Activity;
   onAddMediaAsset: (asset: MediaAsset) => void;
   onCancel: () => void;
@@ -13624,6 +13751,13 @@ function TaskEditDialog({
               <span className="subtle">备注</span>
               <textarea className="textarea" data-testid="task-edit-body" value={draft.text} onChange={(event) => onChange({ ...draft, text: event.target.value })} />
             </label>
+            <TagEditor
+              label="标签"
+              suggestions={tagSuggestions}
+              testId="task-edit-tags"
+              value={draft.tags}
+              onChange={(tags) => onChange({ ...draft, tags })}
+            />
           </div>
           <div className="task-attachment-panel">
             <div className="task-attachment-panel-header">
@@ -14140,7 +14274,7 @@ function notificationChannelTypeLabel(type: NotificationChannel["type"]): string
 }
 
 function buildActivitiesCsv(activities: Activity[], records: CrmRecord[], users: User[]): string {
-  const headers = ["id", "type", "title", "body", "record", "owner", "dueAt", "completedAt", "archivedAt", "createdAt"];
+  const headers = ["id", "type", "title", "tags", "body", "record", "owner", "dueAt", "completedAt", "archivedAt", "createdAt"];
   const rows = activities.map((activity) => {
     const details = activity.type === "task" ? parseTaskDetails(activity.body) : parseActivityDetails(activity.body);
     const record = records.find((candidate) => candidate.id === activity.recordId);
@@ -14149,6 +14283,7 @@ function buildActivitiesCsv(activities: Activity[], records: CrmRecord[], users:
       activity.id,
       formatActivityType(activity.type),
       activity.title,
+      (activity.tags ?? []).join("; "),
       details.text,
       record?.title ?? "",
       owner ? `${owner.name} <${owner.email}>` : "",
@@ -14578,6 +14713,7 @@ function ViewConfigurator({
 }) {
   const fieldChoices = [{ key: "title", label: "名称" }, ...fields.map((field) => ({ key: field.key, label: field.label }))];
   fieldChoices.splice(1, 0, { key: "ownerId", label: "负责人" });
+  fieldChoices.splice(2, 0, { key: "tags", label: "标签" });
   const filterFieldDefinition = fields.find((field) => field.key === draft.filterField);
   if (objectKey === "deals") {
     fieldChoices.push({ key: "stageKey", label: "阶段" });
@@ -15634,224 +15770,6 @@ function TalkAboutThisPanel({
         </>
       ) : null}
     </section>
-  );
-}
-
-function MediaAssetPreview({ asset }: { asset: MediaAsset }) {
-  if (isImageMediaAsset(asset)) {
-    return <img alt={asset.name} src={mediaAssetDataUrl(asset)} />;
-  }
-
-  return (
-    <div className="media-file-preview">
-      <Paperclip size={22} />
-      <span>{mediaAssetExtension(asset.name) || asset.contentType}</span>
-    </div>
-  );
-}
-
-function MediaLibraryModal({
-  accept,
-  canSelectAsset,
-  description,
-  disabled,
-  mediaAssets,
-  onClose,
-  onDeleteMediaAsset,
-  onSelect,
-  onUpdateMediaAsset,
-  onUploadMediaAssets,
-  selectFirstUploaded = false,
-  selectLabel = "选择",
-  testId,
-  title
-}: {
-  accept?: string;
-  canSelectAsset?: (asset: MediaAsset) => boolean;
-  description: string;
-  disabled?: boolean;
-  mediaAssets: MediaAsset[];
-  onClose: () => void;
-  onDeleteMediaAsset?: (asset: MediaAsset) => void;
-  onSelect: (asset: MediaAsset) => void;
-  onUpdateMediaAsset?: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
-  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
-  selectFirstUploaded?: boolean;
-  selectLabel?: string;
-  testId: string;
-  title: string;
-}) {
-  const uploadInputRef = useRef<HTMLInputElement>(null);
-  const replaceInputRef = useRef<HTMLInputElement>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const [editingAssetId, setEditingAssetId] = useState("");
-  const [nameDraft, setNameDraft] = useState("");
-  const editingAsset = mediaAssets.find((asset) => asset.id === editingAssetId);
-  const visibleMediaAssets = canSelectAsset ? mediaAssets.filter(canSelectAsset) : mediaAssets;
-
-  async function uploadFiles(files: FileList | File[] | null) {
-    const uploaded = await onUploadMediaAssets(files);
-    const selectableUploaded = canSelectAsset ? uploaded.find(canSelectAsset) : uploaded[0];
-    if (selectFirstUploaded && selectableUploaded) {
-      onSelect(selectableUploaded);
-    }
-  }
-
-  async function replaceEditingAsset(files: FileList | null) {
-    const file = files?.[0];
-    if (!editingAsset || !file || !onUpdateMediaAsset) {
-      return;
-    }
-    if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
-      return;
-    }
-    onUpdateMediaAsset(editingAsset.id, {
-      name: nameDraft.trim() || file.name,
-      contentType: file.type || "application/octet-stream",
-      size: file.size,
-      contentBase64: await readFileAsBase64(file)
-    });
-    setEditingAssetId("");
-    setNameDraft("");
-  }
-
-  function saveEditingAssetName(asset: MediaAsset) {
-    const nextName = nameDraft.trim();
-    if (!nextName || !onUpdateMediaAsset) {
-      return;
-    }
-    onUpdateMediaAsset(asset.id, { name: nextName });
-    setEditingAssetId("");
-    setNameDraft("");
-  }
-
-  return (
-    <div className="modal-backdrop" data-testid={testId} role="dialog" aria-modal="true" aria-label={title}>
-      <div className="modal-panel media-library-modal">
-        <div className="email-pane-header compact">
-          <div>
-            <h2 className="page-title" style={{ fontSize: 18 }}>{title}</h2>
-            <p className="subtle">{description}</p>
-          </div>
-          <button className="icon-button" aria-label="关闭媒体库" type="button" onClick={onClose}>
-            <XCircle size={16} />
-          </button>
-        </div>
-        <div
-          className={`email-attachment-dropzone ${dragActive ? "active" : ""}`}
-          data-testid={`${testId}-dropzone`}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            setDragActive(true);
-          }}
-          onDragOver={(event) => event.preventDefault()}
-          onDragLeave={() => setDragActive(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragActive(false);
-            void uploadFiles(event.dataTransfer.files);
-          }}
-        >
-          <Upload size={24} />
-          <strong>拖拽文件到这里</strong>
-          <span className="subtle">或从本地选择文件，上传后可复用于产品、联系人、公司、邮件和活动附件。</span>
-          <button className="secondary-button" type="button" onClick={() => uploadInputRef.current?.click()} disabled={disabled}>
-            <Upload size={16} />
-            上传文件
-          </button>
-          <input
-            ref={uploadInputRef}
-            hidden
-            accept={accept}
-            multiple
-            type="file"
-            onChange={(event) => {
-              void uploadFiles(event.target.files);
-              event.target.value = "";
-            }}
-          />
-          <input
-            ref={replaceInputRef}
-            hidden
-            accept={accept}
-            type="file"
-            onChange={(event) => {
-              void replaceEditingAsset(event.target.files);
-              event.target.value = "";
-            }}
-          />
-        </div>
-        {visibleMediaAssets.length ? (
-          <div className="media-library-grid">
-            {visibleMediaAssets.map((asset) => (
-              <div className="media-library-card" key={asset.id}>
-                <button className="media-library-select" type="button" onClick={() => onSelect(asset)}>
-                  <MediaAssetPreview asset={asset} />
-                </button>
-                {editingAssetId === asset.id ? (
-                  <div className="media-library-edit">
-                    <input className="input" data-testid={`media-asset-name-${asset.id}`} value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
-                    <div className="toolbar compact-toolbar">
-                      <button className="secondary-button" type="button" onClick={() => saveEditingAssetName(asset)} disabled={disabled || !nameDraft.trim() || !onUpdateMediaAsset}>
-                        <Save size={14} />
-                        保存
-                      </button>
-                      <button className="secondary-button" type="button" onClick={() => replaceInputRef.current?.click()} disabled={disabled || !onUpdateMediaAsset}>
-                        <Upload size={14} />
-                        替换
-                      </button>
-                      <button className="secondary-button" type="button" onClick={() => setEditingAssetId("")}>
-                        取消
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="media-library-card-footer">
-                    <span title={asset.name}>{asset.name}</span>
-                    <div className="toolbar compact-toolbar">
-                      <button className="secondary-button" type="button" onClick={() => onSelect(asset)}>
-                        {selectLabel}
-                      </button>
-                      <button
-                        className="icon-button"
-                        aria-label={`编辑 ${asset.name}`}
-                        data-testid={`media-asset-edit-${asset.id}`}
-                        type="button"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          setEditingAssetId(asset.id);
-                          setNameDraft(asset.name);
-                        }}
-                        disabled={disabled || !onUpdateMediaAsset}
-                      >
-                        <Pencil size={14} />
-                      </button>
-                      <button
-                        className="icon-button danger-button"
-                        aria-label={`删除 ${asset.name}`}
-                        data-testid={`media-asset-delete-${asset.id}`}
-                        type="button"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onDeleteMediaAsset?.(asset);
-                        }}
-                        disabled={disabled || !onDeleteMediaAsset}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="empty-state">媒体库暂无可选文件</div>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -17223,13 +17141,126 @@ function QuoteProductSearchDropdown({
   );
 }
 
+function TagList({ tags, compact = false }: { tags: string[]; compact?: boolean }) {
+  const normalizedTags = uniqueUiTags(tags);
+  if (!normalizedTags.length) {
+    return null;
+  }
+  return (
+    <span className={`crm-tag-list ${compact ? "compact" : ""}`}>
+      {normalizedTags.map((tag) => (
+        <span className="crm-tag-chip" key={tag}>
+          {tag}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function TagEditor({
+  label,
+  suggestions,
+  testId,
+  value,
+  onChange
+}: {
+  label: string;
+  suggestions: string[];
+  testId?: string;
+  value: string[];
+  onChange: (tags: string[]) => void;
+}) {
+  const [input, setInput] = useState("");
+  const normalizedValue = uniqueUiTags(value);
+  const availableSuggestions = uniqueUiTags(suggestions).filter((tag) => !normalizedValue.includes(tag)).slice(0, 12);
+
+  function applyTags(nextTags: string[]) {
+    onChange(uniqueUiTags(nextTags));
+  }
+
+  function addInputTags(rawValue = input) {
+    const nextTags = splitUiTags(rawValue);
+    if (!nextTags.length) {
+      setInput("");
+      return;
+    }
+    applyTags([...normalizedValue, ...nextTags]);
+    setInput("");
+  }
+
+  return (
+    <div className="wide tag-select" data-testid={testId}>
+      <span className="subtle">{label}</span>
+      <div className="tag-select-input">
+        {normalizedValue.map((tag) => (
+          <span className="tag-select-token" key={tag}>
+            {tag}
+            <button type="button" aria-label={`移除标签 ${tag}`} onClick={() => applyTags(normalizedValue.filter((candidate) => candidate !== tag))}>
+              <XCircle size={12} />
+            </button>
+          </span>
+        ))}
+        <input
+          aria-label={label}
+          value={input}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            if (/[,;\uFF1B\uFF0C]/.test(nextValue)) {
+              addInputTags(nextValue);
+              return;
+            }
+            setInput(nextValue);
+          }}
+          onBlur={() => addInputTags()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === "Tab") {
+              if (input.trim()) {
+                event.preventDefault();
+                addInputTags();
+              }
+            } else if (event.key === "Backspace" && !input && normalizedValue.length) {
+              applyTags(normalizedValue.slice(0, -1));
+            }
+          }}
+          placeholder="添加标签"
+        />
+      </div>
+      {availableSuggestions.length ? (
+        <div className="tag-select-list" style={{ marginTop: 8 }}>
+          {availableSuggestions.map((tag) => (
+            <button className="tag-select-option" key={tag} type="button" onClick={() => applyTags([...normalizedValue, tag])}>
+              <Plus size={12} />
+              {tag}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function uniqueUiTags(tags: string[]): string[] {
+  const normalized = tags
+    .map((tag) => tag.trim().toLowerCase())
+    .filter(Boolean)
+    .map((tag) => tag.slice(0, 40));
+  return Array.from(new Set(normalized)).slice(0, 50);
+}
+
+function splitUiTags(value: string): string[] {
+  return uniqueUiTags(value.split(/[,;\uFF1B\uFF0C]/));
+}
+
 function RecordTitleButton({ record, onOpen }: { record: CrmRecord; onOpen: () => void }) {
   const imageUrl = record.objectKey === "contacts" ? record.data.avatarUrl : record.objectKey === "companies" ? record.data.logoUrl : undefined;
   const hasImage = typeof imageUrl === "string" && imageUrl.trim().length > 0;
   return (
     <button className="record-title record-title-with-media" data-testid={`record-row-${record.id}`} type="button" onClick={onOpen}>
       {hasImage && <RecordListImage imageUrl={imageUrl} title={record.title} objectKey={record.objectKey} />}
-      <span>{record.title}</span>
+      <span className="record-title-text">
+        <span>{record.title}</span>
+        <TagList tags={record.tags ?? []} compact />
+      </span>
     </button>
   );
 }
@@ -20363,6 +20394,10 @@ function displayTableColumnValue(column: TableColumn, record: CrmRecord, records
     return ownerLabel(record.ownerId, users);
   }
 
+  if (column.type === "tags") {
+    return <TagList tags={record.tags ?? []} />;
+  }
+
   if (record.objectKey === "products" && column.field.key === "mainImageUrl") {
     return <ProductThumbnail imageUrl={record.data.mainImageUrl} title={record.title} />;
   }
@@ -20487,6 +20522,7 @@ function createTaskEditDraft(activity: Activity | null): TaskEditDraft {
     title: activity?.title ?? "",
     dueAt: toDateTimeLocalValue(activity?.dueAt),
     text: details.text,
+    tags: activity?.tags ?? [],
     attachments: details.attachments
   };
 }
@@ -20600,16 +20636,16 @@ function sampleCsvFor(objectKey: string, fields: FieldDefinition[]): string {
     return "title,amount,closeDate,companyId\n平台升级项目,120000,2026-08-15,company-acme";
   }
   if (objectKey === "products") {
-    return "title,sku,unitPrice,billingCycle,active\nAI 销售助手标准版,SKU-AI-SALES-STD,2999,annual,true";
+    return "title,tags,sku,unitPrice,billingCycle,active\nAI 销售助手标准版,热销; ai,SKU-AI-SALES-STD,2999,annual,true";
   }
   if (objectKey === "quotes") {
-    return "title,quoteNumber,companyId,contactId,paymentTerm,totalAmount,status,validUntil\nAcme 年度订阅报价,Q-2026-001,company-acme,contact-lin,net_30,3499,draft,2026-07-31";
+    return "title,tags,quoteNumber,companyId,contactId,paymentTerm,totalAmount,status,validUntil\nAcme 年度订阅报价,续约; 重点,Q-2026-001,company-acme,contact-lin,net_30,3499,draft,2026-07-31";
   }
   if (objectKey === "contacts") {
-    return "title,email,phone\n王敏,wang@example.com,+86 139 0000 0000";
+    return "title,tags,email,phone\n王敏,vip; 华东,wang@example.com,+86 139 0000 0000";
   }
 
-  return ["title", ...fields.slice(0, 3).map((field) => field.key)].join(",");
+  return ["title", "tags", ...fields.slice(0, 3).map((field) => field.key)].join(",");
 }
 
 function mergeRecords(...groups: Array<Array<CrmRecord | null | undefined> | null | undefined>): CrmRecord[] {

@@ -11,6 +11,13 @@ export function matchesSavedView(record: CrmRecord, view?: SavedView): boolean {
   }
 
   return view.filters.every((filter) => {
+    if (filter.field === "tags") {
+      const tags = record.tags ?? [];
+      const expected = normalizeComparable(filter.value);
+      return filter.operator === "equals"
+        ? tags.some((tag) => normalizeComparable(tag) === expected)
+        : tags.some((tag) => normalizeComparable(tag).includes(expected));
+    }
     const actual = normalizeComparable(readRecordValue(record, filter.field));
     const expected = normalizeComparable(filter.value);
 
@@ -28,7 +35,7 @@ export function matchesRecordSearch(record: CrmRecord, query?: string): boolean 
     return true;
   }
 
-  return `${record.title} ${JSON.stringify(record.data)}`.toLowerCase().includes(normalizedQuery);
+  return `${record.title} ${(record.tags ?? []).join(" ")} ${JSON.stringify(record.data)}`.toLowerCase().includes(normalizedQuery);
 }
 
 export function compareRecords(
@@ -161,6 +168,9 @@ export function readRecordValue(record: CrmRecord, field: string): unknown {
   if (field === "ownerId") {
     return record.ownerId;
   }
+  if (field === "tags") {
+    return record.tags ?? [];
+  }
   return record.data[field];
 }
 
@@ -170,6 +180,9 @@ function normalizeComparable(value: unknown): string {
   }
   if (typeof value === "string") {
     return value.trim().toLowerCase();
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeComparable(item)).filter(Boolean).join(" ");
   }
   return String(value).trim().toLowerCase();
 }
