@@ -3352,6 +3352,7 @@ await run("contact and company editing refinements are guarded", () => {
 
 await run("tag migration is idempotent and included in VPS failed-migration recovery", () => {
   const migration = readFileSync("prisma/migrations/20260711130000_record_activity_tags/migration.sql", "utf8");
+  const ensureMigration = readFileSync("prisma/migrations/20260711143000_ensure_record_activity_tags/migration.sql", "utf8");
   const recoveryScript = readFileSync("scripts/recover-known-failed-migrations.mjs", "utf8");
   const deployWorkflow = readFileSync(".github/workflows/deploy-vps.yml", "utf8");
 
@@ -3359,8 +3360,14 @@ await run("tag migration is idempotent and included in VPS failed-migration reco
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "tagColors"/);
   assert.match(migration, /CREATE INDEX IF NOT EXISTS "CrmRecord_tags_gin_idx"/);
   assert.match(migration, /CREATE INDEX IF NOT EXISTS "Activity_tags_gin_idx"/);
+  assert.match(ensureMigration, /ADD COLUMN IF NOT EXISTS "tags"/);
+  assert.match(ensureMigration, /ADD COLUMN IF NOT EXISTS "tagColors"/);
+  assert.match(ensureMigration, /CREATE INDEX IF NOT EXISTS "CrmRecord_tags_gin_idx"/);
+  assert.match(ensureMigration, /CREATE INDEX IF NOT EXISTS "Activity_tags_gin_idx"/);
   assert.match(recoveryScript, /20260711130000_record_activity_tags/);
+  assert.match(recoveryScript, /20260711143000_ensure_record_activity_tags/);
   assert.match(deployWorkflow, /20260711130000_record_activity_tags/);
+  assert.match(deployWorkflow, /20260711143000_ensure_record_activity_tags/);
   assert.match(deployWorkflow, /ADD COLUMN IF NOT EXISTS "tagColors"/);
 });
 

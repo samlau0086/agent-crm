@@ -492,6 +492,18 @@ jobs:
             echo "::error title=Stale migration recovery script::Image $crm_image cannot recover the tags migration if a previous deploy left it failed."
             exit 1
           fi
+          ensure_tags_migration_path="prisma/migrations/20260711143000_ensure_record_activity_tags/migration.sql"
+          ensure_tags_migration_sql="$(docker run --rm --entrypoint sh "$crm_image" -lc "cat \"$ensure_tags_migration_path\"")"
+          echo "===== CRM image migration sanity check: $ensure_tags_migration_path ====="
+          printf '%s\n' "$ensure_tags_migration_sql" | sed -n '1,20p'
+          if ! printf '%s\n' "$ensure_tags_migration_sql" | grep -q 'ADD COLUMN IF NOT EXISTS "tagColors"'; then
+            echo "::error title=Missing tags ensure migration::Image $crm_image does not contain the follow-up migration that repairs databases where the original tags migration already finished."
+            exit 1
+          fi
+          if ! docker run --rm --entrypoint sh "$crm_image" -lc "grep -q '20260711143000_ensure_record_activity_tags' scripts/recover-known-failed-migrations.mjs"; then
+            echo "::error title=Stale migration recovery script::Image $crm_image cannot recover the tags ensure migration if it fails."
+            exit 1
+          fi
           echo "===== prepare database services ====="
           docker compose up -d postgres redis
           echo "===== known failed migration recovery ====="
