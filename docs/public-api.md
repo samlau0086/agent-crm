@@ -33,7 +33,7 @@ CRM records and tasks support free-form `tags` and per-tag colors.
 
 - Record create/update payloads accept `tags?: string[]` for contacts, companies, deals, products, quotes, and other CRM objects.
 - Activity create/update payloads accept `tags?: string[]`; the product UI currently exposes this for tasks.
-- Record and activity write payloads accept `tagColors?: Record<string, "robin" | "mint" | "sky" | "amber" | "rose" | "violet" | "slate" | "navy">`. Missing tag colors render as `robin`.
+- Record and activity write payloads accept `tagColors?: Record<string, "cyan" | "mint" | "sky" | "amber" | "rose" | "violet" | "slate" | "navy">`. Missing tag colors are assigned from the palette in round-robin order.
 - The built-in tag palette keeps readable contrast: light colors use dark text, and dark colors use white text.
 - Tags are normalized by trimming whitespace, lowercasing, removing empty values, and de-duplicating. A payload may include at most `50` unique tags, and each tag may contain at most `40` characters.
 - Record list `q` search matches record title, record data, and tags.

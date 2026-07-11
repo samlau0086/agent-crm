@@ -17236,8 +17236,8 @@ function TagList({ colors = {}, tags, compact = false }: { colors?: Record<strin
   }
   return (
     <span className={`crm-tag-cloud ${compact ? "compact" : ""}`}>
-      {normalizedTags.map((tag) => (
-        <span className="crm-tag-chip" data-color={tagColorKey(colors[tag])} key={tag}>
+      {normalizedTags.map((tag, index) => (
+        <span className="crm-tag-chip" data-color={tagColorKey(colors[tag], index)} key={tag}>
           {tag}
         </span>
       ))}
@@ -17373,7 +17373,7 @@ function TagEditor({
 }
 
 const tagColorOptions = [
-  { key: "robin", label: "Robin" },
+  { key: "cyan", label: "Cyan" },
   { key: "mint", label: "Mint" },
   { key: "sky", label: "Sky" },
   { key: "amber", label: "Amber" },
@@ -17383,8 +17383,11 @@ const tagColorOptions = [
   { key: "navy", label: "Navy" }
 ] as const;
 
-function tagColorKey(value: unknown): string {
-  return typeof value === "string" && tagColorOptions.some((option) => option.key === value) ? value : "robin";
+function tagColorKey(value: unknown, fallbackIndex = 0): string {
+  if (typeof value === "string" && tagColorOptions.some((option) => option.key === value)) {
+    return value;
+  }
+  return tagColorOptions[fallbackIndex % tagColorOptions.length].key;
 }
 
 function normalizeUiTag(value: string): string {
@@ -17393,7 +17396,7 @@ function normalizeUiTag(value: string): string {
 
 function normalizeUiTagColors(colors: Record<string, unknown>, tags: string[]): Record<string, string> {
   const normalizedTags = uniqueUiTags(tags);
-  return Object.fromEntries(normalizedTags.map((tag) => [tag, tagColorKey(colors[tag])]));
+  return Object.fromEntries(normalizedTags.map((tag, index) => [tag, tagColorKey(colors[tag], index)]));
 }
 
 function omitUiTagColor(colors: Record<string, string>, tag: string): Record<string, string> {

@@ -2000,11 +2000,13 @@ await run("activity update schema accepts task archive state", () => {
 
 await run("crm tag schemas normalize validate and dedupe values", () => {
   assert.deepEqual(recordWriteSchema.parse({ title: "Tagged", data: {}, tags: [" VIP ", "vip", "重点"] }).tags, ["vip", "重点"]);
+  assert.deepEqual(recordWriteSchema.parse({ title: "Tagged", data: {}, tags: ["vip"], tagColors: { vip: "cyan" } }).tagColors, { vip: "cyan" });
   assert.deepEqual(recordWriteSchema.parse({ title: "Tagged", data: {}, tags: ["vip"], tagColors: { vip: "navy" } }).tagColors, { vip: "navy" });
   assert.deepEqual(activityCreateSchema.parse({ type: "task", title: "Tagged task", tags: [" Follow-Up ", "follow-up"] }).tags, ["follow-up"]);
   assert.deepEqual(activityCreateSchema.parse({ type: "task", title: "Tagged task", tags: ["follow-up"], tagColors: { "follow-up": "amber" } }).tagColors, { "follow-up": "amber" });
   assert.throws(() => recordWriteSchema.parse({ title: "Too long", data: {}, tags: ["x".repeat(41)] }), z.ZodError);
   assert.throws(() => recordWriteSchema.parse({ title: "Bad color", data: {}, tags: ["vip"], tagColors: { vip: "not-a-color" } }), z.ZodError);
+  assert.throws(() => recordWriteSchema.parse({ title: "Robin is not a color", data: {}, tags: ["vip"], tagColors: { vip: "robin" } }), z.ZodError);
   assert.throws(
     () => recordWriteSchema.parse({ title: "Too many", data: {}, tags: Array.from({ length: 51 }, (_, index) => `tag-${index}`) }),
     z.ZodError
@@ -9464,6 +9466,7 @@ await run("record tags can be created searched filtered sorted and exported", ()
 
   assert.deepEqual(tagged.tags, ["vip", "north"]);
   assert.deepEqual(tagged.tagColors, { vip: "navy", north: "mint" });
+  assert.deepEqual(store.createRecord(context, "contacts", { title: "Round Robin", tags: ["one", "two", "three"] }).tagColors, { one: "cyan", two: "mint", three: "sky" });
   const recolored = store.updateRecord(context, "contacts", tagged.id, { tagColors: { vip: "amber", north: "sky", unused: "navy" } });
   assert.deepEqual(recolored.tagColors, { vip: "amber", north: "sky" });
   assert.deepEqual(store.queryRecords(context, "contacts", { q: "north" }).records.map((record) => record.id), [tagged.id]);
@@ -9593,6 +9596,7 @@ await run("csv import maps record tags and task queries filter tags", () => {
   const importResult = store.importCsv(context, "contacts", "title,tags,email\nTagged Import,\"VIP; Import\",tag-import@example.com");
   const imported = importResult.created[0];
   assert.deepEqual(imported.tags, ["vip", "import"]);
+  assert.deepEqual(imported.tagColors, { vip: "cyan", import: "mint" });
 
   const task = store.createActivity(context, {
     recordId: imported.id,

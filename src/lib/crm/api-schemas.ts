@@ -46,7 +46,7 @@ export const tagListSchema = z
     }
     return uniqueTags;
   });
-export const tagColorSchema = z.enum(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"]);
+export const tagColorSchema = z.enum(["cyan", "mint", "sky", "amber", "rose", "violet", "slate", "navy"]);
 export const tagColorsSchema = z.record(tagColorSchema).optional();
 
 export const fieldTypeSchema = z.enum(["text", "textarea", "number", "currency", "date", "select", "boolean", "user", "reference"]);

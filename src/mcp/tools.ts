@@ -15,7 +15,7 @@ const tagListSchema = z
   .max(50)
   .optional()
   .transform((tags) => (tags ? Array.from(new Set(tags)) : undefined));
-const tagColorsSchema = z.record(z.enum(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"])).optional();
+const tagColorsSchema = z.record(z.enum(["cyan", "mint", "sky", "amber", "rose", "violet", "slate", "navy"])).optional();
 const recordFilterSchema = z
   .object({
     field: z.string().trim().min(1),

@@ -5614,14 +5614,15 @@ function uniqueTags(values: string[]): string[] {
   return uniqueTags;
 }
 
-const allowedTagColors = new Set(["robin", "mint", "sky", "amber", "rose", "violet", "slate", "navy"]);
+const tagColorPalette = ["cyan", "mint", "sky", "amber", "rose", "violet", "slate", "navy"] as const;
+const allowedTagColors = new Set<string>(tagColorPalette);
 
 function normalizeTagColors(values: Record<string, unknown>, tags: string[]): Record<string, string> {
   const normalizedTags = uniqueTags(tags);
   const colors: Record<string, string> = {};
-  for (const tag of normalizedTags) {
+  for (const [index, tag] of normalizedTags.entries()) {
     const color = values[tag];
-    colors[tag] = typeof color === "string" && allowedTagColors.has(color) ? color : "robin";
+    colors[tag] = typeof color === "string" && allowedTagColors.has(color) ? color : tagColorPalette[index % tagColorPalette.length];
   }
   return colors;
 }

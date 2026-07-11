@@ -5875,8 +5875,8 @@ body.deal-pipeline-dragging {
   overflow-wrap: anywhere;
 }
 
-.crm-tag-chip[data-color="robin"],
-.tag-select-token[data-color="robin"] {
+.crm-tag-chip[data-color="cyan"],
+.tag-select-token[data-color="cyan"] {
   --tag-bg: #b7f4f7;
   --tag-fg: #0f172a;
   --tag-border: #67d8df;

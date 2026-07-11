@@ -111,8 +111,8 @@ v1 MCP server 有意不暴露以下高风险能力：
 MCP tools support CRM tags and tag colors on records and tasks:
 
 - `crm_search_records` and `crm_list_contacts` accept `tags?: string[]`; the MCP client sends them to REST as a comma-separated `tags` query parameter.
-- `crm_create_record` and `crm_update_record` accept `tags?: string[]` and `tagColors?: Record<string, "robin" | "mint" | "sky" | "amber" | "rose" | "violet" | "slate" | "navy">`.
-- `crm_list_activities` accepts `tags?: string[]`; `crm_create_activity` and `crm_update_activity` accept `tags?: string[]` and `tagColors?: Record<string, "robin" | "mint" | "sky" | "amber" | "rose" | "violet" | "slate" | "navy">`.
+- `crm_create_record` and `crm_update_record` accept `tags?: string[]` and `tagColors?: Record<string, "cyan" | "mint" | "sky" | "amber" | "rose" | "violet" | "slate" | "navy">`.
+- `crm_list_activities` accepts `tags?: string[]`; `crm_create_activity` and `crm_update_activity` accept `tags?: string[]` and `tagColors?: Record<string, "cyan" | "mint" | "sky" | "amber" | "rose" | "violet" | "slate" | "navy">`.
 - Tags are normalized to lowercase, trimmed, de-duplicated, capped at 50 unique values, and each tag is capped at 40 characters.
-- Missing tag colors render as `robin`; the built-in palette keeps contrast by pairing light colors with dark text and dark colors with white text.
+- Missing tag colors are assigned from the palette in round-robin order; the built-in palette keeps contrast by pairing light colors with dark text and dark colors with white text.
 - For contacts, companies, and deals, adding tags and changing colors save immediately. Deleting an existing tag uses the same approval response behavior as other protected record edits and requires `changeReason`.
