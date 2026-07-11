@@ -1634,11 +1634,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function savePaymentTermOptions() {
     if (!quotePaymentTermField) {
-      throw new Error("未找到报价 Payment term 字段");
+      throw new Error("未找到报价付款条款字段");
     }
     const options = parseSelectOptionsText(paymentTermOptionsText);
     if (!options.length) {
-      throw new Error("Payment term 至少需要一个可选项");
+      throw new Error("付款条款至少需要一个可选项");
     }
     await fetchJson(`/api/field-definitions/${quotePaymentTermField.id}`, {
       method: "PATCH",
@@ -1650,7 +1650,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         position: quotePaymentTermField.position
       }
     });
-    setMessage("Payment term 选项已更新");
+    setMessage("付款条款选项已更新");
   }
 
   async function deleteCurrency() {
@@ -4746,7 +4746,7 @@ function PaymentTermAdminPanel({
     <section className="settings-panel" data-testid="settings-payment-terms">
       <div className="settings-panel-header">
         <div>
-          <h2 className="page-title">Payment term</h2>
+          <h2 className="page-title">付款条款</h2>
           <div className="subtle">配置报价里的付款条件下拉选项。每行一个选项，格式为 label:value。</div>
         </div>
       </div>
@@ -4765,7 +4765,7 @@ function PaymentTermAdminPanel({
           <div className="toolbar" style={{ marginTop: 12 }}>
             <button className="primary-button" data-testid="settings-save-payment-terms" type="button" onClick={onSave} disabled={isPending || !optionsText.trim()}>
               <Save size={16} />
-              保存 Payment term
+              保存付款条款
             </button>
           </div>
         </>

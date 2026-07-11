@@ -74,7 +74,7 @@ WITH document_fields AS (
     ('contactId', '关联联系人', 'reference', true, false, '[{"label":"联系人","value":"contacts"}]'::jsonb, NULL::jsonb, 3),
     ('dealId', '关联交易', 'reference', false, false, '[{"label":"交易","value":"deals"}]'::jsonb, NULL::jsonb, 4),
     ('documentCurrency', '单据币种', 'text', true, false, NULL::jsonb, '"CNY"'::jsonb, 5),
-    ('paymentTerm', 'Payment term', 'select', true, false, '[{"label":"见票即付","value":"due_on_receipt"},{"label":"Net 15","value":"net_15"},{"label":"Net 30","value":"net_30"},{"label":"Net 60","value":"net_60"}]'::jsonb, '"net_30"'::jsonb, 6),
+    ('paymentTerm', '付款条款', 'select', true, false, '[{"label":"见票即付","value":"due_on_receipt"},{"label":"Net 15","value":"net_15"},{"label":"Net 30","value":"net_30"},{"label":"Net 60","value":"net_60"}]'::jsonb, '"net_30"'::jsonb, 6),
     ('totalAmount', '总金额', 'currency', true, false, NULL::jsonb, NULL::jsonb, 7),
     ('status', '状态', 'select', true, false, '[{"label":"草稿","value":"draft"},{"label":"已发送","value":"sent"},{"label":"已确认","value":"confirmed"},{"label":"已取消","value":"cancelled"}]'::jsonb, '"draft"'::jsonb, 8),
     ('issueDate', '出具日期', 'date', false, false, NULL::jsonb, NULL::jsonb, 9),
@@ -260,3 +260,8 @@ WHERE "key" IN (
   'salesorder_proformainvoices',
   'proformainvoice_commercialinvoices'
 );
+
+UPDATE "FieldDefinition"
+SET "label" = '付款条款'
+WHERE "key" = 'paymentTerm'
+  AND "objectKey" IN ('quotes', 'salesorders', 'proformainvoices', 'commercialinvoices');

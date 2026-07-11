@@ -766,6 +766,60 @@ function objectIconForKey(objectKey: string): LucideIcon {
   return salesDocumentTabItems.find((item) => item.objectKey === objectKey)?.icon ?? navItems.find((item) => item.key === objectKey)?.icon ?? LayoutList;
 }
 
+function localizedObjectDefinition(object: ObjectDefinition): ObjectDefinition {
+  if (!isSalesDocumentObjectKey(object.key)) {
+    return object;
+  }
+  const label = salesDocumentTitles[object.key];
+  return { ...object, label, pluralLabel: label };
+}
+
+function localizedObjectLabel(object: ObjectDefinition): string {
+  return localizedObjectDefinition(object).label;
+}
+
+function localizedFieldDefinition(field: FieldDefinition): FieldDefinition {
+  if (!isSalesDocumentObjectKey(field.objectKey)) {
+    return field;
+  }
+  const labelByKey: Record<string, string> = {
+    quoteNumber: "报价编号",
+    documentNumber: "单据编号",
+    companyId: "关联公司",
+    contactId: "关联联系人",
+    dealId: "关联交易",
+    quoteCurrency: "报价币种",
+    documentCurrency: "单据币种",
+    paymentTerm: "付款条款",
+    totalAmount: "总金额",
+    status: "状态",
+    validUntil: "有效期至",
+    issueDate: "签发日期",
+    dueDate: "到期日期",
+    notes: "备注"
+  };
+  const label = labelByKey[field.key];
+  return label ? { ...field, label } : field;
+}
+
+function localizedSavedViewName(view: SavedView, objectKey: string): string {
+  if (!isSalesDocumentObjectKey(objectKey)) {
+    return view.name;
+  }
+  if (view.isDefault || /^全部(Quote|Quotes|Sales Order|Sales Orders|Proforma Invoice|Proforma Invoices|Commercial Invoice|Commercial Invoices)$/.test(view.name)) {
+    return `全部${salesDocumentTitles[objectKey]}`;
+  }
+  return view.name
+    .replaceAll("Quotes", "报价")
+    .replaceAll("Quote", "报价")
+    .replaceAll("Sales Orders", "销售订单")
+    .replaceAll("Sales Order", "销售订单")
+    .replaceAll("Proforma Invoices", "形式发票")
+    .replaceAll("Proforma Invoice", "形式发票")
+    .replaceAll("Commercial Invoices", "商业发票")
+    .replaceAll("Commercial Invoice", "商业发票");
+}
+
 const noEmailSignatureId = "none";
 const inlineImageContentIdPrefix = "inline-image-";
 
@@ -1873,11 +1927,12 @@ function ModuleWorkspaceHeader({
               </div>
               {quickAddObjects.map((object) => {
                 const Icon = objectIconForKey(object.key);
+                const label = localizedObjectLabel(object);
                 return (
                   <button key={object.key} type="button" onClick={() => onQuickCreate(object.key)}>
                     <Icon size={16} />
-                    <span>{object.label}</span>
-                    <kbd>{object.label.slice(0, 1).toUpperCase()}</kbd>
+                    <span>{label}</span>
+                    <kbd>{label.slice(0, 1).toUpperCase()}</kbd>
                   </button>
                 );
               })}
@@ -1892,21 +1947,21 @@ function ModuleWorkspaceHeader({
             <div className="toolbar-menu-panel module-menu-panel">
               <button type="button" onClick={onOpenImport}>
                 <Upload size={16} />
-                Import {activeObject.pluralLabel}
+                导入{activeObject.pluralLabel}
               </button>
               <button type="button" onClick={onOpenExport}>
                 <Download size={16} />
-                Export {activeObject.pluralLabel}
+                导出{activeObject.pluralLabel}
               </button>
               <a className="module-menu-link" href={exportRecordsUrl} download={`${activeObject.key}-export.csv`}>
                 <Download size={16} />
-                Download CSV
+                下载 CSV
               </a>
             </div>
           ) : null}
         </div>
         <a className="module-hidden-export-link" data-testid="topbar-export-records" href={exportRecordsUrl} download={`${activeObject.key}-export.csv`} tabIndex={-1} aria-hidden="true">
-          Export
+          导出
         </a>
         {activeObject.key === "deals" ? (
           <div className="module-view-switch" data-testid="deal-view-switch">
@@ -2374,12 +2429,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () => props.objects.find((object) => object.key === activeObjectKey) ?? props.objects[0],
     [activeObjectKey, props.objects]
   );
+  const activeObjectDisplay = useMemo(() => localizedObjectDefinition(activeObject), [activeObject]);
   const activeObjectUsesPool = Boolean(activeObject && isPoolEnabledForObject(activeObject.key, props.poolSettings));
   const objectFields = useMemo(
     () =>
       props.fields
         .filter((field) => field.objectKey === activeObject?.key)
-        .sort((a, b) => a.position - b.position),
+        .sort((a, b) => a.position - b.position)
+        .map(localizedFieldDefinition),
     [activeObject?.key, props.fields]
   );
   const objectFormFields = useMemo(
@@ -2525,7 +2582,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     () =>
       props.fields
         .filter((field) => field.objectKey === selectedRecord?.objectKey)
-        .sort((a, b) => a.position - b.position),
+        .sort((a, b) => a.position - b.position)
+        .map(localizedFieldDefinition),
     [props.fields, selectedRecord?.objectKey]
   );
   const selectedFormFields = useMemo(
@@ -3545,7 +3603,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setCreateTagColors({});
     setCreateValues(buildInitialValues(objectFields, activeObject.key));
     openRecord(created);
-    setMessage(`已创建${activeObject.label}：${created.title}`);
+    setMessage(`已创建${activeObjectDisplay.label}：${created.title}`);
     router.refresh();
   }
 
@@ -6333,7 +6391,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         {activeNav !== "email" ? (
           showRecordWorkspace && activeObject ? (
             <ModuleWorkspaceHeader
-              activeObject={activeObject}
+              activeObject={activeObjectDisplay}
               appSidebarCollapsed={appSidebarCollapsed}
               appTheme={appTheme}
               dealWorkspaceView={dealWorkspaceView}
@@ -6562,7 +6620,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       type="button"
                       onClick={() => setSelectedViewId(view.id)}
                     >
-                      {view.name}
+                      {localizedSavedViewName(view, activeObject.key)}
                     </button>
                   ))}
                 </div>
@@ -6689,14 +6747,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                 </button>
                 <div className="record-panel-context">
                   <div className="subtle">当前对象</div>
-                  <h2 className="page-title" style={{ fontSize: 18 }}>{activeObject.label}</h2>
+                  <h2 className="page-title" style={{ fontSize: 18 }}>{activeObjectDisplay.label}</h2>
                 </div>
               </div>
 
               {recordPanelMode === "create" && (
               <section>
                 <h3 className="panel-title">
-                  新建{activeObject.label}
+                  新建{activeObjectDisplay.label}
                 </h3>
                 <div className="form-grid" style={{ marginTop: 12 }}>
                   <label className="wide">
@@ -6706,7 +6764,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       data-testid={`create-title-${activeObject.key}`}
                       value={createTitle}
                       onChange={(event) => setCreateTitle(event.target.value)}
-                      placeholder={`输入${activeObject.label}名称`}
+                      placeholder={`输入${activeObjectDisplay.label}名称`}
                     />
                   </label>
                   <OwnerSelect
@@ -6797,7 +6855,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               {recordPanelMode === "detail" && (
               <section>
                 <h3 className="panel-title">
-                  {selectedRecord ? `编辑${activeObject.label}` : `选择一个${activeObject.label}`}
+                  {selectedRecord ? `编辑${activeObjectDisplay.label}` : `选择一个${activeObjectDisplay.label}`}
                 </h3>
                 {selectedRecord ? (
                   <>
@@ -7997,10 +8055,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       </main>
       {exportDialogOpen && activeObject ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setExportDialogOpen(false)}>
-          <div className="modal-card module-export-modal" role="dialog" aria-modal="true" aria-label={`导出${activeObject.pluralLabel}`} onMouseDown={(event) => event.stopPropagation()}>
+          <div className="modal-card module-export-modal" role="dialog" aria-modal="true" aria-label={`导出${activeObjectDisplay.pluralLabel}`} onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-header-row">
               <div>
-                <h3 className="panel-title">导出{activeObject.pluralLabel}</h3>
+                <h3 className="panel-title">导出{activeObjectDisplay.pluralLabel}</h3>
                 <p className="subtle">按照当前搜索、筛选、公海/私海和保存视图导出 CSV。</p>
               </div>
               <button className="icon-button" type="button" onClick={() => setExportDialogOpen(false)} aria-label="关闭导出弹窗">
