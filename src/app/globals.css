@@ -1102,6 +1102,18 @@ button {
   border-top: 1px solid var(--line);
 }
 
+.quote-payment-summary {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  margin-top: 8px;
+  color: var(--text);
+}
+
+.quote-payment-summary span {
+  color: var(--muted);
+}
+
 .record-table {
   min-width: 680px;
   width: 100%;

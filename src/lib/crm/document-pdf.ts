@@ -6,6 +6,7 @@ import pdfFonts from "pdfmake/build/vfs_fonts.js";
 import type { CrmRecord, DocumentTemplate } from "@/lib/crm/types";
 import { calculateQuoteTotals, getSalesDocumentCurrency, normalizeQuoteFees, normalizeQuoteLineItems, salesDocumentNumberField, salesDocumentTitles } from "@/lib/crm/quotes";
 import { formatMoneyWithCurrency, getCurrencyDefinitions } from "@/lib/crm/currencies";
+import { buildPaymentTermSchedule } from "@/lib/crm/payment-terms";
 
 pdfMake.vfs = pdfFonts.pdfMake?.vfs ?? pdfFonts.vfs ?? {};
 const defaultPdfFont = configurePdfFonts();
@@ -58,6 +59,7 @@ export function buildTemplateContext(input: SalesDocumentPdfContext): Record<str
   const lineItems = normalizeQuoteLineItems(record.data.lineItems, currency);
   const fees = normalizeQuoteFees(record.data.fees, currency);
   const totals = calculateQuoteTotals(lineItems, fees, currency, currencyRecords);
+  const paymentTermSchedule = buildPaymentTermSchedule(input.records ?? [], record.data.paymentTerm, totals.totalAmount, currency, currencyRecords);
   const documentNumber = String(record.data[salesDocumentNumberField(record.objectKey)] ?? "");
   return {
     record,
@@ -72,6 +74,10 @@ export function buildTemplateContext(input: SalesDocumentPdfContext): Record<str
     lineItems,
     fees,
     totals,
+    paymentTerm: paymentTermSchedule.term ?? {},
+    paymentSchedule: paymentTermSchedule.paymentSchedule,
+    paymentSummary: paymentTermSchedule.paymentSummary,
+    paymentInstructions: paymentTermSchedule.paymentInstructions,
     lineItemsTable: buildLineItemsTable(lineItems, currency, currencyRecords)
   };
 }

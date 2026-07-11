@@ -21,18 +21,19 @@ async function downloadPdf(request: NextRequest, { params }: RouteParams) {
     if (!template.active || template.objectKey !== params.objectKey) {
       throw new Error("PDF template is not active for this object");
     }
-    const [company, contact, deal, currencyRecords] = await Promise.all([
+    const [company, contact, deal, currencyRecords, paymentTermRecords] = await Promise.all([
       getLinkedRecord(context, String(record.data.companyId ?? ""), "companies"),
       getLinkedRecord(context, String(record.data.contactId ?? ""), "contacts"),
       getLinkedRecord(context, String(record.data.dealId ?? ""), "deals"),
-      repository.listRecords(context, "currencies")
+      repository.listRecords(context, "currencies"),
+      repository.listRecords(context, "paymentterms")
     ]);
     const pdf = await renderSalesDocumentPdf(template, {
       record,
       company,
       contact,
       deal,
-      records: currencyRecords,
+      records: [...currencyRecords, ...paymentTermRecords],
       workspace: { id: context.workspaceId },
       generatedAt: new Date().toISOString()
     });

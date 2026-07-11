@@ -90,6 +90,7 @@ import { SettingsAdmin } from "@/components/settings-admin";
 import { convertCurrencyAmount, formatMoneyWithCurrency, getBaseCurrencyCode, getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
+import { buildPaymentTermSchedule, getPaymentTermDefinitions, normalizePaymentTermCode } from "@/lib/crm/payment-terms";
 import { calculateQuoteTotals, isSalesDocumentObjectKey, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, salesDocumentCurrencyField, salesDocumentNextObjectKey, salesDocumentTitles, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
 import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, type RecordApprovalPatch } from "@/lib/crm/record-approval";
 import { parseEmailThreadSearchCommand } from "@/lib/email/search-command";
@@ -16218,6 +16219,18 @@ function FieldInput({
     );
   }
 
+  if (isPaymentTermField(field)) {
+    return (
+      <SelectSearchInput
+        label={field.label}
+        options={buildPaymentTermSelectOptions(allRecords, value)}
+        testId={testId}
+        value={value}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (isCountryField(field)) {
     return <CountrySearchInput label={field.label} testId={testId} value={value} onChange={onChange} />;
   }
@@ -16324,6 +16337,9 @@ function formatEditableFieldValue(field: FieldDefinition, value: string, allReco
   }
   if (field.type === "boolean") {
     return value === "true" ? "是" : "否";
+  }
+  if (isPaymentTermField(field)) {
+    return getPaymentTermDefinitions(allRecords).find((term) => term.code === normalizePaymentTermCode(value))?.label ?? value;
   }
   if (field.type === "select") {
     return field.options?.find((option) => option.value === value)?.label ?? value;
@@ -17145,6 +17161,7 @@ function QuotePricingEditor({
   const lineItems = quoteLineItemsFromValues(values, quoteCurrency);
   const fees = quoteFeesFromValues(values, quoteCurrency);
   const totals = calculateQuoteTotals(lineItems, fees, quoteCurrency, currencyRecords);
+  const paymentTermSchedule = buildPaymentTermSchedule(allRecords, values.paymentTerm, totals.totalAmount, quoteCurrency, currencyRecords);
 
   function updateLineItems(nextLineItems: QuoteLineItem[]) {
     onChange((current) => withQuotePricingValues(current, nextLineItems, fees, quoteCurrency, currencyRecords, objectKey));
@@ -17296,6 +17313,12 @@ function QuotePricingEditor({
         <span>其他费用 {formatMoneyWithCurrency(totals.feeSubtotal, quoteCurrency, currencies)}</span>
         <strong>总计 {formatMoneyWithCurrency(totals.totalAmount, quoteCurrency, currencies)}</strong>
       </div>
+      {paymentTermSchedule.paymentSummary || paymentTermSchedule.paymentInstructions ? (
+        <div className="quote-payment-summary" data-testid={`${testIdPrefix}-payment-summary`}>
+          {paymentTermSchedule.paymentSummary ? <strong>{paymentTermSchedule.paymentSummary}</strong> : null}
+          {paymentTermSchedule.paymentInstructions ? <span>{paymentTermSchedule.paymentInstructions}</span> : null}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -20802,6 +20825,10 @@ function displayValue(field: FieldDefinition | undefined, value: unknown, record
   if (field.type === "date" && typeof value === "string") {
     return formatDate(value);
   }
+  if (isPaymentTermField(field)) {
+    const code = normalizePaymentTermCode(value);
+    return getPaymentTermDefinitions(records).find((term) => term.code === code)?.label ?? labelForOption(field.options, value);
+  }
   if (field.type === "select") {
     return labelForOption(field.options, value);
   }
@@ -20948,6 +20975,17 @@ function toDateTimeLocalValue(value?: string): string {
 
 function isCurrencyCodeField(field: FieldDefinition): boolean {
   return (field.objectKey === "products" && field.key === "unitPriceCurrency") || (isSalesDocumentObjectKey(field.objectKey) && field.key === salesDocumentCurrencyField(field.objectKey));
+}
+
+function isPaymentTermField(field: FieldDefinition): boolean {
+  return isSalesDocumentObjectKey(field.objectKey) && field.key === "paymentTerm";
+}
+
+function buildPaymentTermSelectOptions(records: CrmRecord[], currentValue?: string): Array<{ label: string; value: string }> {
+  const currentCode = normalizePaymentTermCode(currentValue);
+  return getPaymentTermDefinitions(records)
+    .filter((term) => term.active || term.code === currentCode)
+    .map((term) => ({ label: term.label, value: term.code }));
 }
 
 function isCountryField(field: FieldDefinition): boolean {

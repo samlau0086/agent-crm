@@ -7,6 +7,8 @@ import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/k
 import { isImageMediaAsset, MediaLibraryModal, mediaAssetDataUrl } from "@/components/media-library";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
+import { formatPaymentTermSummary, getPaymentTermDefinitions, normalizePaymentTermCode, paymentTermOptionsFromRecords, type PaymentTermDepositType, type PaymentTermMode } from "@/lib/crm/payment-terms";
+import { salesDocumentObjectKeys } from "@/lib/crm/quotes";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
@@ -158,6 +160,19 @@ type CurrencyDraft = {
   active: boolean;
 };
 
+type PaymentTermDraft = {
+  code: string;
+  label: string;
+  active: boolean;
+  mode: PaymentTermMode;
+  fullPaymentMethod: string;
+  depositPaymentMethod: string;
+  balancePaymentMethod: string;
+  depositType: PaymentTermDepositType;
+  depositValue: string;
+  paymentInstructions: string;
+};
+
 type NotificationChannelDraft = {
   name: string;
   type: NotificationChannelType;
@@ -214,7 +229,9 @@ const defaultDocumentTemplateText = JSON.stringify(
       { text: "Number: {{documentNumber}}", style: "meta" },
       { text: "Customer: {{company.title}} / {{contact.title}}", style: "meta" },
       { table: { widths: ["*", "auto", "auto", "auto"], body: "{{lineItemsTable}}" }, layout: "lightHorizontalLines", margin: [0, 16, 0, 8] },
-      { text: "Total: {{money totals.totalAmount currency}}", style: "total" }
+      { text: "Total: {{money totals.totalAmount currency}}", style: "total" },
+      { text: "Payment: {{paymentSummary}}", style: "meta", alignment: "right" },
+      { text: "{{paymentInstructions}}", style: "meta", alignment: "right" }
     ],
     styles: {
       header: { fontSize: 20, bold: true, margin: [0, 0, 0, 12] },
@@ -416,7 +433,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [activeAiAgentConfigTab, setActiveAiAgentConfigTab] = useState<AiAgentConfigTabKey>("providers");
   const [selectedCurrencyId, setSelectedCurrencyId] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<CurrencyDraft>(emptyCurrencyDraft());
-  const [paymentTermOptionsText, setPaymentTermOptionsText] = useState("");
+  const [selectedPaymentTermId, setSelectedPaymentTermId] = useState("");
+  const [paymentTermDraft, setPaymentTermDraft] = useState<PaymentTermDraft>(emptyPaymentTermDraft());
   const [createdWebhookSecret, setCreatedWebhookSecret] = useState<string | null>(null);
   const [webhookDeliveries, setWebhookDeliveries] = useState<WebhookDelivery[]>([]);
   const [backupFiles, setBackupFiles] = useState<BackupFile[]>(props.backupFiles);
@@ -451,6 +469,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const selectedAiAgentFixtureRecord = props.records.find((record) => record.id === aiAgentTestRecordId);
   const currencyRecords = useMemo(() => props.records.filter((record) => record.objectKey === "currencies"), [props.records]);
   const selectedCurrency = currencyRecords.find((currency) => currency.id === selectedCurrencyId);
+  const paymentTermRecords = useMemo(() => props.records.filter((record) => record.objectKey === "paymentterms"), [props.records]);
+  const selectedPaymentTerm = paymentTermRecords.find((term) => term.id === selectedPaymentTermId);
   const objectFields = useMemo(
     () => props.fields.filter((field) => field.objectKey === fieldDraft.objectKey).sort((a, b) => a.position - b.position),
     [fieldDraft.objectKey, props.fields]
@@ -512,7 +532,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     setCustomerLevelSettingsDraft(customerLevelSettingsToDraft(props.customerLevelSettings));
   }, [props.customerLevelSettings]);
   const fieldObject = props.objects.find((object) => object.key === fieldDraft.objectKey);
-  const quotePaymentTermField = props.fields.find((field) => field.objectKey === "quotes" && field.key === "paymentTerm");
+  const paymentTermFields = props.fields.filter((field) => salesDocumentObjectKeys.includes(field.objectKey as (typeof salesDocumentObjectKeys)[number]) && field.key === "paymentTerm");
 
   const showToast = useCallback((nextToast: ToastState) => {
     setToast(nextToast);
@@ -634,8 +654,12 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }, [selectedCurrency]);
 
   useEffect(() => {
-    setPaymentTermOptionsText(quotePaymentTermField ? formatFieldOptions(quotePaymentTermField) : "");
-  }, [quotePaymentTermField]);
+    setSelectedPaymentTermId((current) => (paymentTermRecords.some((term) => term.id === current) ? current : paymentTermRecords[0]?.id ?? ""));
+  }, [paymentTermRecords]);
+
+  useEffect(() => {
+    setPaymentTermDraft(selectedPaymentTerm ? paymentTermDraftFromRecord(selectedPaymentTerm) : emptyPaymentTermDraft());
+  }, [selectedPaymentTerm]);
 
   useEffect(() => {
     if (activeSettingsTab !== "crm" || documentTemplatesLoaded) {
@@ -877,6 +901,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   function resetCurrencyForm() {
     setSelectedCurrencyId("");
     setCurrencyDraft(emptyCurrencyDraft());
+  }
+
+  function resetPaymentTermForm() {
+    setSelectedPaymentTermId("");
+    setPaymentTermDraft(emptyPaymentTermDraft());
   }
 
   function resetDocumentTemplateForm() {
@@ -1632,25 +1661,64 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     resetCurrencyForm();
   }
 
-  async function savePaymentTermOptions() {
-    if (!quotePaymentTermField) {
-      throw new Error("未找到报价付款条款字段");
+  async function savePaymentTerm() {
+    const data = paymentTermDataFromDraft(paymentTermDraft);
+    if (!data.code || !data.label) {
+      throw new Error("付款条款的标签和系统 ID 必须填写");
     }
-    const options = parseSelectOptionsText(paymentTermOptionsText);
+    if (data.mode === "deposit_balance" && data.depositType === "percentage" && data.depositValue > 100) {
+      throw new Error("百分比定金不能超过 100");
+    }
+
+    const savedTerm = selectedPaymentTerm
+      ? await fetchJson<CrmRecord>(`/api/records/paymentterms/${selectedPaymentTerm.id}`, {
+          method: "PATCH",
+          body: { title: data.label, data }
+        })
+      : await fetchJson<CrmRecord>("/api/records/paymentterms", {
+          method: "POST",
+          body: { title: data.label, data }
+        });
+
+    await syncPaymentTermFieldOptions(replaceRecordById(paymentTermRecords, savedTerm));
+    setMessage(selectedPaymentTerm ? `已更新付款条款 ${data.label}` : `已创建付款条款 ${data.label}`);
+    if (!selectedPaymentTerm) {
+      resetPaymentTermForm();
+    }
+  }
+
+  async function deletePaymentTerm() {
+    if (!selectedPaymentTerm) return;
+    const code = normalizePaymentTermCode(selectedPaymentTerm.data.code || selectedPaymentTerm.title);
+    if (isPaymentTermReferenced(code, props.records)) {
+      throw new Error("该付款条款已被报价或销售单据引用，请停用而不是删除");
+    }
+    if (!(await requestConfirm({ title: "删除付款条款", message: `确定删除付款条款“${selectedPaymentTerm.title}”？`, confirmLabel: "删除", danger: true }))) return;
+    await fetchJson(`/api/records/paymentterms/${selectedPaymentTerm.id}`, { method: "DELETE" });
+    await syncPaymentTermFieldOptions(paymentTermRecords.filter((term) => term.id !== selectedPaymentTerm.id));
+    setMessage(`已删除付款条款 ${selectedPaymentTerm.title}`);
+    resetPaymentTermForm();
+  }
+
+  async function syncPaymentTermFieldOptions(recordsForOptions: CrmRecord[]) {
+    const options = paymentTermOptionsFromRecords(recordsForOptions);
     if (!options.length) {
-      throw new Error("付款条款至少需要一个可选项");
+      throw new Error("付款条款至少需要一个可用选项");
     }
-    await fetchJson(`/api/field-definitions/${quotePaymentTermField.id}`, {
-      method: "PATCH",
-      body: {
-        label: quotePaymentTermField.label,
-        required: quotePaymentTermField.required,
-        unique: quotePaymentTermField.unique,
-        options,
-        position: quotePaymentTermField.position
-      }
-    });
-    setMessage("付款条款选项已更新");
+    await Promise.all(
+      paymentTermFields.map((field) =>
+        fetchJson(`/api/field-definitions/${field.id}`, {
+          method: "PATCH",
+          body: {
+            label: field.label,
+            required: field.required,
+            unique: field.unique,
+            options,
+            position: field.position
+          }
+        })
+      )
+    );
   }
 
   async function deleteCurrency() {
@@ -2070,11 +2138,17 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onDelete={() => runAction(deleteCurrency)}
           />
           <PaymentTermAdminPanel
-            field={quotePaymentTermField}
+            currencies={currencyRecords}
+            draft={paymentTermDraft}
             isPending={isPending}
-            optionsText={paymentTermOptionsText}
-            onChange={setPaymentTermOptionsText}
-            onSave={() => runAction(savePaymentTermOptions)}
+            paymentTerms={paymentTermRecords}
+            selectedPaymentTerm={selectedPaymentTerm}
+            selectedPaymentTermId={selectedPaymentTermId}
+            onDelete={() => runAction(deletePaymentTerm)}
+            onDraftChange={(patch) => setPaymentTermDraft((current) => ({ ...current, ...patch }))}
+            onNew={resetPaymentTermForm}
+            onSave={() => runAction(savePaymentTerm)}
+            onSelectPaymentTerm={setSelectedPaymentTermId}
           />
           <DocumentTemplateAdminPanel
             draft={documentTemplateDraft}
@@ -4730,48 +4804,140 @@ function CurrencyAdminPanel({
 }
 
 function PaymentTermAdminPanel({
-  field,
+  currencies,
+  draft,
   isPending,
-  optionsText,
-  onChange,
-  onSave
+  paymentTerms,
+  selectedPaymentTerm,
+  selectedPaymentTermId,
+  onDelete,
+  onDraftChange,
+  onNew,
+  onSave,
+  onSelectPaymentTerm
 }: {
-  field?: FieldDefinition;
+  currencies: CrmRecord[];
+  draft: PaymentTermDraft;
   isPending: boolean;
-  optionsText: string;
-  onChange: (value: string) => void;
+  paymentTerms: CrmRecord[];
+  selectedPaymentTerm?: CrmRecord;
+  selectedPaymentTermId: string;
+  onDelete: () => void;
+  onDraftChange: (patch: Partial<PaymentTermDraft>) => void;
+  onNew: () => void;
   onSave: () => void;
+  onSelectPaymentTerm: (paymentTermId: string) => void;
 }) {
+  const currencyDefinitions = getCurrencyDefinitions(currencies);
+  const definitions = getPaymentTermDefinitions(paymentTerms);
+
   return (
     <section className="settings-panel" data-testid="settings-payment-terms">
       <div className="settings-panel-header">
         <div>
           <h2 className="page-title">付款条款</h2>
-          <div className="subtle">配置报价里的付款条件下拉选项。每行一个选项，格式为 label:value。</div>
+          <div className="subtle">配置付款条款标签、系统 ID、定金/尾款/全款收款方式和支付说明。</div>
+        </div>
+        <button className="secondary-button" type="button" onClick={onNew} disabled={isPending}>
+          <Plus size={16} />
+          新建条款
+        </button>
+      </div>
+
+      <div className="settings-editor-grid">
+        <div className="settings-list">
+          {paymentTerms.map((term) => {
+            const definition = definitions.find((item) => item.code === normalizePaymentTermCode(term.data.code || term.title));
+            return (
+              <button
+                className={`settings-item settings-select ${selectedPaymentTermId === term.id ? "selected" : ""}`}
+                key={term.id}
+                type="button"
+                onClick={() => onSelectPaymentTerm(term.id)}
+              >
+                <div className="stage-header">
+                  <strong>{String(term.data.label ?? term.title)}</strong>
+                  <span className={term.data.active === false ? "danger-badge" : "badge"}>{term.data.active === false ? "停用" : "启用"}</span>
+                </div>
+                <div className="subtle">{String(term.data.code ?? "")}</div>
+                <div className="subtle">{definition ? formatPaymentTermSummary(definition, undefined, currencyDefinitions) : "未配置收款结构"}</div>
+              </button>
+            );
+          })}
+          {paymentTerms.length === 0 ? <div className="empty-state">还没有付款条款配置</div> : null}
+        </div>
+
+        <div className="settings-editor">
+          <div className="form-grid">
+            <label>
+              <span className="subtle">系统 ID</span>
+              <input className="input" data-testid="settings-payment-term-code" value={draft.code} onChange={(event) => onDraftChange({ code: normalizePaymentTermCode(event.target.value) })} placeholder="advance_30_balance_70" />
+            </label>
+            <label>
+              <span className="subtle">标签</span>
+              <input className="input" data-testid="settings-payment-term-label" value={draft.label} onChange={(event) => onDraftChange({ label: event.target.value })} placeholder="30% Advance / 70% Balance" />
+            </label>
+            <label>
+              <span className="subtle">收款结构</span>
+              <select className="select" data-testid="settings-payment-term-mode" value={draft.mode} onChange={(event) => onDraftChange({ mode: event.target.value as PaymentTermMode })}>
+                <option value="full">全款</option>
+                <option value="deposit_balance">定金/尾款</option>
+              </select>
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={draft.active} onChange={(event) => onDraftChange({ active: event.target.checked })} />
+              启用
+            </label>
+
+            {draft.mode === "full" ? (
+              <label className="wide">
+                <span className="subtle">全款收款方式</span>
+                <input className="input" data-testid="settings-payment-term-full-method" value={draft.fullPaymentMethod} onChange={(event) => onDraftChange({ fullPaymentMethod: event.target.value })} placeholder="Full Payment / T/T / Bank Transfer" />
+              </label>
+            ) : (
+              <>
+                <label>
+                  <span className="subtle">定金类型</span>
+                  <select className="select" data-testid="settings-payment-term-deposit-type" value={draft.depositType} onChange={(event) => onDraftChange({ depositType: event.target.value as PaymentTermDepositType })}>
+                    <option value="percentage">按金额比例</option>
+                    <option value="fixed">固定金额</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="subtle">{draft.depositType === "percentage" ? "定金百分比" : "固定定金金额"}</span>
+                  <input className="input" data-testid="settings-payment-term-deposit-value" min="0" max={draft.depositType === "percentage" ? "100" : undefined} step="0.01" type="number" value={draft.depositValue} onChange={(event) => onDraftChange({ depositValue: event.target.value })} />
+                </label>
+                <label>
+                  <span className="subtle">定金收款方式</span>
+                  <input className="input" data-testid="settings-payment-term-deposit-method" value={draft.depositPaymentMethod} onChange={(event) => onDraftChange({ depositPaymentMethod: event.target.value })} placeholder="Payment in Advance" />
+                </label>
+                <label>
+                  <span className="subtle">尾款收款方式</span>
+                  <input className="input" data-testid="settings-payment-term-balance-method" value={draft.balancePaymentMethod} onChange={(event) => onDraftChange({ balancePaymentMethod: event.target.value })} placeholder="Balance" />
+                </label>
+              </>
+            )}
+
+            <label className="wide">
+              <span className="subtle">支付说明</span>
+              <textarea className="textarea" data-testid="settings-payment-term-instructions" value={draft.paymentInstructions} onChange={(event) => onDraftChange({ paymentInstructions: event.target.value })} />
+            </label>
+          </div>
+
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <button className="primary-button" data-testid="settings-save-payment-terms" type="button" onClick={onSave} disabled={isPending || !draft.code.trim() || !draft.label.trim()}>
+              <Save size={16} />
+              {selectedPaymentTerm ? "保存付款条款" : "创建付款条款"}
+            </button>
+            {selectedPaymentTerm ? (
+              <button className="danger-button" data-testid="settings-delete-payment-term" type="button" onClick={onDelete} disabled={isPending}>
+                <Trash2 size={16} />
+                删除付款条款
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
-      {field ? (
-        <>
-          <label className="wide">
-            <span className="subtle">选项</span>
-            <textarea
-              className="textarea"
-              data-testid="settings-payment-term-options"
-              value={optionsText}
-              onChange={(event) => onChange(event.target.value)}
-              placeholder={"见票即付:due_on_receipt\nNet 30:net_30"}
-            />
-          </label>
-          <div className="toolbar" style={{ marginTop: 12 }}>
-            <button className="primary-button" data-testid="settings-save-payment-terms" type="button" onClick={onSave} disabled={isPending || !optionsText.trim()}>
-              <Save size={16} />
-              保存付款条款
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="empty-state">未找到 quotes.paymentTerm 字段，请先在对象字段中恢复该字段。</div>
-      )}
     </section>
   );
 }
@@ -6596,6 +6762,66 @@ function currencyDraftFromRecord(record: CrmRecord): CurrencyDraft {
     isBase: record.data.isBase === true,
     active: record.data.active !== false
   };
+}
+
+function emptyPaymentTermDraft(): PaymentTermDraft {
+  return {
+    code: "",
+    label: "",
+    active: true,
+    mode: "full",
+    fullPaymentMethod: "Full Payment",
+    depositPaymentMethod: "Payment in Advance",
+    balancePaymentMethod: "Balance",
+    depositType: "percentage",
+    depositValue: "100",
+    paymentInstructions: ""
+  };
+}
+
+function paymentTermDraftFromRecord(record: CrmRecord): PaymentTermDraft {
+  return {
+    code: normalizePaymentTermCode(record.data.code || record.title),
+    label: typeof record.data.label === "string" ? record.data.label : record.title,
+    active: record.data.active !== false,
+    mode: record.data.mode === "deposit_balance" ? "deposit_balance" : "full",
+    fullPaymentMethod: typeof record.data.fullPaymentMethod === "string" ? record.data.fullPaymentMethod : "Full Payment",
+    depositPaymentMethod: typeof record.data.depositPaymentMethod === "string" ? record.data.depositPaymentMethod : "Payment in Advance",
+    balancePaymentMethod: typeof record.data.balancePaymentMethod === "string" ? record.data.balancePaymentMethod : "Balance",
+    depositType: record.data.depositType === "fixed" ? "fixed" : "percentage",
+    depositValue: String(record.data.depositValue ?? "100"),
+    paymentInstructions: typeof record.data.paymentInstructions === "string" ? record.data.paymentInstructions : ""
+  };
+}
+
+function paymentTermDataFromDraft(draft: PaymentTermDraft) {
+  const mode = draft.mode === "deposit_balance" ? "deposit_balance" : "full";
+  const depositType = draft.depositType === "fixed" ? "fixed" : "percentage";
+  return {
+    code: normalizePaymentTermCode(draft.code),
+    label: draft.label.trim(),
+    active: draft.active,
+    mode,
+    fullPaymentMethod: draft.fullPaymentMethod.trim(),
+    depositPaymentMethod: draft.depositPaymentMethod.trim(),
+    balancePaymentMethod: draft.balancePaymentMethod.trim(),
+    depositType,
+    depositValue: Math.max(Number(draft.depositValue) || 0, 0),
+    paymentInstructions: draft.paymentInstructions.trim()
+  };
+}
+
+function replaceRecordById(records: CrmRecord[], record: CrmRecord): CrmRecord[] {
+  return records.some((candidate) => candidate.id === record.id)
+    ? records.map((candidate) => (candidate.id === record.id ? record : candidate))
+    : [...records, record];
+}
+
+function isPaymentTermReferenced(code: string, records: CrmRecord[]): boolean {
+  if (!code) {
+    return false;
+  }
+  return records.some((record) => salesDocumentObjectKeys.includes(record.objectKey as (typeof salesDocumentObjectKeys)[number]) && record.data.paymentTerm === code);
 }
 
 function buildAuditExportUrl(query: {

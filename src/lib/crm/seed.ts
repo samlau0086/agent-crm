@@ -21,7 +21,8 @@ const paymentTermOptions = [
   { label: "Due on receipt", value: "due_on_receipt" },
   { label: "Net 15", value: "net_15" },
   { label: "Net 30", value: "net_30" },
-  { label: "Net 60", value: "net_60" }
+  { label: "Net 60", value: "net_60" },
+  { label: "30% Advance / 70% Balance", value: "advance_30_balance_70" }
 ];
 
 const salesDocumentObjects = [
@@ -75,6 +76,8 @@ const defaultDocumentTemplateJson = {
     { table: { widths: ["*", "auto", "auto", "auto"], body: "{{lineItemsTable}}" }, layout: "lightHorizontalLines", margin: [0, 16, 0, 8] },
     { text: "Fees: {{money totals.feeSubtotal currency}}", alignment: "right" },
     { text: "Total: {{money totals.totalAmount currency}}", style: "total" },
+    { text: "Payment: {{paymentSummary}}", style: "meta", alignment: "right" },
+    { text: "{{paymentInstructions}}", style: "meta", alignment: "right" },
     { text: "{{record.data.notes}}", margin: [0, 16, 0, 0] }
   ],
   styles: {
@@ -198,6 +201,18 @@ export const seedData: CrmSnapshot = {
       updatedAt: now
     },
     {
+      id: "obj-paymentterm",
+      workspaceId: defaultWorkspaceId,
+      key: "paymentterms",
+      label: "付款条款",
+      pluralLabel: "付款条款",
+      description: "报价和销售单据使用的付款条款与收款计划",
+      icon: "CreditCard",
+      isSystem: true,
+      createdAt: now,
+      updatedAt: now
+    },
+    {
       id: "obj-partner",
       workspaceId: defaultWorkspaceId,
       key: "partners",
@@ -250,7 +265,7 @@ export const seedData: CrmSnapshot = {
     { id: "field-quote-company", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "companyId", label: "关联公司", type: "reference", required: true, unique: false, options: [{ label: "公司", value: "companies" }], isSystem: true, position: 2 },
     { id: "field-quote-contact", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "contactId", label: "关联联系人", type: "reference", required: true, unique: false, options: [{ label: "联系人", value: "contacts" }], isSystem: true, position: 3 },
     { id: "field-quote-currency", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "quoteCurrency", label: "报价币种", type: "text", required: true, unique: false, defaultValue: "CNY", isSystem: true, position: 4 },
-    { id: "field-quote-payment-term", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "paymentTerm", label: "付款条款", type: "select", required: true, unique: false, options: [{ label: "见票即付", value: "due_on_receipt" }, { label: "Net 15", value: "net_15" }, { label: "Net 30", value: "net_30" }, { label: "Net 60", value: "net_60" }], defaultValue: "net_30", isSystem: true, position: 5 },
+    { id: "field-quote-payment-term", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "paymentTerm", label: "付款条款", type: "select", required: true, unique: false, options: paymentTermOptions, defaultValue: "net_30", isSystem: true, position: 5 },
     { id: "field-quote-total-amount", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "totalAmount", label: "报价金额", type: "currency", required: true, unique: false, isSystem: true, position: 6 },
     { id: "field-quote-status", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "status", label: "状态", type: "select", required: true, unique: false, options: [{ label: "草稿", value: "draft" }, { label: "已发送", value: "sent" }, { label: "已接受", value: "accepted" }, { label: "已拒绝", value: "declined" }, { label: "已过期", value: "expired" }], defaultValue: "draft", isSystem: true, position: 7 },
     { id: "field-quote-valid-until", workspaceId: defaultWorkspaceId, objectKey: "quotes", key: "validUntil", label: "有效期至", type: "date", required: false, unique: false, isSystem: true, position: 8 },
@@ -265,6 +280,16 @@ export const seedData: CrmSnapshot = {
     { id: "field-currency-rate", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "rateToBase", label: "对基准汇率", type: "number", required: true, unique: false, defaultValue: 1, isSystem: true, position: 4 },
     { id: "field-currency-base", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "isBase", label: "基准币种", type: "boolean", required: false, unique: false, defaultValue: false, isSystem: true, position: 5 },
     { id: "field-currency-active", workspaceId: defaultWorkspaceId, objectKey: "currencies", key: "active", label: "启用", type: "boolean", required: false, unique: false, defaultValue: true, isSystem: true, position: 6 },
+    { id: "field-paymentterm-code", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "code", label: "系统 ID", type: "text", required: true, unique: true, isSystem: true, position: 1 },
+    { id: "field-paymentterm-label", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "label", label: "标签", type: "text", required: true, unique: false, isSystem: true, position: 2 },
+    { id: "field-paymentterm-active", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "active", label: "启用", type: "boolean", required: false, unique: false, defaultValue: true, isSystem: true, position: 3 },
+    { id: "field-paymentterm-mode", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "mode", label: "收款结构", type: "select", required: true, unique: false, options: [{ label: "全款", value: "full" }, { label: "定金/尾款", value: "deposit_balance" }], defaultValue: "full", isSystem: true, position: 4 },
+    { id: "field-paymentterm-full-method", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "fullPaymentMethod", label: "全款收款方式", type: "text", required: false, unique: false, isSystem: true, position: 5 },
+    { id: "field-paymentterm-deposit-method", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "depositPaymentMethod", label: "定金收款方式", type: "text", required: false, unique: false, isSystem: true, position: 6 },
+    { id: "field-paymentterm-balance-method", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "balancePaymentMethod", label: "尾款收款方式", type: "text", required: false, unique: false, isSystem: true, position: 7 },
+    { id: "field-paymentterm-deposit-type", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "depositType", label: "定金类型", type: "select", required: true, unique: false, options: [{ label: "按金额比例", value: "percentage" }, { label: "固定金额", value: "fixed" }], defaultValue: "percentage", isSystem: true, position: 8 },
+    { id: "field-paymentterm-deposit-value", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "depositValue", label: "定金数值", type: "number", required: false, unique: false, defaultValue: 100, isSystem: true, position: 9 },
+    { id: "field-paymentterm-instructions", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", key: "paymentInstructions", label: "支付说明", type: "textarea", required: false, unique: false, isSystem: true, position: 10 },
     { id: "field-partner-tier", workspaceId: defaultWorkspaceId, objectKey: "partners", key: "tier", label: "伙伴等级", type: "select", required: true, unique: false, options: [{ label: "金牌", value: "gold" }, { label: "银牌", value: "silver" }], isSystem: false, position: 1 }
   ],
   relationDefinitions: [
@@ -310,6 +335,66 @@ export const seedData: CrmSnapshot = {
       title: "EUR · 欧元",
       ownerId: adminUserId,
       data: { code: "EUR", label: "欧元", symbol: "€", rateToBase: 7.8, isBase: false, active: true },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "paymentterm-due-on-receipt",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "paymentterms",
+      tags: [],
+      tagColors: {},
+      title: "Due on receipt",
+      ownerId: adminUserId,
+      data: { code: "due_on_receipt", label: "Due on receipt", active: true, mode: "full", fullPaymentMethod: "Full Payment", depositType: "percentage", depositValue: 100, paymentInstructions: "" },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "paymentterm-net-15",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "paymentterms",
+      tags: [],
+      tagColors: {},
+      title: "Net 15",
+      ownerId: adminUserId,
+      data: { code: "net_15", label: "Net 15", active: true, mode: "full", fullPaymentMethod: "Full Payment", depositType: "percentage", depositValue: 100, paymentInstructions: "" },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "paymentterm-net-30",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "paymentterms",
+      tags: [],
+      tagColors: {},
+      title: "Net 30",
+      ownerId: adminUserId,
+      data: { code: "net_30", label: "Net 30", active: true, mode: "full", fullPaymentMethod: "Full Payment", depositType: "percentage", depositValue: 100, paymentInstructions: "" },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "paymentterm-net-60",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "paymentterms",
+      tags: [],
+      tagColors: {},
+      title: "Net 60",
+      ownerId: adminUserId,
+      data: { code: "net_60", label: "Net 60", active: true, mode: "full", fullPaymentMethod: "Full Payment", depositType: "percentage", depositValue: 100, paymentInstructions: "" },
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: "paymentterm-advance-30-balance-70",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "paymentterms",
+      tags: [],
+      tagColors: {},
+      title: "30% Advance / 70% Balance",
+      ownerId: adminUserId,
+      data: { code: "advance_30_balance_70", label: "30% Advance / 70% Balance", active: true, mode: "deposit_balance", depositPaymentMethod: "Payment in Advance", balancePaymentMethod: "Balance", depositType: "percentage", depositValue: 30, paymentInstructions: "" },
       createdAt: now,
       updatedAt: now
     },
@@ -640,6 +725,7 @@ export const seedData: CrmSnapshot = {
       sort: { field: "updatedAt", direction: "desc" as const },
       isDefault: true
     })),
-    { id: "view-currencies-default", workspaceId: defaultWorkspaceId, objectKey: "currencies", name: "全部货币", columns: ["title", "code", "label", "symbol", "rateToBase", "isBase", "active"], sort: { field: "code", direction: "asc" }, isDefault: true }
+    { id: "view-currencies-default", workspaceId: defaultWorkspaceId, objectKey: "currencies", name: "全部货币", columns: ["title", "code", "label", "symbol", "rateToBase", "isBase", "active"], sort: { field: "code", direction: "asc" }, isDefault: true },
+    { id: "view-paymentterms-default", workspaceId: defaultWorkspaceId, objectKey: "paymentterms", name: "全部付款条款", columns: ["title", "code", "label", "mode", "depositType", "depositValue", "active"], sort: { field: "code", direction: "asc" }, isDefault: true }
   ]
 };

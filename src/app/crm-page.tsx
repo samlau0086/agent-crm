@@ -74,7 +74,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
     : undefined;
   const referenceObjectKeys = getReferenceObjectKeys(fields, initialObjectKey);
   getRelationObjectKeys(relations, initialObjectKey).forEach((objectKey) => referenceObjectKeys.add(objectKey));
-  for (const objectKey of ["products", "quotes", "salesorders", "proformainvoices", "commercialinvoices", "currencies"]) {
+  for (const objectKey of ["products", "quotes", "salesorders", "proformainvoices", "commercialinvoices", "currencies", "paymentterms"]) {
     if (objects.some((object) => object.key === objectKey)) {
       referenceObjectKeys.add(objectKey);
     }

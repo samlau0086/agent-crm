@@ -86,7 +86,8 @@ import { extractInboundMetadata } from "../src/lib/email/tracking.ts";
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
-import { renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
+import { buildTemplateContext, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
+import { buildPaymentTermSchedule, getPaymentTermDefinitions } from "../src/lib/crm/payment-terms.ts";
 import { salesDocumentNextObjectKey } from "../src/lib/crm/quotes.ts";
 import { generateWorkflowWithAiDesigner } from "../src/lib/workflows/ai-designer.ts";
 import { buildWorkflowDraftFromGoal, graphToLegacyWorkflow, legacyWorkflowToGraph, workflowMatchesEvent } from "../src/lib/workflows/core.ts";
@@ -4328,13 +4329,67 @@ await run("activity records and product records support reusable file attachment
 
 await run("crm settings expose payment term option management", () => {
   const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
-  assert.match(settings, /const quotePaymentTermField = props\.fields\.find/);
+  assert.match(settings, /const paymentTermRecords = useMemo/);
+  assert.match(settings, /const paymentTermFields = props\.fields\.filter/);
   assert.match(settings, /function PaymentTermAdminPanel/);
   assert.match(settings, /data-testid="settings-payment-terms"/);
-  assert.match(settings, /data-testid="settings-payment-term-options"/);
-  assert.match(settings, /async function savePaymentTermOptions/);
-  assert.match(settings, /parseSelectOptionsText\(paymentTermOptionsText\)/);
-  assert.match(settings, /\/api\/field-definitions\/\$\{quotePaymentTermField\.id\}/);
+  assert.match(settings, /data-testid="settings-payment-term-code"/);
+  assert.match(settings, /data-testid="settings-payment-term-deposit-value"/);
+  assert.match(settings, /async function savePaymentTerm/);
+  assert.match(settings, /async function syncPaymentTermFieldOptions/);
+  assert.match(settings, /\/api\/records\/paymentterms/);
+  assert.match(settings, /paymentTermOptionsFromRecords\(recordsForOptions\)/);
+});
+
+await run("payment term helpers build full deposit fixed and inactive schedules", () => {
+  const store = new CrmStore();
+  const context = store.getContext("user-admin");
+  const paymentTerms = store.listRecords(context, "paymentterms");
+  assert.equal(getPaymentTermDefinitions(paymentTerms).some((term) => term.code === "advance_30_balance_70" && term.mode === "deposit_balance"), true);
+
+  const full = buildPaymentTermSchedule(paymentTerms, "net_30", 1000, "CNY", store.listRecords(context, "currencies"));
+  assert.match(full.paymentSummary, /100% Full Payment/);
+  assert.match(full.paymentSummary, /1,000/);
+
+  const advance = buildPaymentTermSchedule(paymentTerms, "advance_30_balance_70", 1000, "CNY", store.listRecords(context, "currencies"));
+  assert.match(advance.paymentSummary, /30% Payment in Advance/);
+  assert.match(advance.paymentSummary, /70% Balance/);
+  assert.equal(advance.paymentSchedule[0].amount, 300);
+  assert.equal(advance.paymentSchedule[1].amount, 700);
+
+  const fixedTerm = store.createRecord(context, "paymentterms", {
+    title: "Fixed deposit",
+    data: {
+      code: "fixed_200_balance",
+      label: "Fixed 200 / Balance",
+      active: false,
+      mode: "deposit_balance",
+      depositPaymentMethod: "Bank Transfer",
+      balancePaymentMethod: "Balance",
+      depositType: "fixed",
+      depositValue: 200,
+      paymentInstructions: "Pay to company bank account."
+    }
+  });
+  const fixed = buildPaymentTermSchedule([...paymentTerms, fixedTerm], "fixed_200_balance", 1000, "CNY", store.listRecords(context, "currencies"));
+  assert.match(fixed.paymentSummary, /Payment in Advance by Bank Transfer/);
+  assert.match(fixed.paymentSummary, /Balance/);
+  assert.equal(fixed.paymentSchedule[0].amount, 200);
+  assert.equal(fixed.paymentSchedule[1].amount, 800);
+  assert.equal(fixed.paymentInstructions, "Pay to company bank account.");
+
+  const missing = buildPaymentTermSchedule(paymentTerms, "missing_term", 1000, "CNY", store.listRecords(context, "currencies"));
+  assert.equal(missing.paymentSummary, "");
+  assert.equal(missing.paymentSchedule.length, 0);
+});
+
+await run("payment term migration creates metadata records and synchronizes sales document options", () => {
+  const migration = readFileSync("prisma/migrations/20260712090000_payment_terms_configuration/migration.sql", "utf8");
+  assert.match(migration, /'paymentterms'/);
+  assert.match(migration, /'field-paymentterm-'/);
+  assert.match(migration, /advance_30_balance_70/);
+  assert.match(migration, /UPDATE "FieldDefinition"[\s\S]*'quotes', 'salesorders', 'proformainvoices', 'commercialinvoices'/);
+  assert.match(migration, /INSERT INTO "SavedView"[\s\S]*view-paymentterms-default/);
 });
 
 await run("notification channels support bark webhook and email event delivery", () => {
@@ -9813,6 +9868,7 @@ await run("product and quote seed metadata supports company and contact associat
   assert.equal(objects.some((object) => object.key === "products" && object.isSystem), true);
   assert.equal(objects.some((object) => object.key === "quotes" && object.isSystem), true);
   assert.equal(objects.some((object) => object.key === "currencies" && object.isSystem), true);
+  assert.equal(objects.some((object) => object.key === "paymentterms" && object.isSystem), true);
   assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "mainImageUrl"), true);
   assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "unitPriceCurrency" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "products" && field.key === "attachments" && field.type === "textarea"), true);
@@ -9820,6 +9876,9 @@ await run("product and quote seed metadata supports company and contact associat
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "companyId" && field.type === "reference" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "contactId" && field.type === "reference" && field.required), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "paymentTerm" && field.type === "select" && field.required), true);
+  assert.equal(fields.some((field) => field.objectKey === "paymentterms" && field.key === "code" && field.unique), true);
+  assert.equal(fields.some((field) => field.objectKey === "paymentterms" && field.key === "mode" && field.type === "select"), true);
+  assert.equal(fields.some((field) => field.objectKey === "paymentterms" && field.key === "depositValue" && field.type === "number"), true);
   assert.equal(fields.some((field) => field.objectKey === "quotes" && field.key === "productId"), false);
   assert.equal(relations.some((relation) => relation.key === "company_quotes" && relation.fromObjectKey === "companies" && relation.toObjectKey === "quotes"), true);
   assert.equal(relations.some((relation) => relation.key === "contact_quotes" && relation.fromObjectKey === "contacts" && relation.toObjectKey === "quotes"), true);
@@ -9843,6 +9902,7 @@ await run("product and quote seed metadata supports company and contact associat
   const currencyDefinitions = getCurrencyDefinitions(store.listRecords(context, "currencies"));
   assert.equal(currencyDefinitions.some((currency) => currency.code === "CNY" && currency.isBase), true);
   assert.equal(currencyDefinitions.some((currency) => currency.code === "USD" && currency.rateToBase === 7.2), true);
+  assert.equal(store.listRecords(context, "paymentterms").some((term) => term.data.code === "advance_30_balance_70" && term.data.depositValue === 30), true);
   const related = findRelatedRecords(product, store.snapshot().records, fields, relations);
   assert.equal(related.some((item) => item.record.id === "quote-acme-platform"), true);
 
@@ -9917,6 +9977,7 @@ await run("sales documents convert through order and invoice chain and render pd
   assert.equal(salesOrder.data.companyId, "company-acme");
   assert.equal(salesOrder.data.contactId, "contact-lin");
   assert.equal(salesOrder.data.documentCurrency, "CNY");
+  assert.equal(salesOrder.data.paymentTerm, "net_30");
   assert.equal(salesOrder.data.totalAmount, 3499);
 
   const proformaInvoice = store.convertSalesDocument(context, "salesorders", salesOrder.id, "proformainvoices");
@@ -9932,11 +9993,21 @@ await run("sales documents convert through order and invoice chain and render pd
 
   const templates = store.listDocumentTemplates(context, "commercialinvoices");
   assert.equal(templates.some((template) => template.isDefault && template.active), true);
+  const documentRecords = [...store.listRecords(context, "currencies"), ...store.listRecords(context, "paymentterms")];
+  const templateContext = buildTemplateContext({
+    record: commercialInvoice,
+    company: store.getRecord(context, "companies", String(commercialInvoice.data.companyId)),
+    contact: store.getRecord(context, "contacts", String(commercialInvoice.data.contactId)),
+    records: documentRecords,
+    workspace: { id: context.workspaceId }
+  });
+  assert.match(String(templateContext.paymentSummary), /100% Full Payment/);
+  assert.equal(Array.isArray(templateContext.paymentSchedule), true);
   const pdf = await renderSalesDocumentPdf(templates[0], {
     record: commercialInvoice,
     company: store.getRecord(context, "companies", String(commercialInvoice.data.companyId)),
     contact: store.getRecord(context, "contacts", String(commercialInvoice.data.contactId)),
-    records: store.listRecords(context, "currencies"),
+    records: documentRecords,
     workspace: { id: context.workspaceId }
   });
   assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
