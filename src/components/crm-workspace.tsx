@@ -17171,11 +17171,23 @@ function TagEditor({
   onChange: (tags: string[]) => void;
 }) {
   const [input, setInput] = useState("");
+  const [focused, setFocused] = useState(false);
   const normalizedValue = uniqueUiTags(value);
-  const availableSuggestions = uniqueUiTags(suggestions).filter((tag) => !normalizedValue.includes(tag)).slice(0, 12);
+  const normalizedInput = input.trim().toLowerCase();
+  const availableSuggestions = uniqueUiTags(suggestions)
+    .filter((tag) => !normalizedValue.includes(tag))
+    .filter((tag) => !normalizedInput || tag.includes(normalizedInput))
+    .slice(0, 12);
+  const showSuggestions = focused && availableSuggestions.length > 0;
 
   function applyTags(nextTags: string[]) {
     onChange(uniqueUiTags(nextTags));
+  }
+
+  function addSuggestedTag(tag: string) {
+    applyTags([...normalizedValue, tag]);
+    setInput("");
+    setFocused(false);
   }
 
   function addInputTags(rawValue = input) {
@@ -17203,6 +17215,7 @@ function TagEditor({
         <input
           aria-label={label}
           value={input}
+          onFocus={() => setFocused(true)}
           onChange={(event) => {
             const nextValue = event.target.value;
             if (/[,;\uFF1B\uFF0C]/.test(nextValue)) {
@@ -17211,12 +17224,24 @@ function TagEditor({
             }
             setInput(nextValue);
           }}
-          onBlur={() => addInputTags()}
+          onBlur={() => {
+            window.setTimeout(() => {
+              addInputTags();
+              setFocused(false);
+            }, 120);
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === "Tab") {
+            if (event.key === "ArrowDown" && availableSuggestions[0]) {
+              event.preventDefault();
+              addSuggestedTag(availableSuggestions[0]);
+            } else if (event.key === "Enter" || event.key === "Tab") {
               if (input.trim()) {
                 event.preventDefault();
-                addInputTags();
+                if (availableSuggestions[0]) {
+                  addSuggestedTag(availableSuggestions[0]);
+                } else {
+                  addInputTags();
+                }
               }
             } else if (event.key === "Backspace" && !input && normalizedValue.length) {
               applyTags(normalizedValue.slice(0, -1));
@@ -17225,12 +17250,12 @@ function TagEditor({
           placeholder="添加标签"
         />
       </div>
-      {availableSuggestions.length ? (
-        <div className="tag-select-list" style={{ marginTop: 8 }}>
+      {showSuggestions ? (
+        <div className="tag-select-menu" role="listbox">
           {availableSuggestions.map((tag) => (
-            <button className="tag-select-option" key={tag} type="button" onClick={() => applyTags([...normalizedValue, tag])}>
-              <Plus size={12} />
-              {tag}
+            <button key={tag} role="option" type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => addSuggestedTag(tag)}>
+              <span>{tag}</span>
+              <small>已有标签</small>
             </button>
           ))}
         </div>
