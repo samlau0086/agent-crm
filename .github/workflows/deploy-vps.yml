@@ -480,6 +480,18 @@ jobs:
             echo "::error title=Unexpected CRM image migration::Image $crm_image does not contain the expected fixed company domain migration SQL."
             exit 1
           fi
+          tags_migration_path="prisma/migrations/20260711130000_record_activity_tags/migration.sql"
+          tags_migration_sql="$(docker run --rm --entrypoint sh "$crm_image" -lc "cat \"$tags_migration_path\"")"
+          echo "===== CRM image migration sanity check: $tags_migration_path ====="
+          printf '%s\n' "$tags_migration_sql" | sed -n '1,20p'
+          if ! printf '%s\n' "$tags_migration_sql" | grep -q 'ADD COLUMN IF NOT EXISTS "tagColors"'; then
+            echo "::error title=Stale CRM image migration::Image $crm_image does not contain the idempotent tags migration SQL. Rebuild and push a fresh image before deploying."
+            exit 1
+          fi
+          if ! docker run --rm --entrypoint sh "$crm_image" -lc "grep -q '20260711130000_record_activity_tags' scripts/recover-known-failed-migrations.mjs"; then
+            echo "::error title=Stale migration recovery script::Image $crm_image cannot recover the tags migration if a previous deploy left it failed."
+            exit 1
+          fi
           echo "===== prepare database services ====="
           docker compose up -d postgres redis
           echo "===== known failed migration recovery ====="

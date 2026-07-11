@@ -3350,6 +3350,20 @@ await run("contact and company editing refinements are guarded", () => {
   assert.match(migration, /"key" = 'domain'/);
 });
 
+await run("tag migration is idempotent and included in VPS failed-migration recovery", () => {
+  const migration = readFileSync("prisma/migrations/20260711130000_record_activity_tags/migration.sql", "utf8");
+  const recoveryScript = readFileSync("scripts/recover-known-failed-migrations.mjs", "utf8");
+  const deployWorkflow = readFileSync(".github/workflows/deploy-vps.yml", "utf8");
+
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "tags"/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS "tagColors"/);
+  assert.match(migration, /CREATE INDEX IF NOT EXISTS "CrmRecord_tags_gin_idx"/);
+  assert.match(migration, /CREATE INDEX IF NOT EXISTS "Activity_tags_gin_idx"/);
+  assert.match(recoveryScript, /20260711130000_record_activity_tags/);
+  assert.match(deployWorkflow, /20260711130000_record_activity_tags/);
+  assert.match(deployWorkflow, /ADD COLUMN IF NOT EXISTS "tagColors"/);
+});
+
 await run("record create and detail panels render full width in the main content flow", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");

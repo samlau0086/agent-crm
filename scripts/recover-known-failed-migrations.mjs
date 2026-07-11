@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 
 import { PrismaClient } from "@prisma/client";
 
-const recoverableMigrations = new Set(["20260707110000_company_domain_optional"]);
+const recoverableMigrations = new Set([
+  "20260707110000_company_domain_optional",
+  "20260711130000_record_activity_tags",
+]);
 
 const prisma = new PrismaClient();
 
