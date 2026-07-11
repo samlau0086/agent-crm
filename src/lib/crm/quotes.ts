@@ -46,10 +46,10 @@ export const salesDocumentNumberPrefixes: Record<SalesDocumentObjectKey, string>
 };
 
 export const salesDocumentTitles: Record<SalesDocumentObjectKey, string> = {
-  quotes: "Quote",
-  salesorders: "Sales Order",
-  proformainvoices: "Proforma Invoice",
-  commercialinvoices: "Commercial Invoice"
+  quotes: "报价",
+  salesorders: "销售订单",
+  proformainvoices: "形式发票",
+  commercialinvoices: "商业发票"
 };
 
 export function isSalesDocumentObjectKey(objectKey: string): objectKey is SalesDocumentObjectKey {

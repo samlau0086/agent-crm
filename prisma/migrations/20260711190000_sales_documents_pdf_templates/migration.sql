@@ -29,17 +29,17 @@ CREATE INDEX IF NOT EXISTS "DocumentTemplate_workspaceId_objectKey_active_idx" O
 CREATE INDEX IF NOT EXISTS "DocumentTemplate_workspaceId_objectKey_isDefault_idx" ON "DocumentTemplate"("workspaceId", "objectKey", "isDefault");
 
 INSERT INTO "ObjectDefinition" ("id", "workspaceId", "key", "label", "pluralLabel", "description", "icon", "isSystem", "createdAt", "updatedAt")
-SELECT 'obj-salesorder-' || "id", "id", 'salesorders', 'Sales Order', 'Sales Orders', '可由报价转换生成的销售订单', 'ClipboardList', true, now(), now()
+SELECT 'obj-salesorder-' || "id", "id", 'salesorders', '销售订单', '销售订单', '可由报价转换生成的销售订单', 'ClipboardList', true, now(), now()
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "ObjectDefinition" ("id", "workspaceId", "key", "label", "pluralLabel", "description", "icon", "isSystem", "createdAt", "updatedAt")
-SELECT 'obj-proformainvoice-' || "id", "id", 'proformainvoices', 'Proforma Invoice', 'Proforma Invoices', '可由 Sales Order 转换生成的形式发票', 'FileText', true, now(), now()
+SELECT 'obj-proformainvoice-' || "id", "id", 'proformainvoices', '形式发票', '形式发票', '可由销售订单转换生成的形式发票', 'FileText', true, now(), now()
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "ObjectDefinition" ("id", "workspaceId", "key", "label", "pluralLabel", "description", "icon", "isSystem", "createdAt", "updatedAt")
-SELECT 'obj-commercialinvoice-' || "id", "id", 'commercialinvoices', 'Commercial Invoice', 'Commercial Invoices', '可由 Proforma Invoice 转换生成的商业发票', 'ReceiptText', true, now(), now()
+SELECT 'obj-commercialinvoice-' || "id", "id", 'commercialinvoices', '商业发票', '商业发票', '可由形式发票转换生成的商业发票', 'ReceiptText', true, now(), now()
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
@@ -104,62 +104,62 @@ WHERE object_definition."key" IN ('salesorders', 'proformainvoices', 'commercial
 ON CONFLICT ("objectDefinitionId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-company-salesorders-' || "id", "id", 'companies', 'salesorders', 'company_salesorders', '公司 Sales Orders', 'one-to-many'
+SELECT 'rel-company-salesorders-' || "id", "id", 'companies', 'salesorders', 'company_salesorders', '公司销售订单', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-contact-salesorders-' || "id", "id", 'contacts', 'salesorders', 'contact_salesorders', '联系人 Sales Orders', 'one-to-many'
+SELECT 'rel-contact-salesorders-' || "id", "id", 'contacts', 'salesorders', 'contact_salesorders', '联系人销售订单', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-deal-salesorders-' || "id", "id", 'deals', 'salesorders', 'deal_salesorders', '交易 Sales Orders', 'one-to-many'
+SELECT 'rel-deal-salesorders-' || "id", "id", 'deals', 'salesorders', 'deal_salesorders', '交易销售订单', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-company-proformainvoices-' || "id", "id", 'companies', 'proformainvoices', 'company_proformainvoices', '公司 Proforma Invoices', 'one-to-many'
+SELECT 'rel-company-proformainvoices-' || "id", "id", 'companies', 'proformainvoices', 'company_proformainvoices', '公司形式发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-contact-proformainvoices-' || "id", "id", 'contacts', 'proformainvoices', 'contact_proformainvoices', '联系人 Proforma Invoices', 'one-to-many'
+SELECT 'rel-contact-proformainvoices-' || "id", "id", 'contacts', 'proformainvoices', 'contact_proformainvoices', '联系人形式发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-deal-proformainvoices-' || "id", "id", 'deals', 'proformainvoices', 'deal_proformainvoices', '交易 Proforma Invoices', 'one-to-many'
+SELECT 'rel-deal-proformainvoices-' || "id", "id", 'deals', 'proformainvoices', 'deal_proformainvoices', '交易形式发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-company-commercialinvoices-' || "id", "id", 'companies', 'commercialinvoices', 'company_commercialinvoices', '公司 Commercial Invoices', 'one-to-many'
+SELECT 'rel-company-commercialinvoices-' || "id", "id", 'companies', 'commercialinvoices', 'company_commercialinvoices', '公司商业发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-contact-commercialinvoices-' || "id", "id", 'contacts', 'commercialinvoices', 'contact_commercialinvoices', '联系人 Commercial Invoices', 'one-to-many'
+SELECT 'rel-contact-commercialinvoices-' || "id", "id", 'contacts', 'commercialinvoices', 'contact_commercialinvoices', '联系人商业发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-deal-commercialinvoices-' || "id", "id", 'deals', 'commercialinvoices', 'deal_commercialinvoices', '交易 Commercial Invoices', 'one-to-many'
+SELECT 'rel-deal-commercialinvoices-' || "id", "id", 'deals', 'commercialinvoices', 'deal_commercialinvoices', '交易商业发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-quote-salesorders-' || "id", "id", 'quotes', 'salesorders', 'quote_salesorders', '报价 Sales Orders', 'one-to-many'
+SELECT 'rel-quote-salesorders-' || "id", "id", 'quotes', 'salesorders', 'quote_salesorders', '报价销售订单', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-salesorder-proformainvoices-' || "id", "id", 'salesorders', 'proformainvoices', 'salesorder_proformainvoices', 'Sales Order Proforma Invoices', 'one-to-many'
+SELECT 'rel-salesorder-proformainvoices-' || "id", "id", 'salesorders', 'proformainvoices', 'salesorder_proformainvoices', '销售订单形式发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
 INSERT INTO "RelationDefinition" ("id", "workspaceId", "fromObjectKey", "toObjectKey", "key", "label", "cardinality")
-SELECT 'rel-proformainvoice-commercialinvoices-' || "id", "id", 'proformainvoices', 'commercialinvoices', 'proformainvoice_commercialinvoices', 'Proforma Invoice Commercial Invoices', 'one-to-many'
+SELECT 'rel-proformainvoice-commercialinvoices-' || "id", "id", 'proformainvoices', 'commercialinvoices', 'proformainvoice_commercialinvoices', '形式发票商业发票', 'one-to-many'
 FROM "Workspace"
 ON CONFLICT ("workspaceId", "key") DO NOTHING;
 
@@ -208,3 +208,55 @@ SELECT 'template-' || object_key || '-' || workspace."id",
 FROM "Workspace" workspace
 CROSS JOIN (VALUES ('quotes'), ('salesorders'), ('proformainvoices'), ('commercialinvoices')) AS template_objects(object_key)
 ON CONFLICT ("workspaceId", "objectKey", "name") DO NOTHING;
+
+UPDATE "ObjectDefinition"
+SET "label" = CASE "key"
+  WHEN 'salesorders' THEN '销售订单'
+  WHEN 'proformainvoices' THEN '形式发票'
+  WHEN 'commercialinvoices' THEN '商业发票'
+  ELSE "label"
+END,
+"pluralLabel" = CASE "key"
+  WHEN 'salesorders' THEN '销售订单'
+  WHEN 'proformainvoices' THEN '形式发票'
+  WHEN 'commercialinvoices' THEN '商业发票'
+  ELSE "pluralLabel"
+END,
+"description" = CASE "key"
+  WHEN 'salesorders' THEN '可由报价转换生成的销售订单'
+  WHEN 'proformainvoices' THEN '可由销售订单转换生成的形式发票'
+  WHEN 'commercialinvoices' THEN '可由形式发票转换生成的商业发票'
+  ELSE "description"
+END
+WHERE "key" IN ('salesorders', 'proformainvoices', 'commercialinvoices');
+
+UPDATE "RelationDefinition"
+SET "label" = CASE "key"
+  WHEN 'company_salesorders' THEN '公司销售订单'
+  WHEN 'contact_salesorders' THEN '联系人销售订单'
+  WHEN 'deal_salesorders' THEN '交易销售订单'
+  WHEN 'company_proformainvoices' THEN '公司形式发票'
+  WHEN 'contact_proformainvoices' THEN '联系人形式发票'
+  WHEN 'deal_proformainvoices' THEN '交易形式发票'
+  WHEN 'company_commercialinvoices' THEN '公司商业发票'
+  WHEN 'contact_commercialinvoices' THEN '联系人商业发票'
+  WHEN 'deal_commercialinvoices' THEN '交易商业发票'
+  WHEN 'quote_salesorders' THEN '报价销售订单'
+  WHEN 'salesorder_proformainvoices' THEN '销售订单形式发票'
+  WHEN 'proformainvoice_commercialinvoices' THEN '形式发票商业发票'
+  ELSE "label"
+END
+WHERE "key" IN (
+  'company_salesorders',
+  'contact_salesorders',
+  'deal_salesorders',
+  'company_proformainvoices',
+  'contact_proformainvoices',
+  'deal_proformainvoices',
+  'company_commercialinvoices',
+  'contact_commercialinvoices',
+  'deal_commercialinvoices',
+  'quote_salesorders',
+  'salesorder_proformainvoices',
+  'proformainvoice_commercialinvoices'
+);

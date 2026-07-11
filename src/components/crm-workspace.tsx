@@ -626,9 +626,9 @@ const navItems: Array<{ key: Exclude<NavKey, "records">; label: string; icon: Lu
 const coreObjects = new Set(["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"]);
 const salesDocumentTabItems = [
   { objectKey: "quotes", label: "报价", icon: FileText },
-  { objectKey: "salesorders", label: "Sales Orders", icon: ClipboardList },
-  { objectKey: "proformainvoices", label: "Proforma Invoices", icon: FileText },
-  { objectKey: "commercialinvoices", label: "Commercial Invoices", icon: ReceiptText }
+  { objectKey: "salesorders", label: "销售订单", icon: ClipboardList },
+  { objectKey: "proformainvoices", label: "形式发票", icon: FileText },
+  { objectKey: "commercialinvoices", label: "商业发票", icon: ReceiptText }
 ] as const;
 const emailAiFeatureMeta: Record<keyof EmailAiSettings["features"], { label: string; description: string; dependsOn?: keyof EmailAiSettings["features"] }> = {
   draft: { label: "AI 写邮件", description: "基于客户背景、沟通历史和知识库生成邮件草稿" },
@@ -20947,13 +20947,13 @@ function sampleCsvFor(objectKey: string, fields: FieldDefinition[]): string {
     return "title,tags,quoteNumber,companyId,contactId,paymentTerm,totalAmount,status,validUntil\nAcme 年度订阅报价,续约; 重点,Q-2026-001,company-acme,contact-lin,net_30,3499,draft,2026-07-31";
   }
   if (objectKey === "salesorders") {
-    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme Sales Order,续约,SO-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
+    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme 销售订单,续约,SO-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
   }
   if (objectKey === "proformainvoices") {
-    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme Proforma Invoice,续约,PI-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
+    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme 形式发票,续约,PI-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
   }
   if (objectKey === "commercialinvoices") {
-    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme Commercial Invoice,续约,CI-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
+    return "title,tags,documentNumber,companyId,contactId,documentCurrency,paymentTerm,totalAmount,status,issueDate,dueDate\nAcme 商业发票,续约,CI-202607-0001,company-acme,contact-lin,CNY,net_30,3499,draft,2026-07-11,2026-08-10";
   }
   if (objectKey === "contacts") {
     return "title,tags,email,phone\n王敏,vip; 华东,wang@example.com,+86 139 0000 0000";

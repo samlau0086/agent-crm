@@ -25,9 +25,9 @@ const paymentTermOptions = [
 ];
 
 const salesDocumentObjects = [
-  { id: "obj-salesorder", key: "salesorders", label: "Sales Order", pluralLabel: "Sales Orders", description: "Sales orders converted from accepted quotes", icon: "ClipboardList" },
-  { id: "obj-proformainvoice", key: "proformainvoices", label: "Proforma Invoice", pluralLabel: "Proforma Invoices", description: "Proforma invoices converted from sales orders", icon: "FileText" },
-  { id: "obj-commercialinvoice", key: "commercialinvoices", label: "Commercial Invoice", pluralLabel: "Commercial Invoices", description: "Commercial invoices converted from proforma invoices", icon: "ReceiptText" }
+  { id: "obj-salesorder", key: "salesorders", label: "销售订单", pluralLabel: "销售订单", description: "可由报价转换生成的销售订单", icon: "ClipboardList" },
+  { id: "obj-proformainvoice", key: "proformainvoices", label: "形式发票", pluralLabel: "形式发票", description: "可由销售订单转换生成的形式发票", icon: "FileText" },
+  { id: "obj-commercialinvoice", key: "commercialinvoices", label: "商业发票", pluralLabel: "商业发票", description: "可由形式发票转换生成的商业发票", icon: "ReceiptText" }
 ].map((object) => ({
   ...object,
   workspaceId: defaultWorkspaceId,
@@ -59,9 +59,9 @@ const salesDocumentRelations = [
     { id: `rel-contact-${object.key}`, fromObjectKey: "contacts", toObjectKey: object.key, key: `contact_${object.key}`, label: `联系人 ${object.pluralLabel}`, cardinality: "one-to-many" as const },
     { id: `rel-deal-${object.key}`, fromObjectKey: "deals", toObjectKey: object.key, key: `deal_${object.key}`, label: `交易 ${object.pluralLabel}`, cardinality: "one-to-many" as const }
   ]),
-  { id: "rel-quote-salesorders", fromObjectKey: "quotes", toObjectKey: "salesorders", key: "quote_salesorders", label: "报价 Sales Orders", cardinality: "one-to-many" as const },
-  { id: "rel-salesorder-proformainvoices", fromObjectKey: "salesorders", toObjectKey: "proformainvoices", key: "salesorder_proformainvoices", label: "Sales Order Proforma Invoices", cardinality: "one-to-many" as const },
-  { id: "rel-proformainvoice-commercialinvoices", fromObjectKey: "proformainvoices", toObjectKey: "commercialinvoices", key: "proformainvoice_commercialinvoices", label: "Proforma Invoice Commercial Invoices", cardinality: "one-to-many" as const }
+  { id: "rel-quote-salesorders", fromObjectKey: "quotes", toObjectKey: "salesorders", key: "quote_salesorders", label: "报价销售订单", cardinality: "one-to-many" as const },
+  { id: "rel-salesorder-proformainvoices", fromObjectKey: "salesorders", toObjectKey: "proformainvoices", key: "salesorder_proformainvoices", label: "销售订单形式发票", cardinality: "one-to-many" as const },
+  { id: "rel-proformainvoice-commercialinvoices", fromObjectKey: "proformainvoices", toObjectKey: "commercialinvoices", key: "proformainvoice_commercialinvoices", label: "形式发票商业发票", cardinality: "one-to-many" as const }
 ].map((relation) => ({ ...relation, workspaceId: defaultWorkspaceId }));
 
 const defaultDocumentTemplateJson = {
