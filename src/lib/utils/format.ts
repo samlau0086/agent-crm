@@ -24,6 +24,18 @@ export function formatDateTimeSeconds(value?: string): string {
   }).format(new Date(value));
 }
 
+export function formatDateTimeMinutes(value?: string): string {
+  if (!value) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Shanghai",
+    hour12: false
+  }).format(new Date(value));
+}
+
 export function labelForOption(options: Array<{ label: string; value: string }> | undefined, value: unknown): string {
   const match = options?.find((option) => option.value === value);
   return match?.label ?? String(value ?? "-");

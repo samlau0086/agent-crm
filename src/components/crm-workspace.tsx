@@ -159,7 +159,7 @@ import { getEmailProviderCapability, getEmailProviderSetupVisibility, isOAuthEma
 import { buildEmailReplyDraft, type EmailComposeReplyDraft } from "@/lib/email/reply-draft";
 import { formatEmailSendResultMessage } from "@/lib/email/status-messages";
 import type { EmailDiagnosticStatus, EmailSubsystemDiagnostics } from "@/lib/email/diagnostics";
-import { formatCurrency, formatDate, formatDateTimeSeconds, labelForOption } from "@/lib/utils/format";
+import { formatCurrency, formatDate, formatDateTimeMinutes, formatDateTimeSeconds, labelForOption } from "@/lib/utils/format";
 import type { BackupFile } from "@/lib/ops/backups";
 
 interface CrmWorkspaceProps {
@@ -5390,9 +5390,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const drafts: EmailComposeDraft[] = [];
     for (const [index, recipient] of recipients.entries()) {
       const preference = resolveRecipientPreferences(recipient);
-      const sendAt = emailDraft.preferredTimeSendEnabled
-        ? preference.scheduledSendAt ?? emailDraft.scheduledSendAt ?? ""
-        : emailDraft.scheduledSendAt ?? "";
+      const sendAt = emailDraft.scheduledSendAt
+        ?? (emailDraft.preferredTimeSendEnabled ? preference.scheduledSendAt : undefined)
+        ?? "";
       const recipientDraft = await translateEmailDraftForRecipient(
         {
           ...emailDraft,
@@ -12324,7 +12324,11 @@ function EmailWorkspace({
                     />
                     按偏好时段发送
                   </label>
-                  {emailDraft.scheduledSendAt ? <span className="badge"><CalendarClock size={12} /> 将在 {formatDate(emailDraft.scheduledSendAt)} 发送</span> : null}
+                  {emailDraft.scheduledSendAt ? (
+                    <span className="badge" title="已设置定时发送，将忽略收件人的偏好发送时段">
+                      <CalendarClock size={12} /> 定时发送优先 · 将在 {formatDateTimeMinutes(emailDraft.scheduledSendAt)} 发送
+                    </span>
+                  ) : null}
                 </div>
                 {(emailDraft.autoTranslateEnabled || emailDraft.preferredTimeSendEnabled) && recipientPreferencePreview.length ? (
                   <div className="email-preference-preview" data-testid="email-compose-preference-preview">
@@ -12336,9 +12340,13 @@ function EmailWorkspace({
                           <span className="badge">{preference.languageLabel} · {preference.languageSourceLabel}</span>
                         ) : null}
                         {emailDraft.preferredTimeSendEnabled ? (
-                          <span className={preference.scheduledSendAt ? "badge" : "danger-badge"}>
+                          <span className={(emailDraft.scheduledSendAt || preference.scheduledSendAt) ? "badge" : "danger-badge"}>
                             <CalendarClock size={12} />
-                            {preference.scheduledSendAt ? formatDate(preference.scheduledSendAt) : "未配置偏好时段"}
+                            {emailDraft.scheduledSendAt
+                              ? `使用定时时间 ${formatDateTimeMinutes(emailDraft.scheduledSendAt)}`
+                              : preference.scheduledSendAt
+                                ? `使用偏好时段 ${formatDateTimeMinutes(preference.scheduledSendAt)}`
+                                : "未配置偏好时段，将立即发送"}
                           </span>
                         ) : null}
                       </div>
