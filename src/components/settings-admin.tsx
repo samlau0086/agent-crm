@@ -5177,16 +5177,22 @@ function DocumentTemplateAdminPanel({
           {templates.length ? (
             templates.map((template) => (
               <button
-                className={`settings-item record-title ${selectedTemplate?.id === template.id ? "active" : ""}`}
+                className={`settings-item record-title document-template-option ${selectedTemplate?.id === template.id ? "selected" : ""}`}
                 data-testid={`document-template-${template.id}`}
                 key={template.id}
                 type="button"
+                aria-pressed={selectedTemplate?.id === template.id}
                 onClick={() => onSelect(template.id)}
               >
-                <strong>{template.name}</strong>
-                <span className="subtle">{objectLabel(template.objectKey)}</span>
-                <span className={template.active ? "badge" : "danger-badge"}>{template.active ? "启用" : "停用"}</span>
-                {template.isDefault ? <span className="badge">默认</span> : null}
+                <span className="document-template-option-main">
+                  <strong>{template.name}</strong>
+                  <span className="subtle">{objectLabel(template.objectKey)}</span>
+                </span>
+                <span className="document-template-option-status">
+                  {selectedTemplate?.id === template.id ? <span className="document-template-editing-badge">正在编辑</span> : null}
+                  <span className={template.active ? "badge" : "danger-badge"}>{template.active ? "启用" : "停用"}</span>
+                  {template.isDefault ? <span className="badge">默认</span> : null}
+                </span>
               </button>
             ))
           ) : (
