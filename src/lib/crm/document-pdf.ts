@@ -24,8 +24,14 @@ export interface SalesDocumentPdfContext {
 
 const handlebars = Handlebars.create();
 
-handlebars.registerHelper("money", (amount: unknown, currency: unknown) => {
-  const code = typeof currency === "string" ? currency : "CNY";
+handlebars.registerHelper("money", (amount: unknown, currencyOrOptions: unknown, helperOptions?: unknown) => {
+  const options = isHandlebarsOptions(helperOptions) ? helperOptions : isHandlebarsOptions(currencyOrOptions) ? currencyOrOptions : undefined;
+  const contextCurrency = options?.data?.root?.currency;
+  const code = typeof currencyOrOptions === "string" && currencyOrOptions.trim()
+    ? currencyOrOptions
+    : typeof contextCurrency === "string" && contextCurrency.trim()
+      ? contextCurrency
+      : "CNY";
   return formatMoneyWithCurrency(Number(amount ?? 0), code, []);
 });
 
@@ -148,16 +154,19 @@ function configurePdfFonts(): { fonts: TFontDictionary; defaultFont: string } {
       bolditalics: robotoMediumItalic
     }
   };
-  const fontPath = findCjkFontPath();
-  if (!fontPath) {
+  const cjkFontFile = findCjkFontFile();
+  if (!cjkFontFile) {
     return { fonts, defaultFont: "Roboto" };
   }
-  const cjkFont = readFileSync(fontPath);
+  const fontBuffer = readFileSync(cjkFontFile.path);
+  const cjkFont = cjkFontFile.collectionName
+    ? [fontBuffer, cjkFontFile.collectionName]
+    : fontBuffer;
   fonts.NotoSansCJK = {
-    normal: cjkFont,
-    bold: cjkFont,
-    italics: cjkFont,
-    bolditalics: cjkFont
+    normal: cjkFont as PDFKit.Mixins.PDFFontSource,
+    bold: cjkFont as PDFKit.Mixins.PDFFontSource,
+    italics: cjkFont as PDFKit.Mixins.PDFFontSource,
+    bolditalics: cjkFont as PDFKit.Mixins.PDFFontSource
   };
   return { fonts, defaultFont: "NotoSansCJK" };
 }
@@ -170,18 +179,23 @@ function fontBufferFromVfs(fileName: string): Buffer {
   return Buffer.from(encoded, "base64");
 }
 
-function findCjkFontPath(): string | undefined {
+function findCjkFontFile(): { path: string; collectionName?: string } | undefined {
   const candidates = [
-    process.env.PDFMAKE_CJK_FONT_PATH,
-    "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-    "C:\\Windows\\Fonts\\simhei.ttf",
-    "C:\\Windows\\Fonts\\simkai.ttf"
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  return candidates.find((candidate) => /\.(otf|ttf)$/i.test(candidate) && existsSync(candidate));
+    process.env.PDFMAKE_CJK_FONT_PATH ? { path: process.env.PDFMAKE_CJK_FONT_PATH, collectionName: process.env.PDFMAKE_CJK_FONT_NAME } : undefined,
+    { path: "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc", collectionName: "NotoSansCJKsc-Regular" },
+    { path: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", collectionName: "NotoSansCJKsc-Regular" },
+    { path: "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf" },
+    { path: "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf" },
+    { path: "C:\\Windows\\Fonts\\simhei.ttf" },
+    { path: "C:\\Windows\\Fonts\\simkai.ttf" }
+  ].filter((candidate): candidate is { path: string; collectionName?: string } => Boolean(candidate));
+  return candidates.find((candidate) => /\.(otf|ttf|ttc)$/i.test(candidate.path) && existsSync(candidate.path));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isHandlebarsOptions(value: unknown): value is { data?: { root?: { currency?: unknown } } } {
+  return isRecord(value) && "hash" in value;
 }
