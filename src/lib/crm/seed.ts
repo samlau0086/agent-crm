@@ -69,10 +69,23 @@ const defaultDocumentTemplateJson = {
   pageSize: "A4",
   pageMargins: [40, 48, 40, 48],
   content: [
-    { text: "{{documentTitle}}", style: "header" },
-    { text: "Number: {{documentNumber}}", style: "meta" },
-    { text: "Customer: {{company.title}} / {{contact.title}}", style: "meta" },
-    { text: "Issue date: {{date record.data.issueDate}}", style: "meta" },
+    {
+      type: "row",
+      gutter: 12,
+      columns: [
+        { type: "col", span: 8, content: [{ text: "{{documentTitle}}", style: "header" }] },
+        { type: "col", span: 4, content: [{ text: "Number: {{documentNumber}}", style: "meta", alignment: "right" }] }
+      ]
+    },
+    { type: "splitter", orientation: "horizontal", color: "#e2e8f0", thickness: 1, margin: [0, 8, 0, 12] },
+    {
+      type: "row",
+      gutter: 12,
+      columns: [
+        { type: "col", span: 6, content: [{ text: "Customer: {{company.title}}", style: "meta" }] },
+        { type: "col", span: 6, content: [{ text: "Issue date: {{date record.data.issueDate}}", style: "meta", alignment: "right" }] }
+      ]
+    },
     { table: { widths: ["*", "auto", "auto", "auto"], body: "{{lineItemsTable}}" }, layout: "lightHorizontalLines", margin: [0, 16, 0, 8] },
     { text: "Fees: {{money totals.feeSubtotal currency}}", alignment: "right" },
     { text: "Total: {{money totals.totalAmount currency}}", style: "total" },

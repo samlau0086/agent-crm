@@ -87,6 +87,7 @@ import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
 import { buildTemplateContext, renderPdfTemplateText, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
+import { compilePdfTemplateLayout, PdfTemplateValidationError, validatePdfTemplate } from "../src/lib/crm/pdf-template-layout.ts";
 import { previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "../src/lib/crm/document-numbering.ts";
 import { buildPaymentTermSchedule, getPaymentTermDefinitions } from "../src/lib/crm/payment-terms.ts";
 import { salesDocumentNextObjectKey } from "../src/lib/crm/quotes.ts";
@@ -9980,6 +9981,40 @@ await run("product and quote seed metadata supports company and contact associat
       }),
     /不存在的产品/
   );
+});
+
+await run("PDF template layout compiles rows, offsets, nesting, and splitters", () => {
+  const template = {
+    content: [
+      { type: "row", gutter: 8, columns: [
+        { type: "col", span: 4, content: [{ text: "Left" }] },
+        { type: "splitter", orientation: "vertical", thickness: 2, height: 30, style: "dashed" },
+        { type: "col", span: 8, content: [{ type: "row", columns: [{ type: "col", span: 12, content: [{ text: "Nested" }] }] }] }
+      ] },
+      { type: "splitter", orientation: "horizontal", color: "#123456", thickness: 2, style: "dashed" },
+      { type: "row", columns: [{ type: "col", span: 4, offset: 2, content: [{ text: "Offset" }] }] },
+      { text: "Native pdfmake remains unchanged", bold: true }
+    ]
+  };
+  const compiled = compilePdfTemplateLayout(template);
+  assert.equal(compiled.content[0].columnGap, 8);
+  assert.equal(compiled.content[0].columns[0].width, `${(4 / 12) * 100}%`);
+  assert.equal(compiled.content[0].columns[1].width, 2);
+  assert.equal(compiled.content[0].columns[2].stack[0].columns[0].width, "100%");
+  assert.equal(compiled.content[1].table.widths[0], "*");
+  assert.equal(typeof compiled.content[1].layout.hLineWidth, "function");
+  assert.equal(compiled.content[2].columns[0].width, `${(2 / 12) * 100}%`);
+  assert.deepEqual(compiled.content[3], template.content[3]);
+});
+
+await run("PDF template layout reports precise validation paths", () => {
+  assert.throws(
+    () => validatePdfTemplate({ content: [{ type: "row", columns: [{ type: "col", span: 13, content: [] }] }] }),
+    (error) => error instanceof PdfTemplateValidationError && /content\[0\]\.columns\[0\]\.span must be between 1 and 12/.test(error.message)
+  );
+  assert.throws(() => validatePdfTemplate({ content: [{ type: "row", columns: [] }] }), /columns must contain at least one column/);
+  assert.throws(() => validatePdfTemplate({ content: [{ type: "splitter", orientation: "vertical" }] }), /vertical splitter may only be used inside row\.columns/);
+  assert.throws(() => validatePdfTemplate({ content: [{ type: "row", columns: [{ type: "col", span: 7, content: [] }, { type: "col", span: 6, content: [] }] }] }), /must not exceed 12/);
 });
 
 await run("sales documents convert through order and invoice chain and render pdf templates", async () => {

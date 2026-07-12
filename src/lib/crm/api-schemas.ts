@@ -3,6 +3,7 @@ import { isValidEmailAttachmentBase64, MAX_EMAIL_ATTACHMENT_BASE64_CHARS, MAX_EM
 import { MAX_OUTBOUND_EMAIL_RECIPIENTS, validateOutboundEmailRecipientPolicy } from "@/lib/email/outbound-policy";
 import { isValidWebhookEvent } from "@/lib/integrations/webhook";
 import type { WebhookEvent } from "@/lib/crm/types";
+import { PdfTemplateValidationError, validatePdfTemplate } from "@/lib/crm/pdf-template-layout";
 
 export const MAX_CSV_IMPORT_CHARS = 5_000_000;
 export const MAX_IMPORT_MAPPING_FIELDS = 200;
@@ -178,7 +179,16 @@ export const salesDocumentConvertSchema = z
   })
   .strict();
 
-const documentTemplateJsonSchema = z.record(z.unknown());
+const documentTemplateJsonSchema = z.record(z.unknown()).superRefine((value, context) => {
+  try {
+    validatePdfTemplate(value);
+  } catch (error) {
+    if (!(error instanceof PdfTemplateValidationError)) throw error;
+    for (const issue of error.issues) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: issue.path, message: issue.message });
+    }
+  }
+});
 
 export const documentTemplateCreateSchema = z
   .object({

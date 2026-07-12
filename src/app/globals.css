@@ -7065,3 +7065,31 @@ body.deal-pipeline-dragging {
   margin-top: 6px;
   color: var(--danger);
 }
+.document-template-layout-help {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 10px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.document-template-grid-guide {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(24px, 1fr));
+  gap: 3px;
+}
+
+.document-template-grid-guide span {
+  padding: 5px 0;
+  border-radius: 4px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 11px;
+  text-align: center;
+}
+
+.document-template-snippet-toolbar {
+  margin-bottom: 8px;
+}

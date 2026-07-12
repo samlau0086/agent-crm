@@ -8,6 +8,7 @@ import { calculateQuoteTotals, getSalesDocumentCurrency, normalizeQuoteFees, nor
 import { formatMoneyWithCurrency, getCurrencyDefinitions } from "@/lib/crm/currencies";
 import { buildPaymentTermSchedule } from "@/lib/crm/payment-terms";
 import { assertWebhookDeliveryTarget } from "@/lib/integrations/webhook";
+import { compilePdfTemplateLayout } from "@/lib/crm/pdf-template-layout";
 
 const bundledFontVfs = pdfFonts.pdfMake?.vfs ?? pdfFonts.vfs ?? (pdfFonts as unknown as Record<string, string>);
 const { fonts: pdfFontsByName, defaultFont: defaultPdfFont } = configurePdfFonts();
@@ -56,7 +57,7 @@ handlebars.registerHelper("sum", (items: unknown, field: unknown) => {
 export async function renderSalesDocumentPdf(template: DocumentTemplate, input: SalesDocumentPdfContext): Promise<Buffer> {
   const context = buildTemplateContext(input);
   context.lineItemsTable = await buildLineItemsTableWithImages(context.lineItems as EnrichedLineItem[], String(context.currency), input.records?.filter((record) => record.objectKey === "currencies") ?? []);
-  const docDefinition = renderTemplateValue(template.templateJson, context) as Record<string, unknown>;
+  const docDefinition = renderTemplateValue(compilePdfTemplateLayout(template.templateJson), context) as Record<string, unknown>;
   if (defaultPdfFont) {
     docDefinition.defaultStyle = { ...(isRecord(docDefinition.defaultStyle) ? docDefinition.defaultStyle : {}), font: defaultPdfFont };
   }
