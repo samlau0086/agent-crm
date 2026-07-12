@@ -365,14 +365,23 @@ async function prepareSmtpSession(client: SmtpClient, config: EmailConnectionCon
 }
 
 async function connectSocket(host: string, port: number, secure: boolean, timeoutMs = getMailConnectTimeoutMs()): Promise<net.Socket> {
-  try {
-    return await connectSocketOnce(host, port, secure, timeoutMs);
-  } catch (error) {
-    if (!isTransientDnsError(error)) {
-      throw error;
+  const dnsRetryDelaysMs = [500, 1_500, 3_000];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await connectSocketOnce(host, port, secure, timeoutMs);
+    } catch (error) {
+      if (!isTransientDnsError(error)) {
+        throw error;
+      }
+      const retryDelayMs = dnsRetryDelaysMs[attempt];
+      if (retryDelayMs === undefined) {
+        throw Object.assign(new Error(`SMTP 服务器域名 ${host} 暂时无法解析（DNS EAI_AGAIN），请稍后点击重试；若持续失败，请检查服务器 DNS 配置`), {
+          code: "EAI_AGAIN",
+          cause: error
+        });
+      }
+      await delay(retryDelayMs);
     }
-    await delay(500);
-    return connectSocketOnce(host, port, secure, timeoutMs);
   }
 }
 

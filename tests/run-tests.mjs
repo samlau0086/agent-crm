@@ -13772,7 +13772,8 @@ await run("smtp transport resolves direct tls starttls and plaintext ports", () 
   const source = readFileSync("src/lib/email/smtp-imap.ts", "utf8");
   assert.match(source, /function isTransientDnsError\(error: unknown\): boolean/);
   assert.match(source, /code === "EAI_AGAIN"/);
-  assert.match(source, /await delay\(500\)/);
+  assert.match(source, /dnsRetryDelaysMs = \[500, 1_500, 3_000\]/);
+  assert.match(source, /SMTP 服务器域名/);
 });
 
 await run("smtp provider encodes non-ascii message headers", async () => {
