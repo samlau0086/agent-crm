@@ -4864,6 +4864,22 @@ body.deal-pipeline-dragging {
   line-height: 1.3;
 }
 
+.sales-document-number-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.sales-document-number-grid > .settings-item {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .sales-document-number-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .automation-workspace {
   display: grid;
   gap: 14px;

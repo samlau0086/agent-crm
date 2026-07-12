@@ -2205,7 +2205,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             <div className="toolbar" style={{ marginTop: 12 }}>
               {salesDocumentNumberVariables.map((variable) => <span className="badge" key={variable}>{variable}</span>)}
             </div>
-            <div className="settings-list" style={{ marginTop: 12 }}>
+            <div className="settings-list sales-document-number-grid" style={{ marginTop: 12 }}>
               {salesDocumentNumberSettingsDraft.map((setting, index) => (
                 <div className="settings-item" key={setting.objectKey} data-testid={`number-setting-${setting.objectKey}`}>
                   <div className="settings-panel-header">
