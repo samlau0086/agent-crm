@@ -2236,7 +2236,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                       ))}
                     </div>
                     <label>
-                      <span className="subtle">$NUM 补零位数</span>
+                      <span className="subtle">流水号补零位数</span>
                       <input className="input" type="number" min={1} max={12} value={setting.sequencePadding} disabled={!canManage} onChange={(event) => setSalesDocumentNumberSettingsDraft((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, sequencePadding: Number(event.target.value) } : candidate))} />
                     </label>
                     <div className="wide subtle">示例：{salesDocumentNumberRulePreview(setting)}</div>
