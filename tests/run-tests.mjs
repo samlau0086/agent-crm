@@ -3670,6 +3670,9 @@ await run("contact and company communication preferences drive compose translati
   assert.match(source, /translatedBodyText: translatedText/);
   assert.match(source, /scheduledSendAt: sendAt/);
   assert.match(source, /const sendAt = emailDraft\.scheduledSendAt\s*\?\?/);
+  assert.match(source, /function formatRecipientSendTime\(value: string, timezone\?: string\)/);
+  assert.match(source, /北京时间 \$\{beijingTime\} · 当地时间 \$\{localTime\}（\$\{timezone\}）/);
+  assert.match(source, /formatRecipientSendTime\(preference\.scheduledSendAt, preference\.contactWindow\?\.timezone\)/);
   assert.match(source, /定时发送优先 · 将在 \{formatDateTimeMinutes\(emailDraft\.scheduledSendAt\)\} 发送/);
   assert.match(source, /未配置偏好时段，将立即发送/);
   assert.match(styles, /\.email-preference-preview/);

@@ -507,6 +507,16 @@ type RecipientPreferenceResolution = {
   company?: CrmRecord;
   scheduledSendAt?: string;
 };
+
+function formatRecipientSendTime(value: string, timezone?: string): string {
+  const beijingTime = formatDateTimeMinutes(value);
+  if (!timezone) {
+    return `北京时间 ${beijingTime}`;
+  }
+  const localTime = formatDateTimeMinutes(value, timezone);
+  return `北京时间 ${beijingTime} · 当地时间 ${localTime}（${timezone}）`;
+}
+
 const preferredContactDayOptions = [
   { label: "周一", value: 1 },
   { label: "周二", value: 2 },
@@ -12343,9 +12353,9 @@ function EmailWorkspace({
                           <span className={(emailDraft.scheduledSendAt || preference.scheduledSendAt) ? "badge" : "danger-badge"}>
                             <CalendarClock size={12} />
                             {emailDraft.scheduledSendAt
-                              ? `使用定时时间 ${formatDateTimeMinutes(emailDraft.scheduledSendAt)}`
+                              ? `使用定时时间 ${formatRecipientSendTime(emailDraft.scheduledSendAt, preference.contactWindow?.timezone)}`
                               : preference.scheduledSendAt
-                                ? `使用偏好时段 ${formatDateTimeMinutes(preference.scheduledSendAt)}`
+                                ? `使用偏好时段 ${formatRecipientSendTime(preference.scheduledSendAt, preference.contactWindow?.timezone)}`
                                 : "未配置偏好时段，将立即发送"}
                           </span>
                         ) : null}

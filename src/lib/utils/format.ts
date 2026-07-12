@@ -24,16 +24,20 @@ export function formatDateTimeSeconds(value?: string): string {
   }).format(new Date(value));
 }
 
-export function formatDateTimeMinutes(value?: string): string {
+export function formatDateTimeMinutes(value?: string, timeZone = "Asia/Shanghai"): string {
   if (!value) {
     return "-";
   }
-  return new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "Asia/Shanghai",
-    hour12: false
-  }).format(new Date(value));
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone,
+      hour12: false
+    }).format(new Date(value));
+  } catch {
+    return "-";
+  }
 }
 
 export function labelForOption(options: Array<{ label: string; value: string }> | undefined, value: unknown): string {
