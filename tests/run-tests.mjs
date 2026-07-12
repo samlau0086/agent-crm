@@ -86,7 +86,7 @@ import { extractInboundMetadata } from "../src/lib/email/tracking.ts";
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
-import { buildTemplateContext, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
+import { buildTemplateContext, renderPdfTemplateText, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
 import { previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "../src/lib/crm/document-numbering.ts";
 import { buildPaymentTermSchedule, getPaymentTermDefinitions } from "../src/lib/crm/payment-terms.ts";
 import { salesDocumentNextObjectKey } from "../src/lib/crm/quotes.ts";
@@ -10037,6 +10037,8 @@ await run("sales documents convert through order and invoice chain and render pd
   });
   assert.match(String(templateContext.paymentSummary), /100% Full Payment/);
   assert.equal(Array.isArray(templateContext.paymentSchedule), true);
+  assert.equal(templateContext.documentTitle, "Commercial Invoice");
+  assert.match(renderPdfTemplateText("Fees: {{money totals.feeSubtotal}} / Total: {{money totals.totalAmount \"CNY\"}}", { currency: "USD", currencyDefinitions: [{ code: "USD", label: "US Dollar", symbol: "$", rateToBase: 7.2, isBase: false, active: true }], totals: { feeSubtotal: 0, totalAmount: 2900 } }), /Fees: \$ 0 USD \/ Total: \$ 2,900 USD/);
   const pdf = await renderSalesDocumentPdf(templates[0], {
     record: commercialInvoice,
     company: store.getRecord(context, "companies", String(commercialInvoice.data.companyId)),

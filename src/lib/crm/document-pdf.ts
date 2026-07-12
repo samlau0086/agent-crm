@@ -7,6 +7,7 @@ import type { CrmRecord, DocumentTemplate } from "@/lib/crm/types";
 import { calculateQuoteTotals, getSalesDocumentCurrency, normalizeQuoteFees, normalizeQuoteLineItems, salesDocumentNumberField, salesDocumentTitles } from "@/lib/crm/quotes";
 import { formatMoneyWithCurrency, getCurrencyDefinitions } from "@/lib/crm/currencies";
 import { buildPaymentTermSchedule } from "@/lib/crm/payment-terms";
+import { assertWebhookDeliveryTarget } from "@/lib/integrations/webhook";
 
 const bundledFontVfs = pdfFonts.pdfMake?.vfs ?? pdfFonts.vfs ?? (pdfFonts as unknown as Record<string, string>);
 const { fonts: pdfFontsByName, defaultFont: defaultPdfFont } = configurePdfFonts();
@@ -27,12 +28,13 @@ const handlebars = Handlebars.create();
 handlebars.registerHelper("money", (amount: unknown, currencyOrOptions: unknown, helperOptions?: unknown) => {
   const options = isHandlebarsOptions(helperOptions) ? helperOptions : isHandlebarsOptions(currencyOrOptions) ? currencyOrOptions : undefined;
   const contextCurrency = options?.data?.root?.currency;
-  const code = typeof currencyOrOptions === "string" && currencyOrOptions.trim()
-    ? currencyOrOptions
-    : typeof contextCurrency === "string" && contextCurrency.trim()
-      ? contextCurrency
+  const currencyDefinitions = Array.isArray(options?.data?.root?.currencyDefinitions) ? options.data.root.currencyDefinitions : [];
+  const code = typeof contextCurrency === "string" && contextCurrency.trim()
+    ? contextCurrency
+    : typeof currencyOrOptions === "string" && currencyOrOptions.trim()
+      ? currencyOrOptions
       : "CNY";
-  return formatMoneyWithCurrency(Number(amount ?? 0), code, []);
+  return formatMoneyWithCurrency(Number(amount ?? 0), code, currencyDefinitions);
 });
 
 handlebars.registerHelper("date", (value: unknown) => {
@@ -52,6 +54,7 @@ handlebars.registerHelper("sum", (items: unknown, field: unknown) => {
 
 export async function renderSalesDocumentPdf(template: DocumentTemplate, input: SalesDocumentPdfContext): Promise<Buffer> {
   const context = buildTemplateContext(input);
+  context.lineItemsTable = await buildLineItemsTableWithImages(context.lineItems as EnrichedLineItem[], String(context.currency), input.records?.filter((record) => record.objectKey === "currencies") ?? []);
   const docDefinition = renderTemplateValue(template.templateJson, context) as Record<string, unknown>;
   if (defaultPdfFont) {
     docDefinition.defaultStyle = { ...(isRecord(docDefinition.defaultStyle) ? docDefinition.defaultStyle : {}), font: defaultPdfFont };
@@ -63,7 +66,8 @@ export function buildTemplateContext(input: SalesDocumentPdfContext): Record<str
   const record = input.record;
   const currencyRecords = input.records?.filter((candidate) => candidate.objectKey === "currencies") ?? [];
   const currency = getSalesDocumentCurrency(record.data, record.objectKey);
-  const lineItems = normalizeQuoteLineItems(record.data.lineItems, currency);
+  const products = input.records?.filter((candidate) => candidate.objectKey === "products") ?? [];
+  const lineItems = enrichLineItems(normalizeQuoteLineItems(record.data.lineItems, currency), products);
   const fees = normalizeQuoteFees(record.data.fees, currency);
   const totals = calculateQuoteTotals(lineItems, fees, currency, currencyRecords);
   const paymentTermSchedule = buildPaymentTermSchedule(input.records ?? [], record.data.paymentTerm, totals.totalAmount, currency, currencyRecords);
@@ -75,9 +79,10 @@ export function buildTemplateContext(input: SalesDocumentPdfContext): Record<str
     deal: input.deal ?? {},
     workspace: input.workspace,
     generatedAt: input.generatedAt ?? new Date().toISOString(),
-    documentTitle: salesDocumentTitles[record.objectKey as keyof typeof salesDocumentTitles] ?? record.objectKey,
+    documentTitle: pdfDocumentTitles[record.objectKey] ?? salesDocumentTitles[record.objectKey as keyof typeof salesDocumentTitles] ?? record.objectKey,
     documentNumber,
     currency,
+    currencyDefinitions: getCurrencyDefinitions(currencyRecords),
     lineItems,
     fees,
     totals,
@@ -94,7 +99,7 @@ function renderTemplateValue(value: unknown, context: Record<string, unknown>): 
     if (value.trim() === "{{lineItemsTable}}") {
       return context.lineItemsTable;
     }
-    return handlebars.compile(value, { noEscape: true })(context);
+    return renderPdfTemplateText(value, context);
   }
   if (Array.isArray(value)) {
     return value.map((item) => renderTemplateValue(item, context));
@@ -105,7 +110,40 @@ function renderTemplateValue(value: unknown, context: Record<string, unknown>): 
   return value;
 }
 
-function buildLineItemsTable(lineItems: ReturnType<typeof normalizeQuoteLineItems>, currency: string, currencyRecords: CrmRecord[]): unknown[][] {
+export function renderPdfTemplateText(value: string, context: Record<string, unknown>): string {
+  return handlebars.compile(value, { noEscape: true })(context);
+}
+
+type EnrichedLineItem = ReturnType<typeof normalizeQuoteLineItems>[number] & {
+  description?: string;
+  imageUrl?: string;
+};
+
+const pdfDocumentTitles: Record<string, string> = {
+  quotes: "Quotation",
+  salesorders: "Sales Order",
+  proformainvoices: "Proforma Invoice",
+  commercialinvoices: "Commercial Invoice"
+};
+
+function enrichLineItems(lineItems: ReturnType<typeof normalizeQuoteLineItems>, products: CrmRecord[]): EnrichedLineItem[] {
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  return lineItems.map((item) => {
+    const product = productsById.get(item.productId);
+    return {
+      ...item,
+      description: item.description || String(product?.data.description ?? "").trim() || undefined,
+      imageUrl: item.imageUrl || String(product?.data.mainImageUrl ?? "").trim() || undefined
+    };
+  });
+}
+
+async function buildLineItemsTableWithImages(lineItems: EnrichedLineItem[], currency: string, currencyRecords: CrmRecord[]): Promise<unknown[][]> {
+  const images = await Promise.all(lineItems.map((item) => loadPdfImage(item.imageUrl)));
+  return buildLineItemsTable(lineItems, currency, currencyRecords, images);
+}
+
+function buildLineItemsTable(lineItems: EnrichedLineItem[], currency: string, currencyRecords: CrmRecord[], images: Array<string | undefined> = []): unknown[][] {
   const currencies = getCurrencyDefinitions(currencyRecords);
   return [
     [
@@ -114,13 +152,43 @@ function buildLineItemsTable(lineItems: ReturnType<typeof normalizeQuoteLineItem
       { text: "Unit Price", bold: true },
       { text: "Amount", bold: true }
     ],
-    ...lineItems.map((item) => [
-      item.productName || item.productId || "",
+    ...lineItems.map((item, index) => [
+      buildProductCell(item, images[index]),
       String(item.quantity),
       formatMoneyWithCurrency(item.unitPrice, item.currency || currency, currencies),
       formatMoneyWithCurrency(item.quantity * item.unitPrice, item.currency || currency, currencies)
     ])
   ];
+}
+
+function buildProductCell(item: EnrichedLineItem, image?: string): Record<string, unknown> {
+  const details = {
+    stack: [
+      { text: item.productName || item.productId || "", bold: true },
+      ...(item.description ? [{ text: item.description, fontSize: 8, color: "#64748b", margin: [0, 3, 0, 0] }] : [])
+    ]
+  };
+  return image
+    ? { columns: [{ image, width: 40, height: 40, fit: [40, 40] }, { ...details, width: "*", margin: [8, 0, 0, 0] }], columnGap: 0 }
+    : details;
+}
+
+async function loadPdfImage(imageUrl?: string): Promise<string | undefined> {
+  if (!imageUrl) return undefined;
+  if (/^data:image\/(?:png|jpe?g);base64,/i.test(imageUrl)) return imageUrl;
+  if (!/^https:\/\//i.test(imageUrl)) return undefined;
+  try {
+    await assertWebhookDeliveryTarget(imageUrl);
+    const response = await fetch(imageUrl, { signal: AbortSignal.timeout(4000), redirect: "error" });
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase();
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (!response.ok || !contentType || !["image/png", "image/jpeg"].includes(contentType) || contentLength > 2_000_000) return undefined;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > 2_000_000) return undefined;
+    return `data:${contentType};base64,${bytes.toString("base64")}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function createPdfBuffer(docDefinition: Record<string, unknown>): Promise<Buffer> {
@@ -196,6 +264,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isHandlebarsOptions(value: unknown): value is { data?: { root?: { currency?: unknown } } } {
+function isHandlebarsOptions(value: unknown): value is { data?: { root?: { currency?: unknown; currencyDefinitions?: ReturnType<typeof getCurrencyDefinitions> } } } {
   return isRecord(value) && "hash" in value;
 }
