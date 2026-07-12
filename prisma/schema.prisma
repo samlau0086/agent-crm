@@ -100,6 +100,12 @@ model Team {
   id          String    @id @default(cuid())
   workspaceId String
   name        String
+  companyName String?
+  address     String?
+  phone       String?
+  email       String?
+  website     String?
+  whatsapp    String?
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
   users       User[]
 

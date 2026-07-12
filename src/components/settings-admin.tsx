@@ -139,6 +139,12 @@ type PasswordDraft = {
 
 type TeamDraft = {
   name: string;
+  companyName: string;
+  address: string;
+  phone: string;
+  email: string;
+  website: string;
+  whatsapp: string;
 };
 
 type ApiKeyDraft = {
@@ -806,7 +812,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }, [props.roles, props.teams, selectedUser]);
 
   useEffect(() => {
-    setTeamDraft(selectedTeam ? { name: selectedTeam.name } : emptyTeamDraft());
+    setTeamDraft(selectedTeam ? teamDraftFromTeam(selectedTeam) : emptyTeamDraft());
   }, [selectedTeam]);
 
   useEffect(() => {
@@ -1381,7 +1387,13 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   async function saveTeam() {
     const payload = {
-      name: teamDraft.name.trim()
+      name: teamDraft.name.trim(),
+      companyName: teamDraft.companyName.trim(),
+      address: teamDraft.address.trim(),
+      phone: teamDraft.phone.trim(),
+      email: teamDraft.email.trim(),
+      website: teamDraft.website.trim(),
+      whatsapp: teamDraft.whatsapp.trim()
     };
 
     if (selectedTeam) {
@@ -2112,7 +2124,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onNewUser={resetUserForm}
             onNewTeam={resetTeamForm}
             onUserChange={(patch) => setUserDraft((current) => ({ ...current, ...patch }))}
-            onTeamNameChange={(name) => setTeamDraft({ name })}
+            onTeamChange={(patch) => setTeamDraft((current) => ({ ...current, ...patch }))}
             onSaveUser={() => runAction(saveUser)}
             onGeneratePasswordLink={() => runAction(generatePasswordSetupLink)}
             onSaveTeam={() => runAction(saveTeam)}
@@ -4482,7 +4494,7 @@ function UserTeamAdminPanel({
   onNewUser,
   onNewTeam,
   onUserChange,
-  onTeamNameChange,
+  onTeamChange,
   onSaveUser,
   onGeneratePasswordLink,
   onSaveTeam,
@@ -4504,7 +4516,7 @@ function UserTeamAdminPanel({
   onNewUser: () => void;
   onNewTeam: () => void;
   onUserChange: (patch: Partial<UserDraft>) => void;
-  onTeamNameChange: (name: string) => void;
+  onTeamChange: (patch: Partial<TeamDraft>) => void;
   onSaveUser: () => void;
   onGeneratePasswordLink: () => void;
   onSaveTeam: () => void;
@@ -4709,8 +4721,32 @@ function UserTeamAdminPanel({
                   className="input"
                   data-testid="settings-team-name"
                   value={teamDraft.name}
-                  onChange={(event) => onTeamNameChange(event.target.value)}
+                  onChange={(event) => onTeamChange({ name: event.target.value })}
                 />
+              </label>
+              <label>
+                <span className="subtle">公司名称</span>
+                <input className="input" data-testid="settings-team-company-name" value={teamDraft.companyName} onChange={(event) => onTeamChange({ companyName: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">电话</span>
+                <input className="input" data-testid="settings-team-phone" value={teamDraft.phone} onChange={(event) => onTeamChange({ phone: event.target.value })} />
+              </label>
+              <label className="wide">
+                <span className="subtle">地址</span>
+                <input className="input" data-testid="settings-team-address" value={teamDraft.address} onChange={(event) => onTeamChange({ address: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">邮箱</span>
+                <input className="input" data-testid="settings-team-email" type="email" value={teamDraft.email} onChange={(event) => onTeamChange({ email: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">网址</span>
+                <input className="input" data-testid="settings-team-website" type="url" placeholder="https://example.com" value={teamDraft.website} onChange={(event) => onTeamChange({ website: event.target.value })} />
+              </label>
+              <label>
+                <span className="subtle">WhatsApp</span>
+                <input className="input" data-testid="settings-team-whatsapp" value={teamDraft.whatsapp} onChange={(event) => onTeamChange({ whatsapp: event.target.value })} />
               </label>
             </div>
 
@@ -5032,7 +5068,7 @@ function DocumentTemplateAdminPanel({
       <div className="settings-panel-header">
         <div>
           <h2 className="page-title">PDF 模板</h2>
-          <div className="subtle">使用 JSON 定义 pdfmake 文档结构，支持 record、company、contact、deal、lineItems、fees、totals、workspace、generatedAt 变量。</div>
+            <div className="subtle">使用 JSON 定义 pdfmake 文档结构，支持 record、company、contact、deal、team、lineItems、fees、totals、workspace、generatedAt 变量。团队信息可用 team.name、team.companyName、team.address、team.phone、team.email、team.website、team.whatsapp。</div>
         </div>
         <button className="secondary-button" type="button" onClick={onNew} disabled={isPending}>
           <Plus size={16} />
@@ -6653,7 +6689,19 @@ function emptyUserDraft(roleId: string, teamId: string): UserDraft {
 }
 
 function emptyTeamDraft(): TeamDraft {
-  return { name: "" };
+  return { name: "", companyName: "", address: "", phone: "", email: "", website: "", whatsapp: "" };
+}
+
+function teamDraftFromTeam(team: Team): TeamDraft {
+  return {
+    name: team.name,
+    companyName: team.companyName ?? "",
+    address: team.address ?? "",
+    phone: team.phone ?? "",
+    email: team.email ?? "",
+    website: team.website ?? "",
+    whatsapp: team.whatsapp ?? ""
+  };
 }
 
 function emptyApiKeyDraft(): ApiKeyDraft {

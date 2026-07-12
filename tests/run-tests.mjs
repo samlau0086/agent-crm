@@ -10038,6 +10038,12 @@ await run("sales documents convert through order and invoice chain and render pd
   assert.match(String(templateContext.paymentSummary), /100% Full Payment/);
   assert.equal(Array.isArray(templateContext.paymentSchedule), true);
   assert.equal(templateContext.documentTitle, "Commercial Invoice");
+  assert.match(String(templateContext.issueDate), /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(templateContext.record.data.issueDate, templateContext.issueDate);
+  const quoteWithoutIssueDate = store.getRecord(context, "quotes", "quote-acme-platform");
+  const quoteTemplateContext = buildTemplateContext({ record: quoteWithoutIssueDate, records: documentRecords, workspace: { id: context.workspaceId } });
+  assert.equal(quoteTemplateContext.issueDate, quoteWithoutIssueDate.createdAt.slice(0, 10));
+  assert.equal(quoteTemplateContext.record.data.issueDate, quoteWithoutIssueDate.createdAt.slice(0, 10));
   assert.match(renderPdfTemplateText("Fees: {{money totals.feeSubtotal}} / Total: {{money totals.totalAmount \"CNY\"}}", { currency: "USD", currencyDefinitions: [{ code: "USD", label: "US Dollar", symbol: "$", rateToBase: 7.2, isBase: false, active: true }], totals: { feeSubtotal: 0, totalAmount: 2900 } }), /Fees: \$ 0 USD \/ Total: \$ 2,900 USD/);
   const pdf = await renderSalesDocumentPdf(templates[0], {
     record: commercialInvoice,

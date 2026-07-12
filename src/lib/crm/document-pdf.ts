@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import PdfPrinter from "pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts.js";
 import type { TDocumentDefinitions, TFontDictionary } from "pdfmake/interfaces";
-import type { CrmRecord, DocumentTemplate } from "@/lib/crm/types";
+import type { CrmRecord, DocumentTemplate, Team } from "@/lib/crm/types";
 import { calculateQuoteTotals, getSalesDocumentCurrency, normalizeQuoteFees, normalizeQuoteLineItems, salesDocumentNumberField, salesDocumentTitles } from "@/lib/crm/quotes";
 import { formatMoneyWithCurrency, getCurrencyDefinitions } from "@/lib/crm/currencies";
 import { buildPaymentTermSchedule } from "@/lib/crm/payment-terms";
@@ -19,6 +19,7 @@ export interface SalesDocumentPdfContext {
   contact?: CrmRecord;
   deal?: CrmRecord;
   workspace: { id: string; name?: string };
+  team?: Team;
   records?: CrmRecord[];
   generatedAt?: string;
 }
@@ -64,6 +65,12 @@ export async function renderSalesDocumentPdf(template: DocumentTemplate, input: 
 
 export function buildTemplateContext(input: SalesDocumentPdfContext): Record<string, unknown> {
   const record = input.record;
+  const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const issueDate = resolveIssueDate(record, generatedAt);
+  const templateRecord = {
+    ...record,
+    data: { ...record.data, issueDate }
+  };
   const currencyRecords = input.records?.filter((candidate) => candidate.objectKey === "currencies") ?? [];
   const currency = getSalesDocumentCurrency(record.data, record.objectKey);
   const products = input.records?.filter((candidate) => candidate.objectKey === "products") ?? [];
@@ -73,12 +80,14 @@ export function buildTemplateContext(input: SalesDocumentPdfContext): Record<str
   const paymentTermSchedule = buildPaymentTermSchedule(input.records ?? [], record.data.paymentTerm, totals.totalAmount, currency, currencyRecords);
   const documentNumber = String(record.data[salesDocumentNumberField(record.objectKey)] ?? "");
   return {
-    record,
+    record: templateRecord,
     company: input.company ?? {},
     contact: input.contact ?? {},
     deal: input.deal ?? {},
+    team: input.team ?? {},
     workspace: input.workspace,
-    generatedAt: input.generatedAt ?? new Date().toISOString(),
+    generatedAt,
+    issueDate,
     documentTitle: pdfDocumentTitles[record.objectKey] ?? salesDocumentTitles[record.objectKey as keyof typeof salesDocumentTitles] ?? record.objectKey,
     documentNumber,
     currency,
@@ -92,6 +101,16 @@ export function buildTemplateContext(input: SalesDocumentPdfContext): Record<str
     paymentInstructions: paymentTermSchedule.paymentInstructions,
     lineItemsTable: buildLineItemsTable(lineItems, currency, currencyRecords)
   };
+}
+
+function resolveIssueDate(record: CrmRecord, generatedAt: string): string {
+  const candidates = [record.data.issueDate, record.createdAt, generatedAt];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const date = new Date(String(candidate));
+    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  }
+  return "";
 }
 
 function renderTemplateValue(value: unknown, context: Record<string, unknown>): unknown {

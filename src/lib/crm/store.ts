@@ -334,6 +334,21 @@ function normalizeTeamName(input: string): string {
   return name;
 }
 
+function normalizeTeamBusinessInformation(input: Partial<Team>) {
+  return {
+    companyName: normalizeOptionalTeamText(input.companyName),
+    address: normalizeOptionalTeamText(input.address),
+    phone: normalizeOptionalTeamText(input.phone),
+    email: normalizeOptionalTeamText(input.email),
+    website: normalizeOptionalTeamText(input.website),
+    whatsapp: normalizeOptionalTeamText(input.whatsapp)
+  };
+}
+
+function normalizeOptionalTeamText(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : value.trim() || undefined;
+}
+
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
 
 export class CrmStore {
@@ -2885,7 +2900,7 @@ export class CrmStore {
     return clone(this.data.teams.filter((team) => team.workspaceId === context.workspaceId).sort((left, right) => left.name.localeCompare(right.name)));
   }
 
-  createTeam(context: RequestContext, input: Pick<Team, "name">): Team {
+  createTeam(context: RequestContext, input: Omit<Team, "id" | "workspaceId">): Team {
     requirePermission(context, "crm.admin");
     const name = normalizeTeamName(input.name);
     this.assertTeamNameAvailable(context, name);
@@ -2893,7 +2908,8 @@ export class CrmStore {
     const team: Team = {
       id: createId("team"),
       workspaceId: context.workspaceId,
-      name
+      name,
+      ...normalizeTeamBusinessInformation(input)
     };
     this.data.teams.push(team);
     this.writeAuditLog(context, "create", "team", team.id, {
@@ -2903,7 +2919,7 @@ export class CrmStore {
     return clone(team);
   }
 
-  updateTeam(context: RequestContext, id: string, patch: Partial<Pick<Team, "name">>): Team {
+  updateTeam(context: RequestContext, id: string, patch: Partial<Omit<Team, "id" | "workspaceId">>): Team {
     requirePermission(context, "crm.admin");
     const team = this.data.teams.find((candidate) => candidate.id === id && candidate.workspaceId === context.workspaceId);
     if (!team) {
@@ -2915,6 +2931,7 @@ export class CrmStore {
     }
 
     team.name = name;
+    Object.assign(team, normalizeTeamBusinessInformation(patch));
     this.writeAuditLog(context, "update", "team", team.id, {
       summary: `Updated team ${team.name}`,
       details: { name: team.name }

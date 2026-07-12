@@ -1285,7 +1285,13 @@ export const mediaAssetUpdateSchema = mediaAssetPayloadSchema
 
 export const teamCreateSchema = z
   .object({
-    name: labelSchema
+    name: labelSchema,
+    companyName: z.string().trim().max(200).optional(),
+    address: z.string().trim().max(500).optional(),
+    phone: z.string().trim().max(100).optional(),
+    email: z.union([z.string().trim().email().max(320), z.literal("")]).optional(),
+    website: z.union([z.string().trim().url().max(500), z.literal("")]).optional(),
+    whatsapp: z.string().trim().max(100).optional()
   })
   .strict();
 

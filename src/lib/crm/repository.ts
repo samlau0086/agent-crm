@@ -1370,11 +1370,17 @@ function mapRole(role: { id: string; workspaceId: string; name: string; permissi
   };
 }
 
-function mapTeam(team: { id: string; workspaceId: string; name: string }): Team {
+function mapTeam(team: { id: string; workspaceId: string; name: string; companyName: string | null; address: string | null; phone: string | null; email: string | null; website: string | null; whatsapp: string | null }): Team {
   return {
     id: team.id,
     workspaceId: team.workspaceId,
-    name: team.name
+    name: team.name,
+    companyName: team.companyName ?? undefined,
+    address: team.address ?? undefined,
+    phone: team.phone ?? undefined,
+    email: team.email ?? undefined,
+    website: team.website ?? undefined,
+    whatsapp: team.whatsapp ?? undefined
   };
 }
 
@@ -4769,7 +4775,7 @@ export class PrismaCrmRepository {
     return teams.map(mapTeam);
   }
 
-  async createTeam(context: RequestContext, input: Pick<Team, "name">): Promise<Team> {
+  async createTeam(context: RequestContext, input: Omit<Team, "id" | "workspaceId">): Promise<Team> {
     requirePermission(context, "crm.admin");
     const name = normalizeTeamName(input.name);
     await this.assertTeamNameAvailable(context, name);
@@ -4777,7 +4783,8 @@ export class PrismaCrmRepository {
     const team = await this.db.team.create({
       data: {
         workspaceId: context.workspaceId,
-        name
+        name,
+        ...normalizeTeamBusinessInformation(input)
       }
     });
 
@@ -4789,7 +4796,7 @@ export class PrismaCrmRepository {
     return mapTeam(team);
   }
 
-  async updateTeam(context: RequestContext, id: string, patch: Partial<Pick<Team, "name">>): Promise<Team> {
+  async updateTeam(context: RequestContext, id: string, patch: Partial<Omit<Team, "id" | "workspaceId">>): Promise<Team> {
     requirePermission(context, "crm.admin");
     const existing = await this.db.team.findUnique({ where: { id } });
     if (!existing || existing.workspaceId !== context.workspaceId) {
@@ -4800,7 +4807,7 @@ export class PrismaCrmRepository {
     if (name !== existing.name) {
       await this.assertTeamNameAvailable(context, name, id);
     }
-    const team = await this.db.team.update({ where: { id }, data: { name } });
+    const team = await this.db.team.update({ where: { id }, data: { name, ...normalizeTeamBusinessInformation(patch) } });
 
     await this.writeAuditLog(context, "update", "team", id, {
       summary: `Updated team ${team.name}`,
@@ -10571,6 +10578,21 @@ function normalizeTeamName(input: string): string {
     throw new Error("Team name is required");
   }
   return name;
+}
+
+function normalizeTeamBusinessInformation(input: Partial<Team>) {
+  return {
+    companyName: normalizeOptionalTeamText(input.companyName),
+    address: normalizeOptionalTeamText(input.address),
+    phone: normalizeOptionalTeamText(input.phone),
+    email: normalizeOptionalTeamText(input.email),
+    website: normalizeOptionalTeamText(input.website),
+    whatsapp: normalizeOptionalTeamText(input.whatsapp)
+  };
+}
+
+function normalizeOptionalTeamText(value: string | undefined): string | null | undefined {
+  return value === undefined ? undefined : value.trim() || null;
 }
 
 function sortDirectionSql(direction: "asc" | "desc"): Prisma.Sql {

@@ -40,6 +40,12 @@ export interface Team {
   id: string;
   workspaceId: string;
   name: string;
+  companyName?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  whatsapp?: string;
 }
 
 export interface User {
