@@ -293,6 +293,9 @@ const fieldTypes: FieldDefinition["type"][] = [
 
 type SettingsTabKey = "profile" | "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations";
 type AiAgentConfigTabKey = "providers" | "agents" | "knowledge";
+type AccessSectionTabKey = "members" | "roles" | "matrix";
+type IntegrationSectionTabKey = "apiKeys" | "webhooks" | "notifications";
+type OperationsSectionTabKey = "imports" | "reviews" | "backups" | "audit";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
 type AiAgentsPayload = { definitions: AiAgentDefinition[]; agents: AiAgentSetting[]; providerProfiles: AiProviderProfile[] };
 type TagSelectOption = { value: string; label: string; description?: string };
@@ -374,6 +377,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [workflowActionKey, setWorkflowActionKey] = useState("");
   const [reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId] = useState("");
   const activeSettingsTab = settingsTabFromPathname(pathname);
+  const [activeAccessSection, setActiveAccessSection] = useState<AccessSectionTabKey>("members");
+  const [activeIntegrationSection, setActiveIntegrationSection] = useState<IntegrationSectionTabKey>("apiKeys");
+  const [activeOperationsSection, setActiveOperationsSection] = useState<OperationsSectionTabKey>("reviews");
   const [selectedObjectId, setSelectedObjectId] = useState("");
   const [selectedFieldId, setSelectedFieldId] = useState("");
   const [selectedRelationId, setSelectedRelationId] = useState("");
@@ -2114,7 +2120,17 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
       {activeSettingsTab === "access" ? (
         <div className="settings-tab-panel" role="tabpanel">
-          <UserTeamAdminPanel
+          <SettingsSectionTabs
+            label="成员权限设置"
+            value={activeAccessSection}
+            onChange={setActiveAccessSection}
+            tabs={[
+              { key: "members", label: "成员与团队", description: "账号、团队和组织资料" },
+              { key: "roles", label: "角色配置", description: "角色与权限范围" },
+              { key: "matrix", label: "权限矩阵", description: "集中核对角色权限" }
+            ]}
+          />
+          {activeAccessSection === "members" ? <UserTeamAdminPanel
             users={props.users}
             teams={props.teams}
             roles={props.roles}
@@ -2136,9 +2152,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onGeneratePasswordLink={() => runAction(generatePasswordSetupLink)}
             onSaveTeam={() => runAction(saveTeam)}
             onDeleteTeam={() => runAction(deleteTeam)}
-          />
+          /> : null}
 
-          <RoleAdminPanel
+          {activeAccessSection === "roles" ? <RoleAdminPanel
             roles={props.roles}
             selectedRoleId={selectedRoleId}
             selectedRole={selectedRole}
@@ -2152,9 +2168,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onTogglePermission={toggleRolePermission}
             onSave={() => runAction(saveRole)}
             onDelete={() => runAction(deleteRole)}
-          />
+          /> : null}
 
-          <PermissionMatrix roles={props.roles} currentRoleId={props.role.id} />
+          {activeAccessSection === "matrix" ? <PermissionMatrix roles={props.roles} currentRoleId={props.role.id} /> : null}
         </div>
       ) : null}
 
@@ -3216,7 +3232,17 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
       {activeSettingsTab === "integrations" ? (
         <div className="settings-tab-panel" role="tabpanel">
-          <ApiKeyAdminPanel
+          <SettingsSectionTabs
+            label="集成接口设置"
+            value={activeIntegrationSection}
+            onChange={setActiveIntegrationSection}
+            tabs={[
+              { key: "apiKeys", label: "API Key", description: "访问凭证与权限" },
+              { key: "webhooks", label: "Webhook", description: "事件推送与投递" },
+              { key: "notifications", label: "通知渠道", description: "Bark、邮件与回调" }
+            ]}
+          />
+          {activeIntegrationSection === "apiKeys" ? <ApiKeyAdminPanel
             apiKeys={apiKeys}
             users={props.users}
             draft={apiKeyDraft}
@@ -3228,9 +3254,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onRevoke={(apiKey) => runManagedAction(() => revokeApiKey(apiKey))}
             onClearToken={() => setCreatedApiKeyToken(null)}
             onReset={resetApiKeyForm}
-          />
+          /> : null}
 
-          <WebhookAdminPanel
+          {activeIntegrationSection === "webhooks" ? <WebhookAdminPanel
             webhooks={props.webhooks}
             objects={props.objects}
             users={props.users}
@@ -3256,9 +3282,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onEventFilterChange={setWebhookDeliveryEventFilter}
             onClearSecret={() => setCreatedWebhookSecret(null)}
             onReset={resetWebhookForm}
-          />
+          /> : null}
 
-          <NotificationChannelAdminPanel
+          {activeIntegrationSection === "notifications" ? <NotificationChannelAdminPanel
             channels={props.notificationChannels}
             emailAccounts={props.emailAccounts}
             users={props.users}
@@ -3272,7 +3298,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onNew={resetNotificationChannelForm}
             onSave={() => runAction(saveNotificationChannel)}
             onDelete={() => runAction(deleteNotificationChannel)}
-          />
+          /> : null}
         </div>
       ) : null}
 
@@ -4051,11 +4077,22 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
       {activeSettingsTab === "operations" ? (
         <>
-          {props.importJobQueueSummary ? (
+          <SettingsSectionTabs
+            label="运维审计设置"
+            value={activeOperationsSection}
+            onChange={setActiveOperationsSection}
+            tabs={[
+              { key: "imports", label: "导入队列", description: "任务状态与处理进度" },
+              { key: "reviews", label: "变更审批", description: "待审核的记录变更" },
+              { key: "backups", label: "备份恢复", description: "数据备份与历史文件" },
+              { key: "audit", label: "审计日志", description: "关键操作与导出" }
+            ]}
+          />
+          {activeOperationsSection === "imports" && props.importJobQueueSummary ? (
             <ImportQueueMonitor summary={props.importJobQueueSummary} users={props.users} />
           ) : null}
 
-          <RecordChangeRequestAdminPanel
+          {activeOperationsSection === "reviews" ? <RecordChangeRequestAdminPanel
             activities={props.activities}
             fields={props.fields}
             objects={props.objects}
@@ -4065,11 +4102,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             reviewingRequestId={reviewingRecordChangeRequestId}
             onApprove={(request) => { void reviewRecordChangeRequest(request, "approve"); }}
             onReject={(request) => { void reviewRecordChangeRequest(request, "reject"); }}
-          />
+          /> : null}
 
-          <BackupOperationsPanel backups={backupFiles} isPending={isPending} onCreate={() => runAction(createBackup)} />
+          {activeOperationsSection === "backups" ? <BackupOperationsPanel backups={backupFiles} isPending={isPending} onCreate={() => runAction(createBackup)} /> : null}
 
-          <section className="settings-panel audit-panel">
+          {activeOperationsSection === "audit" ? <section className="settings-panel audit-panel">
         <div className="settings-panel-header">
           <div>
             <h2 className="page-title">审计日志</h2>
@@ -4163,7 +4200,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         ) : (
           <div className="empty-state">暂无审计日志</div>
         )}
-          </section>
+          </section> : null}
         </>
       ) : null}
       <ToastViewport
@@ -4322,6 +4359,36 @@ function ConfirmDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function SettingsSectionTabs<T extends string>({
+  label,
+  value,
+  tabs,
+  onChange
+}: {
+  label: string;
+  value: T;
+  tabs: Array<{ key: T; label: string; description: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="settings-section-tabs" role="tablist" aria-label={label}>
+      {tabs.map((tab) => (
+        <button
+          key={tab.key}
+          className={`settings-section-tab ${value === tab.key ? "active" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={value === tab.key}
+          onClick={() => onChange(tab.key)}
+        >
+          <strong>{tab.label}</strong>
+          <span>{tab.description}</span>
+        </button>
+      ))}
     </div>
   );
 }
