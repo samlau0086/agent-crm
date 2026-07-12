@@ -1,15 +1,16 @@
 import Handlebars from "handlebars/dist/cjs/handlebars.js";
 import { existsSync, readFileSync } from "node:fs";
-import { basename } from "node:path";
-import pdfMake from "pdfmake/build/pdfmake.js";
+import PdfPrinter from "pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts.js";
+import type { TDocumentDefinitions, TFontDictionary } from "pdfmake/interfaces";
 import type { CrmRecord, DocumentTemplate } from "@/lib/crm/types";
 import { calculateQuoteTotals, getSalesDocumentCurrency, normalizeQuoteFees, normalizeQuoteLineItems, salesDocumentNumberField, salesDocumentTitles } from "@/lib/crm/quotes";
 import { formatMoneyWithCurrency, getCurrencyDefinitions } from "@/lib/crm/currencies";
 import { buildPaymentTermSchedule } from "@/lib/crm/payment-terms";
 
-pdfMake.vfs = pdfFonts.pdfMake?.vfs ?? pdfFonts.vfs ?? {};
-const defaultPdfFont = configurePdfFonts();
+const bundledFontVfs = pdfFonts.pdfMake?.vfs ?? pdfFonts.vfs ?? (pdfFonts as unknown as Record<string, string>);
+const { fonts: pdfFontsByName, defaultFont: defaultPdfFont } = configurePdfFonts();
+const pdfPrinter = new PdfPrinter(pdfFontsByName);
 
 export interface SalesDocumentPdfContext {
   record: CrmRecord;
@@ -117,28 +118,56 @@ function buildLineItemsTable(lineItems: ReturnType<typeof normalizeQuoteLineItem
 }
 
 function createPdfBuffer(docDefinition: Record<string, unknown>): Promise<Buffer> {
-  return new Promise((resolve) => {
-    pdfMake.createPdf(docDefinition, undefined, pdfMake.fonts, pdfMake.vfs).getBuffer((buffer) => resolve(Buffer.from(buffer)));
+  return new Promise((resolve, reject) => {
+    let document: PDFKit.PDFDocument;
+    try {
+      document = pdfPrinter.createPdfKitDocument(docDefinition as unknown as TDocumentDefinitions);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    document.on("data", (chunk: Buffer | Uint8Array) => chunks.push(Buffer.from(chunk)));
+    document.once("error", reject);
+    document.once("end", () => resolve(Buffer.concat(chunks)));
+    document.end();
   });
 }
 
-function configurePdfFonts(): string | undefined {
-  const fontPath = findCjkFontPath();
-  if (!fontPath) {
-    return undefined;
-  }
-  const fontFileName = basename(fontPath);
-  pdfMake.vfs[fontFileName] = readFileSync(fontPath).toString("base64");
-  pdfMake.fonts = {
-    ...(pdfMake.fonts ?? {}),
-    NotoSansCJK: {
-      normal: fontFileName,
-      bold: fontFileName,
-      italics: fontFileName,
-      bolditalics: fontFileName
+function configurePdfFonts(): { fonts: TFontDictionary; defaultFont: string } {
+  const robotoRegular = fontBufferFromVfs("Roboto-Regular.ttf");
+  const robotoMedium = fontBufferFromVfs("Roboto-Medium.ttf");
+  const robotoItalic = fontBufferFromVfs("Roboto-Italic.ttf");
+  const robotoMediumItalic = fontBufferFromVfs("Roboto-MediumItalic.ttf");
+  const fonts: TFontDictionary = {
+    Roboto: {
+      normal: robotoRegular,
+      bold: robotoMedium,
+      italics: robotoItalic,
+      bolditalics: robotoMediumItalic
     }
   };
-  return "NotoSansCJK";
+  const fontPath = findCjkFontPath();
+  if (!fontPath) {
+    return { fonts, defaultFont: "Roboto" };
+  }
+  const cjkFont = readFileSync(fontPath);
+  fonts.NotoSansCJK = {
+    normal: cjkFont,
+    bold: cjkFont,
+    italics: cjkFont,
+    bolditalics: cjkFont
+  };
+  return { fonts, defaultFont: "NotoSansCJK" };
+}
+
+function fontBufferFromVfs(fileName: string): Buffer {
+  const encoded = bundledFontVfs[fileName];
+  if (!encoded) {
+    throw new Error(`Bundled PDF font is missing: ${fileName}`);
+  }
+  return Buffer.from(encoded, "base64");
 }
 
 function findCjkFontPath(): string | undefined {

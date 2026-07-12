@@ -10046,6 +10046,12 @@ await run("sales documents convert through order and invoice chain and render pd
   });
   assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
   assert.equal(pdf.length > 1000, true);
+  await assert.rejects(
+    renderSalesDocumentPdf(
+      { ...templates[0], templateJson: { content: [{ image: "/definitely/missing-pdf-image.png" }] } },
+      { record: commercialInvoice, records: documentRecords, workspace: { id: context.workspaceId } }
+    )
+  );
 });
 
 await run("email accounts messages and thread summaries are workspace scoped", () => {
