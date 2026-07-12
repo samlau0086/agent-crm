@@ -329,6 +329,17 @@ const settingsTabBySlug = Object.fromEntries(
   ])
 ) as Record<string, SettingsTabKey>;
 
+const salesDocumentNumberVariableLabels: Record<string, string> = {
+  $Y: "年份",
+  $M: "月份",
+  $D: "日期",
+  $h: "小时",
+  $m: "分钟",
+  $s: "秒钟",
+  $ID: "记录 ID",
+  $NUM: "流水号"
+};
+
 function settingsTabFromPathname(pathname: string): SettingsTabKey {
   const [, firstSegment, secondSegment] = pathname.split("/");
   if (firstSegment !== "settings") {
@@ -2219,8 +2230,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                     </label>
                     <div className="wide toolbar">
                       {salesDocumentNumberVariables.map((variable) => (
-                        <button className="secondary-button compact-button" type="button" key={variable} disabled={!canManage} onClick={() => setSalesDocumentNumberSettingsDraft((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, pattern: `${candidate.pattern}${variable}` } : candidate))}>
-                          插入 {variable}
+                        <button className="secondary-button compact-button" type="button" key={variable} title={`插入系统变量 ${variable}`} disabled={!canManage} onClick={() => setSalesDocumentNumberSettingsDraft((current) => current.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, pattern: `${candidate.pattern}${variable}` } : candidate))}>
+                          插入{salesDocumentNumberVariableLabels[variable] ?? variable}
                         </button>
                       ))}
                     </div>
