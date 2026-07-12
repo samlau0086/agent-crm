@@ -16,6 +16,13 @@ export interface CrmMcpErrorPayload {
   details?: unknown;
 }
 
+export interface CrmMcpBinaryResponse {
+  contentType: string;
+  filename?: string;
+  size: number;
+  base64: string;
+}
+
 export class CrmMcpApiError extends Error {
   readonly status: number;
   readonly method: string;
@@ -70,6 +77,38 @@ export class CrmMcpClient {
 
   delete<T>(path: string, body?: unknown, options: Omit<CrmMcpRequestOptions, "body"> = {}): Promise<T> {
     return this.request<T>("DELETE", path, { ...options, body });
+  }
+
+  async getBinary(path: string, options: Omit<CrmMcpRequestOptions, "body"> = {}): Promise<CrmMcpBinaryResponse> {
+    const url = this.buildUrl(path, options.query);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetchImpl(url, { method: "GET", signal: controller.signal, headers: { accept: "application/pdf, text/csv, application/octet-stream", authorization: `Bearer ${this.apiKey}` } });
+      if (!response.ok) {
+        const responseBody = await readResponseBody(response);
+        const payload = normalizeErrorPayload(responseBody);
+        throw new CrmMcpApiError({ status: response.status, method: "GET", path, message: payload.error || response.statusText || "CRM request failed", code: payload.code, details: payload.details, responseBody });
+      }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return { contentType: response.headers.get("content-type") ?? "application/octet-stream", filename: parseContentDispositionFilename(response.headers.get("content-disposition")), size: bytes.length, base64: bytes.toString("base64") };
+    } catch (error) {
+      if (error instanceof CrmMcpApiError) throw error;
+      if (error instanceof Error && error.name === "AbortError") throw new CrmMcpApiError({ status: 504, method: "GET", path, message: `CRM request timed out after ${this.timeoutMs}ms`, code: "CRM_TIMEOUT" });
+      throw error;
+    } finally { clearTimeout(timeout); }
+  }
+
+  async postBinary(path: string, body: unknown): Promise<CrmMcpBinaryResponse> {
+    const url = this.buildUrl(path);
+    const response = await this.fetchImpl(url, { method: "POST", headers: { accept: "application/pdf", authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) {
+      const responseBody = await readResponseBody(response);
+      const payload = normalizeErrorPayload(responseBody);
+      throw new CrmMcpApiError({ status: response.status, method: "POST", path, message: payload.error || response.statusText || "CRM request failed", code: payload.code, details: payload.details, responseBody });
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { contentType: response.headers.get("content-type") ?? "application/pdf", filename: parseContentDispositionFilename(response.headers.get("content-disposition")), size: bytes.length, base64: bytes.toString("base64") };
   }
 
   private async request<T>(method: string, path: string, options: CrmMcpRequestOptions): Promise<T> {
@@ -185,6 +224,13 @@ function normalizeErrorPayload(body: unknown): CrmMcpErrorPayload {
     return { error: body };
   }
   return {};
+}
+
+function parseContentDispositionFilename(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) { try { return decodeURIComponent(encoded); } catch { return encoded; } }
+  return value.match(/filename="?([^";]+)"?/i)?.[1];
 }
 
 function parsePositiveInteger(value: string | undefined): number | undefined {

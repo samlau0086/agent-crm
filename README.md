@@ -237,8 +237,10 @@ content[2].columns[1].span must be between 1 and 12
 - 跟进活动：`crm_list_activities`、`crm_create_activity`、`crm_update_activity`。
 - AI 只读查询：`crm_ai_query`，调用 `/api/ai/query`，需要 API key 具备 `ai.use`。
 - 邮件只读：`crm_list_email_threads`、`crm_get_email_thread`、`crm_list_email_messages`。
+- 销售单据：支持四类单据的 CRUD、转换、PDF 下载、CSV 导入导出和导入模板下载。
+- 单据配置：支持 PDF 模板的查询、创建、修改、删除和预览，以及编号规则的查询、修改和号码预览。
 
-v1 不暴露删除记录、发送邮件、用户管理、API key 管理、邮箱配置、工作流启停/管理等高风险工具。记录更新如果触发现有审批逻辑，MCP 工具会把 CRM 的 `pendingApproval` 响应原样返回给 agent。
+MCP 不暴露邮箱密钥配置、API key 管理和工作流启停等敏感能力。所有操作继续受 API key 权限、RBAC、审批流和审计日志约束；触发审批时会把 `pendingApproval` 原样返回给 agent。
 
 ### 本地 MCP server 配置
 

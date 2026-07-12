@@ -432,4 +432,50 @@ export async function runMcpTests(run: (name: string, fn: () => unknown | Promis
     assert.equal(requests[0].init.method, "POST");
     assert.deepEqual(JSON.parse(String(requests[0].init.body)), { question: "Which deals need follow-up?", objectKey: "deals" });
   });
+
+  await run("mcp sales document tools cover conversion PDF CSV templates and numbering", async () => {
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const client = new CrmMcpClient({
+      baseUrl: "https://crm.example.com",
+      apiKey: "crm_live_test",
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init: init ?? {} });
+        const pathname = new URL(String(url)).pathname;
+        if (pathname.endsWith("/pdf") || pathname.endsWith("/export") || pathname.includes("/imports/templates/") || pathname === "/api/document-templates/preview") {
+          const isPdf = pathname.endsWith("/pdf") || pathname === "/api/document-templates/preview";
+          return new Response(isPdf ? new Uint8Array([37, 80, 68, 70]) : "title,status\nExample,draft", {
+            status: 200,
+            headers: { "content-type": isPdf ? "application/pdf" : "text/csv; charset=utf-8", "content-disposition": `attachment; filename="${isPdf ? "document.pdf" : "documents.csv"}"` }
+          });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    const converted = await executeCrmMcpTool("crm_convert_sales_document", { objectKey: "quotes", recordId: "quote-1", targetObjectKey: "salesorders" }, client);
+    const pdf = await executeCrmMcpTool("crm_download_sales_document_pdf", { objectKey: "quotes", recordId: "quote-1" }, client);
+    await executeCrmMcpTool("crm_export_sales_documents_csv", { objectKey: "salesorders", q: "Acme", sort: { field: "issueDate", direction: "desc" } }, client);
+    await executeCrmMcpTool("crm_import_sales_documents_csv", { objectKey: "salesorders", csv: "title\nAcme", strategy: "all-or-nothing" }, client);
+    await executeCrmMcpTool("crm_get_sales_document_import_template", { objectKey: "salesorders", kind: "field-guide" }, client);
+    await executeCrmMcpTool("crm_create_document_template", { objectKey: "quotes", name: "Default", templateJson: { content: [{ text: "Quote" }] } }, client);
+    await executeCrmMcpTool("crm_update_document_template", { templateId: "template-1", active: false }, client);
+    await executeCrmMcpTool("crm_preview_document_template_pdf", { objectKey: "quotes", recordId: "quote-1", templateJson: { content: [{ text: "Quote" }] } }, client);
+    await executeCrmMcpTool("crm_update_sales_document_number_settings", { settings: [{ objectKey: "quotes", pattern: "QT-{YYYY}-{SEQ}", sequencePadding: 4 }] }, client);
+    await executeCrmMcpTool("crm_preview_sales_document_number", { objectKey: "quotes" }, client);
+
+    assert.equal(converted.isError, undefined);
+    assert.equal(new URL(requests[0].url).pathname, "/api/records/quotes/quote-1/convert");
+    assert.deepEqual(JSON.parse(String(requests[0].init.body)), { targetObjectKey: "salesorders" });
+    assert.deepEqual(pdf.structuredContent, { contentType: "application/pdf", filename: "document.pdf", size: 4, base64: "JVBERg==" });
+    assert.equal(new URL(requests[2].url).searchParams.get("sortField"), "issueDate");
+    assert.equal(new URL(requests[2].url).searchParams.get("sortDirection"), "desc");
+    assert.deepEqual(JSON.parse(String(requests[3].init.body)), { objectKey: "salesorders", csv: "title\nAcme", strategy: "all-or-nothing" });
+    assert.equal(new URL(requests[4].url).pathname, "/api/imports/templates/salesorders/fields");
+    assert.equal(new URL(requests[5].url).pathname, "/api/document-templates");
+    assert.equal(requests[6].init.method, "PATCH");
+    assert.equal(requests[7].init.method, "POST");
+    assert.equal(new URL(requests[8].url).pathname, "/api/sales-document-number-settings");
+    assert.equal(requests[8].init.method, "PATCH");
+    assert.equal(new URL(requests[9].url).searchParams.get("objectKey"), "quotes");
+  });
 }

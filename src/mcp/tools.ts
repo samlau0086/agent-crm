@@ -52,6 +52,10 @@ const pipelineStageSchema = z
     color: z.string().trim().min(1)
   })
   .strict();
+const salesDocumentObjectKeySchema = z.enum(["quotes", "salesorders", "proformainvoices", "commercialinvoices"]);
+const documentTemplatePatchSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional(), isDefault: z.boolean().optional(), templateJson: z.record(z.unknown()).optional()
+}).strict();
 const activityListSchema = z
   .object({
     recordId: idSchema.optional(),
@@ -139,6 +143,20 @@ const schemas = {
     .strict(),
   crm_delete_record: z.object({ objectKey: objectKeySchema, recordId: idSchema, changeReason: changeReasonSchema }).strict(),
   crm_transfer_record: z.object({ objectKey: objectKeySchema, recordId: idSchema, ownerId: z.union([idSchema, z.null()]).optional() }).strict(),
+  crm_convert_sales_document: z.object({ objectKey: salesDocumentObjectKeySchema, recordId: idSchema, targetObjectKey: z.enum(["salesorders", "proformainvoices", "commercialinvoices"]) }).strict(),
+  crm_download_sales_document_pdf: z.object({ objectKey: salesDocumentObjectKeySchema, recordId: idSchema }).strict(),
+  crm_export_sales_documents_csv: z.object({ objectKey: salesDocumentObjectKeySchema, q: z.string().trim().optional(), filters: z.array(recordFilterSchema).max(50).optional(), sort: recordSortSchema.optional() }).strict(),
+  crm_import_sales_documents_csv: z.object({ objectKey: salesDocumentObjectKeySchema, csv: z.string().min(1), strategy: z.enum(["skip-invalid", "all-or-nothing", "update-existing"]).optional(), mapping: z.record(z.string().trim().min(1)).optional() }).strict(),
+  crm_get_sales_document_import_template: z.object({ objectKey: salesDocumentObjectKeySchema, kind: z.enum(["template", "field-guide"]).optional() }).strict(),
+  crm_list_document_templates: z.object({ objectKey: salesDocumentObjectKeySchema.optional() }).strict(),
+  crm_get_document_template: z.object({ templateId: idSchema }).strict(),
+  crm_create_document_template: z.object({ objectKey: salesDocumentObjectKeySchema, name: z.string().trim().min(1).max(200), active: z.boolean().optional(), isDefault: z.boolean().optional(), templateJson: z.record(z.unknown()) }).strict(),
+  crm_update_document_template: documentTemplatePatchSchema.extend({ templateId: idSchema }).strict(),
+  crm_delete_document_template: z.object({ templateId: idSchema }).strict(),
+  crm_preview_document_template_pdf: z.object({ objectKey: salesDocumentObjectKeySchema, recordId: idSchema, templateJson: z.record(z.unknown()) }).strict(),
+  crm_get_sales_document_number_settings: z.object({}).strict(),
+  crm_update_sales_document_number_settings: z.object({ settings: z.array(z.object({ objectKey: salesDocumentObjectKeySchema, pattern: z.string().trim().min(1).max(160), sequencePadding: z.number().int().min(1).max(12) }).strict()).min(1).max(4) }).strict(),
+  crm_preview_sales_document_number: z.object({ objectKey: salesDocumentObjectKeySchema }).strict(),
   crm_list_activities: activityListSchema,
   crm_create_activity: z
     .object({
@@ -322,6 +340,20 @@ export const crmMcpToolDefinitions: Array<{
   { name: "crm_update_record", title: "Update CRM record", description: "Update a CRM record; approval responses are returned as-is.", inputSchema: schemas.crm_update_record },
   { name: "crm_delete_record", title: "Delete CRM record", description: "Delete or request deletion of a CRM record, respecting approval rules for contacts, companies, deals, products, and quotes.", inputSchema: schemas.crm_delete_record },
   { name: "crm_transfer_record", title: "Transfer CRM record", description: "Transfer a record owner or release ownership by setting ownerId null, respecting pool/admin permissions.", inputSchema: schemas.crm_transfer_record },
+  { name: "crm_convert_sales_document", title: "Convert sales document", description: "Convert a quote to a sales order, a sales order to a proforma invoice, or a proforma invoice to a commercial invoice.", inputSchema: schemas.crm_convert_sales_document },
+  { name: "crm_download_sales_document_pdf", title: "Download sales document PDF", description: "Render a sales document PDF and return its filename, content type, size, and Base64 content.", inputSchema: schemas.crm_download_sales_document_pdf },
+  { name: "crm_export_sales_documents_csv", title: "Export sales documents CSV", description: "Export filtered sales documents as a Base64 CSV file.", inputSchema: schemas.crm_export_sales_documents_csv },
+  { name: "crm_import_sales_documents_csv", title: "Import sales documents CSV", description: "Bulk import sales documents from CSV using CRM validation and import permissions.", inputSchema: schemas.crm_import_sales_documents_csv },
+  { name: "crm_get_sales_document_import_template", title: "Get sales document import template", description: "Download the CSV import template or field guide for a sales document type.", inputSchema: schemas.crm_get_sales_document_import_template },
+  { name: "crm_list_document_templates", title: "List PDF templates", description: "List sales document PDF templates, optionally by document type.", inputSchema: schemas.crm_list_document_templates },
+  { name: "crm_get_document_template", title: "Get PDF template", description: "Get one sales document PDF template.", inputSchema: schemas.crm_get_document_template },
+  { name: "crm_create_document_template", title: "Create PDF template", description: "Create a sales document PDF template. Requires CRM admin permission.", inputSchema: schemas.crm_create_document_template },
+  { name: "crm_update_document_template", title: "Update PDF template", description: "Update a sales document PDF template. Requires CRM admin permission.", inputSchema: schemas.crm_update_document_template },
+  { name: "crm_delete_document_template", title: "Delete PDF template", description: "Delete a sales document PDF template. Requires CRM admin permission.", inputSchema: schemas.crm_delete_document_template },
+  { name: "crm_preview_document_template_pdf", title: "Preview PDF template", description: "Render an unsaved PDF template against a sales document and return Base64 PDF content.", inputSchema: schemas.crm_preview_document_template_pdf },
+  { name: "crm_get_sales_document_number_settings", title: "Get document number settings", description: "Read numbering patterns for all sales document types.", inputSchema: schemas.crm_get_sales_document_number_settings },
+  { name: "crm_update_sales_document_number_settings", title: "Update document number settings", description: "Update one or more sales document numbering patterns. Requires CRM admin permission.", inputSchema: schemas.crm_update_sales_document_number_settings },
+  { name: "crm_preview_sales_document_number", title: "Preview document number", description: "Preview the next formatted number for a sales document type without consuming it.", inputSchema: schemas.crm_preview_sales_document_number },
   { name: "crm_list_activities", title: "List CRM activities", description: "List CRM activities and tasks. Use type=task, completed=false, archived=false, and dueFrom/dueTo for today's tasks.", inputSchema: schemas.crm_list_activities },
   { name: "crm_create_activity", title: "Create CRM activity", description: "Create a note, call, meeting, task, or email activity.", inputSchema: schemas.crm_create_activity },
   { name: "crm_update_activity", title: "Update CRM activity", description: "Update an activity or task status.", inputSchema: schemas.crm_update_activity },
@@ -433,6 +465,49 @@ async function dispatchTool(name: BaseCrmMcpToolName, args: z.infer<(typeof sche
       const input = args as z.infer<typeof schemas.crm_transfer_record>;
       return client.post(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}/transfer`, stripUndefined({ ownerId: input.ownerId }));
     }
+    case "crm_convert_sales_document": {
+      const input = args as z.infer<typeof schemas.crm_convert_sales_document>;
+      return client.post(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}/convert`, { targetObjectKey: input.targetObjectKey });
+    }
+    case "crm_download_sales_document_pdf": {
+      const input = args as z.infer<typeof schemas.crm_download_sales_document_pdf>;
+      return client.getBinary(`/api/records/${encodeURIComponent(input.objectKey)}/${encodeURIComponent(input.recordId)}/pdf`);
+    }
+    case "crm_export_sales_documents_csv": {
+      const input = args as z.infer<typeof schemas.crm_export_sales_documents_csv>;
+      return client.getBinary(`/api/records/${encodeURIComponent(input.objectKey)}/export`, { query: { q: input.q, filters: input.filters, sortField: input.sort?.field, sortDirection: input.sort?.direction } });
+    }
+    case "crm_import_sales_documents_csv":
+      return client.post("/api/imports/csv", stripUndefined(args as z.infer<typeof schemas.crm_import_sales_documents_csv>));
+    case "crm_get_sales_document_import_template": {
+      const input = args as z.infer<typeof schemas.crm_get_sales_document_import_template>;
+      const suffix = input.kind === "field-guide" ? "/fields" : "";
+      return client.getBinary(`/api/imports/templates/${encodeURIComponent(input.objectKey)}${suffix}`);
+    }
+    case "crm_list_document_templates":
+      return client.get("/api/document-templates", { query: args as z.infer<typeof schemas.crm_list_document_templates> });
+    case "crm_get_document_template": {
+      const input = args as z.infer<typeof schemas.crm_get_document_template>;
+      return client.get(`/api/document-templates/${encodeURIComponent(input.templateId)}`);
+    }
+    case "crm_create_document_template":
+      return client.post("/api/document-templates", stripUndefined(args as z.infer<typeof schemas.crm_create_document_template>));
+    case "crm_update_document_template": {
+      const input = args as z.infer<typeof schemas.crm_update_document_template>;
+      return client.patch(`/api/document-templates/${encodeURIComponent(input.templateId)}`, stripUndefined({ ...input, templateId: undefined }));
+    }
+    case "crm_delete_document_template": {
+      const input = args as z.infer<typeof schemas.crm_delete_document_template>;
+      return client.delete(`/api/document-templates/${encodeURIComponent(input.templateId)}`);
+    }
+    case "crm_preview_document_template_pdf":
+      return client.postBinary("/api/document-templates/preview", args);
+    case "crm_get_sales_document_number_settings":
+      return client.get("/api/sales-document-number-settings");
+    case "crm_update_sales_document_number_settings":
+      return client.patch("/api/sales-document-number-settings", args);
+    case "crm_preview_sales_document_number":
+      return client.get("/api/sales-document-number-preview", { query: args as z.infer<typeof schemas.crm_preview_sales_document_number> });
     case "crm_list_activities":
       return client.get("/api/activities", { query: args as z.infer<typeof schemas.crm_list_activities> });
     case "crm_create_activity":

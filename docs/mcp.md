@@ -92,14 +92,16 @@ Windows 注意事项：
 - `crm_list_email_threads`：只读列出可见邮件线程。
 - `crm_get_email_thread`：只读读取一条邮件线程。
 - `crm_list_email_messages`：只读列出某个邮件线程下的消息。
+- 销售单据：`crm_convert_sales_document`、`crm_download_sales_document_pdf`、`crm_export_sales_documents_csv`、`crm_import_sales_documents_csv`、`crm_get_sales_document_import_template`。
+- PDF 模板：`crm_list_document_templates`、`crm_get_document_template`、`crm_create_document_template`、`crm_update_document_template`、`crm_delete_document_template`、`crm_preview_document_template_pdf`。
+- 单据编号：`crm_get_sales_document_number_settings`、`crm_update_sales_document_number_settings`、`crm_preview_sales_document_number`。
+
+PDF 和 CSV 下载工具返回 `contentType`、`filename`、`size` 和 `base64`；调用方可将 `base64` 解码后保存为对应文件。付款条款是 `paymentterms` CRM 对象，通过通用记录工具管理。
 
 ## 安全边界
 
-v1 MCP server 有意不暴露以下高风险能力：
+MCP server 仍有意不暴露以下敏感能力：
 
-- 删除记录或活动。
-- 发送外部邮件。
-- 管理用户、角色、团队或 API key。
 - 配置邮箱账号、OAuth 或 SMTP/IMAP 密钥。
 - 启停、删除或管理工作流。
 - 直接连接数据库或绕过 CRM REST API。
