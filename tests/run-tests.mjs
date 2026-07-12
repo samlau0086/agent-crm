@@ -4916,6 +4916,8 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /const resultMailbox: EmailMailboxKey = messages\.some\(\(item\) => item\.status === "queued" \|\| item\.status === "sending"\) \? "scheduled" : "sent"/);
   assert.match(workspace, /data-testid="email-thread-send-status"/);
   assert.match(workspace, /data-testid="email-message-send-status"/);
+  assert.match(workspace, /message\.direction === "outbound" && \(message\.status === "sent" \|\| message\.status === "failed"\)/);
+  assert.match(workspace, /data-testid=\{`email-message-edit-sent-\$\{message\.id\}`\}/);
   assert.match(workspace, /type EmailListDisplayMode = "thread" \| "message"/);
   assert.match(workspace, /const \[emailListDisplayMode, setEmailListDisplayMode\] = useState<EmailListDisplayMode>\(routeListDisplayMode\)/);
   assert.match(workspace, /const visibleRows = useMemo\(\(\) => \{/);

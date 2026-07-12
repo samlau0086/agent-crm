@@ -5496,8 +5496,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   }
 
   function editSentEmailMessage(message: EmailMessage, options: { notice?: string } = {}) {
-    if (message.direction !== "outbound" || message.status !== "sent") {
-      showError("只能再次编辑已发送邮件");
+    if (message.direction !== "outbound" || (message.status !== "sent" && message.status !== "failed")) {
+      showError("只能再次编辑已发送或发送失败的邮件");
       return;
     }
     const thread = emailThreads.find((candidate) => candidate.id === message.threadId);
@@ -5543,10 +5543,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       replyOriginalSentAt: undefined
     }));
     setMessage(options.notice ?? "已复制已发送邮件，可编辑后重新发送");
-  }
-
-  function resendSentEmailMessage(message: EmailMessage) {
-    editSentEmailMessage(message, { notice: "已载入原邮件内容，请确认后点击发送" });
   }
 
   function replyToEmailMessage(message: EmailMessage) {
@@ -7975,7 +7971,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onReplyToMessage={replyToEmailMessage}
             onRetryMessage={(messageId) => runAction(() => retryEmailMessage(messageId))}
             onEditSentMessage={editSentEmailMessage}
-            onResendSentMessage={resendSentEmailMessage}
             onGenerateAiForMessage={(message, purpose) => runAction(() => generateEmailAiForMessage(message, purpose))}
             onGenerateAi={() => runAction(generateEmailAi)}
             onGenerateAiForDraft={(prompt) => runAction(() => generateEmailAiForDraft(prompt))}
@@ -9270,7 +9265,6 @@ function EmailWorkspace({
   onReplyToMessage,
   onRetryMessage,
   onEditSentMessage,
-  onResendSentMessage,
   onGenerateAiForMessage,
   onGenerateAi,
   onGenerateAiForDraft,
@@ -9378,7 +9372,6 @@ function EmailWorkspace({
   onReplyToMessage: (message: EmailMessage) => void;
   onRetryMessage: (messageId: string) => void;
   onEditSentMessage: (message: EmailMessage) => void;
-  onResendSentMessage: (message: EmailMessage) => void;
   onGenerateAiForMessage: (message: EmailMessage, purpose: "translate" | "context_analysis") => void;
   onGenerateAi: () => void;
   onGenerateAiForDraft: (prompt: string) => void;
@@ -11949,6 +11942,21 @@ function EmailWorkspace({
                           ) : null}
                           {message.groupSendMode ? <span className="badge">群发单显</span> : null}
                           {message.trackingEnabled ? <span className="badge">追踪已开启</span> : null}
+                          {message.direction === "outbound" && (message.status === "sent" || message.status === "failed") ? (
+                            <button
+                              className="secondary-button"
+                              data-testid={`email-message-edit-sent-${message.id}`}
+                              type="button"
+                              onClick={() => {
+                                onEditSentMessage(message);
+                                openComposePopup();
+                              }}
+                              disabled={disabled}
+                            >
+                              <Pencil size={14} />
+                              再次编辑
+                            </button>
+                          ) : null}
                           {message.inboundMetadata?.sourceIp ? (
                             <span className="badge">
                               来源 IP {message.inboundMetadata.sourceIp}
@@ -12090,40 +12098,6 @@ function EmailWorkspace({
                           </div>
                         ) : null}
                         <div className="toolbar" style={{ marginTop: 8 }}>
-                          {message.direction === "outbound" && message.status === "sent" ? (
-                            <>
-                              <button
-                                className="secondary-button"
-                                data-testid={`email-message-edit-sent-${message.id}`}
-                                type="button"
-                                onClick={() => {
-                                  onEditSentMessage(message);
-                                  setComposeOpen(true);
-                                  setComposeMinimized(false);
-                                  setComposeFullSize(false);
-                                }}
-                                disabled={disabled}
-                              >
-                                <Pencil size={14} />
-                                再次编辑
-                              </button>
-                              <button
-                                className="secondary-button"
-                                data-testid={`email-message-resend-${message.id}`}
-                                type="button"
-                                onClick={() => {
-                                  onResendSentMessage(message);
-                                  setComposeOpen(true);
-                                  setComposeMinimized(false);
-                                  setComposeFullSize(false);
-                                }}
-                                disabled={disabled}
-                              >
-                                <Send size={14} />
-                                重新发送
-                              </button>
-                            </>
-                          ) : null}
                           <button
                             className="secondary-button"
                             data-testid={`email-message-reply-${message.id}`}
