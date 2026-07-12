@@ -2232,6 +2232,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             isPending={isPending}
             objects={props.objects}
             records={props.records}
+            mediaAssets={props.mediaAssets}
             selectedTemplate={selectedDocumentTemplate}
             templates={documentTemplates}
             onChange={(patch) => setDocumentTemplateDraft((current) => ({ ...current, ...patch }))}
@@ -5048,6 +5049,7 @@ function DocumentTemplateAdminPanel({
   isPending,
   objects,
   records,
+  mediaAssets,
   selectedTemplate,
   templates,
   onChange,
@@ -5060,6 +5062,7 @@ function DocumentTemplateAdminPanel({
   isPending: boolean;
   objects: ObjectDefinition[];
   records: CrmRecord[];
+  mediaAssets: MediaAsset[];
   selectedTemplate?: DocumentTemplate;
   templates: DocumentTemplate[];
   onChange: (patch: Partial<DocumentTemplateDraft>) => void;
@@ -5130,7 +5133,12 @@ function DocumentTemplateAdminPanel({
           </div>
           <div>
             <span className="subtle">模板 JSON</span>
-            <DocumentTemplateVisualEditor value={draft.templateJsonText} onChange={(templateJsonText) => onChange({ templateJsonText })} />
+            <DocumentTemplateVisualEditor
+              value={draft.templateJsonText}
+              onChange={(templateJsonText) => onChange({ templateJsonText })}
+              mediaAssets={mediaAssets}
+              preview={previewRecord ? { objectKey: previewRecord.objectKey, recordId: previewRecord.id } : undefined}
+            />
           </div>
           <div className="toolbar">
             <button className="primary-button" type="button" onClick={onSave} disabled={isPending || !draft.name.trim()}>

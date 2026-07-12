@@ -26,6 +26,16 @@ export interface PdfSplitter {
   height?: number;
 }
 
+export interface PdfConditionalBlock {
+  type: "condition";
+  when: {
+    path: string;
+    operator?: "exists" | "notEmpty" | "equals" | "notEquals";
+    value?: unknown;
+  };
+  content: PdfTemplateNode[];
+}
+
 export interface PdfTemplateValidationIssue {
   path: Array<string | number>;
   message: string;
@@ -95,6 +105,16 @@ function validateNode(value: unknown, path: Array<string | number>, issues: PdfT
     validateSplitter(value, path, issues, insideRow);
     return;
   }
+  if (value.type === "condition") {
+    if (!isRecord(value.when)) issues.push({ path: [...path, "when"], message: "must be an object" });
+    else {
+      if (typeof value.when.path !== "string" || !value.when.path.trim()) issues.push({ path: [...path, "when", "path"], message: "must be a non-empty context path" });
+      if (value.when.operator !== undefined && !["exists", "notEmpty", "equals", "notEquals"].includes(String(value.when.operator))) issues.push({ path: [...path, "when", "operator"], message: "must be exists, notEmpty, equals, or notEquals" });
+    }
+    if (!Array.isArray(value.content)) issues.push({ path: [...path, "content"], message: "must be an array" });
+    else validateNode(value.content, [...path, "content"], issues, false);
+    return;
+  }
   if (typeof value.type === "string" && ["row", "col", "splitter"].includes(value.type) === false) {
     // Unknown native pdfmake `type` values are preserved for compatibility.
   }
@@ -138,7 +158,14 @@ function compileRow(row: PdfLayoutRow): Record<string, unknown> {
       ...(item.margin !== undefined ? { margin: item.margin } : {})
     });
   }
-  return { columns, columnGap: gutter };
+  const source = row as unknown as Record<string, unknown>;
+  return {
+    columns,
+    columnGap: gutter,
+    ...(source.pageBreak ? { pageBreak: source.pageBreak } : {}),
+    ...(source.unbreakable !== undefined ? { unbreakable: source.unbreakable } : {}),
+    ...(source.margin !== undefined ? { margin: source.margin } : {})
+  };
 }
 
 function compileSplitter(splitter: PdfSplitter): Record<string, unknown> {

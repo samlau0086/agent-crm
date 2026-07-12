@@ -14,6 +14,15 @@
 - 撤销、重做最多保留最近 60 个编辑状态。
 - JSON 与可视化结构实时同步；JSON 暂时无效时会保留原始输入并提示修复。
 
+第二期可视化编辑器支持：
+
+- 拖动相邻列之间的蓝色手柄调整 `span`；两列的总栅格数保持不变。
+- 从“模板区块”快速加入文档页头、客户信息、金额汇总、付款信息和签名区。
+- 选择图片节点后从现有媒体库绑定图片，并配置宽度与对齐。
+- 使用条件区块按上下文路径决定是否显示内容。
+- 插入分页符，或为行、文本、图片、条件区块配置分页前/后及“避免跨页拆分”。
+- 在编辑画布与真实 PDF 之间切换；未保存的模板修改会在停止输入约 700ms 后重新生成预览。
+
 ### Row 与 Column
 
 一个 `row` 最多使用 12 个栅格单位。每个 `col` 的占用单位为 `span + offset`，同一行所有普通列的占用总和不能超过 12。
@@ -122,6 +131,55 @@
 | `style` | `solid` / `dashed` | `solid` | 实线或虚线。 |
 | `margin` | 2 或 4 个数字 | 水平线为 `[0,12,0,12]` | pdfmake margin。 |
 | `height` | 大于 0 的数字 | `24` | 垂直分隔线高度。 |
+
+### 条件显示
+
+条件节点根据 PDF 模板上下文中的字段决定是否渲染其 `content`：
+
+```json
+{
+  "type": "condition",
+  "when": {
+    "path": "record.data.notes",
+    "operator": "notEmpty"
+  },
+  "content": [
+    { "text": "Notes", "bold": true },
+    { "text": "{{record.data.notes}}" }
+  ]
+}
+```
+
+支持的操作符：
+
+| 操作符 | 说明 |
+| --- | --- |
+| `exists` | 路径值不是 `null` 或 `undefined`。 |
+| `notEmpty` | 路径值存在且不是空字符串或空数组，默认值。 |
+| `equals` | 路径值严格等于 `when.value`。 |
+| `notEquals` | 路径值不严格等于 `when.value`。 |
+
+### 分页控制
+
+独立分页符：
+
+```json
+{ "type": "pageBreak", "text": "", "pageBreak": "before" }
+```
+
+普通内容节点、布局行和条件区块也可以设置：
+
+```json
+{
+  "text": "Terms and conditions",
+  "pageBreak": "before",
+  "unbreakable": true
+}
+```
+
+- `pageBreak: "before"`：节点从新页面开始。
+- `pageBreak: "after"`：节点之后开始新页面。
+- `unbreakable: true`：尽量让整个节点保持在同一页。
 
 ### 完整模板示例
 

@@ -125,9 +125,25 @@ function renderTemplateValue(value: unknown, context: Record<string, unknown>): 
     return value.map((item) => renderTemplateValue(item, context));
   }
   if (isRecord(value)) {
+    if (value.type === "condition") {
+      const content = Array.isArray(value.content) ? value.content : [];
+      return evaluatePdfTemplateCondition(value.when, context)
+        ? { stack: content.map((item) => renderTemplateValue(item, context)), ...(value.pageBreak ? { pageBreak: value.pageBreak } : {}), ...(value.unbreakable !== undefined ? { unbreakable: value.unbreakable } : {}) }
+        : { text: "" };
+    }
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renderTemplateValue(item, context)]));
   }
   return value;
+}
+
+export function evaluatePdfTemplateCondition(condition: unknown, context: Record<string, unknown>): boolean {
+  if (!isRecord(condition) || typeof condition.path !== "string") return false;
+  const actual = condition.path.split(".").filter(Boolean).reduce<unknown>((current, key) => isRecord(current) ? current[key] : undefined, context);
+  const operator = condition.operator ?? "notEmpty";
+  if (operator === "exists") return actual !== undefined && actual !== null;
+  if (operator === "equals") return actual === condition.value;
+  if (operator === "notEquals") return actual !== condition.value;
+  return actual !== undefined && actual !== null && actual !== "" && (!Array.isArray(actual) || actual.length > 0);
 }
 
 export function renderPdfTemplateText(value: string, context: Record<string, unknown>): string {

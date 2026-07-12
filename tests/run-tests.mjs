@@ -86,7 +86,7 @@ import { extractInboundMetadata } from "../src/lib/email/tracking.ts";
 import { formatAuditAction } from "../src/lib/crm/audit-labels.ts";
 import { buildCsv } from "../src/lib/crm/csv.ts";
 import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
-import { buildTemplateContext, renderPdfTemplateText, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
+import { buildTemplateContext, evaluatePdfTemplateCondition, renderPdfTemplateText, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
 import { compilePdfTemplateLayout, PdfTemplateValidationError, validatePdfTemplate } from "../src/lib/crm/pdf-template-layout.ts";
 import { previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "../src/lib/crm/document-numbering.ts";
 import { buildPaymentTermSchedule, getPaymentTermDefinitions } from "../src/lib/crm/payment-terms.ts";
@@ -2906,6 +2906,20 @@ await run("PDF template visual editor supports palette, canvas, properties, JSON
   assert.match(editor, /PropertyFields/);
   assert.match(styles, /\.pdf-editor-workspace/);
   assert.match(styles, /\.pdf-editor-page/);
+});
+
+await run("PDF template visual editor phase two supports resize blocks images conditions pages and live preview", () => {
+  const editor = readFileSync("src/components/document-template-visual-editor.tsx", "utf8");
+  const previewRoute = readFileSync("src/app/api/document-templates/preview/route.ts", "utf8");
+  assert.match(editor, /ColumnResizeHandle/);
+  assert.match(editor, /templateBlocks/);
+  assert.match(editor, /mediaAssetDataUrl/);
+  assert.match(editor, /type: "condition"/);
+  assert.match(editor, /type: "pageBreak"/);
+  assert.match(editor, /\/api\/document-templates\/preview/);
+  assert.match(editor, /700/);
+  assert.match(previewRoute, /renderSalesDocumentPdf/);
+  assert.match(previewRoute, /Cache-Control.*no-store/);
 });
 
 await run("settings admin groups configuration panels by tabs", () => {
@@ -10034,6 +10048,16 @@ await run("PDF template layout reports precise validation paths", () => {
   assert.throws(() => validatePdfTemplate({ content: [{ type: "row", columns: [] }] }), /columns must contain at least one column/);
   assert.throws(() => validatePdfTemplate({ content: [{ type: "splitter", orientation: "vertical" }] }), /vertical splitter may only be used inside row\.columns/);
   assert.throws(() => validatePdfTemplate({ content: [{ type: "row", columns: [{ type: "col", span: 7, content: [] }, { type: "col", span: 6, content: [] }] }] }), /must not exceed 12/);
+});
+
+await run("PDF template conditions evaluate context paths and operators", () => {
+  const context = { record: { data: { notes: "Ready", status: "approved" } }, fees: [] };
+  assert.equal(evaluatePdfTemplateCondition({ path: "record.data.notes", operator: "notEmpty" }, context), true);
+  assert.equal(evaluatePdfTemplateCondition({ path: "record.data.missing", operator: "exists" }, context), false);
+  assert.equal(evaluatePdfTemplateCondition({ path: "record.data.status", operator: "equals", value: "approved" }, context), true);
+  assert.equal(evaluatePdfTemplateCondition({ path: "record.data.status", operator: "notEquals", value: "draft" }, context), true);
+  assert.doesNotThrow(() => validatePdfTemplate({ content: [{ type: "condition", when: { path: "record.data.notes", operator: "notEmpty" }, content: [{ text: "Notes" }] }] }));
+  assert.throws(() => validatePdfTemplate({ content: [{ type: "condition", when: { path: "", operator: "invalid" }, content: [] }] }), /context path/);
 });
 
 await run("sales documents convert through order and invoice chain and render pdf templates", async () => {

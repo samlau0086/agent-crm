@@ -179,7 +179,7 @@ export const salesDocumentConvertSchema = z
   })
   .strict();
 
-const documentTemplateJsonSchema = z.record(z.unknown()).superRefine((value, context) => {
+export const documentTemplateJsonSchema = z.record(z.unknown()).superRefine((value, context) => {
   try {
     validatePdfTemplate(value);
   } catch (error) {
@@ -189,6 +189,12 @@ const documentTemplateJsonSchema = z.record(z.unknown()).superRefine((value, con
     }
   }
 });
+
+export const documentTemplatePreviewSchema = z.object({
+  objectKey: z.enum(["quotes", "salesorders", "proformainvoices", "commercialinvoices"]),
+  recordId: z.string().trim().min(1),
+  templateJson: documentTemplateJsonSchema
+}).strict();
 
 export const documentTemplateCreateSchema = z
   .object({

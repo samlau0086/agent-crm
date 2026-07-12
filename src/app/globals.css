@@ -7114,6 +7114,12 @@ body.deal-pipeline-dragging {
   opacity: 0.4;
 }
 
+.pdf-editor-history button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .pdf-editor-workspace {
   display: grid;
   grid-template-columns: 152px minmax(420px, 1fr) 210px;
@@ -7154,6 +7160,12 @@ body.deal-pipeline-dragging {
 .pdf-editor-palette button:hover {
   border-color: #93c5fd;
   background: #eff6ff;
+}
+
+.pdf-palette-section-title {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
 }
 
 .pdf-editor-canvas-shell {
@@ -7225,6 +7237,32 @@ body.deal-pipeline-dragging {
   border-radius: 6px;
 }
 
+.pdf-column-resize-handle {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: -8px;
+  width: 15px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.pdf-column-resize-handle span {
+  display: block;
+  width: 3px;
+  height: 28px;
+  margin: auto;
+  border-radius: 3px;
+  background: #93c5fd;
+}
+
+.pdf-column-resize-handle:hover span {
+  background: #2563eb;
+}
+
 .pdf-col-label {
   position: absolute;
   top: 2px;
@@ -7254,6 +7292,36 @@ body.deal-pipeline-dragging {
   border-radius: 6px;
   background: #f8fafc;
   color: #64748b;
+}
+
+.pdf-canvas-condition {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed #a78bfa;
+  border-radius: 7px;
+  background: #faf5ff;
+}
+
+.pdf-canvas-condition > strong {
+  color: #7c3aed;
+  font-size: 10px;
+}
+
+.pdf-page-break-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.pdf-page-break-node::before,
+.pdf-page-break-node::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dashed #94a3b8;
 }
 
 .pdf-drop-marker {
@@ -7296,6 +7364,77 @@ body.deal-pipeline-dragging {
   display: grid;
   gap: 8px;
   padding: 0 10px 10px;
+}
+
+.pdf-live-preview {
+  display: grid;
+  grid-template-rows: auto minmax(620px, 1fr);
+  width: min(100%, 760px);
+  min-height: 680px;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.15);
+}
+
+.pdf-live-preview-status {
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.pdf-live-preview iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.pdf-image-picker-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.pdf-image-picker {
+  display: grid;
+  gap: 14px;
+  width: min(760px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 18px;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.28);
+}
+
+.pdf-image-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.pdf-image-picker-grid button {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.pdf-image-picker-grid img {
+  width: 100%;
+  height: 100px;
+  object-fit: contain;
+  background: white;
 }
 
 @media (max-width: 1100px) {
