@@ -2889,6 +2889,25 @@ await run("company detail loads inverse contact relationships", () => {
   assert.match(workspace, /Array\.isArray\(value\)[\s\S]*value\.some\(\(item\) => recordReferencesId\(item, recordId\)\)/);
 });
 
+await run("PDF template visual editor supports palette, canvas, properties, JSON, and history", () => {
+  const editor = readFileSync("src/components/document-template-visual-editor.tsx", "utf8");
+  const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(settings, /<DocumentTemplateVisualEditor/);
+  assert.match(editor, /data-testid="pdf-visual-editor"/);
+  assert.match(editor, /"text" \| "row" \| "splitter" \| "table" \| "image"/);
+  assert.match(editor, /draggable/);
+  assert.match(editor, /application\/x-pdf-template-node/);
+  assert.match(editor, /可视化/);
+  assert.match(editor, /data-testid="document-template-json"/);
+  assert.match(editor, /Undo2/);
+  assert.match(editor, /Redo2/);
+  assert.match(editor, /PropertyFields/);
+  assert.match(styles, /\.pdf-editor-workspace/);
+  assert.match(styles, /\.pdf-editor-page/);
+});
+
 await run("settings admin groups configuration panels by tabs", () => {
   const source = readFileSync("src/components/settings-admin.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type 
 import { usePathname, useRouter } from "next/navigation";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
 import { isImageMediaAsset, MediaLibraryModal, mediaAssetDataUrl } from "@/components/media-library";
+import { DocumentTemplateVisualEditor } from "@/components/document-template-visual-editor";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
 import { formatPaymentTermSummary, getPaymentTermDefinitions, normalizePaymentTermCode, paymentTermOptionsFromRecords, type PaymentTermDepositType, type PaymentTermMode } from "@/lib/crm/payment-terms";
@@ -257,15 +258,6 @@ const defaultDocumentTemplateText = JSON.stringify(
   null,
   2
 );
-
-const documentTemplateSnippets = {
-  row: { type: "row", gutter: 12, align: "top", columns: [
-    { type: "col", span: 6, content: [{ text: "Left column" }] },
-    { type: "col", span: 6, content: [{ text: "Right column" }] }
-  ] },
-  col: { type: "col", span: 6, offset: 0, content: [{ text: "Column content" }] },
-  splitter: { type: "splitter", orientation: "horizontal", color: "#e2e8f0", thickness: 1, style: "solid", margin: [0, 12, 0, 12] }
-} as const;
 
 const baseWebhookEventOptions: WebhookEvent[] = ["record.created", "record.updated", "record.deleted", "activity.created", "import.completed", "import.failed", "webhook.test"];
 const emailWebhookEventOptions: WebhookEvent[] = [
@@ -5078,21 +5070,6 @@ function DocumentTemplateAdminPanel({
 }) {
   const previewRecord = records.find((record) => record.objectKey === draft.objectKey);
   const objectLabel = (objectKey: string) => objects.find((object) => object.key === objectKey)?.label ?? objectKey;
-  const templateEditorRef = useRef<HTMLTextAreaElement>(null);
-
-  function insertTemplateSnippet(snippet: unknown) {
-    const editor = templateEditorRef.current;
-    if (!editor) return;
-    const serialized = JSON.stringify(snippet, null, 2);
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    const nextValue = `${draft.templateJsonText.slice(0, start)}${serialized}${draft.templateJsonText.slice(end)}`;
-    onChange({ templateJsonText: formatJsonIfValid(nextValue) });
-    requestAnimationFrame(() => {
-      editor.focus();
-      editor.setSelectionRange(start, start + serialized.length);
-    });
-  }
   return (
     <section className="settings-panel" data-testid="document-template-settings">
       <div className="settings-panel-header">
@@ -5151,24 +5128,10 @@ function DocumentTemplateAdminPanel({
               <span>设为默认模板</span>
             </label>
           </div>
-          <label>
+          <div>
             <span className="subtle">模板 JSON</span>
-            <div className="document-template-layout-help">
-              <strong>12-column layout</strong>
-              <span className="subtle">row contains col nodes; span is 1-12, offset is 0-11, and each row may use at most 12 units. Rows can be nested inside col.content.</span>
-              <div className="document-template-grid-guide" aria-label="12 column grid">
-                {Array.from({ length: 12 }, (_, index) => <span key={index}>{index + 1}</span>)}
-              </div>
-              <code>{`row { gutter, align, columns } | col { span, offset, content } | splitter { orientation, color, thickness, style, margin }`}</code>
-            </div>
-            <div className="toolbar document-template-snippet-toolbar">
-              <button className="secondary-button" type="button" onClick={() => insertTemplateSnippet(documentTemplateSnippets.row)}>Insert Row</button>
-              <button className="secondary-button" type="button" onClick={() => insertTemplateSnippet(documentTemplateSnippets.col)}>Insert Column</button>
-              <button className="secondary-button" type="button" onClick={() => insertTemplateSnippet(documentTemplateSnippets.splitter)}>Insert Splitter</button>
-              <button className="secondary-button" type="button" onClick={() => onChange({ templateJsonText: formatJsonIfValid(draft.templateJsonText) })}>Format JSON</button>
-            </div>
-            <textarea ref={templateEditorRef} className="textarea code-textarea" data-testid="document-template-json" value={draft.templateJsonText} onChange={(event) => onChange({ templateJsonText: event.target.value })} rows={18} />
-          </label>
+            <DocumentTemplateVisualEditor value={draft.templateJsonText} onChange={(templateJsonText) => onChange({ templateJsonText })} />
+          </div>
           <div className="toolbar">
             <button className="primary-button" type="button" onClick={onSave} disabled={isPending || !draft.name.trim()}>
               <Save size={16} />
@@ -6707,14 +6670,6 @@ function parseDocumentTemplateJson(value: string): Record<string, unknown> {
     return parsed as Record<string, unknown>;
   } catch (error) {
     throw new Error(error instanceof Error ? `PDF 模板 JSON 无效：${error.message}` : "PDF 模板 JSON 无效");
-  }
-}
-
-function formatJsonIfValid(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
   }
 }
 

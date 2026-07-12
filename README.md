@@ -1,5 +1,170 @@
 # AI Agent CRM
 
+## PDF 模板与 12 栅格布局
+
+销售文档（报价单、销售订单、形式发票和商业发票）的 PDF 模板在“设置 -> PDF 模板”中配置。模板使用 JSON，兼容原生 [pdfmake](https://pdfmake.github.io/docs/) 节点，并额外提供类似 Bootstrap 的 `row`、`col` 和 `splitter`。这些节点可以与 pdfmake 的 `text`、`table`、`image`、`stack` 等节点混合使用。
+
+配置页默认打开可视化编辑器：从左侧组件库拖入文本、行/列、分隔线、产品表格或图片，在中间 A4 画布中选择和排序元素，再通过右侧属性面板修改内容与样式。工具栏提供撤销、重做以及“可视化 / JSON”双向切换；无法可视化识别的原生 pdfmake 对象会作为“高级节点”保留，可在 JSON 模式继续编辑。
+
+第一期可视化编辑器支持：
+
+- 点击组件将其添加到页面末尾，或拖拽到页面、列容器和指定排序位置。
+- 在同一个 `content` 容器内拖拽已有节点重新排序。
+- 选择 `row`、`col`、`splitter` 和文本节点后，在属性面板修改常用属性。
+- 撤销、重做最多保留最近 60 个编辑状态。
+- JSON 与可视化结构实时同步；JSON 暂时无效时会保留原始输入并提示修复。
+
+### Row 与 Column
+
+一个 `row` 最多使用 12 个栅格单位。每个 `col` 的占用单位为 `span + offset`，同一行所有普通列的占用总和不能超过 12。
+
+```json
+{
+  "type": "row",
+  "gutter": 12,
+  "align": "top",
+  "columns": [
+    {
+      "type": "col",
+      "span": 4,
+      "offset": 0,
+      "content": [
+        { "text": "Customer", "bold": true },
+        { "text": "{{company.title}}" }
+      ]
+    },
+    {
+      "type": "col",
+      "span": 8,
+      "content": [{ "text": "{{documentTitle}}", "alignment": "right" }]
+    }
+  ]
+}
+```
+
+`row` 属性：
+
+| 属性 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `"row"` | 必填 | 行布局节点。 |
+| `columns` | 数组 | 必填 | 至少包含一个 `col` 或垂直 `splitter`。 |
+| `gutter` | 非负数字 | `12` | 列间距，单位为 pdfmake point。 |
+| `align` | `top` / `center` / `bottom` | `top` | 行内内容的垂直对齐策略。 |
+
+`col` 属性：
+
+| 属性 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `"col"` | 必填 | `col` 只能直接放在 `row.columns` 中。 |
+| `span` | 整数 `1-12` | `12` | 当前列占用的栅格数。 |
+| `offset` | 整数 `0-11` | `0` | 当前列之前保留的空白栅格数。 |
+| `content` | 数组 | 必填 | pdfmake 或布局节点；其中可以嵌套新的 `row`。 |
+| `style` | pdfmake style | 无 | 应用于编译后列容器的样式。 |
+| `margin` | pdfmake margin | 无 | 列容器间距，例如 `[8, 0, 0, 0]`。 |
+
+嵌套布局示例：
+
+```json
+{
+  "type": "row",
+  "columns": [
+    {
+      "type": "col",
+      "span": 8,
+      "content": [
+        {
+          "type": "row",
+          "gutter": 8,
+          "columns": [
+            { "type": "col", "span": 6, "content": [{ "text": "Nested left" }] },
+            { "type": "col", "span": 6, "content": [{ "text": "Nested right" }] }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Splitter 分隔线
+
+水平分隔线可以直接放入 `content`；垂直分隔线只能放入 `row.columns`。
+
+```json
+{
+  "type": "splitter",
+  "orientation": "horizontal",
+  "color": "#e2e8f0",
+  "thickness": 1,
+  "style": "solid",
+  "margin": [0, 12, 0, 12]
+}
+```
+
+垂直分隔线示例：
+
+```json
+{
+  "type": "row",
+  "columns": [
+    { "type": "col", "span": 6, "content": [{ "text": "Left" }] },
+    { "type": "splitter", "orientation": "vertical", "height": 48, "color": "#cbd5e1" },
+    { "type": "col", "span": 6, "content": [{ "text": "Right" }] }
+  ]
+}
+```
+
+| 属性 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `orientation` | `horizontal` / `vertical` | `horizontal` | 分隔线方向。 |
+| `color` | CSS 颜色字符串 | `#e2e8f0` | 线条颜色。 |
+| `thickness` | 大于 0 的数字 | `1` | 线条粗细，单位为 point。 |
+| `style` | `solid` / `dashed` | `solid` | 实线或虚线。 |
+| `margin` | 2 或 4 个数字 | 水平线为 `[0,12,0,12]` | pdfmake margin。 |
+| `height` | 大于 0 的数字 | `24` | 垂直分隔线高度。 |
+
+### 完整模板示例
+
+```json
+{
+  "pageSize": "A4",
+  "pageMargins": [40, 48, 40, 48],
+  "content": [
+    {
+      "type": "row",
+      "gutter": 12,
+      "columns": [
+        { "type": "col", "span": 8, "content": [{ "text": "{{documentTitle}}", "style": "header" }] },
+        { "type": "col", "span": 4, "content": [{ "text": "{{documentNumber}}", "alignment": "right" }] }
+      ]
+    },
+    { "type": "splitter", "orientation": "horizontal", "color": "#2563eb", "thickness": 2 },
+    {
+      "table": { "widths": ["*", "auto", "auto", "auto"], "body": "{{lineItemsTable}}" },
+      "layout": "lightHorizontalLines",
+      "margin": [0, 16, 0, 8]
+    },
+    { "text": "Total: {{money totals.totalAmount currency}}", "style": "total" }
+  ],
+  "styles": {
+    "header": { "fontSize": 20, "bold": true },
+    "total": { "fontSize": 14, "bold": true, "alignment": "right" }
+  }
+}
+```
+
+### 模板变量与校验
+
+常用变量包括 `record`、`company`、`contact`、`deal`、`team`、`workspace`、`documentTitle`、`documentNumber`、`issueDate`、`lineItems`、`fees`、`totals`、`paymentSummary`、`paymentInstructions` 和 `generatedAt`。产品明细表使用特殊值 `"{{lineItemsTable}}"`；金额和日期可以使用 `{{money ...}}` 与 `{{date ...}}` helper。
+
+模板保存前会递归校验布局。非法 `span`、`offset`、空 `columns`、一行超过 12 栅格、错误的 splitter 方向或非法嵌套会阻止保存，并返回包含 JSON 路径的错误，例如：
+
+```text
+content[2].columns[1].span must be between 1 and 12
+```
+
+旧的原生 pdfmake 模板无需迁移；没有 `type: "row"`、`type: "col"` 或 `type: "splitter"` 的节点会按原有方式渲染。
+
 ## MCP 本地代理（OpenClaw / Cherry Studio）
 
 本项目提供一个本地 stdio MCP server，方便 OpenClaw、Cherry Studio 等本地 AI agent 操作远程部署的 CRM。MCP server 不直连数据库，也不新增远程 `/mcp` 端点；它只通过 `CRM_BASE_URL` + `CRM_API_KEY` 调用远程 CRM 的现有 HTTPS REST API，所以会继续复用现有 Bearer API key、RBAC、审批流、审计日志、分页和 API 限制。
