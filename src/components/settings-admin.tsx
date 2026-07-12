@@ -294,6 +294,7 @@ const fieldTypes: FieldDefinition["type"][] = [
 type SettingsTabKey = "profile" | "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations";
 type AiAgentConfigTabKey = "providers" | "agents" | "knowledge";
 type AccessSectionTabKey = "members" | "roles" | "matrix";
+type CrmSectionTabKey = "documents" | "finance" | "customers" | "dataModel" | "salesWorkspace";
 type IntegrationSectionTabKey = "apiKeys" | "webhooks" | "notifications";
 type OperationsSectionTabKey = "imports" | "reviews" | "backups" | "audit";
 type RecordChangeReviewResponse = { request: RecordChangeRequest; record?: CrmRecord };
@@ -378,6 +379,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   const [reviewingRecordChangeRequestId, setReviewingRecordChangeRequestId] = useState("");
   const activeSettingsTab = settingsTabFromPathname(pathname);
   const [activeAccessSection, setActiveAccessSection] = useState<AccessSectionTabKey>("members");
+  const [activeCrmSection, setActiveCrmSection] = useState<CrmSectionTabKey>("documents");
   const [activeIntegrationSection, setActiveIntegrationSection] = useState<IntegrationSectionTabKey>("apiKeys");
   const [activeOperationsSection, setActiveOperationsSection] = useState<OperationsSectionTabKey>("reviews");
   const [selectedObjectId, setSelectedObjectId] = useState("");
@@ -2176,6 +2178,20 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
       {activeSettingsTab === "crm" ? (
         <div className="settings-tab-panel" role="tabpanel">
+          <SettingsSectionTabs
+            label="CRM 配置分类"
+            value={activeCrmSection}
+            onChange={setActiveCrmSection}
+            tabs={[
+              { key: "documents", label: "销售单据", description: "编号规则与 PDF 模板" },
+              { key: "finance", label: "币种与账期", description: "币种汇率和付款条款" },
+              { key: "customers", label: "客户等级", description: "等级规则与评分权重" },
+              { key: "dataModel", label: "数据模型", description: "对象、字段与关联关系" },
+              { key: "salesWorkspace", label: "销售工作区", description: "销售管道与列表视图" }
+            ]}
+          />
+          <>
+          {activeCrmSection === "documents" ? <>
           <section className="settings-panel" data-testid="settings-sales-document-numbering">
             <div className="settings-panel-header">
               <div>
@@ -2218,6 +2234,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               ))}
             </div>
           </section>
+          </> : null}
+          {activeCrmSection === "finance" ? <>
           <CurrencyAdminPanel
             currencies={currencyRecords}
             draft={currencyDraft}
@@ -2243,7 +2261,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onSave={() => runAction(savePaymentTerm)}
             onSelectPaymentTerm={setSelectedPaymentTermId}
           />
-          <DocumentTemplateAdminPanel
+          </> : null}
+          {activeCrmSection === "documents" ? <DocumentTemplateAdminPanel
             draft={documentTemplateDraft}
             isPending={isPending}
             objects={props.objects}
@@ -2256,8 +2275,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             onNew={resetDocumentTemplateForm}
             onSave={() => runAction(saveDocumentTemplate)}
             onSelect={setSelectedDocumentTemplateId}
-          />
-          <section className="settings-panel">
+          /> : null}
+          {activeCrmSection === "customers" ? <section className="settings-panel">
             <div className="settings-panel-header">
               <div>
                 <h2 className="page-title">客户等级</h2>
@@ -2393,7 +2412,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               </button>
               <span className="subtle">正式等级修改仍会进入记录变更审批；建议等级由规则评分生成。</span>
             </div>
-          </section>
+          </section> : null}
+          </>
         </div>
       ) : null}
 
@@ -3302,7 +3322,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         </div>
       ) : null}
 
-      {activeSettingsTab === "crm" ? (
+      {activeSettingsTab === "crm" && activeCrmSection === "dataModel" ? (
         <div className="settings-grid settings-grid-wide">
           <section className="settings-panel">
           <div className="settings-panel-header">
@@ -3690,7 +3710,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         </div>
       ) : null}
 
-      {activeSettingsTab === "crm" ? (
+      {activeSettingsTab === "crm" && activeCrmSection === "salesWorkspace" ? (
         <div className="settings-grid settings-grid-wide">
           <section className="settings-panel">
           <div className="settings-panel-header">
