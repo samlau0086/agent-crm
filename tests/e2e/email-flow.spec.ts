@@ -11,6 +11,10 @@ type EmailAccountPayload = {
 type EmailMessagePayload = {
   id: string;
   threadId: string;
+  direction?: "inbound" | "outbound";
+  status?: string;
+  subject?: string;
+  bodyText?: string;
 };
 
 type EmailThreadPayload = {
@@ -138,6 +142,20 @@ test("admin can use email workspace reply translate and send flow", async ({ pag
   await page.getByTestId("email-compose-body").fill("We will send the deployment plan today.");
   await page.getByTestId("email-send").click();
   await expect(page.getByText("We will send the deployment plan today.")).toBeVisible();
+
+  const sentMessagesResponse = await page.request.get(`/api/email/threads/${inbound.threadId}/messages`);
+  expect(sentMessagesResponse.ok()).toBe(true);
+  const sentMessages = (await sentMessagesResponse.json()) as EmailMessagePayload[];
+  const sentMessage = sentMessages.find((message) => message.direction === "outbound" && message.status === "sent");
+  expect(sentMessage).toBeTruthy();
+  await page.getByTestId(`email-message-edit-sent-${sentMessage!.id}`).click();
+  await expect(page.getByTestId("email-compose-account")).toHaveValue(account.id);
+  await expect(page.getByTestId("email-compose-to")).toHaveValue(String(contact.data.email));
+  await expect(page.getByTestId("email-compose-subject")).toHaveValue("Re: E2E deployment reply");
+  await expect(page.getByTestId("email-compose-body")).toContainText("We will send the deployment plan today.");
+  await page.getByTestId("email-compose-body").fill("We edited the sent email before sending it again.");
+  await page.getByTestId("email-send").click();
+  await expect(page.getByText("We edited the sent email before sending it again.")).toBeVisible();
 
   await page.getByTestId(`email-message-translate-${inbound.id}`).click();
   await expect(page.getByTestId("email-message-translation").filter({ hasText: "Content to translate" })).toBeVisible();
