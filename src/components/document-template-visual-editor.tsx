@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { Blocks, Columns3, Eye, FilePlus2, GripVertical, Image as ImageIcon, Redo2, Rows3, SeparatorHorizontal, Table2, TextCursorInput, Trash2, Undo2, XCircle } from "lucide-react";
+import { Blocks, CalendarPlus, Columns3, Eye, FilePlus2, GripVertical, Image as ImageIcon, Redo2, Rows3, SeparatorHorizontal, Table2, TextCursorInput, Trash2, Undo2, XCircle } from "lucide-react";
 import type { MediaAsset } from "@/lib/crm/types";
 import { isImageMediaAsset, mediaAssetDataUrl } from "@/components/media-library";
 
 type JsonRecord = Record<string, unknown>;
 type Path = Array<string | number>;
-type PaletteKind = "text" | "row" | "splitter" | "table" | "image" | "condition" | "pageBreak";
+type PaletteKind = "text" | "todayOffset" | "row" | "splitter" | "table" | "image" | "condition" | "pageBreak";
 type BlockKind = "documentHeader" | "customerDetails" | "totals" | "payment" | "signature";
 
 interface DocumentTemplateVisualEditorProps {
@@ -19,6 +19,7 @@ interface DocumentTemplateVisualEditorProps {
 
 const palette: Array<{ kind: PaletteKind; label: string; icon: typeof TextCursorInput }> = [
   { kind: "text", label: "文本", icon: TextCursorInput },
+  { kind: "todayOffset", label: "距离今日 + N 天", icon: CalendarPlus },
   { kind: "row", label: "行 / 列", icon: Rows3 },
   { kind: "splitter", label: "分隔线", icon: SeparatorHorizontal },
   { kind: "table", label: "产品表格", icon: Table2 },
@@ -381,6 +382,10 @@ function PropertyFields({ node, onPatch, onChooseImage }: { node: JsonRecord; on
     {pagination}
   </>;
   if (type === "text") return <>
+    {node._widget === "todayOffset" ? <>
+      <PropertyNumber label="距离今日（天）" value={Number(node._days ?? 30)} min={0} max={36500} onChange={(days) => onPatch({ _days: days, text: `{{dateAdd generatedAt ${days}}}` })} />
+      <span className="subtle">示例：设置 30，将显示生成 PDF 当天之后 30 天的日期。</span>
+    </> : null}
     <label><span className="subtle">文本 / 变量</span><textarea className="textarea" rows={4} value={String(node.text ?? "")} onChange={(event) => onPatch({ text: event.target.value })} /></label>
     <PropertyNumber label="字号" value={Number(node.fontSize ?? 12)} min={6} max={72} onChange={(fontSize) => onPatch({ fontSize })} />
     <PropertyText label="颜色" value={String(node.color ?? "#0f172a")} onChange={(color) => onPatch({ color })} />
@@ -402,6 +407,7 @@ function PropertySelect({ label, value, options, onChange }: { label: string; va
 }
 
 function createNode(kind: PaletteKind): JsonRecord {
+  if (kind === "todayOffset") return { text: "{{dateAdd generatedAt 30}}", _widget: "todayOffset", _days: 30, fontSize: 12, color: "#0f172a" };
   if (kind === "row") return { type: "row", gutter: 12, align: "top", columns: [{ type: "col", span: 6, offset: 0, content: [{ text: "Left column" }] }, { type: "col", span: 6, offset: 0, content: [{ text: "Right column" }] }] };
   if (kind === "splitter") return { type: "splitter", orientation: "horizontal", color: "#e2e8f0", thickness: 1, style: "solid", margin: [0, 12, 0, 12] };
   if (kind === "table") return { table: { widths: ["*", "auto", "auto", "auto"], body: "{{lineItemsTable}}" }, layout: "lightHorizontalLines", margin: [0, 16, 0, 8] };

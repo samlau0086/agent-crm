@@ -213,7 +213,7 @@
 
 ### 模板变量与校验
 
-常用变量包括 `record`、`company`、`contact`、`deal`、`team`、`workspace`、`documentTitle`、`documentNumber`、`issueDate`、`lineItems`、`fees`、`totals`、`paymentSummary`、`paymentInstructions` 和 `generatedAt`。产品明细表使用特殊值 `"{{lineItemsTable}}"`；金额和日期可以使用 `{{money ...}}` 与 `{{date ...}}` helper。
+常用变量包括 `record`、`company`、`contact`、`deal`、`team`、`workspace`、`documentTitle`、`documentNumber`、`issueDate`、`lineItems`、`fees`、`totals`、`paymentSummary`、`paymentInstructions` 和 `generatedAt`。产品明细表使用特殊值 `"{{lineItemsTable}}"`；金额和日期可以使用 `{{money ...}}` 与 `{{date ...}}` helper。可视化编辑器的“距离今日 + N 天”组件使用 `{{dateAdd generatedAt N}}`，例如 `{{dateAdd generatedAt 30}}` 会输出 PDF 生成日期之后 30 天的日期。
 
 模板保存前会递归校验布局。非法 `span`、`offset`、空 `columns`、一行超过 12 栅格、错误的 splitter 方向或非法嵌套会阻止保存，并返回包含 JSON 路径的错误，例如：
 

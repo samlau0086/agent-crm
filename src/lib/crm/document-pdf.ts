@@ -46,6 +46,15 @@ handlebars.registerHelper("date", (value: unknown) => {
   return date.toISOString().slice(0, 10);
 });
 
+handlebars.registerHelper("dateAdd", (value: unknown, days: unknown) => {
+  if (!value) return "";
+  const date = new Date(String(value));
+  const offset = Number(days);
+  if (Number.isNaN(date.getTime()) || !Number.isFinite(offset)) return "";
+  date.setUTCDate(date.getUTCDate() + Math.trunc(offset));
+  return date.toISOString().slice(0, 10);
+});
+
 handlebars.registerHelper("uppercase", (value: unknown) => String(value ?? "").toUpperCase());
 handlebars.registerHelper("default", (value: unknown, fallback: unknown) => (value === undefined || value === null || value === "" ? fallback : value));
 handlebars.registerHelper("eq", (left: unknown, right: unknown) => left === right);

@@ -2897,7 +2897,9 @@ await run("PDF template visual editor supports palette, canvas, properties, JSON
 
   assert.match(settings, /<DocumentTemplateVisualEditor/);
   assert.match(editor, /data-testid="pdf-visual-editor"/);
-  assert.match(editor, /"text" \| "row" \| "splitter" \| "table" \| "image"/);
+  assert.match(editor, /"text" \| "todayOffset" \| "row" \| "splitter" \| "table" \| "image"/);
+  assert.match(editor, /距离今日 \+ N 天/);
+  assert.match(editor, /dateAdd generatedAt/);
   assert.match(editor, /draggable/);
   assert.match(editor, /application\/x-pdf-template-node/);
   assert.match(editor, /可视化/);
@@ -10142,6 +10144,7 @@ await run("sales documents convert through order and invoice chain and render pd
   assert.equal(quoteTemplateContext.issueDate, quoteWithoutIssueDate.createdAt.slice(0, 10));
   assert.equal(quoteTemplateContext.record.data.issueDate, quoteWithoutIssueDate.createdAt.slice(0, 10));
   assert.match(renderPdfTemplateText("Fees: {{money totals.feeSubtotal}} / Total: {{money totals.totalAmount \"CNY\"}}", { currency: "USD", currencyDefinitions: [{ code: "USD", label: "US Dollar", symbol: "$", rateToBase: 7.2, isBase: false, active: true }], totals: { feeSubtotal: 0, totalAmount: 2900 } }), /Fees: \$ 0 USD \/ Total: \$ 2,900 USD/);
+  assert.equal(renderPdfTemplateText("{{dateAdd generatedAt 30}}", { generatedAt: "2026-07-13T23:30:00.000Z" }), "2026-08-12");
   const pdf = await renderSalesDocumentPdf(templates[0], {
     record: commercialInvoice,
     company: store.getRecord(context, "companies", String(commercialInvoice.data.companyId)),
