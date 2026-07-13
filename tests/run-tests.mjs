@@ -109,6 +109,7 @@ import { buildCsvImportJobEnvelope, buildEmailAnalyzeJobEnvelope, buildEmailClas
 import { encodeRedisCommand, getDeadLetterQueueName } from "../src/lib/jobs/redis-queue.ts";
 import { buildFailedJobEnvelope, getMaxJobAttempts, getMaxJobAttemptsForEnvelope } from "../src/lib/jobs/worker-policy.ts";
 import { formatJobWorkerResult, processQueuedJobEnvelope } from "../src/lib/jobs/worker.ts";
+import { formatDateTimeSeconds } from "../src/lib/utils/format.ts";
 import { checkJobHealth, toSafeDatabaseHealthError, toSafeHealthError } from "../src/lib/ops/health.ts";
 import { buildServiceHealthPayload } from "../src/lib/ops/service-health.ts";
 import { appUrl, getAppBaseUrl } from "../src/lib/security/app-origin.ts";
@@ -3568,8 +3569,9 @@ await run("record create and detail panels render full width in the main content
   assert.match(styles, /\.activity-timeline-item::before/);
   assert.match(styles, /\.activity-timeline-marker\.email/);
   assert.match(styles, /\.activity-timeline-card/);
-  assert.doesNotMatch(source, /data-testid="activity-type"/);
-  assert.doesNotMatch(source, /data-testid="activity-submit"/);
+  assert.match(source, /function RecordActivityUnifiedComposer/);
+  assert.match(source, /data-testid="activity-type"/);
+  assert.match(source, /testIdPrefix="activity"/);
   assert.doesNotMatch(source, /aria-label="关闭面板"[\s\S]{0,120}setRecordPanelMode\("closed"\)/);
   assert.match(styles, /\.workspace-grid\.has-drawer \{\s*grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(styles, /\.record-drawer \{[\s\S]*order: -1;[\s\S]*position: static;[\s\S]*max-height: none;[\s\S]*overflow: visible;/);
@@ -3784,11 +3786,11 @@ await run("contact and company communication preferences drive compose translati
   assert.match(styles, /\.preferred-window-editor/);
 });
 
-await run("contact detail uses a social profile layout instead of a flat form", () => {
+await run("contact detail uses the shared timeline-first detail workspace", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /selectedRecord\.objectKey === "contacts" \? \(/);
+  assert.match(source, /recordDetailEditing && selectedRecord\.objectKey === "contacts" \? \(/);
   assert.match(source, /<ContactProfileEditor/);
   assert.match(source, /saveLabel=\{editApprovalObjectKeys\.has\(selectedRecord\.objectKey\) \? "提交修改审批" : "保存"\}/);
   assert.match(source, /onSave=\{\(\) => runRecordSaveAction\(submitUpdateRecord\)\}/);
@@ -3830,22 +3832,24 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(source, /onSaveField=\{submitSingleRecordField\}/);
   assert.match(source, /<EditableFieldRow[\s\S]*onSave=\{\(nextValue\) => onSaveField\(field, nextValue\)\}/);
   assert.match(source, /<EditableOwnerRow[\s\S]*onSave=\{onSaveOwner\}/);
-  assert.match(source, /<ContactDetailActivityTabs/);
-  assert.match(source, /activeTab=\{contactDetailActivityTab\}/);
-  assert.match(source, /onChange=\{setContactDetailActivityTab\}/);
+  assert.match(source, /<RecordDetailWorkspace/);
+  assert.match(source, /const \[recordDetailTab, setRecordDetailTab\] = useState<RecordDetailTab>\("activities"\)/);
+  assert.match(source, /const \[recordDetailEditing, setRecordDetailEditing\] = useState\(false\)/);
   assert.match(source, /const selectedRecordUsesActivityTabs = selectedRecord \? \["contacts", "companies", "deals"\]\.includes\(selectedRecord\.objectKey\) : false/);
   assert.match(source, /showContactEmailSections/);
   assert.match(source, /showContactActivityTimeline/);
   assert.match(source, /className=\{selectedRecordUsesActivityTabs \? "contact-detail-tab-panel" : ""\}/);
   assert.match(source, /record-activity-grid \$\{selectedRecordUsesActivityTabs \? "contact-detail-tab-panel" : ""\}/);
-  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(!selectedRecordUsesActivityTabs \|\| showContactAllSections\)/);
+  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(!selectedRecordUsesActivityTabs \|\| showContactDetailSections\)/);
   assert.match(source, /selectedRecordEmailAddresses\.length > 0 \|\| selectedRecordEmailThreads\.length > 0\) && \(!selectedRecordUsesActivityTabs \|\| showContactEmailSections\)/);
-  assert.match(source, /data-testid=\{`contact-detail-activity-tab-\$\{tab\.key\}`\}/);
-  assert.match(source, /aria-pressed=\{activeTab === tab\.key\}/);
-  assert.match(source, /data-testid="contact-detail-activity-tabs"/);
+  const detailWorkspace = readFileSync("src/components/record-detail-workspace.tsx", "utf8");
+  assert.match(detailWorkspace, /data-testid=\{`record-detail-tab-\$\{tab\.key\}`\}/);
+  assert.match(detailWorkspace, /aria-selected=\{activeTab === tab\.key\}/);
+  assert.match(detailWorkspace, /data-testid="record-detail-tabs"/);
   assert.match(source, /function ContactProfileEditor/);
   assert.match(source, /function ContactProfileInfoStrip/);
-  assert.match(source, /function ContactDetailActivityTabs/);
+  assert.match(source, /function RecordDetailSummaryCard/);
+  assert.match(source, /function RecordDetailOverview/);
   assert.match(source, /function ContactAvatarEditor/);
   assert.match(source, /ContactMethodsEditor[\s\S]*showContactMethodEditor/);
   assert.match(styles, /\.contact-profile-layout/);
@@ -3855,11 +3859,11 @@ await run("contact detail uses a social profile layout instead of a flat form", 
   assert.match(styles, /\.contact-profile-info-label/);
   assert.match(styles, /\.editable-field-row/);
   assert.match(styles, /\.editable-field-dialog/);
-  assert.match(styles, /\.contact-detail-activity-tabs/);
-  assert.match(styles, /\.contact-detail-activity-tab:hover/);
-  assert.match(styles, /\.contact-detail-activity-tab\.active/);
-  assert.match(styles, /\.contact-detail-tab-panel \{[\s\S]*min-height: max\(320px, 42vh\);/);
-  assert.match(styles, /\.contact-detail-tab-panel > \.empty-state \{[\s\S]*place-items: center;/);
+  assert.match(styles, /\.record-detail-layout/);
+  assert.match(styles, /\.record-detail-tab:hover/);
+  assert.match(styles, /\.record-detail-tab\.active/);
+  assert.match(styles, /\.record-detail-tab-content/);
+  assert.match(styles, /\.record-detail-rail/);
   assert.match(styles, /\.contact-profile-hero\.update-pending/);
   assert.match(styles, /\.record-update-pending-banner/);
   assert.match(styles, /\.record-change-old-value[\s\S]*text-decoration: line-through/);
@@ -3872,7 +3876,7 @@ await run("company detail uses the same profile layout pattern as contacts", () 
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /selectedRecord\.objectKey === "companies" \? \(/);
+  assert.match(source, /recordDetailEditing && selectedRecord\.objectKey === "companies" \? \(/);
   assert.match(source, /<CompanyProfileEditor/);
   assert.match(source, /saveLabel=\{editApprovalObjectKeys\.has\(selectedRecord\.objectKey\) \? "提交修改审批" : "保存"\}/);
   assert.match(source, /onSave=\{\(\) => runRecordSaveAction\(submitUpdateRecord\)\}/);
@@ -3880,8 +3884,8 @@ await run("company detail uses the same profile layout pattern as contacts", () 
   assert.match(source, /data-testid="company-profile-layout"/);
   assert.match(source, /<CompanyProfileInfoStrip/);
   assert.match(source, /testId="company-profile-info-strip"/);
-  assert.match(source, /<CompanyProfileEditor[\s\S]*<ContactDetailActivityTabs/);
-  assert.match(source, /selectedRecord\.objectKey === "companies" && showContactAllSections/);
+  assert.match(source, /<CompanyProfileEditor[\s\S]*showContactDetailSections/);
+  assert.match(source, /selectedRecord\.objectKey === "companies" && showContactDetailSections/);
   assert.match(source, /function CompanyProfileEditor/);
   assert.match(source, /function CompanyProfileInfoStrip/);
   assert.match(source, /function CompanyLogoEditor/);
@@ -3898,7 +3902,7 @@ await run("deal detail uses profile layout with a one-click stage bar", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
-  assert.match(source, /selectedRecord\.objectKey === "deals" \? \(/);
+  assert.match(source, /recordDetailEditing && selectedRecord\.objectKey === "deals" \? \(/);
   assert.match(source, /<DealProfileEditor/);
   assert.match(source, /stages=\{activePipelineStages\}/);
   assert.match(source, /onMoveStage=\{\(stageKey\) => runAction\(\(\) => moveDealStage\(selectedRecord, stageKey\)\)\}/);
@@ -3907,8 +3911,8 @@ await run("deal detail uses profile layout with a one-click stage bar", () => {
   assert.match(source, /function DealProfileInfoStrip/);
   assert.match(source, /data-testid="deal-profile-layout"/);
   assert.match(source, /testId="deal-profile-info-strip"/);
-  assert.match(source, /<DealProfileEditor[\s\S]*<ContactDetailActivityTabs/);
-  assert.match(source, /selectedRecord\.objectKey === "deals" && showContactAllSections/);
+  assert.match(source, /<DealProfileEditor[\s\S]*showContactDetailSections/);
+  assert.match(source, /selectedRecord\.objectKey === "deals" && showContactDetailSections/);
   assert.match(source, /data-testid="deal-stage-progress-bar"/);
   assert.match(source, /data-testid=\{`deal-stage-bar-\$\{stage\.key\}`\}/);
   assert.match(source, /onClick=\{\(\) => onMoveStage\(stage\.key\)\}/);
@@ -5025,6 +5029,7 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /data-testid="email-compose-scheduled-send-at"/);
   assert.match(workspace, /data-testid="email-compose-group-send"/);
   assert.match(workspace, /data-testid="email-compose-tracking"/);
+  assert.match(workspace, /formatDateTimeSeconds\(event\.occurredAt\)/);
   assert.match(workspace, /function removeEmailLabel\(threadId: string, label: string\)/);
   assert.match(workspace, /function getEmailMessageSendStatus\(message: EmailMessage \| undefined\)/);
   assert.match(workspace, /label: "已排队"/);
@@ -7128,6 +7133,23 @@ await run("email translate job envelopes preserve workspace user and message pay
   assert.equal(envelope.attempts, 0);
 });
 
+await run("email tracking timestamps render with Asia Shanghai seconds precision", () => {
+  assert.equal(formatDateTimeSeconds("2026-07-13T06:23:08.000Z"), "2026年7月13日 14:23:08");
+});
+
+await run("false failed email migration only repairs conclusive delivery evidence", () => {
+  const migration = readFileSync("prisma/migrations/20260714100000_repair_false_failed_email_delivery/migration.sql", "utf8");
+  assert.match(migration, /"direction" = 'outbound'/);
+  assert.match(migration, /"status" = 'failed'/);
+  assert.match(migration, /CASE\s+WHEN jsonb_typeof\("trackingEvents"\) = 'array'/);
+  assert.match(migration, /jsonb_array_length\("trackingEvents"\) > 0/);
+  assert.match(migration, /"imapSyncStatus" IN \('sent', 'synced'\)/);
+  assert.match(migration, /NULLIF\(BTRIM\("imapMailbox"\), ''\) IS NOT NULL/);
+  assert.match(migration, /NULLIF\(BTRIM\("imapUid"\), ''\) IS NOT NULL/);
+  assert.doesNotMatch(migration, /"externalMessageId"\s+IS NOT NULL/);
+  assert.match(migration, /"sentAt" = COALESCE\("sendAttemptedAt", "createdAt"\)/);
+});
+
 await run("email classify job envelopes preserve workspace user and message payload", () => {
   const store = new CrmStore();
   const context = store.getContext("user-admin");
@@ -8350,6 +8372,218 @@ await run("email sync scheduler queues active or retryable sync-enabled accounts
   assert.match(summary.accounts[4].skipReason, /未开启收件同步/);
   assert.match(summary.accounts[5].skipReason, /未配置收件连接/);
   assert.match(summary.accounts[6].skipReason, /不支持收件同步/);
+});
+
+await run("smtp delivery remains sent when IMAP Sent sync and account diagnostics fail", async () => {
+  const previousMode = process.env.EMAIL_DELIVERY_MODE;
+  process.env.EMAIL_DELIVERY_MODE = "live";
+  const smtp = await startFakeSmtpServer();
+  try {
+    const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+    const account = {
+      id: "smtp-imap-post-delivery-account",
+      workspaceId: defaultWorkspaceId,
+      name: "SMTP with unavailable IMAP",
+      emailAddress: "sender@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      sendEnabled: true,
+      syncEnabled: true,
+      connectionConfigured: true,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const queued = {
+      id: "smtp-imap-post-delivery-message",
+      workspaceId: defaultWorkspaceId,
+      threadId: "smtp-imap-post-delivery-thread",
+      accountId: account.id,
+      direction: "outbound",
+      status: "queued",
+      from: account.emailAddress,
+      to: ["buyer@example.com"],
+      subject: "Accepted by SMTP",
+      bodyText: "IMAP bookkeeping must not change delivery status.",
+      createdAt: new Date().toISOString()
+    };
+    const statusUpdates = [];
+    const repository = {
+      async getEmailMessage() {
+        return queued;
+      },
+      async getEmailAccount() {
+        return account;
+      },
+      async listEmailMessages() {
+        return [queued];
+      },
+      async getEmailAccountConnectionConfig() {
+        return {
+          smtpHost: "127.0.0.1",
+          smtpPort: smtp.port,
+          smtpSecure: false,
+          username: "sender@example.com",
+          password: "password",
+          imapHost: "127.0.0.1",
+          imapPort: 1,
+          imapSecure: false,
+          mailbox: "INBOX"
+        };
+      },
+      async markEmailAccountConnectionError() {
+        throw new Error("diagnostic persistence unavailable");
+      },
+      async updateEmailMessageStatus(_context, messageId, status, patch) {
+        statusUpdates.push(status);
+        return { ...queued, id: messageId, status, ...patch };
+      }
+    };
+
+    const result = await createEmailProviderAdapter(repository).sendQueued(context, queued.id);
+    assert.equal(result.status, "sent");
+    assert.equal(result.imapSyncStatus, "failed");
+    assert.match(result.imapSyncError, /connect|ECONNREFUSED|IMAP/i);
+    assert.deepEqual(statusUpdates, ["sent"]);
+    assert.match(smtp.message(), /Subject: Accepted by SMTP/);
+  } finally {
+    restoreEnvValue("EMAIL_DELIVERY_MODE", previousMode);
+    await smtp.close();
+  }
+});
+
+await run("email provider returns persisted sent state when post-update bookkeeping throws", async () => {
+  const previousMode = process.env.EMAIL_DELIVERY_MODE;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.EMAIL_DELIVERY_MODE = "dry-run";
+  process.env.NODE_ENV = "test";
+  try {
+    const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+    const account = {
+      id: "post-update-smtp-account",
+      workspaceId: defaultWorkspaceId,
+      name: "Post-update SMTP",
+      emailAddress: "post-update@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      sendEnabled: true,
+      syncEnabled: false,
+      connectionConfigured: false,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const queued = {
+      id: "post-update-message",
+      workspaceId: defaultWorkspaceId,
+      threadId: "post-update-thread",
+      accountId: account.id,
+      direction: "outbound",
+      status: "queued",
+      from: account.emailAddress,
+      to: ["buyer@example.com"],
+      subject: "Persisted before audit",
+      bodyText: "The core update succeeds before bookkeeping fails.",
+      createdAt: new Date().toISOString()
+    };
+    let persisted = queued;
+    const statusUpdates = [];
+    const repository = {
+      async getEmailMessage() {
+        return persisted;
+      },
+      async getEmailAccount() {
+        return account;
+      },
+      async listEmailMessages() {
+        return [queued];
+      },
+      async claimEmailMessageForSending() {
+        persisted = { ...persisted, status: "sending" };
+        return { message: persisted, claimed: true };
+      },
+      async updateEmailMessageStatus(_context, messageId, status, patch) {
+        statusUpdates.push(status);
+        persisted = { ...persisted, id: messageId, status, externalMessageId: patch?.externalMessageId };
+        if (status === "sent") {
+          throw new Error("audit write failed after core status update");
+        }
+        return persisted;
+      }
+    };
+
+    const result = await createEmailProviderAdapter(repository).sendQueued(context, queued.id);
+    assert.equal(result.status, "sent");
+    assert.deepEqual(statusUpdates, ["sent"]);
+  } finally {
+    restoreEnvValue("EMAIL_DELIVERY_MODE", previousMode);
+    restoreEnvValue("NODE_ENV", previousNodeEnv);
+  }
+});
+
+await run("email provider preserves sending when the core sent status write fails", async () => {
+  const previousMode = process.env.EMAIL_DELIVERY_MODE;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.EMAIL_DELIVERY_MODE = "dry-run";
+  process.env.NODE_ENV = "test";
+  try {
+    const context = { workspaceId: defaultWorkspaceId, user: seedData.users[0], role: seedData.roles[0] };
+    const account = {
+      id: "status-write-smtp-account",
+      workspaceId: defaultWorkspaceId,
+      name: "Status-write SMTP",
+      emailAddress: "status-write@example.com",
+      provider: "smtp_imap",
+      status: "active",
+      sendEnabled: true,
+      syncEnabled: false,
+      connectionConfigured: false,
+      createdById: "user-admin",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const queued = {
+      id: "status-write-message",
+      workspaceId: defaultWorkspaceId,
+      threadId: "status-write-thread",
+      accountId: account.id,
+      direction: "outbound",
+      status: "queued",
+      from: account.emailAddress,
+      to: ["buyer@example.com"],
+      subject: "Ambiguous persistence",
+      bodyText: "Delivery succeeds but the core status write does not.",
+      createdAt: new Date().toISOString()
+    };
+    let persisted = queued;
+    const statusUpdates = [];
+    const repository = {
+      async getEmailMessage() {
+        return persisted;
+      },
+      async getEmailAccount() {
+        return account;
+      },
+      async listEmailMessages() {
+        return [queued];
+      },
+      async claimEmailMessageForSending() {
+        persisted = { ...persisted, status: "sending" };
+        return { message: persisted, claimed: true };
+      },
+      async updateEmailMessageStatus(_context, _messageId, status) {
+        statusUpdates.push(status);
+        throw new Error("database unavailable before core status update");
+      }
+    };
+
+    await assert.rejects(() => createEmailProviderAdapter(repository).sendQueued(context, queued.id), /database unavailable/);
+    assert.equal(persisted.status, "sending");
+    assert.deepEqual(statusUpdates, ["sent"]);
+  } finally {
+    restoreEnvValue("EMAIL_DELIVERY_MODE", previousMode);
+    restoreEnvValue("NODE_ENV", previousNodeEnv);
+  }
 });
 
 await run("email sync scheduler forwards full resync requests to each scheduled account", async () => {

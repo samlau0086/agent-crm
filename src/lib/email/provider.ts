@@ -247,9 +247,15 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       await this.repository.updateEmailMessageStatus(context, message.id, "failed", { failureReason: error instanceof Error ? error.message : "Email recipient policy failed" });
       throw error;
     }
+    let delivery: MailSendResult;
     try {
-      const delivery = await this.deliver(context, account, input);
-      return this.repository.updateEmailMessageStatus(context, message.id, "sent", {
+      delivery = await this.deliver(context, account, input);
+    } catch (error) {
+      await this.repository.updateEmailMessageStatus(context, message.id, "failed", { failureReason: error instanceof Error ? error.message : "Email delivery failed" });
+      throw error;
+    }
+    try {
+      return await this.repository.updateEmailMessageStatus(context, message.id, "sent", {
         externalMessageId: delivery.externalMessageId,
         imapMailbox: delivery.imapMailbox,
         imapUid: delivery.imapUid,
@@ -258,7 +264,14 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         imapSyncError: delivery.imapSyncError
       });
     } catch (error) {
-      await this.repository.updateEmailMessageStatus(context, message.id, "failed", { failureReason: error instanceof Error ? error.message : "Email delivery failed" });
+      try {
+        const persisted = await this.repository.getEmailMessage(context, message.id);
+        if (persisted.status === "sent") {
+          return persisted;
+        }
+      } catch {
+        // Preserve the original status persistence error when the verification read also fails.
+      }
       throw error;
     }
   }
@@ -515,36 +528,45 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       const from = outboundService?.fromEmail ?? account.emailAddress;
       const rawMessage = buildRfc822Message(input, from);
       if (outboundService?.type === "resend") {
+        let result: MailSendResult;
         try {
-          const result = await sendResendEmail(outboundService, input, account.emailAddress);
-          return await this.appendSentCopyAfterDelivery(context, account, config, input, rawMessage, result);
+          result = await sendResendEmail(outboundService, input, account.emailAddress);
         } catch (error) {
           const message = error instanceof Error ? error.message : "Resend send failed";
-          await this.repository.markEmailAccountConnectionError(context, input.accountId, message);
+          await this.markEmailAccountConnectionErrorBestEffort(context, input.accountId, message);
           throw new Error(message);
         }
+        return this.appendSentCopyAfterDelivery(context, account, config, input, rawMessage, result);
       }
+      let result: MailSendResult;
       try {
-        const result = await sendSmtpEmail(getOutboundSmtpConnectionConfig(config, outboundService), input, from, rawMessage);
-        return await this.appendSentCopyAfterDelivery(context, account, config, input, rawMessage, result);
+        result = await sendSmtpEmail(getOutboundSmtpConnectionConfig(config, outboundService), input, from, rawMessage);
       } catch (error) {
         const message = error instanceof Error ? error.message : "SMTP send failed";
-        await this.repository.markEmailAccountConnectionError(context, input.accountId, message);
+        await this.markEmailAccountConnectionErrorBestEffort(context, input.accountId, message);
         throw new Error(message);
       }
+      return this.appendSentCopyAfterDelivery(context, account, config, input, rawMessage, result);
     }
     if (isOAuthProvider(account.provider)) {
       const config = await this.getOAuthProviderConfig(context, account);
+      let result: Awaited<ReturnType<typeof sendOAuthEmail>>;
       try {
-        const result = await sendOAuthEmail(account.provider, config, input, account.emailAddress, this.options.oauth);
-        await this.repository.updateEmailAccountConnectionConfig(context, input.accountId, result.config);
-        await this.repository.markEmailAccountConnectionError(context, input.accountId, null);
-        return { externalMessageId: result.externalMessageId };
+        result = await sendOAuthEmail(account.provider, config, input, account.emailAddress, this.options.oauth);
       } catch (error) {
         const message = error instanceof Error ? error.message : `${account.provider} send failed`;
-        await this.repository.markEmailAccountConnectionError(context, input.accountId, message);
+        await this.markEmailAccountConnectionErrorBestEffort(context, input.accountId, message);
         throw new Error(message);
       }
+      try {
+        await this.repository.updateEmailAccountConnectionConfig(context, input.accountId, result.config);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : `${account.provider} connection update failed after delivery`;
+        await this.markEmailAccountConnectionErrorBestEffort(context, input.accountId, message);
+        return { externalMessageId: result.externalMessageId };
+      }
+      await this.markEmailAccountConnectionErrorBestEffort(context, input.accountId, null);
+      return { externalMessageId: result.externalMessageId };
     }
     return {};
   }
@@ -558,17 +580,26 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     delivery: MailSendResult
   ): Promise<MailSendResult> {
     if (!input.messageId) {
-      await this.repository.markEmailAccountConnectionError(context, account.id, null);
+      await this.markEmailAccountConnectionErrorBestEffort(context, account.id, null);
       return delivery;
     }
+    let locator: Awaited<ReturnType<typeof appendImapSentMessage>>;
     try {
-      const locator = await appendImapSentMessage(config, rawMessage, input.messageId);
-      await this.repository.markEmailAccountConnectionError(context, account.id, null);
-      return { ...delivery, imapMailbox: locator.mailbox, imapUid: locator.uid, imapUidValidity: locator.uidValidity, imapSyncStatus: "synced" };
+      locator = await appendImapSentMessage(config, rawMessage, input.messageId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "IMAP Sent synchronization failed";
-      await this.repository.markEmailAccountConnectionError(context, account.id, message);
+      await this.markEmailAccountConnectionErrorBestEffort(context, account.id, message);
       return { ...delivery, imapSyncStatus: "failed", imapSyncError: message };
+    }
+    await this.markEmailAccountConnectionErrorBestEffort(context, account.id, null);
+    return { ...delivery, imapMailbox: locator.mailbox, imapUid: locator.uid, imapUidValidity: locator.uidValidity, imapSyncStatus: "synced" };
+  }
+
+  private async markEmailAccountConnectionErrorBestEffort(context: RequestContext, accountId: string, message: string | null): Promise<void> {
+    try {
+      await this.repository.markEmailAccountConnectionError(context, accountId, message);
+    } catch {
+      // Delivery status must not be changed by post-delivery account diagnostics.
     }
   }
 

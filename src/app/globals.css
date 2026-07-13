@@ -1955,6 +1955,395 @@ button {
   grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
 }
 
+.record-detail-host {
+  min-width: 0;
+}
+
+.record-detail-workspace {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.record-detail-summary {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+.record-detail-summary-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%),
+    var(--surface);
+}
+
+.record-detail-avatar {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  background-position: center;
+  background-size: cover;
+  color: var(--accent-strong);
+  font-size: 18px;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.record-detail-avatar.companies,
+.record-detail-avatar.deals {
+  border-radius: 14px;
+}
+
+.record-detail-identity {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.record-detail-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.record-detail-title-row h2 {
+  margin: 2px 0 0;
+  overflow: hidden;
+  font-size: 20px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-detail-eyebrow {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.record-detail-summary-actions,
+.record-detail-quick-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.record-detail-quick-actions .icon-button {
+  min-height: 34px;
+  width: 34px;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--accent);
+}
+
+.record-detail-summary > .contact-profile-info-strip {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.record-detail-summary > .deal-profile-stage-bar {
+  margin: 12px 14px 14px;
+}
+
+.record-detail-notices {
+  display: grid;
+  gap: 8px;
+}
+
+.record-detail-notices:empty {
+  display: none;
+}
+
+.record-detail-notices .record-delete-pending-banner,
+.record-detail-notices .record-update-pending-banner {
+  margin-top: 0;
+}
+
+.record-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 310px);
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.record-detail-main,
+.record-detail-rail {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.record-detail-main {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.record-detail-tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+}
+
+.record-detail-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 48px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.record-detail-tab:hover,
+.record-detail-tab.active {
+  color: var(--accent);
+}
+
+.record-detail-tab.active {
+  border-bottom-color: var(--accent);
+}
+
+.record-detail-tab-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-strong);
+  font-size: 11px;
+}
+
+.record-detail-tab-content {
+  min-width: 0;
+  min-height: 420px;
+  padding: 14px;
+}
+
+.record-detail-tab-content > :first-child {
+  margin-top: 0 !important;
+}
+
+.record-detail-tab-content .record-activity-grid {
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 0;
+}
+
+.record-detail-tab-content .activity-timeline-shell {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.record-detail-activity-composer {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.record-detail-activity-composer .record-activity-composer {
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.record-detail-activity-type {
+  width: auto;
+  min-width: 112px;
+}
+
+.record-detail-tab-content .contact-profile-cover,
+.record-detail-tab-content .contact-profile-info-strip,
+.record-detail-tab-content .contact-profile-actions,
+.record-detail-tab-content .deal-profile-stage-bar {
+  display: none;
+}
+
+.record-detail-tab-content .contact-profile-main {
+  align-items: center;
+  margin-top: 0;
+  padding: 16px;
+}
+
+.record-detail-tab-content .contact-profile-identity {
+  padding-top: 0;
+}
+
+.record-detail-tag-editor {
+  margin-bottom: 12px;
+}
+
+.record-detail-overview {
+  display: grid;
+  gap: 14px;
+}
+
+.record-detail-section-heading,
+.record-detail-rail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.record-detail-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.record-detail-overview-item {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.record-detail-overview-item:nth-child(2n) {
+  border-right: 0;
+}
+
+.record-detail-overview-item span,
+.record-detail-rail-heading span,
+.record-detail-metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.record-detail-overview-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-detail-rail {
+  position: sticky;
+  top: 12px;
+}
+
+.record-detail-rail-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+}
+
+.record-detail-metric-list,
+.record-detail-rail-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.record-detail-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.record-detail-metric:last-child {
+  border-bottom: 0;
+}
+
+.record-detail-rail-item {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.record-detail-rail-item span,
+.record-detail-rail-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-detail-rail-item small,
+.record-detail-rail-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.record-detail-rail-empty {
+  padding: 16px 0 4px;
+  text-align: center;
+}
+
+.record-detail-rail-card .record-workflow-card {
+  padding: 9px;
+}
+
+.record-detail-reminder-card .smart-reminder-card {
+  padding: 9px;
+}
+
+.record-detail-reminder-card .smart-reminder-actions {
+  padding-left: 0;
+}
+
+@media (max-width: 1180px) {
+  .record-detail-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .record-detail-rail {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 900px) {
   .contact-profile-main,
   .contact-profile-grid {
@@ -1994,6 +2383,47 @@ button {
 
   .deal-profile-stage-button::after {
     display: none;
+  }
+
+  .record-detail-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .record-detail-summary-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .record-detail-rail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .record-detail-summary-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .record-detail-avatar {
+    width: 50px;
+    height: 50px;
+  }
+
+  .record-detail-summary > .contact-profile-info-strip,
+  .record-detail-overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .record-detail-summary > .contact-profile-info-strip .contact-profile-info-item,
+  .record-detail-overview-item {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .record-detail-tab-content {
+    min-height: 320px;
+    padding: 10px;
   }
 }
 

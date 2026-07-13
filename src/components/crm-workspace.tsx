@@ -83,6 +83,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
 import { MediaAssetPreview, MediaLibraryModal } from "@/components/media-library";
+import { RecordDetailWorkspace, type RecordDetailTab } from "@/components/record-detail-workspace";
 import { formatParsedAddressText, parseAddressWithLocalAi, type ParsedAddressDraft } from "@/lib/crm/address-parser";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "@/lib/crm/languages";
@@ -2212,8 +2213,6 @@ function HeaderNotificationsMenu({
   );
 }
 
-type ContactDetailActivityTab = "all" | "activities" | "emails" | "calls" | "notes" | "tasks";
-
 export function CrmWorkspace(props: CrmWorkspaceProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -2271,7 +2270,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
-  const [contactDetailActivityTab, setContactDetailActivityTab] = useState<ContactDetailActivityTab>("all");
+  const [recordDetailTab, setRecordDetailTab] = useState<RecordDetailTab>("activities");
+  const [recordDetailEditing, setRecordDetailEditing] = useState(false);
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
   const [contactMethodEditingRecordId, setContactMethodEditingRecordId] = useState("");
   const [contactMethodEditingValue, setContactMethodEditingValue] = useState("");
@@ -2679,13 +2679,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     [records, selectedRecord]
   );
   const selectedRecordUsesActivityTabs = selectedRecord ? ["contacts", "companies", "deals"].includes(selectedRecord.objectKey) : false;
-  const contactDetailTab = selectedRecordUsesActivityTabs ? contactDetailActivityTab : "all";
-  const showContactAllSections = contactDetailTab === "all";
-  const showContactEmailSections = showContactAllSections || contactDetailTab === "emails";
-  const showContactActivityTimeline = showContactAllSections || contactDetailTab === "activities";
-  const showContactTaskSections = showContactAllSections || contactDetailTab === "tasks";
-  const showContactNoteSections = showContactAllSections || contactDetailTab === "notes";
-  const showContactCallSections = showContactAllSections || contactDetailTab === "calls";
+  const contactDetailTab = selectedRecordUsesActivityTabs ? recordDetailTab : "details";
+  const showContactEmailSections = contactDetailTab === "emails";
+  const showContactActivityTimeline = contactDetailTab === "activities";
+  const showContactTaskSections = contactDetailTab === "tasks";
+  const showContactNoteSections = contactDetailTab === "notes";
+  const showContactCallSections = contactDetailTab === "calls";
+  const showContactMeetingSections = contactDetailTab === "meetings";
+  const showContactDetailSections = contactDetailTab === "details";
+  const showContactAiSections = contactDetailTab === "ai";
   const openTasks = useMemo(
     () =>
       activities
@@ -3007,6 +3009,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setContactMethodEditingValue("");
     setCompanyAddressEditing(null);
     setRecordActivityComposerType("");
+    setRecordDetailTab("activities");
+    setRecordDetailEditing(false);
   }, [selectedRecord?.id]);
 
   useEffect(() => {
@@ -3371,7 +3375,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEditTagColors({});
       setEditValues({});
       setDealCloseReason("");
-      setContactDetailActivityTab("all");
+      setRecordDetailTab("activities");
+      setRecordDetailEditing(false);
       setRecordActivityComposerType("");
       return;
     }
@@ -3386,7 +3391,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditTagColors(normalizeUiTagColors(selectedRecord.tagColors ?? {}, selectedRecord.tags ?? []));
     setEditValues(buildRecordValues(selectedFields, selectedRecord));
     setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
-    setContactDetailActivityTab("all");
+    setRecordDetailTab("activities");
+    setRecordDetailEditing(false);
     setRecordActivityComposerType("");
   }, [selectedFields, selectedRecord, selectedRecordFormResetKey]);
 
@@ -3657,15 +3663,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return fetchJson<CrmRecord>(`/api/records/${record.objectKey}/${record.id}`, { method: "GET" });
   }
 
-  async function submitRecordUpdatePatch(updatePatch: RecordApprovalPatch, successMessage = "记录已更新") {
+  async function submitRecordUpdatePatch(updatePatch: RecordApprovalPatch, successMessage = "记录已更新"): Promise<boolean> {
     if (!selectedRecord) {
-      return;
+      return false;
     }
 
     const approvalBaselineRecord = await loadRecordForApprovalDecision(selectedRecord);
     if (editApprovalObjectKeys.has(selectedRecord.objectKey) && !hasRecordUpdatePatchChanges(approvalBaselineRecord, updatePatch)) {
       setMessage("未检测到修改，无需提交审批");
-      return;
+      return true;
     }
     const needsApproval =
       editApprovalObjectKeys.has(selectedRecord.objectKey) &&
@@ -3679,7 +3685,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       : "";
     if (needsApproval && !changeReason?.trim()) {
       setMessage("已取消修改审批");
-      return;
+      return false;
     }
 
     let result = await fetchJson<CrmRecord | RecordChangeRequestResponse | RecordApprovalReasonRequiredResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
@@ -3697,7 +3703,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       });
       if (!fallbackReason?.trim()) {
         setMessage("已取消修改审批");
-        return;
+        return false;
       }
       result = await fetchJson<CrmRecord | RecordChangeRequestResponse>(`/api/records/${selectedRecord.objectKey}/${selectedRecord.id}`, {
         method: "PATCH",
@@ -3719,7 +3725,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
       showSuccess("修改申请已提交，等待管理员审核");
       router.refresh();
-      return;
+      return true;
     }
 
     setRecords((current) => mergeRecords(current, [result]));
@@ -3730,14 +3736,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditTagColors(normalizeUiTagColors(result.tagColors ?? {}, result.tags ?? []));
     setMessage(successMessage);
     router.refresh();
+    return true;
   }
 
-  async function submitUpdateRecord() {
+  async function submitUpdateRecord(): Promise<boolean> {
     if (!selectedRecord) {
-      return;
+      return false;
     }
 
-    await submitRecordUpdatePatch(selectedRecordUpdatePatch);
+    const saved = await submitRecordUpdatePatch(selectedRecordUpdatePatch);
     if (selectedRecord.objectKey === "contacts") {
       setContactMethodEditingId("");
       setContactMethodEditingRecordId("");
@@ -3745,6 +3752,29 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     }
     if (selectedRecord.objectKey === "companies") {
       setCompanyAddressEditing(null);
+    }
+    return saved;
+  }
+
+  function cancelRecordDetailEdit() {
+    if (!selectedRecord) {
+      return;
+    }
+    setEditTitle(selectedRecord.title);
+    setEditOwnerId(selectedRecord.ownerId ?? "");
+    setEditTags(selectedRecord.tags ?? []);
+    setEditTagColors(normalizeUiTagColors(selectedRecord.tagColors ?? {}, selectedRecord.tags ?? []));
+    setEditValues(buildRecordValues(selectedFields, selectedRecord));
+    setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
+    setCompanyAddressEditing(null);
+    closeContactMethodEditor();
+    setRecordDetailEditing(false);
+  }
+
+  async function saveRecordDetailEdit() {
+    const saved = await submitUpdateRecord();
+    if (saved) {
+      setRecordDetailEditing(false);
     }
   }
 
@@ -6262,7 +6292,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
-  function runRecordSaveAction(action: () => Promise<void>) {
+  function runRecordSaveAction(action: () => Promise<unknown>) {
     setMessage(null);
     setError(null);
     setIsRecordSavePending(true);
@@ -6293,22 +6323,155 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     });
   }
 
+  function renderSelectedRecordSummary() {
+    if (!selectedRecord) {
+      return null;
+    }
+
+    const ownerName = ownerLabel(selectedRecord.ownerId, workspaceUsers);
+    const companyId = String(selectedRecord.data.companyId ?? "");
+    const company = records.find((record) => record.id === companyId);
+    const currentStage = activePipelineStages.find((stage) => stage.key === selectedRecord.stageKey);
+    const primaryContact = selectedRecord.objectKey === "companies" ? selectedCompanyPrimaryContact : undefined;
+    const reviewStatus = selectedRecordPendingDeleteRequest ? "删除待审核" : selectedRecordPendingUpdateRequest ? "修改待审核" : "正常";
+    const usesPool = isPoolEnabledForObject(selectedRecord.objectKey, props.poolSettings);
+    const poolLabel = usesPool ? (selectedRecord.ownerId ? "私海" : "公海") : "已分配";
+    const avatarUrl = selectedRecord.objectKey === "contacts"
+      ? String(selectedRecord.data.avatarUrl ?? "")
+      : selectedRecord.objectKey === "companies"
+        ? String(selectedRecord.data.logoUrl ?? "")
+        : "";
+    const contactLevel = selectedRecord.objectKey === "contacts"
+      ? normalizeCustomerLevelValue(company?.data.customerLevel ?? selectedRecord.data.contactTempCustomerLevel)
+      : normalizeCustomerLevelValue(selectedRecord.data.customerLevel);
+    const summaryItems = selectedRecord.objectKey === "contacts"
+      ? [
+          { label: "公司", value: company?.title ?? "未关联", record: company },
+          { label: "邮箱", value: getPrimaryRecordEmail(selectedRecord) ?? "未设置" },
+          { label: "客户等级", value: customerLevelLabel(customerLevelSettings, contactLevel) },
+          { label: "负责人", value: ownerName },
+          { label: "归属", value: poolLabel },
+          { label: "审核", value: reviewStatus }
+        ]
+      : selectedRecord.objectKey === "companies"
+        ? [
+            { label: "域名", value: String(selectedRecord.data.domain ?? "未设置") },
+            { label: "行业", value: String(selectedRecord.data.industry ?? "未设置") },
+            { label: "主联系人", value: primaryContact?.title ?? "未设置", record: primaryContact },
+            { label: "客户等级", value: customerLevelLabel(customerLevelSettings, contactLevel) },
+            { label: "负责人", value: ownerName },
+            { label: "审核", value: reviewStatus }
+          ]
+        : [
+            { label: "金额", value: formatCurrency(selectedRecord.data.amount) },
+            { label: "阶段", value: currentStage?.label ?? "未设置" },
+            { label: "销售管道", value: activePipeline?.name ?? "默认管道" },
+            { label: "关联公司", value: company?.title ?? "未关联", record: company },
+            { label: "预计成交", value: selectedRecord.data.closeDate ? formatDate(String(selectedRecord.data.closeDate)) : "未设置" },
+            { label: "负责人/审核", value: `${ownerName} / ${reviewStatus}` }
+          ];
+
+    return (
+      <RecordDetailSummaryCard
+        avatarKind={selectedRecord.objectKey}
+        avatarUrl={avatarUrl}
+        editing={recordDetailEditing}
+        infoItems={summaryItems}
+        isPending={isPending || isRecordSavePending}
+        saveDisabled={selectedRecordApprovalSaveDisabled}
+        saveLabel={editApprovalObjectKeys.has(selectedRecord.objectKey) ? "提交修改审批" : "保存修改"}
+        stageBar={selectedRecord.objectKey === "deals" ? (
+          <DealStageProgressBar currentStageKey={selectedRecord.stageKey} disabled={isPending} stages={activePipelineStages} onMoveStage={(stageKey) => runAction(() => moveDealStage(selectedRecord, stageKey))} />
+        ) : null}
+        tagColors={selectedRecord.tagColors ?? {}}
+        tags={selectedRecord.tags ?? []}
+        title={selectedRecord.title}
+        quickActions={selectedRecordQuickContactMethods.length ? (
+          <RecordDetailQuickActions
+            methods={selectedRecordQuickContactMethods}
+            record={selectedRecord}
+            onComposeEmail={(emailAddress) => composeEmailForRecord(selectedRecord, emailAddress)}
+            onStartCall={(method) => openContactFollowUp(selectedRecord, method, "call")}
+            onStartWhatsApp={(method) => openContactFollowUp(selectedRecord, method, "whatsapp")}
+          />
+        ) : null}
+        onCancel={cancelRecordDetailEdit}
+        onDelete={() => { void runImmediateAction(submitDeleteRecord); }}
+        onEdit={() => {
+          setRecordDetailTab("details");
+          setRecordDetailEditing(true);
+        }}
+        onSave={() => runRecordSaveAction(saveRecordDetailEdit)}
+      />
+    );
+  }
+
   function renderSelectedRecordEngagementPanels() {
     if (!selectedRecord || !selectedRecordUsesActivityTabs) {
       return null;
     }
 
+    const currentStage = activePipelineStages.find((stage) => stage.key === selectedRecord.stageKey);
+    const railSummary = selectedRecord.objectKey === "deals"
+      ? [
+          { label: "当前阶段", value: currentStage?.label ?? "未设置" },
+          { label: "交易金额", value: formatCurrency(selectedRecord.data.amount) },
+          { label: "活动", value: `${selectedActivities.length} 条` }
+        ]
+      : selectedRecord.objectKey === "companies"
+        ? [
+            { label: "联系人", value: `${selectedCompanyContacts.length} 位` },
+            { label: "关联记录", value: `${relatedRecords.length} 条` },
+            { label: "活动", value: `${selectedActivities.length} 条` }
+          ]
+        : [
+            { label: "邮件", value: `${selectedRecordEmailThreads.length} 封` },
+            { label: "关联记录", value: `${relatedRecords.length} 条` },
+            { label: "活动", value: `${selectedActivities.length} 条` }
+          ];
+
     return (
       <>
-        <div className="section record-engagement-panel">
+        <section className="record-detail-rail-card" data-testid="record-detail-summary-card">
+          <div className="record-detail-rail-heading">
+            <strong>业务摘要</strong>
+            <span>{activeObjectDisplay.label}</span>
+          </div>
+          <div className="record-detail-metric-list">
+            {railSummary.map((item) => (
+              <div className="record-detail-metric" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="record-detail-rail-card" data-testid="record-detail-related-card">
+          <div className="record-detail-rail-heading">
+            <strong>关联记录</strong>
+            <span>{relatedRecords.length}</span>
+          </div>
+          {relatedRecords.length ? (
+            <div className="record-detail-rail-list">
+              {relatedRecords.slice(0, 6).map((item) => (
+                <button className="record-detail-rail-item" key={`${item.label}-${item.record.id}`} type="button" onClick={() => openRecord(item.record)}>
+                  <span>{item.record.title}</span>
+                  <small>{item.label} · {props.objects.find((object) => object.key === item.record.objectKey)?.label ?? item.record.objectKey}</small>
+                </button>
+              ))}
+            </div>
+          ) : <div className="record-detail-rail-empty">暂无关联记录</div>}
+        </section>
+
+        <section className="record-detail-rail-card" data-testid="record-detail-automation-card">
           <div className="stage-header">
             <div>
               <strong>自动化跟进</strong>
-              <div className="subtle">基于当前记录生成或运行客户跟进、营销培育、交易推进流程。</div>
+              <div className="subtle">绑定到当前记录的流程。</div>
             </div>
-            <button className="secondary-button" data-testid={`record-automation-${selectedRecord.id}`} type="button" onClick={() => openAutomationForRecord(selectedRecord)}>
+            <button className="icon-button" aria-label="创建自动化" data-testid={`record-automation-${selectedRecord.id}`} type="button" onClick={() => openAutomationForRecord(selectedRecord)}>
               <WorkflowIcon size={16} />
-              为此记录创建自动化
             </button>
           </div>
           {selectedRecordWorkflows.length ? (
@@ -6326,25 +6489,27 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           ) : (
             <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
           )}
+        </section>
+        <div className="record-detail-rail-card record-detail-reminder-card" data-testid="record-detail-reminder-card">
+          <SmartReminderPanel
+            compact
+            generating={isGeneratingSmartReminders}
+            reminders={selectedRecordSmartReminders}
+            title="AI 跟进提醒"
+            emptyMessage="暂无当前记录提醒。"
+            onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+            onBulkDelete={(reminders) => runImmediateAction(() => requestSmartReminderBulkDelete(reminders)).then(Boolean)}
+            onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
+            onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
+            onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+            onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
+            onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
+            onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
+            onSnooze={(reminder, days) => runImmediateAction(() => snoozeSmartReminder(reminder, days))}
+            pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+            onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
+          />
         </div>
-        <SmartReminderPanel
-          compact
-          generating={isGeneratingSmartReminders}
-          reminders={selectedRecordSmartReminders}
-          title="AI 跟进提醒"
-          emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
-          onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
-          onBulkDelete={(reminders) => runImmediateAction(() => requestSmartReminderBulkDelete(reminders)).then(Boolean)}
-          onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
-          onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
-          onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
-          onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
-          onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
-          onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
-          onSnooze={(reminder, days) => runImmediateAction(() => snoozeSmartReminder(reminder, days))}
-          pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
-          onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
-        />
       </>
     );
   }
@@ -6984,13 +7149,49 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               )}
 
               {recordPanelMode === "detail" && (
-              <section>
-                <h3 className="panel-title">
-                  {selectedRecord ? `编辑${activeObjectDisplay.label}` : `选择一个${activeObjectDisplay.label}`}
-                </h3>
+              <section className="record-detail-host">
                 {selectedRecord ? (
-                  <>
-                    {isPoolEnabledForObject(selectedRecord.objectKey, props.poolSettings) ? (
+                  <RecordDetailWorkspace
+                    activeTab={recordDetailTab}
+                    counts={{
+                      activities: selectedActivities.length,
+                      emails: selectedRecordEmailThreads.length,
+                      notes: selectedNotes.length,
+                      tasks: selectedTasks.length,
+                      calls: selectedCalls.length,
+                      meetings: selectedMeetings.length
+                    }}
+                    notices={(
+                      <>
+                        {selectedRecordPendingDeleteRequest ? (
+                          <RecordDeletePendingBanner
+                            disabled={isPending}
+                            request={selectedRecordPendingDeleteRequest}
+                            onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                          />
+                        ) : null}
+                        {selectedRecordPendingUpdateRequest ? (
+                          <RecordUpdatePendingBanner
+                            fields={selectedFields}
+                            record={selectedRecord}
+                            request={selectedRecordPendingUpdateRequest}
+                            users={workspaceUsers}
+                            onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
+                            disabled={isPending || isRecordSavePending}
+                          />
+                        ) : null}
+                      </>
+                    )}
+                    rail={renderSelectedRecordEngagementPanels()}
+                    summary={renderSelectedRecordSummary()}
+                    onTabChange={(tab) => {
+                      if (recordDetailEditing && tab !== "details") {
+                        cancelRecordDetailEdit();
+                      }
+                      setRecordDetailTab(tab);
+                    }}
+                  >
+                    {showContactDetailSections && isPoolEnabledForObject(selectedRecord.objectKey, props.poolSettings) ? (
                       <RecordPoolPanel
                         currentUserId={props.contextUser.id}
                         disabled={isPending}
@@ -7002,24 +7203,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onTransfer={(ownerId) => runAction(() => transferRecordOwner(selectedRecord, ownerId))}
                       />
                     ) : null}
-                    {selectedRecordPendingDeleteRequest ? (
-                      <RecordDeletePendingBanner
-                        disabled={isPending}
-                        request={selectedRecordPendingDeleteRequest}
-                        onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
-                      />
-                    ) : null}
-                    {selectedRecordPendingUpdateRequest ? (
-                      <RecordUpdatePendingBanner
-                        fields={selectedFields}
-                        record={selectedRecord}
-                        request={selectedRecordPendingUpdateRequest}
-                        users={workspaceUsers}
-                        onCancel={(request) => { void runImmediateAction(() => cancelRecordChangeRequest(request)); }}
-                        disabled={isPending || isRecordSavePending}
-                      />
-                    ) : null}
-                    <div className="form-grid" style={{ marginTop: 12 }}>
+                    {showContactDetailSections && recordDetailEditing ? (
+                    <div className="form-grid record-detail-tag-editor">
                       <TagEditor
                         colors={editTagColors}
                         label="标签"
@@ -7034,7 +7219,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         onRemoveTag={(tag) => { void runImmediateAction(() => removeSelectedRecordTag(tag)); }}
                       />
                     </div>
-                    {selectedRecord.objectKey === "contacts" ? (
+                    ) : null}
+                    {showContactDetailSections && !recordDetailEditing ? (
+                      <RecordDetailOverview fields={selectedFormFields} record={selectedRecord} records={records} users={workspaceUsers} />
+                    ) : null}
+                    {showContactDetailSections && recordDetailEditing && selectedRecord.objectKey === "contacts" ? (
                       <>
                         <ContactProfileEditor
                           allRecords={records}
@@ -7071,18 +7260,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
                           showContactMethodEditor={selectedRecordQuickContactMethods.length === 0}
                         />
-                        {renderSelectedRecordEngagementPanels()}
-                        <ContactDetailActivityTabs
-                          activeTab={contactDetailActivityTab}
-                          activityCount={selectedActivities.length}
-                          callCount={selectedCalls.length}
-                          emailCount={selectedRecordVisibleEmailThreads.length}
-                          noteCount={selectedNotes.length}
-                          onChange={setContactDetailActivityTab}
-                          taskCount={selectedTasks.length}
-                        />
                       </>
-                    ) : selectedRecord.objectKey === "companies" ? (
+                    ) : showContactDetailSections && recordDetailEditing && selectedRecord.objectKey === "companies" ? (
                       <>
                         <CompanyProfileEditor
                           allRecords={records}
@@ -7142,18 +7321,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onUploadMediaAssets={uploadMediaAssets}
                           onValueChange={(fieldKey, nextValue) => setEditValues((current) => ({ ...current, [fieldKey]: nextValue }))}
                         />
-                        {renderSelectedRecordEngagementPanels()}
-                        <ContactDetailActivityTabs
-                          activeTab={contactDetailActivityTab}
-                          activityCount={selectedActivities.length}
-                          callCount={selectedCalls.length}
-                          emailCount={selectedRecordVisibleEmailThreads.length}
-                          noteCount={selectedNotes.length}
-                          onChange={setContactDetailActivityTab}
-                          taskCount={selectedTasks.length}
-                        />
                       </>
-                    ) : selectedRecord.objectKey === "deals" ? (
+                    ) : showContactDetailSections && recordDetailEditing && selectedRecord.objectKey === "deals" ? (
                       <>
                         <DealProfileEditor
                           allRecords={records}
@@ -7185,18 +7354,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                           onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
                           onUploadMediaAssets={uploadMediaAssets}
                         />
-                        {renderSelectedRecordEngagementPanels()}
-                        <ContactDetailActivityTabs
-                          activeTab={contactDetailActivityTab}
-                          activityCount={selectedActivities.length}
-                          callCount={selectedCalls.length}
-                          emailCount={selectedRecordVisibleEmailThreads.length}
-                          noteCount={selectedNotes.length}
-                          onChange={setContactDetailActivityTab}
-                          taskCount={selectedTasks.length}
-                        />
                       </>
-                    ) : (
+                    ) : !selectedRecordUsesActivityTabs ? (
                     <>
                     <div className="form-grid" style={{ marginTop: 12 }}>
                       <label className="wide">
@@ -7308,7 +7467,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       ) : null}
                     </div>
                     <div className="toolbar" style={{ marginTop: 12 }}>
-                      <button className="primary-button" data-testid="edit-record-save" type="button" onClick={() => runAction(submitUpdateRecord)} disabled={isPending || !editTitle.trim() || selectedRecordApprovalSaveDisabled}>
+                      <button className="primary-button" data-testid="edit-record-save" type="button" onClick={() => runAction(async () => { await submitUpdateRecord(); })} disabled={isPending || !editTitle.trim() || selectedRecordApprovalSaveDisabled}>
                         <Save size={16} />
                         保存
                       </button>
@@ -7360,9 +7519,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       )}
                     </div>
                     </>
-                    )}
+                    ) : null}
 
-                    {selectedRecordQuickContactMethods.length > 0 && (!selectedRecordUsesActivityTabs || showContactAllSections) ? (
+                    {selectedRecordQuickContactMethods.length > 0 && (!selectedRecordUsesActivityTabs || showContactDetailSections) ? (
                       <>
                         <ContactMethodsQuickActions
                           methods={selectedRecordQuickContactMethods}
@@ -7406,7 +7565,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </>
                     ) : null}
 
-                    {selectedRecord.objectKey === "companies" && showContactAllSections && (
+                    {selectedRecord.objectKey === "companies" && showContactDetailSections && (
                       <section style={{ marginTop: 16 }}>
                         <div className="stage-header" style={{ marginBottom: 8 }}>
                           <div className="property-name">公司联系人</div>
@@ -7526,8 +7685,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         )}
                       </section>
                     )}
+                    {selectedRecordUsesActivityTabs && showContactEmailSections && selectedRecordEmailAddresses.length === 0 && selectedRecordEmailThreads.length === 0 ? (
+                      <div className="empty-state">暂无关联邮箱或邮件线程</div>
+                    ) : null}
 
-                    {selectedRecord.objectKey === "deals" && showContactAllSections && (
+                    {selectedRecord.objectKey === "deals" && showContactDetailSections && (
                       <section style={{ marginTop: 16 }}>
                         <div className="property-name" style={{ marginBottom: 8 }}>
                           赢输关闭
@@ -7555,7 +7717,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                     )}
 
-                    {(!selectedRecordUsesActivityTabs || showContactAllSections) ? (
+                    {!selectedRecordUsesActivityTabs ? (
                     <section style={{ marginTop: 16 }}>
                       <div className="property-name" style={{ marginBottom: 8 }}>
                         关联记录
@@ -7582,7 +7744,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     </section>
                     ) : null}
 
-                    {(!selectedRecordUsesActivityTabs || showContactAllSections || showContactTaskSections || showContactNoteSections || showContactCallSections) ? (
+                    {(!selectedRecordUsesActivityTabs || showContactTaskSections || showContactNoteSections || showContactCallSections || showContactMeetingSections) ? (
                     <div className={`record-activity-grid ${selectedRecordUsesActivityTabs ? "contact-detail-tab-panel" : ""}`}>
                       {(!selectedRecordUsesActivityTabs || showContactTaskSections) ? (
                       <section className="record-activity-card">
@@ -7721,7 +7883,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       </section>
                       ) : null}
 
-                      {(!selectedRecordUsesActivityTabs || showContactAllSections) ? (
+                      {(!selectedRecordUsesActivityTabs || showContactMeetingSections) ? (
                       <section className="record-activity-card">
                         <RecordSectionHeader
                           title="会议"
@@ -7770,18 +7932,30 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     ) : null}
 
                     {(!selectedRecordUsesActivityTabs || showContactActivityTimeline) ? (
-                      <ActivityTimeline
-                        activities={selectedActivities}
-                        emptyMessage="暂无活动"
-                        mediaAssets={mediaAssets}
-                        pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
-                        records={records}
-                        testIdPrefix="record-activity"
-                        onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
-                      />
+                      <>
+                        <RecordActivityUnifiedComposer
+                          isPending={isPending}
+                          mediaAssets={mediaAssets}
+                          onUploadMediaAssets={uploadMediaAssets}
+                          onSubmit={(input) => runAction(async () => {
+                            await createRecordActivity({ recordId: selectedRecord.id, ...input });
+                            setMessage("已添加活动");
+                            router.refresh();
+                          })}
+                        />
+                        <ActivityTimeline
+                          activities={selectedActivities}
+                          emptyMessage="暂无活动"
+                          mediaAssets={mediaAssets}
+                          pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
+                          records={records}
+                          testIdPrefix="record-activity"
+                          onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
+                        />
+                      </>
                     ) : null}
 
-                    {coreObjects.has(selectedRecord.objectKey) && (!selectedRecordUsesActivityTabs || showContactAllSections) && (
+                    {coreObjects.has(selectedRecord.objectKey) && (!selectedRecordUsesActivityTabs || showContactAiSections) && (
                       <AiAssistant
                         record={selectedRecord}
                         fields={selectedFields}
@@ -7794,7 +7968,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       />
                     )}
 
-                    {(!selectedRecordUsesActivityTabs || showContactAllSections) ? (
+                    {(!selectedRecordUsesActivityTabs || showContactAiSections) ? (
                     <TalkAboutThisPanel
                       target={{ type: "record", objectKey: selectedRecord.objectKey, recordId: selectedRecord.id, label: selectedRecord.title }}
                       disabled={isPending}
@@ -7804,7 +7978,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onShowToast={showToast}
                     />
                     ) : null}
-                  </>
+                  </RecordDetailWorkspace>
                 ) : (
                   <div className="empty-state">请先从左侧列表选择一条记录</div>
                 )}
@@ -12128,7 +12302,7 @@ function EmailWorkspace({
                               {message.trackingEvents.slice().reverse().slice(0, 20).map((event, index) => (
                                 <div className="email-tracking-event" key={`${event.type}-${event.occurredAt}-${index}`}>
                                   <strong>{event.type === "open" ? "打开" : "点击"}</strong>
-                                  <span>{formatDate(event.occurredAt)}</span>
+                                  <span>{formatDateTimeSeconds(event.occurredAt)}</span>
                                   {event.ip ? <span>{event.ip}</span> : null}
                                   {event.country ? <span>{event.country}</span> : null}
                                   {event.timezone ? <span>{event.timezone}</span> : null}
@@ -15090,6 +15264,58 @@ function RecordSectionHeader({
         {isOpen ? <ChevronDown size={16} /> : <Plus size={16} />}
       </button>
     </div>
+  );
+}
+
+function RecordActivityUnifiedComposer({
+  isPending,
+  mediaAssets,
+  onUploadMediaAssets,
+  onSubmit
+}: {
+  isPending: boolean;
+  mediaAssets: MediaAsset[];
+  onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
+  onSubmit: (input: RecordActivityComposerInput) => void;
+}) {
+  const [type, setType] = useState<Activity["type"]>("note");
+  const labels: Record<Activity["type"], { title: string; body: string; dateLabel?: string }> = {
+    email: { title: "邮件主题", body: "邮件内容" },
+    call: { title: "电话主题", body: "记录电话结论、异议和下一步动作" },
+    meeting: { title: "会议主题", body: "记录会议结论、参会人与待办", dateLabel: "会议日期" },
+    note: { title: "备注标题", body: "记录沟通背景、需求或内部观察" },
+    stage_change: { title: "阶段变化", body: "记录阶段变化原因" },
+    task: { title: "任务标题", body: "任务说明和下一步动作", dateLabel: "截止日期" }
+  };
+  const config = labels[type];
+  return (
+    <section className="record-detail-activity-composer">
+      <div className="record-detail-section-heading">
+        <div>
+          <strong>新增活动</strong>
+          <div className="subtle">在同一处记录备注、任务、电话或会议。</div>
+        </div>
+        <select className="select record-detail-activity-type" data-testid="activity-type" value={type} onChange={(event) => setType(event.target.value as Activity["type"])}>
+          <option value="note">备注</option>
+          <option value="task">任务</option>
+          <option value="call">电话</option>
+          <option value="meeting">会议</option>
+        </select>
+      </div>
+      <RecordActivityComposer
+        key={type}
+        bodyPlaceholder={config.body}
+        dateLabel={config.dateLabel}
+        isPending={isPending}
+        mediaAssets={mediaAssets}
+        submitLabel="添加活动"
+        testIdPrefix="activity"
+        titlePlaceholder={config.title}
+        type={type}
+        onSubmit={onSubmit}
+        onUploadMediaAssets={onUploadMediaAssets}
+      />
+    </section>
   );
 }
 
@@ -18664,6 +18890,154 @@ function CustomerLevelPanel({
   );
 }
 
+function RecordDetailSummaryCard({
+  avatarKind,
+  avatarUrl,
+  editing,
+  infoItems,
+  isPending,
+  quickActions,
+  saveDisabled,
+  saveLabel,
+  stageBar,
+  tagColors,
+  tags,
+  title,
+  onCancel,
+  onDelete,
+  onEdit,
+  onSave
+}: {
+  avatarKind: string;
+  avatarUrl: string;
+  editing: boolean;
+  infoItems: Array<{ label: string; value: string; record?: CrmRecord }>;
+  isPending: boolean;
+  quickActions?: ReactNode;
+  saveDisabled?: boolean;
+  saveLabel: string;
+  stageBar?: ReactNode;
+  tagColors: Record<string, string>;
+  tags: string[];
+  title: string;
+  onCancel: () => void;
+  onDelete: () => void;
+  onEdit: () => void;
+  onSave: () => void;
+}) {
+  const initials = contactInitials(title);
+  return (
+    <section className="record-detail-summary" data-testid="record-detail-summary">
+      <div className="record-detail-summary-main">
+        <div
+          aria-hidden="true"
+          className={`record-detail-avatar ${avatarKind}`}
+          style={avatarUrl ? { backgroundImage: `url("${avatarUrl.replace(/"/g, "%22")}")` } : undefined}
+        >
+          {avatarUrl ? null : avatarKind === "deals" ? <Trophy size={28} /> : initials}
+        </div>
+        <div className="record-detail-identity">
+          <div className="record-detail-title-row">
+            <div>
+              <span className="record-detail-eyebrow">{avatarKind === "contacts" ? "联系人" : avatarKind === "companies" ? "公司" : "交易"}</span>
+              <h2>{title}</h2>
+            </div>
+            <div className="record-detail-summary-actions">
+              {quickActions}
+              {editing ? (
+                <>
+                  <button className="primary-button" data-testid="record-detail-save" type="button" onClick={onSave} disabled={isPending || saveDisabled}>
+                    <Save size={16} /> {saveLabel}
+                  </button>
+                  <button className="secondary-button" data-testid="record-detail-cancel" type="button" onClick={onCancel} disabled={isPending}>
+                    取消
+                  </button>
+                </>
+              ) : (
+                <button className="primary-button" data-testid="record-detail-edit" type="button" onClick={onEdit}>
+                  <Pencil size={16} /> 编辑
+                </button>
+              )}
+              <button className="icon-button danger-button" aria-label="删除记录" type="button" onClick={onDelete} disabled={isPending}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+          <TagList colors={tagColors} tags={tags} compact />
+        </div>
+      </div>
+      <ProfileInfoStrip items={infoItems} testId="record-detail-info-strip" />
+      {stageBar}
+    </section>
+  );
+}
+
+function RecordDetailQuickActions({
+  methods,
+  record,
+  onComposeEmail,
+  onStartCall,
+  onStartWhatsApp
+}: {
+  methods: ContactMethodDraft[];
+  record: CrmRecord;
+  onComposeEmail: (emailAddress: string) => void;
+  onStartCall: (method: ContactMethodDraft) => void;
+  onStartWhatsApp: (method: ContactMethodDraft) => void;
+}) {
+  const visibleMethods = normalizePrimaryContactMethods(methods).filter((method) => method.value.trim());
+  const email = visibleMethods.find((method) => method.type === "email");
+  const phone = visibleMethods.find((method) => method.type === "mob" || method.type === "tel");
+  const whatsapp = visibleMethods.find((method) => method.type === "whatsapp");
+  return (
+    <div className="record-detail-quick-actions" data-testid={`record-detail-quick-actions-${record.id}`}>
+      {email ? <button className="icon-button" aria-label={`发送邮件至 ${email.value}`} type="button" onClick={() => onComposeEmail(email.value)}><Mail size={16} /></button> : null}
+      {phone ? <button className="icon-button" aria-label={`致电 ${phone.value}`} type="button" onClick={() => onStartCall(phone)}><Phone size={16} /></button> : null}
+      {whatsapp ? <button className="icon-button" aria-label={`WhatsApp 联系 ${whatsapp.value}`} type="button" onClick={() => onStartWhatsApp(whatsapp)}><MessageCircle size={16} /></button> : null}
+    </div>
+  );
+}
+
+function RecordDetailOverview({
+  fields,
+  record,
+  records,
+  users
+}: {
+  fields: FieldDefinition[];
+  record: CrmRecord;
+  records: CrmRecord[];
+  users: User[];
+}) {
+  const visibleFields = fields.filter((field) => !["avatarUrl", "logoUrl"].includes(field.key));
+  return (
+    <section className="record-detail-overview" data-testid="record-detail-overview">
+      <div className="record-detail-section-heading">
+        <div>
+          <strong>资料详情</strong>
+          <div className="subtle">浏览记录字段；点击右上角编辑进入修改状态。</div>
+        </div>
+      </div>
+      <div className="record-detail-overview-grid">
+        <div className="record-detail-overview-item">
+          <span>名称</span>
+          <strong>{record.title}</strong>
+        </div>
+        <div className="record-detail-overview-item">
+          <span>负责人</span>
+          <strong>{ownerLabel(record.ownerId, users)}</strong>
+        </div>
+        {visibleFields.map((field) => (
+          <div className="record-detail-overview-item" key={field.id}>
+            <span>{field.label}</span>
+            <strong>{formatEditableFieldValue(field, String(record.data[field.key] ?? ""), records, users) || "未设置"}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ContactProfileEditor({
   allRecords,
   canManageOwners,
@@ -18993,59 +19367,6 @@ function ProfileInfoStrip({ items, testId }: { items: Array<{ label: string; val
           )}
         </div>
       ))}
-    </div>
-  );
-}
-
-function ContactDetailActivityTabs({
-  activeTab,
-  activityCount,
-  callCount,
-  emailCount,
-  noteCount,
-  onChange,
-  taskCount
-}: {
-  activeTab: ContactDetailActivityTab;
-  activityCount: number;
-  callCount: number;
-  emailCount: number;
-  noteCount: number;
-  onChange: (tab: ContactDetailActivityTab) => void;
-  taskCount: number;
-}) {
-  const tabs = [
-    { key: "all", label: "All", count: activityCount + emailCount, icon: LayoutList },
-    { key: "activities", label: "Activities", count: activityCount, icon: ActivityIcon },
-    { key: "emails", label: "Emails", count: emailCount, icon: Mail },
-    { key: "calls", label: "Calls", count: callCount, icon: Phone },
-    { key: "notes", label: "Notes", count: noteCount, icon: FileText },
-    { key: "tasks", label: "Tasks", count: taskCount, icon: CheckCircle2 }
-  ] satisfies Array<{ key: ContactDetailActivityTab; label: string; count: number; icon: LucideIcon }>;
-
-  function handleTabChange(tab: ContactDetailActivityTab) {
-    onChange(tab);
-  }
-
-  return (
-    <div className="contact-detail-activity-tabs" data-testid="contact-detail-activity-tabs">
-      {tabs.map((tab) => {
-        const Icon = tab.icon;
-        return (
-          <button
-            aria-pressed={activeTab === tab.key}
-            className={`contact-detail-activity-tab ${activeTab === tab.key ? "active" : ""}`}
-            data-testid={`contact-detail-activity-tab-${tab.key}`}
-            key={tab.key}
-            type="button"
-            onClick={() => handleTabChange(tab.key)}
-          >
-            <Icon size={15} />
-            <span>{tab.label}</span>
-            {tab.count > 0 ? <span className="contact-detail-tab-count">{tab.count}</span> : null}
-          </button>
-        );
-      })}
     </div>
   );
 }

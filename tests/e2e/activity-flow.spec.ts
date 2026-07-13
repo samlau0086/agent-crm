@@ -45,9 +45,11 @@ test("admin can add notes tasks and manage the activity timeline", async ({ page
   const note = (await noteResponse.json()) as ActivityPayload;
   expect(note.recordId).toBe(contact.id);
   expect(note.type).toBe("note");
+  await expect(page.getByTestId(`record-activity-${note.id}`)).toContainText(noteTitle);
+  await page.getByTestId("record-detail-tab-notes").click();
   await expect(page.getByTestId(`record-note-${note.id}`)).toContainText(noteTitle);
   await expect(page.getByTestId(`record-note-${note.id}`)).toContainText(`Note body ${suffix}`);
-  await expect(page.getByTestId(`record-activity-${note.id}`)).toContainText(noteTitle);
+  await page.getByTestId("record-detail-tab-activities").click();
 
   await page.getByTestId("activity-type").selectOption("task");
   await page.getByTestId("activity-due-at").fill(dueDate);
@@ -62,8 +64,9 @@ test("admin can add notes tasks and manage the activity timeline", async ({ page
   expect(task.recordId).toBe(contact.id);
   expect(task.type).toBe("task");
   expect(task.dueAt).toContain(dueDate);
-  await expect(page.getByTestId(`record-task-${task.id}`)).toContainText(taskTitle);
   await expect(page.getByTestId(`record-activity-${task.id}`)).toContainText(taskTitle);
+  await page.getByTestId("record-detail-tab-tasks").click();
+  await expect(page.getByTestId(`record-task-${task.id}`)).toContainText(taskTitle);
 
   const [completeResponse] = await Promise.all([
     page.waitForResponse((response) => response.url().includes(`/api/activities/${task.id}`) && response.request().method() === "PATCH"),
