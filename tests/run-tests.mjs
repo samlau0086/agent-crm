@@ -3028,6 +3028,7 @@ await run("settings admin groups configuration panels by tabs", () => {
 await run("workspace and settings use friendly feedback instead of browser dialogs", () => {
   const workspace = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const settings = readFileSync("src/components/settings-admin.tsx", "utf8");
+  const automation = readFileSync("src/components/automation-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
   const sourceWithUi = `${workspace}\n${settings}`;
 
@@ -3037,6 +3038,9 @@ await run("workspace and settings use friendly feedback instead of browser dialo
   assert.match(workspace, /function ConfirmDialog/);
   assert.match(workspace, /function PromptDialog/);
   assert.match(settings, /function ToastViewport/);
+  assert.match(workspace, /const TOAST_AUTO_DISMISS_MS = 5_000;[\s\S]*window\.setTimeout\(\(\) => onDismissRef\.current\(\), TOAST_AUTO_DISMISS_MS\)/);
+  assert.match(settings, /const TOAST_AUTO_DISMISS_MS = 5_000;[\s\S]*window\.setTimeout\(\(\) => onDismissRef\.current\(\), TOAST_AUTO_DISMISS_MS\)/);
+  assert.match(automation, /const TOAST_AUTO_DISMISS_MS = 5_000;[\s\S]*}, TOAST_AUTO_DISMISS_MS\)/);
   assert.match(settings, /function ConfirmDialog/);
   assert.match(sourceWithUi, /requestConfirm\(\{[\s\S]*danger: true/);
   assert.match(styles, /\.toast/);

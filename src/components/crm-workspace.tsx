@@ -168,6 +168,8 @@ import type { EmailDiagnosticStatus, EmailSubsystemDiagnostics } from "@/lib/ema
 import { formatCurrency, formatDate, formatDateTimeMinutes, formatDateTimeSeconds, labelForOption } from "@/lib/utils/format";
 import type { BackupFile } from "@/lib/ops/backups";
 
+const TOAST_AUTO_DISMISS_MS = 5_000;
+
 interface CrmWorkspaceProps {
   contextUser: User;
   role: Role;
@@ -2415,9 +2417,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   function showToast(nextToast: ToastState) {
     setToast(nextToast);
-    window.setTimeout(() => {
-      setToast((current) => (current?.message === nextToast.message && current.intent === nextToast.intent ? null : current));
-    }, 3600);
   }
 
   function showSuccess(messageText: string) {
@@ -8250,6 +8249,16 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 }
 
 function ToastViewport({ toast, onDismiss }: { toast: ToastState | null; onDismiss: () => void }) {
+  const onDismissRef = useRef(onDismiss);
+  const toastKey = toast ? `${toast.intent}\u0000${toast.message}` : null;
+  onDismissRef.current = onDismiss;
+
+  useEffect(() => {
+    if (toastKey === null) return;
+    const timeoutId = window.setTimeout(() => onDismissRef.current(), TOAST_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [toastKey]);
+
   if (!toast) {
     return null;
   }

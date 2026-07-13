@@ -52,6 +52,8 @@ import type {
 import { graphToLegacyWorkflow, legacyWorkflowToGraph } from "@/lib/workflows/core";
 import { formatDateTimeSeconds } from "@/lib/utils/format";
 
+const TOAST_AUTO_DISMISS_MS = 5_000;
+
 type AutomationObjectKey = "all" | "contacts" | "companies" | "deals" | "email" | "tasks";
 type AutomationNodeKind = "trigger" | "condition" | "action";
 type AutomationNode =
@@ -220,7 +222,7 @@ export function AutomationWorkspace({ workflows: initialWorkflows, workflowRuns:
     setToast({ intent, message });
     window.setTimeout(() => {
       setToast((current) => (current?.message === message ? null : current));
-    }, 3200);
+    }, TOAST_AUTO_DISMISS_MS);
   }
 
   function selectWorkflow(workflow: WorkflowDefinition) {

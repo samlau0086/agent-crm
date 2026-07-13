@@ -18,6 +18,8 @@ import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
 import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SalesDocumentNumberSetting, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 
+const TOAST_AUTO_DISMISS_MS = 5_000;
+
 interface SettingsAdminProps {
   currentUser: User;
   role: Role;
@@ -576,9 +578,6 @@ export function SettingsAdmin(props: SettingsAdminProps) {
 
   const showToast = useCallback((nextToast: ToastState) => {
     setToast(nextToast);
-    window.setTimeout(() => {
-      setToast((current) => (current?.message === nextToast.message && current.intent === nextToast.intent ? null : current));
-    }, 3600);
   }, []);
 
   const showError = useCallback((messageText: string) => {
@@ -4357,6 +4356,16 @@ function SearchableTagInput({
 }
 
 function ToastViewport({ toast, onDismiss }: { toast: ToastState | null; onDismiss: () => void }) {
+  const onDismissRef = useRef(onDismiss);
+  const toastKey = toast ? `${toast.intent}\u0000${toast.message}` : null;
+  onDismissRef.current = onDismiss;
+
+  useEffect(() => {
+    if (toastKey === null) return;
+    const timeoutId = window.setTimeout(() => onDismissRef.current(), TOAST_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [toastKey]);
+
   if (!toast) {
     return null;
   }
