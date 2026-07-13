@@ -517,6 +517,17 @@ function formatRecipientSendTime(value: string, timezone?: string): string {
   return `北京时间 ${beijingTime} · 当地时间 ${localTime}（${timezone}）`;
 }
 
+function formatScheduledSendTimeForRecipients(value: string, recipients: RecipientPreferenceResolution[]): string {
+  const timezones = Array.from(new Set(recipients.map((recipient) => recipient.contactWindow?.timezone).filter(Boolean)));
+  if (timezones.length === 1) {
+    return formatRecipientSendTime(value, timezones[0]);
+  }
+  const beijingTime = formatDateTimeMinutes(value);
+  return timezones.length > 1
+    ? `北京时间 ${beijingTime} · 各收件人当地时间见下方`
+    : `北京时间 ${beijingTime}`;
+}
+
 const preferredContactDayOptions = [
   { label: "周一", value: 1 },
   { label: "周二", value: 2 },
@@ -9549,6 +9560,9 @@ function EmailWorkspace({
       ),
     [emailDraft.recordId, emailDraft.to, records, selectedRecord]
   );
+  const scheduledSendTimeLabel = emailDraft.scheduledSendAt
+    ? formatScheduledSendTimeForRecipients(emailDraft.scheduledSendAt, recipientPreferencePreview)
+    : "";
   const updateAiAgent = (agentKey: string, patch: Partial<EmailAiSettings["agents"][number]>) => {
     onUpdateAiSettings({
       agents: aiSettings.agents.map((agent) => (agent.key === agentKey ? { ...agent, ...patch } : agent))
@@ -12336,20 +12350,20 @@ function EmailWorkspace({
                   </label>
                   {emailDraft.scheduledSendAt ? (
                     <span className="badge" title="已设置定时发送，将忽略收件人的偏好发送时段">
-                      <CalendarClock size={12} /> 定时发送优先 · 将在 {formatDateTimeMinutes(emailDraft.scheduledSendAt)} 发送
+                      <CalendarClock size={12} /> 定时发送优先 · 将在 {scheduledSendTimeLabel} 发送
                     </span>
                   ) : null}
                 </div>
-                {(emailDraft.autoTranslateEnabled || emailDraft.preferredTimeSendEnabled) && recipientPreferencePreview.length ? (
+                {(emailDraft.scheduledSendAt || emailDraft.autoTranslateEnabled || emailDraft.preferredTimeSendEnabled) && recipientPreferencePreview.length ? (
                   <div className="email-preference-preview" data-testid="email-compose-preference-preview">
-                    <strong>收件人偏好预览</strong>
+                    <strong>{emailDraft.scheduledSendAt ? "收件人发送时间预览" : "收件人偏好预览"}</strong>
                     {recipientPreferencePreview.map((preference) => (
                       <div className="email-preference-preview-row" key={preference.email}>
                         <span>{preference.email}</span>
                         {emailDraft.autoTranslateEnabled ? (
                           <span className="badge">{preference.languageLabel} · {preference.languageSourceLabel}</span>
                         ) : null}
-                        {emailDraft.preferredTimeSendEnabled ? (
+                        {(emailDraft.scheduledSendAt || emailDraft.preferredTimeSendEnabled) ? (
                           <span className={(emailDraft.scheduledSendAt || preference.scheduledSendAt) ? "badge" : "danger-badge"}>
                             <CalendarClock size={12} />
                             {emailDraft.scheduledSendAt
