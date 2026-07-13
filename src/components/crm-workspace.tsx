@@ -13137,26 +13137,28 @@ function SmartReminderPanel({
           </button>
         ))}
       </div>
-      <div className="smart-reminder-tabs compact-tabs" role="tablist" aria-label={`${title} 类型筛选`}>
-        {(
-          [
-            ["all", "全部"],
-            ["follow_up", "跟进"],
-            ["data_quality", "数据质量"],
-            ["customer_level", "客户等级"],
-            ["portfolio_health", "经营健康"],
-            ["pipeline_optimization", "交易推进"]
-          ] as Array<[SmartReminderKindFilter, string]>
-        ).map(([filter, label]) => {
-          const count = remindersInActiveView.filter((reminder) => smartReminderMatchesKindFilter(reminder, filter)).length;
-          return (
-            <button className={activeKindFilter === filter ? "active" : ""} key={filter} onClick={() => setActiveKindFilter(filter)} type="button" role="tab" aria-selected={activeKindFilter === filter}>
-              {label}
-              <span>{count}</span>
-            </button>
-          );
-        })}
-      </div>
+      {remindersInActiveView.length > 0 ? (
+        <div className="smart-reminder-tabs compact-tabs" role="tablist" aria-label={`${title} 类型筛选`}>
+          {(
+            [
+              ["all", "全部"],
+              ["follow_up", "跟进"],
+              ["data_quality", "数据质量"],
+              ["customer_level", "客户等级"],
+              ["portfolio_health", "经营健康"],
+              ["pipeline_optimization", "交易推进"]
+            ] as Array<[SmartReminderKindFilter, string]>
+          ).map(([filter, label]) => {
+            const count = remindersInActiveView.filter((reminder) => smartReminderMatchesKindFilter(reminder, filter)).length;
+            return (
+              <button className={activeKindFilter === filter ? "active" : ""} key={filter} onClick={() => setActiveKindFilter(filter)} type="button" role="tab" aria-selected={activeKindFilter === filter}>
+                {label}
+                <span>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
       {activeView === "dismissed" && visibleReminders.length ? (
         <div className="smart-reminder-bulkbar" data-testid="smart-reminder-dismissed-bulkbar">
           <label className="smart-reminder-select-all">
