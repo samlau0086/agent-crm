@@ -897,7 +897,7 @@ export type SmartReminderKind =
   | "data_quality"
   | "customer_level"
   | "pipeline_optimization";
-export type SmartReminderPriority = "low" | "medium" | "high" | "urgent";
+export type SmartReminderPriority = "info" | "low" | "medium" | "high" | "urgent" | "critical";
 export type SmartReminderStatus = "open" | "done" | "dismissed";
 
 export interface SmartReminderSource {
@@ -926,6 +926,16 @@ export interface SmartReminder {
   sources: SmartReminderSource[];
   score: number;
   idempotencyKey: string;
+  issueKey?: string;
+  basePriority: SmartReminderPriority;
+  consecutiveDays: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastEscalatedAt?: string;
+  nextEligibleAt?: string;
+  completionEvidence?: Record<string, unknown>;
+  resolutionRule?: Record<string, unknown>;
+  linkedTaskId?: string;
   generatedByAgentKey?: AiAgentKey;
   createdAt: string;
   updatedAt: string;

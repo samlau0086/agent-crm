@@ -6181,10 +6181,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     await updateSmartReminder(reminder, { status: "open", snoozedUntil: null });
   }
 
-  async function snoozeSmartReminder(reminder: SmartReminder) {
-    const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  async function snoozeSmartReminder(reminder: SmartReminder, days: 1 | 2 | 3) {
+    const snoozedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
     await updateSmartReminder(reminder, { status: "open", snoozedUntil });
-    showSuccess("已稍后提醒：明天再显示");
+    showSuccess(`已稍后提醒：${days} 天后再显示`);
   }
 
   async function convertSmartReminderToTask(reminder: SmartReminder) {
@@ -6341,7 +6341,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
           onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
           onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
-          onSnooze={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
+          onSnooze={(reminder, days) => runImmediateAction(() => snoozeSmartReminder(reminder, days))}
           pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
           onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
         />
@@ -6642,7 +6642,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onDeleteSmartReminder={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
             onDismissSmartReminder={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
             onRestoreSmartReminder={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
-            onSnoozeSmartReminder={(reminder) => runImmediateAction(() => snoozeSmartReminder(reminder))}
+            onSnoozeSmartReminder={(reminder, days) => runImmediateAction(() => snoozeSmartReminder(reminder, days))}
             onConvertSmartReminderToTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
             pendingSmartReminderDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
             onCancelSmartReminderDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
@@ -9219,7 +9219,7 @@ function Dashboard({
   onDeleteSmartReminder: (reminder: SmartReminder) => void;
   onDismissSmartReminder: (reminder: SmartReminder) => void;
   onRestoreSmartReminder: (reminder: SmartReminder) => void;
-  onSnoozeSmartReminder: (reminder: SmartReminder) => void;
+  onSnoozeSmartReminder: (reminder: SmartReminder, days: 1 | 2 | 3) => void;
   onConvertSmartReminderToTask: (reminder: SmartReminder) => void;
   onCancelSmartReminderDeleteRequest: (request: RecordChangeRequest) => void;
 }) {
@@ -13035,7 +13035,7 @@ function SmartReminderPanel({
   onGenerate: () => void;
   onOpenRecord: (reminder: SmartReminder) => void;
   onRestore: (reminder: SmartReminder) => void;
-  onSnooze: (reminder: SmartReminder) => void;
+  onSnooze: (reminder: SmartReminder, days: 1 | 2 | 3) => void;
   pendingDeleteRequestsById?: Map<string, RecordChangeRequest>;
   onCancelDeleteRequest?: (request: RecordChangeRequest) => void;
 }) {
@@ -13219,7 +13219,7 @@ function SmartReminderPanel({
                   <div className="smart-reminder-title-row">
                     <strong>{reminder.title}</strong>
                     <span className="badge">AI</span>
-                    <span className="subtle-badge">{smartReminderPriorityLabel(reminder.priority)}</span>
+                    <SmartReminderUrgency priority={reminder.priority} />
                     <span className="subtle-badge">{smartReminderKindLabel(reminder.kind)}</span>
                     {reminder.status === "dismissed" ? <span className="subtle-badge">已忽略</span> : null}
                     {reminder.status === "done" ? <span className="subtle-badge">已完成</span> : null}
@@ -13229,8 +13229,11 @@ function SmartReminderPanel({
                   <p>{reminder.body}</p>
                   <div className="smart-reminder-meta">
                     {reminder.actionLabel ? <span>{reminder.actionLabel}</span> : null}
-                    <span>创建时间 {formatDateTimeSeconds(reminder.createdAt)}</span>
+                    <span>本轮开始 {formatDateTimeSeconds(reminder.firstSeenAt)}</span>
+                    <span>已持续 {Math.max(1, reminder.consecutiveDays)} 天</span>
+                    {reminder.lastEscalatedAt ? <span>最近升级 {formatDateTimeSeconds(reminder.lastEscalatedAt)}</span> : null}
                     {reminder.dueAt ? <span>建议截止 {formatDateTimeSeconds(reminder.dueAt)}</span> : null}
+                    {reminder.nextEligibleAt && reminder.status === "done" ? <span>最早再次提醒 {formatDateTimeSeconds(reminder.nextEligibleAt)}</span> : null}
                     {reminder.snoozedUntil && isSnoozedForPanel(reminder) ? <span>稍后至 {formatDateTimeSeconds(reminder.snoozedUntil)}</span> : null}
                     {reminder.sources.length ? <span>{reminder.sources.slice(0, 2).map((source) => source.label).join("、")}</span> : null}
                     {pendingDeleteRequest ? <span>删除原因：{pendingDeleteRequest.reason}</span> : null}
@@ -13255,10 +13258,14 @@ function SmartReminderPanel({
                       <CheckCircle2 size={14} />
                       完成
                     </button>
-                    <button type="button" className="secondary-button" onClick={() => onSnooze(reminder)}>
-                      <Clock3 size={14} />
-                      稍后
-                    </button>
+                    <span className="smart-reminder-snooze-actions" aria-label="稍后提醒">
+                      {[1, 2, 3].map((days) => (
+                        <button key={days} type="button" className="secondary-button" onClick={() => onSnooze(reminder, days as 1 | 2 | 3)}>
+                          <Clock3 size={14} />
+                          {days}天
+                        </button>
+                      ))}
+                    </span>
                     <button type="button" className="secondary-button" onClick={() => onConvertTask(reminder)}>
                       <CalendarClock size={14} />
                       转任务
@@ -13305,6 +13312,19 @@ function Metric({ label, value, icon: Icon }: { label: string; value: string | n
       </div>
       <span className="metric-value">{value}</span>
     </div>
+  );
+}
+
+function SmartReminderUrgency({ priority }: { priority: SmartReminder["priority"] }) {
+  const level = smartReminderPriorityWeightForUi(priority);
+  const label = smartReminderPriorityLabel(priority);
+  return (
+    <span className={`smart-reminder-urgency smart-reminder-urgency-${priority}`} aria-label={`紧急程度：${label}，6 级中的第 ${level} 级`} role="img">
+      <span className="smart-reminder-urgency-bars" aria-hidden="true">
+        {Array.from({ length: 6 }, (_, index) => <i className={index < level ? "active" : ""} key={index} />)}
+      </span>
+      <span>{label}</span>
+    </span>
   );
 }
 
@@ -14784,7 +14804,7 @@ function buildHeaderNotifications({
         description: [smartReminderKindLabel(reminder.kind), smartReminderPriorityLabel(reminder.priority), linkedRecord?.title, reminder.actionLabel].filter(Boolean).join(" · "),
         time: reminder.dueAt ?? reminder.createdAt,
         icon: smartReminderKindIcon(reminder.kind),
-        intent: reminder.priority === "urgent" ? "danger" : reminder.priority === "high" ? "warning" : "info",
+        intent: reminder.priority === "critical" || reminder.priority === "urgent" ? "danger" : reminder.priority === "high" || reminder.priority === "medium" ? "warning" : "info",
         event,
         syncedChannels
       });
@@ -18511,6 +18531,7 @@ function CustomerLevelPanel({
   currentLevel: currentLevelOverride,
   description = "正式等级需审批；系统建议仅作为参考。",
   disabled,
+  explanationRecord,
   record,
   settings,
   showSuggestion = true,
@@ -18524,6 +18545,7 @@ function CustomerLevelPanel({
   currentLevel?: CustomerLevel | "";
   description?: string;
   disabled: boolean;
+  explanationRecord?: CrmRecord;
   record: CrmRecord;
   settings: CustomerLevelSettings;
   showSuggestion?: boolean;
@@ -18532,14 +18554,24 @@ function CustomerLevelPanel({
   onRequestChange: (level: CustomerLevel | "") => void;
 }) {
   const currentLevel = currentLevelOverride ?? normalizeCustomerLevelValue(record.data.customerLevel);
-  const suggestedLevel = normalizeCustomerLevelValue(record.data.customerLevelSuggested);
-  const score = typeof record.data.customerLevelScore === "number" ? record.data.customerLevelScore : undefined;
-  const reasons = customerLevelReasons(record.data.customerLevelReasons);
-  const suggestedAt = typeof record.data.customerLevelSuggestedAt === "string" ? record.data.customerLevelSuggestedAt : "";
+  const currentDefinition = customerLevelDefinition(settings, currentLevel);
+  const ratingBasisRecord = explanationRecord ?? record;
+  const suggestedLevel = normalizeCustomerLevelValue(ratingBasisRecord.data.customerLevelSuggested);
+  const score = typeof ratingBasisRecord.data.customerLevelScore === "number" ? ratingBasisRecord.data.customerLevelScore : undefined;
+  const reasons = customerLevelReasons(ratingBasisRecord.data.customerLevelReasons);
+  const suggestedAt = typeof ratingBasisRecord.data.customerLevelSuggestedAt === "string" ? ratingBasisRecord.data.customerLevelSuggestedAt : "";
   const enabledLevels = settings.levels.filter((level) => level.enabled).sort((left, right) => left.position - right.position);
   const isSuggesting = actionKey === `suggest:${record.id}`;
   const isChanging = actionKey === `change:${record.id}`;
   const suggestionDiffers = Boolean(suggestedLevel && suggestedLevel !== currentLevel);
+  const hasRatingBasis = Boolean(suggestedLevel || typeof score === "number" || reasons.length > 0 || suggestedAt);
+  const inheritsRatingBasis = ratingBasisRecord.id !== record.id;
+  const ratingBasisTitle = suggestedLevel && suggestedLevel === currentLevel ? "当前等级评分依据" : "最近建议依据";
+  const emptyRatingBasisMessage = inheritsRatingBasis
+    ? "关联公司暂无系统评分依据，请到公司详情刷新建议。"
+    : record.objectKey === "contacts"
+      ? "临时等级暂无系统评分依据；系统评分仅针对公司生成。"
+      : "暂无系统评分依据，可点击刷新建议生成评分。";
 
   return (
     <section className="contact-profile-card customer-level-panel" data-testid="customer-level-panel">
@@ -18559,6 +18591,11 @@ function CustomerLevelPanel({
         <div className="customer-level-current">
           <span className="editable-field-label">{currentLabel}</span>
           <CustomerLevelBadge level={currentLevel} settings={settings} />
+          <div className="customer-level-definition" data-testid="customer-level-definition">
+            {currentDefinition
+              ? `${currentDefinition.label}的评分区间为 ${currentDefinition.minScore}–${currentDefinition.maxScore} 分${currentDefinition.enabled ? "。" : "，该等级当前已停用。"}`
+              : "尚未设置客户等级，暂无对应评分区间。"}
+          </div>
         </div>
         {changeEnabled ? (
           <label className="customer-level-select">
@@ -18595,16 +18632,34 @@ function CustomerLevelPanel({
             </button>
           ) : null}
         </div>
-      ) : showSuggestion ? (
-        <div className="customer-level-empty">暂无建议等级，可点击刷新建议生成评分。</div>
       ) : null}
-      {showSuggestion && reasons.length > 0 ? (
-        <ul className="customer-level-reasons">
-          {reasons.slice(0, 5).map((reason, index) => (
-            <li key={`${reason}-${index}`}>{reason}</li>
-          ))}
-        </ul>
-      ) : null}
+      {hasRatingBasis ? (
+        <div className="customer-level-explanation" data-testid="customer-level-explanation">
+          <span className="editable-field-label">{ratingBasisTitle}</span>
+          {suggestionDiffers ? (
+            <div className="customer-level-explanation-notice">
+              最近建议为 {customerLevelLabel(settings, suggestedLevel)}，与当前{currentLabel}不同；以下内容仅说明最近一次系统建议。
+            </div>
+          ) : null}
+          <div className="customer-level-explanation-meta">
+            {suggestedLevel ? <CustomerLevelBadge level={suggestedLevel} settings={settings} subtle /> : null}
+            {typeof score === "number" ? <span>{score} 分</span> : null}
+            {suggestedAt ? <span>生成于 {formatDateTimeSeconds(suggestedAt)}</span> : null}
+            {inheritsRatingBasis ? <span>来源：关联公司 {ratingBasisRecord.title}</span> : null}
+          </div>
+          {reasons.length > 0 ? (
+            <ul className="customer-level-reasons">
+              {reasons.slice(0, 5).map((reason, index) => (
+                <li key={`${reason}-${index}`}>{reason}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="customer-level-explanation-notice">本次评分未保存具体原因。</div>
+          )}
+        </div>
+      ) : (
+        <div className="customer-level-empty" data-testid="customer-level-explanation-empty">{emptyRatingBasisMessage}</div>
+      )}
     </section>
   );
 }
@@ -18754,6 +18809,7 @@ function ContactProfileEditor({
         currentLevel={contactEffectiveCustomerLevel}
         description={company ? "联系人客户等级由关联公司决定，请到公司记录修改。" : "未关联公司时可维护临时等级；关联公司后以公司等级为准。"}
         disabled={isPending}
+        explanationRecord={company}
         record={record}
         settings={customerLevelSettings}
         showSuggestion={false}
@@ -21431,29 +21487,41 @@ function isSmartReminderSnoozed(reminder: SmartReminder, now = Date.now()): bool
 }
 
 function smartReminderPriorityWeightForUi(priority: SmartReminder["priority"]): number {
+  if (priority === "critical") {
+    return 6;
+  }
   if (priority === "urgent") {
-    return 4;
+    return 5;
   }
   if (priority === "high") {
-    return 3;
+    return 4;
   }
   if (priority === "medium") {
+    return 3;
+  }
+  if (priority === "low") {
     return 2;
   }
   return 1;
 }
 
 function smartReminderPriorityLabel(priority: SmartReminder["priority"]): string {
+  if (priority === "critical") {
+    return "危急";
+  }
   if (priority === "urgent") {
     return "紧急";
   }
   if (priority === "high") {
-    return "高优先级";
+    return "优先";
   }
   if (priority === "medium") {
-    return "中优先级";
+    return "重要";
   }
-  return "低优先级";
+  if (priority === "low") {
+    return "关注";
+  }
+  return "提示";
 }
 
 function smartReminderKindLabel(kind: SmartReminder["kind"]): string {

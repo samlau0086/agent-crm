@@ -159,6 +159,13 @@ import {
 } from "@/lib/workflows/core";
 import { generateWorkflowWithAiDesigner } from "@/lib/workflows/ai-designer";
 import { validatePdfFileNamePattern } from "@/lib/crm/pdf-file-name";
+import {
+  higherSmartReminderPriority,
+  localCalendarDayKey,
+  nextSmartReminderPriority,
+  smartReminderNextEligibleAt,
+  smartReminderPriorityWeight
+} from "@/lib/crm/smart-reminder-lifecycle";
 
 type PrismaContext = typeof prisma;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
@@ -167,6 +174,7 @@ const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
 const EDIT_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals"] as const;
 const DELETE_APPROVAL_OBJECT_KEYS = ["contacts", "companies", "deals", "products", "quotes", "salesorders", "proformainvoices", "commercialinvoices"] as const;
 type SmartReminderCandidate = {
+  issueKey?: string;
   kind: SmartReminderKind;
   priority: SmartReminderPriority;
   title: string;
@@ -177,6 +185,7 @@ type SmartReminderCandidate = {
   dueAt?: string;
   sources: SmartReminder["sources"];
   score: number;
+  resolutionRule?: Record<string, unknown>;
 };
 type SmartReminderGenerationContext = {
   user: { id: string; name: string; email: string };
@@ -188,7 +197,7 @@ type SmartReminderGenerationContext = {
   portfolioMetrics: SmartReminderPortfolioMetrics;
 };
 type SmartReminderPortfolioMetrics = {
-  totals: { contacts: number; companies: number; deals: number; publicPool: number; privatePool: number; unowned: number };
+  totals: { contacts: number; companies: number; deals: number; activeDeals: number; publicPool: number; privatePool: number; unowned: number };
   customerLevels: Record<"A" | "B" | "C" | "D" | "unrated", number>;
   dataQuality: {
     lowCompletenessContacts: number;
@@ -5444,13 +5453,15 @@ export class PrismaCrmRepository {
       const aiCandidates = await this.generateAiSmartReminderCandidates(context, contextPayload).catch(() => []);
       const fallbackCandidates = buildFallbackSmartReminderCandidates(context, contextPayload);
       const candidates = dedupeSmartReminderCandidates([...aiCandidates, ...fallbackCandidates])
+        .map((candidate) => ({ ...candidate, resolutionRule: candidate.resolutionRule ?? inferSmartReminderResolutionRule(candidate, contextPayload) }))
         .sort((a, b) => b.score - a.score)
         .slice(0, settings.maxPerUser);
       const reminders: SmartReminder[] = [];
       for (const candidate of candidates) {
-        const created = await this.upsertSmartReminderCandidate(context, candidate);
-        reminders.push(created);
+        const active = await this.upsertSmartReminderCandidate(context, candidate);
+        if (active) reminders.push(active);
       }
+      reminders.push(...await this.reconcileResolvedSmartReminders(context, contextPayload, new Set(candidates.map(buildSmartReminderIssueKey))));
       const completed = await this.db.smartReminderRun.update({
         where: { id: run.id },
         data: {
@@ -5526,13 +5537,25 @@ export class PrismaCrmRepository {
     const existing = await this.getSmartReminderForAction(context, id);
     const status = patch.status ?? existing.status;
     const now = new Date();
+    const completed = status === "done";
+    const restored = status === "open" && existing.status !== "open";
     const updated = await this.db.smartReminder.update({
       where: { id },
       data: {
         status,
         snoozedUntil: patch.snoozedUntil === undefined ? undefined : patch.snoozedUntil ? new Date(patch.snoozedUntil) : null,
         completedAt: status === "done" ? now : status === "open" ? null : undefined,
-        dismissedAt: status === "dismissed" ? now : status === "open" ? null : undefined
+        dismissedAt: status === "dismissed" ? now : status === "open" ? null : undefined,
+        nextEligibleAt: completed ? smartReminderNextEligibleAt(existing.priority, now) : restored ? null : undefined,
+        completionEvidence: completed
+          ? ({ type: "explicit_completion", actorId: context.user.id, at: now.toISOString() } as Prisma.InputJsonValue)
+          : restored
+            ? Prisma.JsonNull
+            : undefined,
+        consecutiveDays: restored ? 1 : undefined,
+        firstSeenAt: restored ? now : undefined,
+        lastSeenAt: restored ? now : undefined,
+        lastEscalatedAt: restored ? null : undefined
       }
     });
     await this.writeAuditLog(context, "update", "smart_reminder", id, {
@@ -5555,8 +5578,15 @@ export class PrismaCrmRepository {
       completedAt: undefined,
       archivedAt: undefined
     });
-    const updated = await this.updateSmartReminder(context, id, { status: "done" });
-    return { reminder: updated, task };
+    const updated = await this.db.smartReminder.update({
+      where: { id },
+      data: { linkedTaskId: task.id, status: "open", snoozedUntil: new Date(taskDueAt), completedAt: null, nextEligibleAt: null }
+    });
+    await this.writeAuditLog(context, "update", "smart_reminder", id, {
+      summary: `Linked smart reminder ${reminder.title} to task ${task.title}`,
+      details: { reminderId: id, activityId: task.id, dueAt: taskDueAt }
+    });
+    return { reminder: mapSmartReminder(updated), task };
   }
 
   async requestSmartReminderDelete(context: RequestContext, id: string, reason: string): Promise<RecordChangeRequest> {
@@ -9306,25 +9336,45 @@ export class PrismaCrmRepository {
     return parseSmartReminderCandidates(result.structured ?? result.text, payload);
   }
 
-  private async upsertSmartReminderCandidate(context: RequestContext, candidate: SmartReminderCandidate): Promise<SmartReminder> {
+  private async upsertSmartReminderCandidate(context: RequestContext, candidate: SmartReminderCandidate): Promise<SmartReminder | undefined> {
     const settings = await this.ensureSmartReminderSettings(context.workspaceId);
-    const dateKey = new Date().toISOString().slice(0, 10);
-    const idempotencyKey = [
-      dateKey,
-      candidate.kind,
-      candidate.objectKey ?? "none",
-      candidate.recordId ?? "none",
-      normalizeIdempotencyText(candidate.title)
-    ].join(":");
-    const reminder = await this.db.smartReminder.upsert({
-      where: {
-        workspaceId_userId_idempotencyKey: {
+    const now = new Date();
+    const issueKey = buildSmartReminderIssueKey(candidate);
+    let existing = await this.db.smartReminder.findUnique({
+      where: { workspaceId_userId_issueKey: { workspaceId: context.workspaceId, userId: context.user.id, issueKey } }
+    });
+    if (!existing) {
+      const possibleMatches = await this.db.smartReminder.findMany({
+        where: {
           workspaceId: context.workspaceId,
           userId: context.user.id,
-          idempotencyKey
-        }
-      },
-      create: {
+          kind: candidate.kind,
+          objectKey: candidate.objectKey ?? null,
+          recordId: candidate.recordId ?? null
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 20
+      });
+      existing = possibleMatches.find((item) => smartReminderSemanticsMatch(item.actionLabel || item.title, candidate.actionLabel || candidate.title)) ?? null;
+    }
+
+    if (existing?.status === "dismissed") return undefined;
+    if (existing?.linkedTaskId) {
+      const linkedTask = await this.db.activity.findFirst({
+        where: { id: existing.linkedTaskId, workspaceId: context.workspaceId },
+        select: { id: true, completedAt: true }
+      });
+      if (linkedTask?.completedAt) {
+        await this.completeSmartReminderWithEvidence(existing.id, existing.priority, { type: "linked_task_completed", activityId: linkedTask.id, at: linkedTask.completedAt.toISOString() });
+        return undefined;
+      }
+    }
+    if (existing?.status === "done" && existing.nextEligibleAt && existing.nextEligibleAt > now) return undefined;
+
+    let reminder;
+    let shouldNotify = false;
+    if (!existing) {
+      reminder = await this.db.smartReminder.create({ data: {
         workspaceId: context.workspaceId,
         userId: context.user.id,
         objectKey: candidate.objectKey,
@@ -9337,21 +9387,64 @@ export class PrismaCrmRepository {
         dueAt: candidate.dueAt ? new Date(candidate.dueAt) : undefined,
         sources: candidate.sources as unknown as Prisma.InputJsonValue,
         score: candidate.score,
-        idempotencyKey,
+        idempotencyKey: `issue:${issueKey}`,
+        issueKey,
+        basePriority: candidate.priority,
+        consecutiveDays: 1,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        resolutionRule: candidate.resolutionRule as Prisma.InputJsonValue | undefined,
         generatedByAgentKey: smartReminderPlannerAgentKey
-      },
-      update: {
+      }});
+      shouldNotify = true;
+    } else if (existing.status === "done") {
+      reminder = await this.db.smartReminder.update({ where: { id: existing.id }, data: {
+        issueKey,
+        basePriority: candidate.priority,
         priority: candidate.priority,
+        title: candidate.title,
         body: candidate.body,
         actionLabel: candidate.actionLabel,
         dueAt: candidate.dueAt ? new Date(candidate.dueAt) : undefined,
         sources: candidate.sources as unknown as Prisma.InputJsonValue,
         score: candidate.score,
-        status: "open"
-      }
-    });
+        status: "open",
+        snoozedUntil: null,
+        consecutiveDays: 1,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        lastEscalatedAt: null,
+        nextEligibleAt: null,
+        completedAt: null,
+        completionEvidence: Prisma.JsonNull,
+        resolutionRule: candidate.resolutionRule as Prisma.InputJsonValue | undefined,
+        linkedTaskId: null
+      }});
+      shouldNotify = true;
+    } else {
+      const isNewCalendarDay = localCalendarDayKey(existing.lastSeenAt) !== localCalendarDayKey(now);
+      const candidateFloor = higherSmartReminderPriority(normalizeSmartReminderPriority(existing.priority), candidate.priority);
+      const priority = isNewCalendarDay ? nextSmartReminderPriority(candidateFloor) : candidateFloor;
+      const escalated = smartReminderPriorityWeight(priority) > smartReminderPriorityWeight(normalizeSmartReminderPriority(existing.priority));
+      reminder = await this.db.smartReminder.update({ where: { id: existing.id }, data: {
+        issueKey,
+        basePriority: candidate.priority,
+        priority,
+        title: candidate.title,
+        body: candidate.body,
+        actionLabel: candidate.actionLabel,
+        dueAt: candidate.dueAt ? new Date(candidate.dueAt) : undefined,
+        sources: candidate.sources as unknown as Prisma.InputJsonValue,
+        score: candidate.score,
+        lastSeenAt: now,
+        consecutiveDays: isNewCalendarDay ? existing.consecutiveDays + 1 : existing.consecutiveDays,
+        lastEscalatedAt: escalated ? now : existing.lastEscalatedAt,
+        resolutionRule: candidate.resolutionRule as Prisma.InputJsonValue | undefined
+      }});
+      shouldNotify = escalated;
+    }
     const mapped = mapSmartReminder(reminder);
-    if (settings.notifyCreated) {
+    if (settings.notifyCreated && shouldNotify) {
       this.emitNotificationEvent(context, "ai.reminder.created", {
         reminderId: mapped.id,
         title: mapped.title,
@@ -9362,6 +9455,93 @@ export class PrismaCrmRepository {
       });
     }
     return mapped;
+  }
+
+  private async completeSmartReminderWithEvidence(id: string, priority: string, evidence: Record<string, unknown>): Promise<void> {
+    const evidenceAt = typeof evidence.at === "string" ? new Date(evidence.at) : undefined;
+    const completedAt = evidenceAt && !Number.isNaN(evidenceAt.getTime()) ? evidenceAt : new Date();
+    await this.db.smartReminder.update({
+      where: { id },
+      data: {
+        status: "done",
+        completedAt,
+        dismissedAt: null,
+        snoozedUntil: null,
+        nextEligibleAt: smartReminderNextEligibleAt(normalizeSmartReminderPriority(priority), completedAt),
+        completionEvidence: evidence as Prisma.InputJsonValue
+      }
+    });
+  }
+
+  private async reconcileResolvedSmartReminders(
+    context: RequestContext,
+    payload: SmartReminderGenerationContext,
+    seenIssueKeys: Set<string>
+  ): Promise<SmartReminder[]> {
+    const openReminders = await this.db.smartReminder.findMany({
+      where: { workspaceId: context.workspaceId, userId: context.user.id, status: "open" },
+      orderBy: { updatedAt: "desc" },
+      take: 100
+    });
+    const resolved: SmartReminder[] = [];
+    for (const reminder of openReminders) {
+      if (reminder.issueKey && seenIssueKeys.has(reminder.issueKey)) continue;
+      const evidence = await this.smartReminderCompletionEvidence(reminder, payload, context.workspaceId);
+      if (!evidence) continue;
+      await this.completeSmartReminderWithEvidence(reminder.id, reminder.priority, evidence);
+      const updated = await this.db.smartReminder.findUnique({ where: { id: reminder.id } });
+      if (updated) resolved.push(mapSmartReminder(updated));
+    }
+    return resolved;
+  }
+
+  private async smartReminderCompletionEvidence(
+    reminder: { id: string; linkedTaskId: string | null; sources: Prisma.JsonValue | null; resolutionRule: Prisma.JsonValue | null },
+    payload: SmartReminderGenerationContext,
+    workspaceId: string
+  ): Promise<Record<string, unknown> | undefined> {
+    const activityIds = new Set<string>();
+    if (reminder.linkedTaskId) activityIds.add(reminder.linkedTaskId);
+    if (Array.isArray(reminder.sources)) {
+      for (const source of reminder.sources) {
+        if (isJsonRecord(source) && typeof source.activityId === "string") activityIds.add(source.activityId);
+      }
+    }
+    if (activityIds.size) {
+      const completed = await this.db.activity.findFirst({
+        where: { workspaceId, id: { in: Array.from(activityIds) }, completedAt: { not: null } },
+        select: { id: true, completedAt: true }
+      });
+      if (completed?.completedAt) return { type: "activity_completed", activityId: completed.id, at: completed.completedAt.toISOString() };
+    }
+    const rule = isJsonRecord(reminder.resolutionRule) ? reminder.resolutionRule : undefined;
+    if (!rule || typeof rule.type !== "string") return undefined;
+    if (rule.type === "record_activity_after" && typeof rule.recordId === "string" && typeof rule.after === "string") {
+      const activity = payload.recentActivities.find((item) => item.recordId === rule.recordId && Date.parse(item.createdAt) > Date.parse(rule.after as string));
+      if (activity) return { type: "record_activity_created", activityId: activity.id, recordId: rule.recordId, at: activity.createdAt };
+    }
+    if (rule.type === "outbound_email_after" && typeof rule.threadId === "string" && typeof rule.after === "string") {
+      const reply = await this.db.emailMessage.findFirst({
+        where: {
+          workspaceId,
+          threadId: rule.threadId,
+          direction: "outbound",
+          status: "sent",
+          createdAt: { gt: new Date(rule.after) }
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, createdAt: true }
+      });
+      if (reply) return { type: "email_reply_sent", messageId: reply.id, threadId: rule.threadId, at: reply.createdAt.toISOString() };
+    }
+    if (rule.type === "minimum_active_deals" && payload.portfolioMetrics.totals.activeDeals > Number(rule.baseline ?? 0)) {
+      return { type: "pipeline_improved", activeDeals: payload.portfolioMetrics.totals.activeDeals, at: new Date().toISOString() };
+    }
+    const currentMetric = smartReminderResolutionMetricValue(rule.metric, payload.portfolioMetrics);
+    if (rule.type === "metric_decrease" && currentMetric !== undefined && currentMetric < Number(rule.baseline)) {
+      return { type: "portfolio_metric_improved", metric: rule.metric, before: rule.baseline, after: currentMetric, at: new Date().toISOString() };
+    }
+    return undefined;
   }
 
   private async getSmartReminderForAction(context: RequestContext, id: string): Promise<SmartReminder> {
@@ -10198,7 +10378,7 @@ function normalizeSmartReminderKind(value: string): SmartReminderKind {
 }
 
 function normalizeSmartReminderPriority(value: string): SmartReminderPriority {
-  return ["low", "medium", "high", "urgent"].includes(value) ? (value as SmartReminderPriority) : "medium";
+  return ["info", "low", "medium", "high", "urgent", "critical"].includes(value) ? (value as SmartReminderPriority) : "medium";
 }
 
 function smartReminderDailyWindowStart(value: string): Date {
@@ -10220,14 +10400,11 @@ function compareSmartReminders(a: SmartReminder, b: SmartReminder): number {
   return b.score - a.score;
 }
 
-function smartReminderPriorityWeight(priority: SmartReminderPriority): number {
-  return { low: 1, medium: 2, high: 3, urgent: 4 }[priority];
-}
 
 function buildSmartReminderPortfolioMetrics(payload: Pick<SmartReminderGenerationContext, "records" | "tasks" | "recentActivities" | "emailThreads">): SmartReminderPortfolioMetrics {
   const now = Date.now();
   const metrics: SmartReminderPortfolioMetrics = {
-    totals: { contacts: 0, companies: 0, deals: 0, publicPool: 0, privatePool: 0, unowned: 0 },
+    totals: { contacts: 0, companies: 0, deals: 0, activeDeals: 0, publicPool: 0, privatePool: 0, unowned: 0 },
     customerLevels: { A: 0, B: 0, C: 0, D: 0, unrated: 0 },
     dataQuality: { lowCompletenessContacts: 0, lowCompletenessCompanies: 0, averageContactCompleteness: 0, averageCompanyCompleteness: 0 },
     stale: { noActivity7Days: 0, noActivity14Days: 0, noActivity30Days: 0, stalePrivateRecords: 0 },
@@ -10238,7 +10415,10 @@ function buildSmartReminderPortfolioMetrics(payload: Pick<SmartReminderGeneratio
   for (const record of payload.records) {
     if (record.objectKey === "contacts") metrics.totals.contacts += 1;
     if (record.objectKey === "companies") metrics.totals.companies += 1;
-    if (record.objectKey === "deals") metrics.totals.deals += 1;
+    if (record.objectKey === "deals") {
+      metrics.totals.deals += 1;
+      if (!isClosedSmartReminderDeal(record.stageKey)) metrics.totals.activeDeals += 1;
+    }
     if (["contacts", "companies"].includes(record.objectKey)) {
       if (record.ownerId) metrics.totals.privatePool += 1;
       else metrics.totals.publicPool += 1;
@@ -10579,6 +10759,7 @@ function parseSmartReminderCandidates(value: unknown, payload: SmartReminderGene
       const sourceList = Array.isArray(raw.sources) ? raw.sources.filter(isJsonRecord) : [];
       const kind = normalizeSmartReminderKind(typeof raw.kind === "string" ? raw.kind : "");
       return {
+        issueKey: normalizeOptionalText(raw.issueKey, 120),
         kind,
         priority: normalizeSmartReminderPriority(typeof raw.priority === "string" ? raw.priority : ""),
         title,
@@ -10634,6 +10815,73 @@ function normalizeOptionalDate(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function normalizeSmartReminderIssueSemantic(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?/g, "")
+    .replace(/[\d０-９]+/g, "")
+    .replace(/[\s\p{P}\p{S}]+/gu, "")
+    .slice(0, 80) || "general";
+}
+
+function buildSmartReminderIssueKey(candidate: SmartReminderCandidate): string {
+  const sourceAnchor = candidate.sources
+    .flatMap((source) => [source.activityId && `activity-${source.activityId}`, source.threadId && `thread-${source.threadId}`, source.messageId && `message-${source.messageId}`])
+    .find(Boolean);
+  if (sourceAnchor) return [candidate.kind, sourceAnchor].map(normalizeIdempotencyText).join(":").slice(0, 220);
+  const target = candidate.recordId ? `record-${candidate.recordId}` : candidate.objectKey || "portfolio";
+  const semantic = normalizeSmartReminderIssueSemantic(candidate.issueKey || candidate.actionLabel || candidate.title);
+  return [candidate.kind, target, semantic].map(normalizeIdempotencyText).join(":").slice(0, 220);
+}
+
+function smartReminderSemanticsMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeSmartReminderIssueSemantic(left);
+  const normalizedRight = normalizeSmartReminderIssueSemantic(right);
+  return normalizedLeft === normalizedRight || (Math.min(normalizedLeft.length, normalizedRight.length) >= 6 && (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)));
+}
+
+function inferSmartReminderResolutionRule(
+  candidate: SmartReminderCandidate,
+  payload: SmartReminderGenerationContext
+): Record<string, unknown> | undefined {
+  const text = `${candidate.title} ${candidate.body ?? ""} ${candidate.actionLabel ?? ""}`;
+  const sourceThreadId = candidate.sources.find((source) => source.threadId)?.threadId;
+  if (candidate.kind === "email_reply" && sourceThreadId) {
+    return { type: "outbound_email_after", threadId: sourceThreadId, after: new Date().toISOString() };
+  }
+  if (candidate.recordId && ["follow_up", "customer_level", "today_best_action"].includes(candidate.kind)) {
+    return { type: "record_activity_after", recordId: candidate.recordId, after: new Date().toISOString() };
+  }
+  if (["pipeline_optimization", "portfolio_health", "today_best_action"].includes(candidate.kind) && /无.{0,4}(活跃)?商机|没有.{0,4}商机|销售管道建设/.test(text)) {
+    return { type: "minimum_active_deals", baseline: payload.portfolioMetrics.totals.activeDeals };
+  }
+  if (candidate.kind === "data_quality") {
+    return {
+      type: "metric_decrease",
+      metric: "low_completeness",
+      baseline: payload.portfolioMetrics.dataQuality.lowCompletenessContacts + payload.portfolioMetrics.dataQuality.lowCompletenessCompanies
+    };
+  }
+  if (candidate.kind === "customer_level" && !candidate.recordId) {
+    return { type: "metric_decrease", metric: "unrated_customers", baseline: payload.portfolioMetrics.customerLevels.unrated };
+  }
+  if (["pipeline_optimization", "deal_close"].includes(candidate.kind)) {
+    return { type: "metric_decrease", metric: "stalled_deals", baseline: payload.portfolioMetrics.deals.highValueStalled };
+  }
+  return undefined;
+}
+
+function smartReminderResolutionMetricValue(metric: unknown, metrics: SmartReminderPortfolioMetrics): number | undefined {
+  if (metric === "low_completeness") return metrics.dataQuality.lowCompletenessContacts + metrics.dataQuality.lowCompletenessCompanies;
+  if (metric === "unrated_customers") return metrics.customerLevels.unrated;
+  if (metric === "stalled_deals") return metrics.deals.highValueStalled;
+  return undefined;
+}
+
+function isClosedSmartReminderDeal(stageKey: string | undefined): boolean {
+  return Boolean(stageKey && /(^|[-_])(won|lost|closed)([-_]|$)/i.test(stageKey));
 }
 
 function smartReminderDefaultDueAt(now = new Date()): string {
@@ -11226,6 +11474,16 @@ function mapSmartReminder(reminder: {
   sources: Prisma.JsonValue | null;
   score: number;
   idempotencyKey: string;
+  issueKey: string | null;
+  basePriority: string;
+  consecutiveDays: number;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  lastEscalatedAt: Date | null;
+  nextEligibleAt: Date | null;
+  completionEvidence: Prisma.JsonValue | null;
+  resolutionRule: Prisma.JsonValue | null;
+  linkedTaskId: string | null;
   generatedByAgentKey: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -11262,6 +11520,16 @@ function mapSmartReminder(reminder: {
     sources,
     score: reminder.score,
     idempotencyKey: reminder.idempotencyKey,
+    issueKey: reminder.issueKey ?? undefined,
+    basePriority: normalizeSmartReminderPriority(reminder.basePriority),
+    consecutiveDays: reminder.consecutiveDays,
+    firstSeenAt: reminder.firstSeenAt.toISOString(),
+    lastSeenAt: reminder.lastSeenAt.toISOString(),
+    lastEscalatedAt: reminder.lastEscalatedAt?.toISOString(),
+    nextEligibleAt: reminder.nextEligibleAt?.toISOString(),
+    completionEvidence: isJsonRecord(reminder.completionEvidence) ? reminder.completionEvidence : undefined,
+    resolutionRule: isJsonRecord(reminder.resolutionRule) ? reminder.resolutionRule : undefined,
+    linkedTaskId: reminder.linkedTaskId ?? undefined,
     generatedByAgentKey: reminder.generatedByAgentKey as SmartReminder["generatedByAgentKey"],
     createdAt: reminder.createdAt.toISOString(),
     updatedAt: reminder.updatedAt.toISOString(),

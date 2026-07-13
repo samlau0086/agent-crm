@@ -61,6 +61,7 @@ import {
 import { defaultWorkspaceId, seedData } from "../src/lib/crm/seed.ts";
 import { parseAddressWithLocalAi } from "../src/lib/crm/address-parser.ts";
 import { resolveCountry } from "../src/lib/crm/countries.ts";
+import { nextSmartReminderPriority, smartReminderCooldownDays, smartReminderNextEligibleAt } from "../src/lib/crm/smart-reminder-lifecycle.ts";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "../src/lib/crm/languages.ts";
 import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
@@ -301,11 +302,41 @@ await run("smart reminders support portfolio operating actions", () => {
   assert.match(repositorySource, /convertSmartReminderToTask[\s\S]*dueAt: taskDueAt/);
   assert.match(repositorySource, /dueAt: normalizeOptionalDate\(raw\.dueAt\) \?\? smartReminderDefaultDueAt\(\)/);
   assert.match(repositorySource, /function smartReminderDefaultDueAt\(now = new Date\(\)\): string/);
+  assert.match(repositorySource, /buildSmartReminderIssueKey\(candidate\)/);
+  assert.match(repositorySource, /localCalendarDayKey\(existing\.lastSeenAt\) !== localCalendarDayKey\(now\)/);
+  assert.match(repositorySource, /nextSmartReminderPriority\(candidateFloor\)/);
+  assert.match(repositorySource, /smartReminderNextEligibleAt\(existing\.priority, now\)/);
+  assert.match(repositorySource, /linked_task_completed/);
+  assert.match(repositorySource, /pipeline_improved/);
   const workspaceSource = readFileSync("src/components/crm-workspace.tsx", "utf8");
   assert.match(workspaceSource, /function smartReminderFallbackObjectKey\(kind: SmartReminder\["kind"\], availableObjectKeys: string\[\]\): string/);
   assert.match(workspaceSource, /const isAvailableRecordObject = \(objectKey\?: string\) => Boolean\(objectKey && props\.objects\.some\(\(object\) => object\.key === objectKey\)\)/);
   assert.match(workspaceSource, /reminder\.objectKey === "emails" \|\| reminder\.objectKey === "emailThreads"/);
   assert.match(workspaceSource, /\(isAvailableRecordObject\(reminder\.objectKey\) \? reminder\.objectKey : undefined\)/);
+  assert.match(workspaceSource, /function SmartReminderUrgency/);
+  assert.match(workspaceSource, /Array\.from\(\{ length: 6 \}/);
+  assert.match(workspaceSource, /\[1, 2, 3\]\.map\(\(days\)/);
+  const migrationSource = readFileSync("prisma/migrations/20260713170000_smart_reminder_lifecycle/migration.sql", "utf8");
+  assert.match(migrationSource, /"issueKey" TEXT/);
+  assert.match(migrationSource, /SmartReminder_workspaceId_userId_issueKey_key/);
+  assert.match(migrationSource, /row_number\(\) OVER/);
+});
+
+await run("smart reminder lifecycle escalates once per level and applies calendar-day cooldowns", () => {
+  assert.equal(nextSmartReminderPriority("info"), "low");
+  assert.equal(nextSmartReminderPriority("urgent"), "critical");
+  assert.equal(nextSmartReminderPriority("critical"), "critical");
+  assert.equal(smartReminderCooldownDays("critical"), 1);
+  assert.equal(smartReminderCooldownDays("high"), 2);
+  assert.equal(smartReminderCooldownDays("low"), 3);
+  const completedAt = new Date(2026, 6, 13, 21, 30, 0);
+  assert.deepEqual(
+    ["critical", "high", "low"].map((priority) => {
+      const eligible = smartReminderNextEligibleAt(priority, completedAt);
+      return [eligible.getFullYear(), eligible.getMonth() + 1, eligible.getDate(), eligible.getHours()];
+    }),
+    [[2026, 7, 15, 0], [2026, 7, 16, 0], [2026, 7, 17, 0]]
+  );
 });
 
 await run("workflow permissions and designer agent are registered", () => {
@@ -1315,6 +1346,27 @@ await run("customer level schemas accept settings and approval changes", () => {
     recordId: "company-acme"
   });
   assert.throws(() => customerLevelSuggestionGenerateSchema.parse({ objectKey: "contacts", recordId: "contact-lin" }), /Invalid enum value|validation/i);
+});
+
+await run("contact and company details keep customer level explanations visible", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  const styles = readFileSync("src/app/globals.css", "utf8");
+
+  assert.match(source, /explanationRecord\?: CrmRecord/);
+  assert.match(source, /const ratingBasisRecord = explanationRecord \?\? record/);
+  assert.match(source, /ratingBasisRecord\.data\.customerLevelReasons/);
+  assert.match(source, /data-testid="customer-level-definition"/);
+  assert.match(source, /currentDefinition\.minScore[\s\S]*currentDefinition\.maxScore/);
+  assert.match(source, /data-testid="customer-level-explanation"/);
+  assert.match(source, /suggestedLevel === currentLevel \? "当前等级评分依据" : "最近建议依据"/);
+  assert.match(source, /以下内容仅说明最近一次系统建议/);
+  assert.match(source, /reasons\.slice\(0, 5\)/);
+  assert.match(source, /explanationRecord=\{company\}/);
+  assert.match(source, /关联公司暂无系统评分依据，请到公司详情刷新建议/);
+  assert.match(source, /临时等级暂无系统评分依据；系统评分仅针对公司生成/);
+  assert.match(styles, /\.customer-level-definition/);
+  assert.match(styles, /\.customer-level-explanation/);
+  assert.match(styles, /\.customer-level-explanation-meta/);
 });
 
 await run("pool settings schema accepts level rules and rejects invalid level rules", () => {

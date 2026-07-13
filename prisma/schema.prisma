@@ -353,6 +353,16 @@ model SmartReminder {
   sources              Json?
   score                Float      @default(0)
   idempotencyKey       String
+  issueKey             String?
+  basePriority         String     @default("medium")
+  consecutiveDays      Int        @default(1)
+  firstSeenAt          DateTime   @default(now())
+  lastSeenAt           DateTime   @default(now())
+  lastEscalatedAt      DateTime?
+  nextEligibleAt       DateTime?
+  completionEvidence   Json?
+  resolutionRule       Json?
+  linkedTaskId         String?
   generatedByAgentKey  String?
   createdAt            DateTime   @default(now())
   updatedAt            DateTime   @updatedAt
@@ -363,7 +373,9 @@ model SmartReminder {
   record               CrmRecord? @relation(fields: [recordId], references: [id], onDelete: SetNull)
 
   @@unique([workspaceId, userId, idempotencyKey])
+  @@unique([workspaceId, userId, issueKey])
   @@index([workspaceId, userId, status, dueAt])
+  @@index([workspaceId, userId, issueKey, status])
   @@index([workspaceId, objectKey, recordId])
   @@index([workspaceId, createdAt])
 }

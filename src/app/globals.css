@@ -545,13 +545,24 @@ button {
   background: color-mix(in srgb, #fef2f2 35%, var(--surface));
 }
 
+.smart-reminder-medium {
+  border-left-color: #ca8a04;
+}
+
 .smart-reminder-high,
-.smart-reminder-urgent {
+.smart-reminder-urgent,
+.smart-reminder-critical {
   border-left-color: #d97706;
 }
 
-.smart-reminder-urgent {
+.smart-reminder-urgent,
+.smart-reminder-critical {
   background: color-mix(in srgb, #fef2f2 42%, var(--surface));
+}
+
+.smart-reminder-critical {
+  border-left-color: #dc2626;
+  background: color-mix(in srgb, #fee2e2 55%, var(--surface));
 }
 
 .smart-reminder-main {
@@ -605,6 +616,47 @@ button {
   gap: 7px;
 }
 
+.smart-reminder-urgency {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.smart-reminder-urgency-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.smart-reminder-urgency-bars i {
+  width: 3px;
+  height: 5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.smart-reminder-urgency-bars i:nth-child(2) { height: 6px; }
+.smart-reminder-urgency-bars i:nth-child(3) { height: 7px; }
+.smart-reminder-urgency-bars i:nth-child(4) { height: 9px; }
+.smart-reminder-urgency-bars i:nth-child(5) { height: 10px; }
+.smart-reminder-urgency-bars i:nth-child(6) { height: 12px; }
+.smart-reminder-urgency-bars i.active { background: currentColor; }
+
+.smart-reminder-urgency-info { color: #64748b; }
+.smart-reminder-urgency-low { color: #0284c7; }
+.smart-reminder-urgency-medium { color: #ca8a04; }
+.smart-reminder-urgency-high { color: #ea580c; }
+.smart-reminder-urgency-urgent { color: #dc2626; }
+.smart-reminder-urgency-critical { color: #991b1b; }
+
 .smart-reminder-card p {
   margin: 6px 0 0;
   color: var(--text);
@@ -618,6 +670,12 @@ button {
   margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.smart-reminder-snooze-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .smart-reminder-meta span:not(:last-child)::after {
@@ -1531,6 +1589,12 @@ button {
   min-width: 0;
 }
 
+.customer-level-definition {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .customer-level-badge {
   display: inline-flex;
   width: fit-content;
@@ -1578,6 +1642,30 @@ button {
   border-radius: 8px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.customer-level-explanation {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--surface-strong));
+}
+
+.customer-level-explanation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.customer-level-explanation-notice {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .customer-level-reasons {
