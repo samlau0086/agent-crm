@@ -6212,6 +6212,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     showSuccess("删除申请已提交，等待管理员审核");
   }
 
+  async function requestSmartReminderBulkDelete(reminders: SmartReminder[]): Promise<boolean> {
+    if (!reminders.length) return false;
+    if (
+      !(await requestConfirm({
+        title: "批量删除已忽略提醒",
+        message: `确定提交 ${reminders.length} 条已忽略提醒的删除审批？删除原因将统一填写为“忽略”。`,
+        confirmLabel: "批量删除",
+        danger: true
+      }))
+    ) {
+      return false;
+    }
+    const results = await Promise.all(
+      reminders.map((reminder) =>
+        fetchJson<RecordChangeRequestResponse>(`/api/smart-reminders/${reminder.id}`, {
+          method: "DELETE",
+          body: { changeReason: "忽略" }
+        })
+      )
+    );
+    setRecordChangeRequests((current) => mergeRecordChangeRequests(current, results.map((result) => result.request)));
+    showSuccess(`已提交 ${results.length} 条删除申请，默认原因为“忽略”`);
+    return true;
+  }
+
   function runAction(action: () => Promise<void>) {
     setMessage(null);
     setError(null);
@@ -6307,6 +6332,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           title="AI 跟进提醒"
           emptyMessage="暂无当前记录提醒。可手动刷新生成此记录的跟进建议。"
           onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+          onBulkDelete={(reminders) => runImmediateAction(() => requestSmartReminderBulkDelete(reminders)).then(Boolean)}
           onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
           onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
           onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
@@ -6610,6 +6636,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onOpenSmartReminder={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
             onGenerateSmartReminders={() => runAction(generateSmartReminders)}
             onCompleteSmartReminder={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+            onBulkDeleteSmartReminders={(reminders) => runImmediateAction(() => requestSmartReminderBulkDelete(reminders)).then(Boolean)}
             onDeleteSmartReminder={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
             onDismissSmartReminder={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
             onRestoreSmartReminder={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
@@ -9154,6 +9181,7 @@ function Dashboard({
   onOpenSmartReminder,
   onGenerateSmartReminders,
   onCompleteSmartReminder,
+  onBulkDeleteSmartReminders,
   onDeleteSmartReminder,
   onDismissSmartReminder,
   onRestoreSmartReminder,
@@ -9175,6 +9203,7 @@ function Dashboard({
   onOpenSmartReminder: (reminder: SmartReminder) => void;
   onGenerateSmartReminders: () => void;
   onCompleteSmartReminder: (reminder: SmartReminder) => void;
+  onBulkDeleteSmartReminders: (reminders: SmartReminder[]) => Promise<boolean>;
   onDeleteSmartReminder: (reminder: SmartReminder) => void;
   onDismissSmartReminder: (reminder: SmartReminder) => void;
   onRestoreSmartReminder: (reminder: SmartReminder) => void;
@@ -9235,6 +9264,7 @@ function Dashboard({
           title="今日最佳行动"
           emptyMessage="暂无 AI 智能提醒。可手动刷新生成今日跟进建议。"
           onComplete={onCompleteSmartReminder}
+          onBulkDelete={onBulkDeleteSmartReminders}
           onConvertTask={onConvertSmartReminderToTask}
           onDelete={onDeleteSmartReminder}
           onDismiss={onDismissSmartReminder}
@@ -12969,6 +12999,7 @@ function SmartReminderPanel({
   reminders,
   title,
   onComplete,
+  onBulkDelete,
   onConvertTask,
   onDelete,
   onDismiss,
@@ -12985,6 +13016,7 @@ function SmartReminderPanel({
   reminders: SmartReminder[];
   title: string;
   onComplete: (reminder: SmartReminder) => void;
+  onBulkDelete: (reminders: SmartReminder[]) => Promise<boolean>;
   onConvertTask: (reminder: SmartReminder) => void;
   onDelete: (reminder: SmartReminder) => void;
   onDismiss: (reminder: SmartReminder) => void;
@@ -12997,6 +13029,8 @@ function SmartReminderPanel({
 }) {
   const [activeView, setActiveView] = useState<SmartReminderPanelView>("open");
   const [activeKindFilter, setActiveKindFilter] = useState<SmartReminderKindFilter>("all");
+  const [selectedDismissedReminderIds, setSelectedDismissedReminderIds] = useState<Set<string>>(() => new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [now, setNow] = useState<number | undefined>();
   useEffect(() => {
     setNow(Date.now());
@@ -13035,6 +13069,42 @@ function SmartReminderPanel({
         : activeView === "snoozed"
           ? "暂无稍后提醒。"
           : emptyMessage;
+  const selectableDismissedReminders = useMemo(
+    () => activeView === "dismissed" ? visibleReminders.filter((reminder) => !pendingDeleteRequestsById?.has(reminder.id)) : [],
+    [activeView, pendingDeleteRequestsById, visibleReminders]
+  );
+  const selectableDismissedReminderIdsKey = selectableDismissedReminders.map((reminder) => reminder.id).join("\u0000");
+  const selectedDismissedReminders = selectableDismissedReminders.filter((reminder) => selectedDismissedReminderIds.has(reminder.id));
+  const allDismissedRemindersSelected = selectableDismissedReminders.length > 0 && selectedDismissedReminders.length === selectableDismissedReminders.length;
+
+  useEffect(() => {
+    const selectableIds = new Set(selectableDismissedReminderIdsKey ? selectableDismissedReminderIdsKey.split("\u0000") : []);
+    setSelectedDismissedReminderIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => selectableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [selectableDismissedReminderIdsKey]);
+
+  function toggleDismissedReminder(reminderId: string, selected: boolean) {
+    setSelectedDismissedReminderIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(reminderId);
+      else next.delete(reminderId);
+      return next;
+    });
+  }
+
+  async function bulkDeleteSelectedDismissedReminders() {
+    if (!selectedDismissedReminders.length || isBulkDeleting) return;
+    setIsBulkDeleting(true);
+    try {
+      if (await onBulkDelete(selectedDismissedReminders)) {
+        setSelectedDismissedReminderIds(new Set());
+      }
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }
 
   return (
     <section className={`section smart-reminder-panel ${compact ? "compact" : ""}`}>
@@ -13083,6 +13153,29 @@ function SmartReminderPanel({
           );
         })}
       </div>
+      {activeView === "dismissed" && visibleReminders.length ? (
+        <div className="smart-reminder-bulkbar" data-testid="smart-reminder-dismissed-bulkbar">
+          <label className="smart-reminder-select-all">
+            <input
+              checked={allDismissedRemindersSelected}
+              disabled={!selectableDismissedReminders.length || isBulkDeleting}
+              type="checkbox"
+              onChange={(event) => setSelectedDismissedReminderIds(event.target.checked ? new Set(selectableDismissedReminders.map((reminder) => reminder.id)) : new Set())}
+            />
+            <span>已选择 {selectedDismissedReminders.length} / {selectableDismissedReminders.length}</span>
+          </label>
+          <button
+            className="danger-button"
+            data-testid="smart-reminder-dismissed-bulk-delete"
+            disabled={!selectedDismissedReminders.length || isBulkDeleting}
+            type="button"
+            onClick={() => void bulkDeleteSelectedDismissedReminders()}
+          >
+            <Trash2 size={14} />
+            {isBulkDeleting ? "提交中" : "批量删除"}
+          </button>
+        </div>
+      ) : null}
       {visibleReminders.length ? (
         <div className="smart-reminder-list">
           {visibleReminders.map((reminder) => {
@@ -13090,7 +13183,17 @@ function SmartReminderPanel({
             const ReminderIcon = smartReminderKindIcon(reminder.kind);
             return (
             <article className={`smart-reminder-card smart-reminder-${reminder.priority} ${pendingDeleteRequest ? "delete-pending" : ""}`} key={reminder.id}>
-              <div className="smart-reminder-main">
+              <div className={`smart-reminder-main ${activeView === "dismissed" ? "selectable" : ""}`}>
+                {activeView === "dismissed" ? (
+                  <input
+                    aria-label={`选择 ${reminder.title}`}
+                    checked={selectedDismissedReminderIds.has(reminder.id)}
+                    data-testid={`smart-reminder-select-${reminder.id}`}
+                    disabled={Boolean(pendingDeleteRequest) || isBulkDeleting}
+                    type="checkbox"
+                    onChange={(event) => toggleDismissedReminder(reminder.id, event.target.checked)}
+                  />
+                ) : null}
                 <span className="smart-reminder-icon">
                   <ReminderIcon size={16} />
                 </span>

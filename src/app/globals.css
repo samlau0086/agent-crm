@@ -561,6 +561,33 @@ button {
   min-width: 0;
 }
 
+.smart-reminder-main.selectable {
+  grid-template-columns: 18px 32px minmax(0, 1fr);
+}
+
+.smart-reminder-main.selectable > input {
+  margin-top: 9px;
+}
+
+.smart-reminder-bulkbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.smart-reminder-select-all {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .smart-reminder-icon {
   display: inline-grid;
   width: 32px;
