@@ -517,6 +517,7 @@ export interface DocumentTemplate {
   name: string;
   active: boolean;
   isDefault: boolean;
+  fileNamePattern: string;
   templateJson: Record<string, unknown>;
   createdById: string;
   createdAt: string;

@@ -158,6 +158,7 @@ import {
   workflowMatchesEvent
 } from "@/lib/workflows/core";
 import { generateWorkflowWithAiDesigner } from "@/lib/workflows/ai-designer";
+import { validatePdfFileNamePattern } from "@/lib/crm/pdf-file-name";
 
 type PrismaContext = typeof prisma;
 type TalkMessageTargetInput = { type: "record"; objectKey: string; recordId: string } | { type: "email_thread"; threadId: string };
@@ -1475,6 +1476,7 @@ function mapDocumentTemplate(template: {
   name: string;
   active: boolean;
   isDefault: boolean;
+  fileNamePattern: string;
   templateJson: Prisma.JsonValue;
   createdById: string;
   createdAt: Date;
@@ -1487,6 +1489,7 @@ function mapDocumentTemplate(template: {
     name: template.name,
     active: template.active,
     isDefault: template.isDefault,
+    fileNamePattern: template.fileNamePattern,
     templateJson: asRecord(template.templateJson),
     createdById: template.createdById,
     createdAt: template.createdAt.toISOString(),
@@ -6009,9 +6012,10 @@ export class PrismaCrmRepository {
 
   async createDocumentTemplate(
     context: RequestContext,
-    input: Pick<DocumentTemplate, "objectKey" | "name" | "active" | "isDefault" | "templateJson">
+    input: Pick<DocumentTemplate, "objectKey" | "name" | "active" | "isDefault" | "fileNamePattern" | "templateJson">
   ): Promise<DocumentTemplate> {
     requirePermission(context, "crm.admin");
+    validatePdfFileNamePattern(input.fileNamePattern);
     if (!isSalesDocumentObjectKey(input.objectKey)) {
       throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
     }
@@ -6029,6 +6033,7 @@ export class PrismaCrmRepository {
           name: input.name,
           active: input.active,
           isDefault: input.isDefault,
+          fileNamePattern: input.fileNamePattern,
           templateJson: input.templateJson as Prisma.InputJsonValue,
           createdById: context.user.id
         }
@@ -6045,13 +6050,14 @@ export class PrismaCrmRepository {
   async updateDocumentTemplate(
     context: RequestContext,
     id: string,
-    patch: Partial<Pick<DocumentTemplate, "name" | "active" | "isDefault" | "templateJson">>
+    patch: Partial<Pick<DocumentTemplate, "name" | "active" | "isDefault" | "fileNamePattern" | "templateJson">>
   ): Promise<DocumentTemplate> {
     requirePermission(context, "crm.admin");
     const existing = await this.db.documentTemplate.findFirst({ where: { id, workspaceId: context.workspaceId } });
     if (!existing) {
       throw new Error("Document template not found");
     }
+    if (patch.fileNamePattern !== undefined) validatePdfFileNamePattern(patch.fileNamePattern);
     const updated = await this.db.$transaction(async (tx) => {
       if (patch.isDefault) {
         await tx.documentTemplate.updateMany({
@@ -6065,6 +6071,7 @@ export class PrismaCrmRepository {
           name: patch.name,
           active: patch.active,
           isDefault: patch.isDefault,
+          fileNamePattern: patch.fileNamePattern,
           templateJson: patch.templateJson as Prisma.InputJsonValue | undefined
         }
       });

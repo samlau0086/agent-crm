@@ -13,6 +13,7 @@ import { salesDocumentObjectKeys } from "@/lib/crm/quotes";
 import { formatAuditAction } from "@/lib/crm/audit-labels";
 import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previewSalesDocumentNumber, salesDocumentNumberVariables } from "@/lib/crm/document-numbering";
+import { pdfFileNameVariables, previewPdfFileName } from "@/lib/crm/pdf-file-name";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
 import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SalesDocumentNumberSetting, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
@@ -224,6 +225,7 @@ type DocumentTemplateDraft = {
   name: string;
   active: boolean;
   isDefault: boolean;
+  fileNamePattern: string;
   templateJsonText: string;
 };
 type ToastState = { intent: "success" | "error" | "info"; message: string };
@@ -2027,6 +2029,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           name: documentTemplateDraft.name,
           active: documentTemplateDraft.active,
           isDefault: documentTemplateDraft.isDefault,
+          fileNamePattern: documentTemplateDraft.fileNamePattern,
           templateJson
         }
       });
@@ -2042,6 +2045,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         name: documentTemplateDraft.name,
         active: documentTemplateDraft.active,
         isDefault: documentTemplateDraft.isDefault,
+        fileNamePattern: documentTemplateDraft.fileNamePattern,
         templateJson
       }
     });
@@ -5212,6 +5216,18 @@ function DocumentTemplateAdminPanel({
         </div>
         <div className="settings-form-stack">
           <div className="form-grid">
+            <label className="wide">
+              <span className="subtle">PDF 下载文件名规则（必须包含 $NUM）</span>
+              <input className="input" data-testid="document-template-file-name-pattern" value={draft.fileNamePattern} onChange={(event) => onChange({ fileNamePattern: event.target.value })} />
+              <span className="button-row compact">
+                {pdfFileNameVariables.map((variable) => (
+                  <button className="secondary-button compact-button" type="button" key={variable} onClick={() => onChange({ fileNamePattern: `${draft.fileNamePattern}${variable}` })}>
+                    插入{salesDocumentNumberVariableLabels[variable] ?? variable}
+                  </button>
+                ))}
+              </span>
+              <span className="subtle">示例：{safePdfFileNamePreview(draft.fileNamePattern)}</span>
+            </label>
             <label>
               <span className="subtle">适用对象</span>
               <select className="select" value={draft.objectKey} onChange={(event) => onChange({ objectKey: event.target.value })} disabled={Boolean(selectedTemplate)}>
@@ -5245,7 +5261,7 @@ function DocumentTemplateAdminPanel({
             />
           </div>
           <div className="toolbar">
-            <button className="primary-button" type="button" onClick={onSave} disabled={isPending || !draft.name.trim()}>
+            <button className="primary-button" type="button" onClick={onSave} disabled={isPending || !draft.name.trim() || !draft.fileNamePattern.includes("$NUM")}>
               <Save size={16} />
               保存模板
             </button>
@@ -6759,6 +6775,7 @@ function emptyDocumentTemplateDraft(): DocumentTemplateDraft {
     name: "自定义 PDF 模板",
     active: true,
     isDefault: false,
+    fileNamePattern: "$NUM",
     templateJsonText: defaultDocumentTemplateText
   };
 }
@@ -6769,8 +6786,17 @@ function documentTemplateDraftFromTemplate(template: DocumentTemplate): Document
     name: template.name,
     active: template.active,
     isDefault: template.isDefault,
+    fileNamePattern: template.fileNamePattern,
     templateJsonText: JSON.stringify(template.templateJson, null, 2)
   };
+}
+
+function safePdfFileNamePreview(pattern: string): string {
+  try {
+    return previewPdfFileName(pattern);
+  } catch {
+    return "规则必须包含 $NUM";
+  }
 }
 
 function parseDocumentTemplateJson(value: string): Record<string, unknown> {

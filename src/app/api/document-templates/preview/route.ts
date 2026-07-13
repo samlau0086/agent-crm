@@ -25,6 +25,7 @@ async function previewTemplate(request: NextRequest) {
     const now = new Date().toISOString();
     const pdf = await renderSalesDocumentPdf({
       id: "preview", workspaceId: context.workspaceId, objectKey: body.objectKey, name: "Preview", active: true, isDefault: false,
+      fileNamePattern: "$NUM",
       templateJson: body.templateJson, createdById: context.user.id, createdAt: now, updatedAt: now
     }, {
       record, company, contact, deal,

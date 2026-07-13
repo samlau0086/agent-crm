@@ -718,6 +718,7 @@ export const seedData: CrmSnapshot = {
     name: "默认 PDF 模板",
     active: true,
     isDefault: true,
+    fileNamePattern: `${objectKey}-$NUM`,
     templateJson: defaultDocumentTemplateJson,
     createdById: adminUserId,
     createdAt: now,

@@ -89,6 +89,7 @@ import { getCurrencyDefinitions } from "../src/lib/crm/currencies.ts";
 import { buildTemplateContext, evaluatePdfTemplateCondition, renderPdfTemplateText, renderSalesDocumentPdf } from "../src/lib/crm/document-pdf.ts";
 import { compilePdfTemplateLayout, PdfTemplateValidationError, validatePdfTemplate } from "../src/lib/crm/pdf-template-layout.ts";
 import { previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "../src/lib/crm/document-numbering.ts";
+import { renderPdfFileName, validatePdfFileNamePattern } from "../src/lib/crm/pdf-file-name.ts";
 import { buildPaymentTermSchedule, getPaymentTermDefinitions } from "../src/lib/crm/payment-terms.ts";
 import { salesDocumentNextObjectKey } from "../src/lib/crm/quotes.ts";
 import { generateWorkflowWithAiDesigner } from "../src/lib/workflows/ai-designer.ts";
@@ -9912,6 +9913,16 @@ await run("sales document number rules render supported variables in Shanghai ti
   assert.throws(() => validateSalesDocumentNumberRule("Q-$UNKNOWN", 4), /Unknown number variable/);
   assert.throws(() => validateSalesDocumentNumberRule("Q-$Y$M$D", 4), /must include \$NUM or \$ID/);
   assert.throws(() => validateSalesDocumentNumberRule("Q-$NUM", 0), /Sequence padding/);
+});
+
+await run("PDF file name rules require and render the document number variable", () => {
+  const now = new Date("2026-07-13T01:02:03.000Z");
+  assert.equal(
+    renderPdfFileName("报价-$Y$M$D-$NUM-$ID", { now, recordId: "quote/1", documentNumber: "QT:0001" }),
+    "报价-20260713-QT_0001-quote_1.pdf"
+  );
+  assert.throws(() => validatePdfFileNamePattern("报价-$Y$M$D"), /must include \$NUM/);
+  assert.throws(() => validatePdfFileNamePattern("$NUM-$UNKNOWN"), /Unknown PDF file name variable/);
 });
 
 await run("sales document creation applies configured real id and independent daily sequence", () => {

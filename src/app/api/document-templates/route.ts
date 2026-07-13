@@ -23,7 +23,8 @@ async function createTemplate(request: NextRequest) {
       await getCrmRepository().createDocumentTemplate(context, {
         ...body,
         active: body.active ?? true,
-        isDefault: body.isDefault ?? false
+        isDefault: body.isDefault ?? false,
+        fileNamePattern: body.fileNamePattern ?? "$NUM"
       }),
       { status: 201 }
     );

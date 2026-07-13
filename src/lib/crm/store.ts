@@ -105,6 +105,7 @@ import type {
 } from "@/lib/crm/types";
 import { assertValidFieldDefinition, validateRecordPayload } from "@/lib/crm/validation";
 import { compareRecords, matchesRecordSearch, matchesSavedView } from "@/lib/crm/views";
+import { validatePdfFileNamePattern } from "@/lib/crm/pdf-file-name";
 import {
   buildSalesDocumentConversionData,
   isSalesDocumentObjectKey,
@@ -3419,6 +3420,7 @@ export class CrmStore {
     return clone(
       (this.data.documentTemplates ?? [])
         .filter((template) => template.workspaceId === context.workspaceId && (!objectKey || template.objectKey === objectKey))
+        .map((template) => ({ ...template, fileNamePattern: template.fileNamePattern ?? `${template.objectKey}-$NUM` }))
         .sort((left, right) => left.objectKey.localeCompare(right.objectKey) || Number(right.isDefault) - Number(left.isDefault) || right.updatedAt.localeCompare(left.updatedAt))
     );
   }
@@ -3429,7 +3431,7 @@ export class CrmStore {
     if (!template) {
       throw new Error("Document template not found");
     }
-    return clone(template);
+    return clone({ ...template, fileNamePattern: template.fileNamePattern ?? `${template.objectKey}-$NUM` });
   }
 
   getDefaultDocumentTemplate(context: RequestContext, objectKey: string): DocumentTemplate {
@@ -3445,8 +3447,9 @@ export class CrmStore {
     return template;
   }
 
-  createDocumentTemplate(context: RequestContext, input: Pick<DocumentTemplate, "objectKey" | "name" | "active" | "isDefault" | "templateJson">): DocumentTemplate {
+  createDocumentTemplate(context: RequestContext, input: Pick<DocumentTemplate, "objectKey" | "name" | "active" | "isDefault" | "fileNamePattern" | "templateJson">): DocumentTemplate {
     requirePermission(context, "crm.admin");
+    validatePdfFileNamePattern(input.fileNamePattern);
     if (!isSalesDocumentObjectKey(input.objectKey)) {
       throw new ApiError(400, "VALIDATION_ERROR", "PDF templates are only supported for sales documents");
     }
@@ -3480,8 +3483,9 @@ export class CrmStore {
     return clone(template);
   }
 
-  updateDocumentTemplate(context: RequestContext, id: string, patch: Partial<Pick<DocumentTemplate, "name" | "active" | "isDefault" | "templateJson">>): DocumentTemplate {
+  updateDocumentTemplate(context: RequestContext, id: string, patch: Partial<Pick<DocumentTemplate, "name" | "active" | "isDefault" | "fileNamePattern" | "templateJson">>): DocumentTemplate {
     requirePermission(context, "crm.admin");
+    if (patch.fileNamePattern !== undefined) validatePdfFileNamePattern(patch.fileNamePattern);
     const template = (this.data.documentTemplates ?? []).find((candidate) => candidate.workspaceId === context.workspaceId && candidate.id === id);
     if (!template) {
       throw new Error("Document template not found");

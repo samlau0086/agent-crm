@@ -943,6 +943,7 @@ model DocumentTemplate {
   name         String
   active       Boolean   @default(true)
   isDefault    Boolean   @default(false)
+  fileNamePattern String @default("$NUM")
   templateJson Json
   createdById  String
   createdAt    DateTime  @default(now())

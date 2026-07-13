@@ -3,6 +3,7 @@ import { getRequestContext, handleApiError, withApiMetrics } from "@/lib/api";
 import { renderSalesDocumentPdf } from "@/lib/crm/document-pdf";
 import { getCrmRepository } from "@/lib/crm/repository";
 import { salesDocumentNumberField } from "@/lib/crm/quotes";
+import { renderPdfFileName } from "@/lib/crm/pdf-file-name";
 import type { CrmRecord, DocumentTemplate, RequestContext } from "@/lib/crm/types";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +55,7 @@ async function downloadPdf(request: NextRequest, { params }: RouteParams) {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${fileName}"`,
+        "Content-Disposition": buildContentDisposition(fileName),
         "Cache-Control": "no-store"
       }
     });
@@ -80,8 +81,13 @@ async function getLinkedRecord(context: RequestContext, recordId: string, object
 }
 
 function buildPdfFileName(record: CrmRecord, template: DocumentTemplate): string {
-  const number = String(record.data[salesDocumentNumberField(record.objectKey)] ?? record.id).replace(/[^A-Za-z0-9._-]/g, "_");
-  return `${template.objectKey}-${number}.pdf`;
+  const documentNumber = String(record.data[salesDocumentNumberField(record.objectKey)] ?? record.id);
+  return renderPdfFileName(template.fileNamePattern, { recordId: record.id, documentNumber });
+}
+
+function buildContentDisposition(fileName: string): string {
+  const fallback = fileName.replace(/[^A-Za-z0-9._-]/g, "_");
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 export const GET = withApiMetrics("GET /api/records/[objectKey]/[recordId]/pdf", downloadPdf);

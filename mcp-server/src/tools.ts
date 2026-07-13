@@ -15,7 +15,7 @@ const tagColorsSchema = z.record(z.enum(["robin", "mint", "sky", "amber", "rose"
 const recordFilterSchema = z.object({ field: z.string().trim().min(1), operator: z.enum(["contains", "equals"]), value: z.string() }).strict();
 const recordSortSchema = z.object({ field: z.string().trim().min(1), direction: z.enum(["asc", "desc"]) }).strict();
 const salesDocumentObjectKeySchema = z.enum(["quotes", "salesorders", "proformainvoices", "commercialinvoices"]);
-const documentTemplatePatchSchema = z.object({ name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional(), isDefault: z.boolean().optional(), templateJson: z.record(z.unknown()).optional() }).strict();
+const documentTemplatePatchSchema = z.object({ name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional(), isDefault: z.boolean().optional(), fileNamePattern: z.string().trim().min(1).max(160).optional(), templateJson: z.record(z.unknown()).optional() }).strict();
 const recordWriteSchema = z.object({ objectKey: objectKeySchema, title: z.string().trim().min(1), data: z.record(z.unknown()), tags: tagListSchema, tagColors: tagColorsSchema, stageKey: optionalIdSchema, ownerId: optionalIdSchema }).strict();
 const changeReasonSchema = z.string().trim().min(1).max(1000).optional();
 const metadataKeySchema = z.string().trim().regex(/^[a-z][a-z0-9_]*$/);
@@ -88,7 +88,7 @@ const schemas = {
   crm_get_sales_document_import_template: z.object({ objectKey: salesDocumentObjectKeySchema, kind: z.enum(["template", "field-guide"]).optional() }).strict(),
   crm_list_document_templates: z.object({ objectKey: salesDocumentObjectKeySchema.optional() }).strict(),
   crm_get_document_template: z.object({ templateId: idSchema }).strict(),
-  crm_create_document_template: z.object({ objectKey: salesDocumentObjectKeySchema, name: z.string().trim().min(1).max(200), active: z.boolean().optional(), isDefault: z.boolean().optional(), templateJson: z.record(z.unknown()) }).strict(),
+  crm_create_document_template: z.object({ objectKey: salesDocumentObjectKeySchema, name: z.string().trim().min(1).max(200), active: z.boolean().optional(), isDefault: z.boolean().optional(), fileNamePattern: z.string().trim().min(1).max(160).optional(), templateJson: z.record(z.unknown()) }).strict(),
   crm_update_document_template: documentTemplatePatchSchema.extend({ templateId: idSchema }).strict(),
   crm_delete_document_template: z.object({ templateId: idSchema }).strict(),
   crm_preview_document_template_pdf: z.object({ objectKey: salesDocumentObjectKeySchema, recordId: idSchema, templateJson: z.record(z.unknown()) }).strict(),

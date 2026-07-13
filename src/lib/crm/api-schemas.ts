@@ -202,6 +202,7 @@ export const documentTemplateCreateSchema = z
     name: labelSchema,
     active: z.boolean().optional().default(true),
     isDefault: z.boolean().optional().default(false),
+    fileNamePattern: z.string().trim().min(1).max(160).refine((value) => value.includes("$NUM"), "PDF file name pattern must include $NUM").optional().default("$NUM"),
     templateJson: documentTemplateJsonSchema
   })
   .strict();
@@ -211,6 +212,7 @@ export const documentTemplateUpdateSchema = z
     name: labelSchema.optional(),
     active: z.boolean().optional(),
     isDefault: z.boolean().optional(),
+    fileNamePattern: z.string().trim().min(1).max(160).refine((value) => value.includes("$NUM"), "PDF file name pattern must include $NUM").optional(),
     templateJson: documentTemplateJsonSchema.optional()
   })
   .strict()
