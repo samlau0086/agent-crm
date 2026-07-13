@@ -4276,6 +4276,9 @@ await run("email compose supports ai generation signatures rich text and attachm
   assert.match(source, /Promise\.all\(sentThreadIds\.map\(\(threadId\) => updateEmailThreadState\(threadId, \{ read: true \}\)\)\)/);
   const sendEmailBody = source.slice(source.indexOf("async function sendEmail()"), source.indexOf("async function retryEmailMessage"));
   assert.doesNotMatch(sendEmailBody, /threadId: selectedEmailThreadId \|\| undefined/);
+  const editSentEmailBody = source.slice(source.indexOf("function editSentEmailMessage"), source.indexOf("function replyToEmailMessage"));
+  assert.match(editSentEmailBody, /threadId: undefined/);
+  assert.doesNotMatch(editSentEmailBody, /threadId: message\.threadId/);
   assert.match(source, /const htmlParts = \[inlineImageResult\.bodyHtml, signatureHtml, originalHtml\]\.filter\(Boolean\)/);
   assert.match(source, /const textParts = \[bodyText, signatureText, originalText\]\.filter\(Boolean\)/);
   assert.match(source, /onGenerateAiForDraft=\{\(prompt\) => runAction\(\(\) => generateEmailAiForDraft\(prompt\)\)\}/);

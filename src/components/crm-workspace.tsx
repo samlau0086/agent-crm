@@ -5577,7 +5577,10 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       accountId: emailAccounts.some((account) => account.id === message.accountId && canSelectEmailAccountForSending(account))
         ? message.accountId
         : current.accountId || emailAccounts.find(canSelectEmailAccountForSending)?.id || "",
-      threadId: message.threadId,
+      // "再次编辑" copies the message into a new outbound email. Keeping the
+      // original thread id would make the copy share thread-level archive and
+      // delete state with the failed/sent message it was copied from.
+      threadId: undefined,
       recordId: linkedRecordIds[0] ?? "",
       linkedRecordIds,
       to: message.to.join(", "),
