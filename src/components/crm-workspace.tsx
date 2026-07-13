@@ -13048,18 +13048,22 @@ function SmartReminderPanel({
     }),
     [isSnoozedForPanel, reminders]
   );
+  const remindersInActiveView = useMemo(
+    () =>
+      reminders.filter((reminder) => {
+        if (activeView === "snoozed") return reminder.status === "open" && isSnoozedForPanel(reminder);
+        if (activeView === "open") return reminder.status === "open" && !isSnoozedForPanel(reminder);
+        return reminder.status === activeView;
+      }),
+    [activeView, isSnoozedForPanel, reminders]
+  );
   const visibleReminders = useMemo(
     () =>
-      reminders
-        .filter((reminder) => {
-          if (activeView === "snoozed") return reminder.status === "open" && isSnoozedForPanel(reminder);
-          if (activeView === "open") return reminder.status === "open" && !isSnoozedForPanel(reminder);
-          return reminder.status === activeView;
-        })
+      remindersInActiveView
         .filter((reminder) => smartReminderMatchesKindFilter(reminder, activeKindFilter))
         .sort(compareSmartReminderForUi)
         .slice(0, compact ? 8 : 20),
-    [activeKindFilter, activeView, compact, isSnoozedForPanel, reminders]
+    [activeKindFilter, compact, remindersInActiveView]
   );
   const viewEmptyMessage =
     activeView === "dismissed"
@@ -13144,7 +13148,7 @@ function SmartReminderPanel({
             ["pipeline_optimization", "交易推进"]
           ] as Array<[SmartReminderKindFilter, string]>
         ).map(([filter, label]) => {
-          const count = reminders.filter((reminder) => smartReminderMatchesKindFilter(reminder, filter)).length;
+          const count = remindersInActiveView.filter((reminder) => smartReminderMatchesKindFilter(reminder, filter)).length;
           return (
             <button className={activeKindFilter === filter ? "active" : ""} key={filter} onClick={() => setActiveKindFilter(filter)} type="button" role="tab" aria-selected={activeKindFilter === filter}>
               {label}
