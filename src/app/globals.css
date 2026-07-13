@@ -4018,6 +4018,67 @@ body.deal-pipeline-dragging {
   white-space: nowrap;
 }
 
+.email-compose-field-heading,
+.email-template-preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.email-compose-field-heading .text-button {
+  font-size: 12px;
+}
+
+.email-template-variable-picker {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.email-template-variable-group {
+  display: grid;
+  gap: 6px;
+}
+
+.email-template-variable-group > strong {
+  color: #1e3a8a;
+  font-size: 12px;
+}
+
+.email-template-variable-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.email-template-variable-list button,
+.email-compose-variable-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.email-template-variable-list button:hover,
+.email-compose-variable-button:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.email-template-variable-list code {
+  color: #2563eb;
+  font-size: 11px;
+}
+
 .email-compose-ai-bar {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto auto;
@@ -4038,6 +4099,29 @@ body.deal-pipeline-dragging {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f8fafc;
+}
+
+.email-template-preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.email-template-preview-heading .select {
+  width: auto;
+  max-width: 65%;
+}
+
+.email-template-preview iframe {
+  width: 100%;
+  height: 130px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
 }
 
 .email-preference-preview-row {
@@ -4202,6 +4286,16 @@ body.deal-pipeline-dragging {
   padding: 6px 8px;
   border-bottom: 1px solid var(--line);
   background: #f8fafc;
+}
+
+.email-compose-toolbar .email-compose-variable-button {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.email-compose-editor-shell > .email-template-variable-picker {
+  border-width: 0 0 1px;
+  border-radius: 0;
 }
 
 .email-rich-editor {

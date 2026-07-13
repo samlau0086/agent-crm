@@ -78,6 +78,7 @@ import { buildEmailReplyDraft } from "../src/lib/email/reply-draft.ts";
 import { parseEmailThreadSearchCommand } from "../src/lib/email/search-command.ts";
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
 import { repairEmailMojibake } from "../src/lib/email/mojibake.ts";
+import { getEmailTemplateVariableDefinitions, hasEmailTemplateVariables, renderEmailTemplate } from "../src/lib/email/template-variables.ts";
 import { buildImapFallbackExternalMessageId, fetchRecentImapEmailBatch, fetchRecentImapEmails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
 import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
 import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
@@ -212,6 +213,48 @@ function startFakeSmtpServer() {
     });
   });
 }
+
+await run("email templates personalize contact and company variables per recipient", () => {
+  const contact = {
+    id: "contact-george",
+    workspaceId: "workspace-1",
+    objectKey: "contacts",
+    title: "George Shepherd",
+    tags: [],
+    tagColors: {},
+    data: { email: "george@example.com", companyId: "company-viper" },
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z"
+  };
+  const company = {
+    id: "company-viper",
+    workspaceId: "workspace-1",
+    objectKey: "companies",
+    title: "Viper <Tech>",
+    tags: [],
+    tagColors: {},
+    data: { billingAddresses: [{ line1: "1 Nebula Way", city: "London", country: "GB" }] },
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z"
+  };
+  const context = { recipientEmail: "george@example.com", contact, company };
+  assert.equal(hasEmailTemplateVariables("Hello {{contact.firstName}}"), true);
+  assert.equal(
+    renderEmailTemplate("Hello {{contact.firstName}} {{contact.lastName}} from {{company.name}} at {{company.address}}", context).value,
+    "Hello George Shepherd from Viper <Tech> at 1 Nebula Way, London, GB"
+  );
+  assert.match(renderEmailTemplate("<p>{{company.name}}</p>", context, { html: true }).value, /Viper &lt;Tech&gt;/);
+  assert.deepEqual(renderEmailTemplate("{{contact.phone}}", context).missingVariables, ["contact.phone"]);
+});
+
+await run("email template variable catalog includes custom contact and company fields", () => {
+  const definitions = getEmailTemplateVariableDefinitions([
+    { id: "field-1", workspaceId: "workspace-1", objectKey: "contacts", key: "jobTitle", label: "职位", type: "text", required: false, unique: false, isSystem: false, position: 1 },
+    { id: "field-2", workspaceId: "workspace-1", objectKey: "companies", key: "industry", label: "行业", type: "text", required: false, unique: false, isSystem: false, position: 1 }
+  ]);
+  assert.ok(definitions.some((definition) => definition.token === "{{contact.jobTitle}}"));
+  assert.ok(definitions.some((definition) => definition.token === "{{company.industry}}"));
+});
 
 await run("field definition rejects invalid key", () => {
   assert.throws(() => assertValidFieldDefinition({ key: "Bad Key", label: "Bad field", type: "text" }), /key/);

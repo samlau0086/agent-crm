@@ -154,6 +154,12 @@ import { buildEmailAttachmentHref, MAX_EMAIL_ATTACHMENT_BYTES } from "@/lib/emai
 import { canOpenEmailAiSource, emailAiSourceKey, type EmailAiSourceRef } from "@/lib/email/ai-sources";
 import { isEmailAiPurposeEnabled } from "@/lib/email/assistant";
 import { repairEmailMojibake } from "@/lib/email/mojibake";
+import {
+  getEmailTemplateVariableDefinitions,
+  hasEmailTemplateVariables,
+  renderEmailTemplate,
+  type EmailTemplateVariableDefinition
+} from "@/lib/email/template-variables";
 import { readEmailOAuthCallbackNotice } from "@/lib/email/oauth-callback";
 import { getEmailProviderCapability, getEmailProviderSetupVisibility, isOAuthEmailProvider, listEmailProviderCapabilities } from "@/lib/email/providers";
 import { buildEmailReplyDraft, type EmailComposeReplyDraft } from "@/lib/email/reply-draft";
@@ -5367,6 +5373,31 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     };
   }
 
+  function personalizeEmailDraftForRecipient(draft: EmailComposeDraft, preference: RecipientPreferenceResolution): EmailComposeDraft {
+    const context = {
+      recipientEmail: preference.email,
+      contact: preference.contact,
+      company: preference.company
+    };
+    const renderedSubject = renderEmailTemplate(draft.subject, context);
+    const renderedBodyText = renderEmailTemplate(draft.bodyText, context);
+    const renderedBodyHtml = renderEmailTemplate(draft.bodyHtml || emailTextToHtml(draft.bodyText), context, { html: true });
+    const missingVariables = Array.from(new Set([
+      ...renderedSubject.missingVariables,
+      ...renderedBodyText.missingVariables,
+      ...renderedBodyHtml.missingVariables
+    ]));
+    if (missingVariables.length) {
+      throw new Error(`无法为 ${preference.email} 填充变量：${missingVariables.map((key) => `{{${key}}}`).join("、")}。请补全联系人/公司资料或移除变量后再发送。`);
+    }
+    return {
+      ...draft,
+      subject: renderedSubject.value,
+      bodyText: renderedBodyText.value,
+      bodyHtml: sanitizeComposeHtml(renderedBodyHtml.value)
+    };
+  }
+
   async function sendSingleEmailDraft(emailDraft: EmailComposeDraft): Promise<EmailMessage[]> {
     const preparedDraft = prepareEmailDraftForSend(emailDraft, emailSignatures, emailAccounts);
     const result = await fetchJson<EmailMessage | { messages: EmailMessage[] }>("/api/email/send", {
@@ -5404,7 +5435,11 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
 
   async function buildPreferenceAwareDrafts(): Promise<EmailComposeDraft[]> {
     const recipients = splitEmailList(emailDraft.to);
-    const shouldSplitByRecipient = Boolean(emailDraft.autoTranslateEnabled || emailDraft.preferredTimeSendEnabled);
+    const hasPersonalizationVariables = [emailDraft.subject, emailDraft.bodyText, emailDraft.bodyHtml].some((value) => hasEmailTemplateVariables(value ?? ""));
+    if (hasPersonalizationVariables && recipients.length > 1 && !emailDraft.groupSendMode) {
+      throw new Error("多收件人使用个性化变量时，请开启“群发单显”，系统才能为每位收件人生成独立内容。");
+    }
+    const shouldSplitByRecipient = Boolean(emailDraft.autoTranslateEnabled || emailDraft.preferredTimeSendEnabled || hasPersonalizationVariables);
     if (!shouldSplitByRecipient) {
       return [emailDraft];
     }
@@ -5414,16 +5449,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       const sendAt = emailDraft.scheduledSendAt
         ?? (emailDraft.preferredTimeSendEnabled ? preference.scheduledSendAt : undefined)
         ?? "";
-      const recipientDraft = await translateEmailDraftForRecipient(
-        {
+      const personalizedDraft = hasPersonalizationVariables
+        ? personalizeEmailDraftForRecipient(
+          {
+            ...emailDraft,
+            to: recipient,
+            clientRequestId: `${emailDraft.clientRequestId}:pref${index}`,
+            scheduledSendAt: sendAt,
+            groupSendMode: recipients.length > 1 || emailDraft.groupSendMode
+          },
+          preference
+        )
+        : {
           ...emailDraft,
           to: recipient,
           clientRequestId: `${emailDraft.clientRequestId}:pref${index}`,
           scheduledSendAt: sendAt,
           groupSendMode: recipients.length > 1 || emailDraft.groupSendMode
-        },
-        preference
-      );
+        };
+      const recipientDraft = await translateEmailDraftForRecipient(personalizedDraft, preference);
       drafts.push(recipientDraft);
     }
     return drafts;
@@ -7903,6 +7947,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             routeSearch={routeEmailSearch}
             view={emailWorkspaceView}
             objects={props.objects}
+            fields={props.fields}
             selectedRecord={selectedRecord}
             records={records}
             aiSettings={emailAiSettings}
@@ -9225,6 +9270,7 @@ function EmailWorkspace({
   routeSearch,
   view,
   objects,
+  fields,
   selectedRecord,
   records,
   aiSettings,
@@ -9332,6 +9378,7 @@ function EmailWorkspace({
   routeSearch: string;
   view: EmailWorkspaceView;
   objects: ObjectDefinition[];
+  fields: FieldDefinition[];
   selectedRecord?: CrmRecord;
   records: CrmRecord[];
   aiSettings: EmailAiSettings;
@@ -9528,12 +9575,15 @@ function EmailWorkspace({
   const [composeCcVisible, setComposeCcVisible] = useState(false);
   const [composeBccVisible, setComposeBccVisible] = useState(false);
   const [composeRecordPickerEditing, setComposeRecordPickerEditing] = useState(false);
+  const [composeVariableTarget, setComposeVariableTarget] = useState<"subject" | "body" | null>(null);
+  const [templatePreviewEmail, setTemplatePreviewEmail] = useState("");
   const [composePromptGenerating, setComposePromptGenerating] = useState(false);
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false);
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [attachmentUploads, setAttachmentUploads] = useState<EmailAttachmentUploadItem[]>([]);
   const composeEditorRef = useRef<HTMLDivElement>(null);
+  const composeSubjectRef = useRef<HTMLInputElement>(null);
   const handledComposeOpenRequestRef = useRef("");
   const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
@@ -9560,6 +9610,24 @@ function EmailWorkspace({
       ),
     [emailDraft.recordId, emailDraft.to, records, selectedRecord]
   );
+  const composeVariableDefinitions = useMemo(() => getEmailTemplateVariableDefinitions(fields), [fields]);
+  const hasComposeTemplateVariables = [emailDraft.subject, emailDraft.bodyText, emailDraft.bodyHtml]
+    .some((value) => hasEmailTemplateVariables(value ?? ""));
+  const emailTemplatePreviews = useMemo(
+    () => recipientPreferencePreview.map((preference) => {
+      const context = { recipientEmail: preference.email, contact: preference.contact, company: preference.company };
+      const subject = renderEmailTemplate(emailDraft.subject, context);
+      const body = renderEmailTemplate(emailDraft.bodyHtml || emailTextToHtml(emailDraft.bodyText), context, { html: true });
+      return {
+        email: preference.email,
+        subject: subject.value,
+        bodyHtml: body.value,
+        missingVariables: Array.from(new Set([...subject.missingVariables, ...body.missingVariables]))
+      };
+    }),
+    [emailDraft.bodyHtml, emailDraft.bodyText, emailDraft.subject, recipientPreferencePreview]
+  );
+  const selectedEmailTemplatePreview = emailTemplatePreviews.find((preview) => preview.email === templatePreviewEmail) ?? emailTemplatePreviews[0];
   const scheduledSendTimeLabel = emailDraft.scheduledSendAt
     ? formatScheduledSendTimeForRecipients(emailDraft.scheduledSendAt, recipientPreferencePreview)
     : "";
@@ -10207,6 +10275,7 @@ function EmailWorkspace({
     setComposeOpen(false);
     setComposeMinimized(false);
     setComposeFullSize(false);
+    setComposeVariableTarget(null);
     if (!emailDraft.cc.trim()) {
       setComposeCcVisible(false);
     }
@@ -10233,6 +10302,27 @@ function EmailWorkspace({
         bodyText: stripHtmlToText(bodyHtml)
       })
     );
+  }
+
+  function insertComposeVariable(definition: EmailTemplateVariableDefinition) {
+    if (composeVariableTarget === "subject") {
+      const input = composeSubjectRef.current;
+      const start = input?.selectionStart ?? emailDraft.subject.length;
+      const end = input?.selectionEnd ?? start;
+      const subject = `${emailDraft.subject.slice(0, start)}${definition.token}${emailDraft.subject.slice(end)}`;
+      onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject }));
+      setComposeVariableTarget(null);
+      window.setTimeout(() => {
+        input?.focus();
+        input?.setSelectionRange(start + definition.token.length, start + definition.token.length);
+      }, 0);
+      return;
+    }
+    const editor = composeEditorRef.current;
+    editor?.focus();
+    document.execCommand("insertText", false, definition.token);
+    updateComposeBodyFromEditor();
+    setComposeVariableTarget(null);
   }
 
   async function runComposeEditorCommand(command: "bold" | "italic" | "underline" | "insertUnorderedList" | "createLink") {
@@ -12297,9 +12387,15 @@ function EmailWorkspace({
                     />
                   ) : null}
                   <label>
-                    <span className="subtle">主题</span>
-                    <input className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
+                    <span className="email-compose-field-heading">
+                      <span className="subtle">主题</span>
+                      <button className="text-button" data-testid="email-compose-subject-variable" type="button" onClick={() => setComposeVariableTarget((current) => current === "subject" ? null : "subject")}>插入变量</button>
+                    </span>
+                    <input ref={composeSubjectRef} className="input" data-testid="email-compose-subject" value={emailDraft.subject} onChange={(event) => onEmailDraftChange(clearEmailDraftAiProvenance({ ...emailDraft, subject: event.target.value }))} />
                   </label>
+                  {composeVariableTarget === "subject" ? (
+                    <EmailTemplateVariablePicker definitions={composeVariableDefinitions} onSelect={insertComposeVariable} />
+                  ) : null}
                   <label>
                     <span className="subtle">定时发送</span>
                     <input
@@ -12378,6 +12474,28 @@ function EmailWorkspace({
                     <span className="subtle">开启偏好能力后，多收件人会拆分成独立邮件；签名和原邮件引用不会参与正文翻译。</span>
                   </div>
                 ) : null}
+                {hasComposeTemplateVariables ? (
+                  <div className="email-template-preview" data-testid="email-compose-template-preview">
+                    <div className="email-template-preview-heading">
+                      <strong>个性化预览</strong>
+                      {emailTemplatePreviews.length ? (
+                        <select className="select" value={selectedEmailTemplatePreview?.email ?? ""} onChange={(event) => setTemplatePreviewEmail(event.target.value)}>
+                          {emailTemplatePreviews.map((preview) => <option key={preview.email} value={preview.email}>{preview.email}</option>)}
+                        </select>
+                      ) : <span className="danger-badge">请先添加收件人</span>}
+                    </div>
+                    {selectedEmailTemplatePreview ? (
+                      <>
+                        <div><span className="subtle">主题：</span>{selectedEmailTemplatePreview.subject || "（空）"}</div>
+                        {selectedEmailTemplatePreview.missingVariables.length ? (
+                          <div className="danger-badge">缺少：{selectedEmailTemplatePreview.missingVariables.map((key) => `{{${key}}}`).join("、")}</div>
+                        ) : <span className="badge">变量已完整匹配</span>}
+                        <iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={buildEmailHtmlPreview(selectedEmailTemplatePreview.bodyHtml)} title={`${selectedEmailTemplatePreview.email} 个性化正文预览`} />
+                      </>
+                    ) : <span className="subtle">添加收件人后，可在发送前逐一检查主题和正文。</span>}
+                    <span className="subtle">群发单显时，系统会为每位收件人分别替换变量并生成独立邮件。</span>
+                  </div>
+                ) : null}
                 <div className="email-compose-ai-bar">
                   <Bot size={16} />
                   <input className="input" data-testid="email-compose-ai-prompt" value={composeAiPrompt} onChange={(event) => setComposeAiPrompt(event.target.value)} placeholder="告诉 AI 这封邮件要表达什么，例如：礼貌跟进报价并约下周会议" />
@@ -12398,6 +12516,7 @@ function EmailWorkspace({
                     <button className="icon-button" aria-label="链接" type="button" onClick={() => void runComposeEditorCommand("createLink")}><Link size={15} /></button>
                     <button className="icon-button" aria-label="打开媒体库插入图片" type="button" onClick={() => setMediaLibraryOpen(true)}><ImageIcon size={15} /></button>
                     <button className="icon-button" aria-label="添加附件" type="button" onClick={() => setAttachmentModalOpen(true)}><Paperclip size={15} /></button>
+                    <button className="email-compose-variable-button" data-testid="email-compose-body-variable" type="button" onClick={() => setComposeVariableTarget((current) => current === "body" ? null : "body")}><Plus size={14} /> 变量</button>
                     <input
                       ref={composeInlineImageInputRef}
                       data-testid="email-compose-inline-image"
@@ -12414,6 +12533,9 @@ function EmailWorkspace({
                       }}
                     />
                   </div>
+                  {composeVariableTarget === "body" ? (
+                    <EmailTemplateVariablePicker definitions={composeVariableDefinitions} onSelect={insertComposeVariable} />
+                  ) : null}
                   <div
                     ref={composeEditorRef}
                     className="email-rich-editor"
@@ -13108,6 +13230,37 @@ function EmailContactSearchDropdown({
       onChange={onChange}
       onSearchChange={setSearch}
     />
+  );
+}
+
+function EmailTemplateVariablePicker({
+  definitions,
+  onSelect
+}: {
+  definitions: EmailTemplateVariableDefinition[];
+  onSelect: (definition: EmailTemplateVariableDefinition) => void;
+}) {
+  const contactVariables = definitions.filter((definition) => definition.scope === "contact");
+  const companyVariables = definitions.filter((definition) => definition.scope === "company");
+  return (
+    <div className="email-template-variable-picker" data-testid="email-template-variable-picker">
+      {[
+        { label: "联系人", variables: contactVariables },
+        { label: "公司", variables: companyVariables }
+      ].map((group) => (
+        <div className="email-template-variable-group" key={group.label}>
+          <strong>{group.label}</strong>
+          <div className="email-template-variable-list">
+            {group.variables.map((definition) => (
+              <button key={definition.key} type="button" title={definition.token} onClick={() => onSelect(definition)}>
+                <span>{definition.label}</span>
+                <code>{definition.token}</code>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
