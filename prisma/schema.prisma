@@ -735,6 +735,7 @@ model EmailThread {
   aiAnalysisSources Json?
   aiAnalysisUpdatedAt DateTime?
   lastMessageAt     DateTime?
+  remoteDeleted     Boolean        @default(false)
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   workspace         Workspace      @relation(fields: [workspaceId], references: [id])
@@ -810,6 +811,12 @@ model EmailMessage {
   trackingId        String?      @unique
   trackingEvents    Json?
   inboundMetadata   Json?
+  imapMailbox       String?
+  imapUid           String?
+  imapUidValidity   String?
+  imapOriginalMailbox String?
+  imapSyncStatus    String?
+  imapSyncError     String?
   groupSendMode     Boolean      @default(false)
   createdById       String?
   createdAt         DateTime     @default(now())
@@ -821,6 +828,7 @@ model EmailMessage {
   @@index([workspaceId, threadId, createdAt])
   @@index([workspaceId, accountId, createdAt])
   @@index([workspaceId, accountId, clientRequestId])
+  @@index([workspaceId, accountId, imapSyncStatus])
   @@index([workspaceId, status, sendAttemptedAt])
   @@index([workspaceId, status, scheduledSendAt])
   @@index([workspaceId, trackingId])

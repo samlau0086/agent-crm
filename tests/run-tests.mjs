@@ -79,7 +79,7 @@ import { parseEmailThreadSearchCommand } from "../src/lib/email/search-command.t
 import { getFailedEmailSendResultOrThrow } from "../src/lib/email/send-failure.ts";
 import { repairEmailMojibake } from "../src/lib/email/mojibake.ts";
 import { getEmailTemplateVariableDefinitions, hasEmailTemplateVariables, renderEmailTemplate } from "../src/lib/email/template-variables.ts";
-import { buildImapFallbackExternalMessageId, fetchRecentImapEmailBatch, fetchRecentImapEmails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
+import { buildImapFallbackExternalMessageId, buildRfc822Message, fetchRecentImapEmailBatch, fetchRecentImapEmails, parseRawEmailMessage, resolveSmtpTransport, sendSmtpEmail, withImapFallbackExternalMessageId } from "../src/lib/email/smtp-imap.ts";
 import { getFailedEmailSyncResultOrThrow } from "../src/lib/email/sync-failure.ts";
 import { scheduleEmailSyncForActiveAccounts } from "../src/lib/email/sync-scheduler.ts";
 import { formatEmailSendResultMessage } from "../src/lib/email/status-messages.ts";
@@ -4947,6 +4947,10 @@ await run("email send status messages distinguish queued sent and failed results
   assert.equal(formatEmailSendResultMessage({ status: "queued", subject: "Proposal", scheduledSendAt: "2026-06-25T03:00:00.000Z" }).startsWith("邮件已加入待发送 Proposal"), true);
   assert.equal(formatEmailSendResultMessage({ status: "sending", subject: "Proposal" }), "邮件正在发送 Proposal");
   assert.equal(formatEmailSendResultMessage({ status: "sent", subject: "Proposal" }), "已发送邮件 Proposal");
+  assert.equal(
+    formatEmailSendResultMessage({ status: "sent", subject: "Proposal", imapSyncStatus: "failed", imapSyncError: "Sent unavailable" }),
+    "已发送邮件 Proposal，但同步到远程“已发送”失败：Sent unavailable"
+  );
   assert.equal(formatEmailSendResultMessage({ status: "failed", subject: "Proposal" }), "邮件发送失败 Proposal");
   assert.equal(formatEmailSendResultMessage({ status: "failed", subject: "Proposal", failureReason: "SMTP returned 550" }), "邮件发送失败 Proposal：SMTP returned 550");
 });
@@ -10376,6 +10380,9 @@ await run("email threads support restore unarchive permanent delete and contact 
   assert.equal(store.getEmailThread(context, promo.threadId).category, "promotions");
   assert.equal(store.updateEmailThreadState(context, message.threadId, { deleted: true }).deleted, true);
   assert.equal(store.updateEmailThreadState(context, message.threadId, { deleted: false }).deleted, false);
+  assert.equal(store.setEmailThreadRemoteDeleted(context, message.threadId, true).deleted, true);
+  assert.equal(store.updateEmailThreadState(context, message.threadId, { deleted: false }).deleted, true);
+  assert.equal(store.setEmailThreadRemoteDeleted(context, message.threadId, false).deleted, false);
   assert.equal(store.updateEmailThreadState(context, message.threadId, { archived: true }).archived, true);
   assert.equal(store.updateEmailThreadState(context, message.threadId, { archived: false }).archived, false);
 
@@ -14136,6 +14143,24 @@ await run("imap provider fetches a bounded recent sequence range without scannin
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+await run("smtp and imap sent synchronization can reuse one stable rfc822 message", () => {
+  const input = {
+    accountId: "smtp-account",
+    to: ["buyer@example.com"],
+    cc: ["manager@example.com"],
+    bcc: ["hidden@example.com"],
+    subject: "Stable sent copy",
+    bodyText: "Same bytes for SMTP and IMAP.",
+    messageId: "stable-sent-copy"
+  };
+  const raw = buildRfc822Message(input, "sales@example.com");
+  assert.match(raw, /Message-ID: <stable-sent-copy@ai-agent-crm\.local>/);
+  assert.match(raw, /^To: buyer@example\.com$/m);
+  assert.match(raw, /^Cc: manager@example\.com$/m);
+  assert.doesNotMatch(raw, /^Bcc:/m);
+  assert.equal(buildRfc822Message(input, "sales@example.com").replace(/^Date: .*$/m, "Date: normalized"), raw.replace(/^Date: .*$/m, "Date: normalized"));
 });
 
 await run("imap full resync paginates backward through historical messages", async () => {

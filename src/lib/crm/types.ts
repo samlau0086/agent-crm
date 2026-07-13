@@ -296,6 +296,7 @@ export interface EmailThread {
   accountId: string;
   subject: string;
   participantEmails: string[];
+  remoteDeleted?: boolean;
   recordId?: string;
   summary?: string;
   summaryUpdatedAt?: string;
@@ -422,6 +423,12 @@ export interface EmailMessage {
   trackingId?: string;
   trackingEvents?: EmailTrackingEvent[];
   inboundMetadata?: EmailInboundMetadata;
+  imapMailbox?: string;
+  imapUid?: string;
+  imapUidValidity?: string;
+  imapOriginalMailbox?: string;
+  imapSyncStatus?: "pending" | "synced" | "failed";
+  imapSyncError?: string;
   groupSendMode?: boolean;
   createdById?: string;
   createdAt: string;

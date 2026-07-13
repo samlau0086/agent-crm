@@ -3,7 +3,7 @@ import type { EmailAccount, EmailAttachment, EmailConnectionConfig, EmailMessage
 import type { PrismaCrmRepository } from "@/lib/crm/repository";
 import { requirePermission } from "@/lib/auth/rbac";
 import { assertEmailDeliveryModeAllowed, getEmailDeliveryMode } from "@/lib/email/delivery-mode";
-import { fetchRecentMailboxEmailBatch, getMappedMailbox, sendSmtpEmail, testMailConnection, withInboundMailboxSource, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
+import { appendImapSentMessage, buildRfc822Message, fetchRecentMailboxEmailBatch, getMappedMailbox, moveImapMessageToTrash, permanentlyDeleteImapMessage, restoreImapMessage, sendSmtpEmail, testMailConnection, withInboundMailboxSource, type MailConnectionTestResult, type MailSendResult } from "@/lib/email/smtp-imap";
 import { getDefaultOutboundService, getInboundConnectionConfig, getOutboundSmtpConnectionConfig } from "@/lib/email/connection-config";
 import { sendResendEmail } from "@/lib/email/resend";
 import { assertOAuthConfig, isOAuthProvider } from "@/lib/email/oauth";
@@ -68,6 +68,8 @@ export interface EmailProviderAdapter {
   sendQueued(context: RequestContext, messageId: string): Promise<EmailMessage>;
   sync(context: RequestContext, accountId: string, options?: number | EmailSyncOptions): Promise<EmailSyncResult>;
   testConnection(context: RequestContext, accountId: string, options?: EmailConnectionTestOptions): Promise<EmailConnectionTestSummary>;
+  syncThreadDeletion(context: RequestContext, threadId: string, deleted: boolean): Promise<boolean>;
+  permanentlyDeleteThread(context: RequestContext, threadId: string): Promise<void>;
 }
 
 export interface EmailProviderAdapterOptions {
@@ -106,7 +108,94 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     const deliverableInput = ensureEmailSendMessageId(input);
     assertOutboundEmailRecipientPolicy(deliverableInput);
     const delivery = await this.deliver(context, account, deliverableInput);
-    return this.repository.sendEmailMessage(context, { ...deliverableInput, externalMessageId: delivery.externalMessageId });
+    return this.repository.sendEmailMessage(context, {
+      ...deliverableInput,
+      externalMessageId: delivery.externalMessageId,
+      imapMailbox: delivery.imapMailbox,
+      imapUid: delivery.imapUid,
+      imapUidValidity: delivery.imapUidValidity,
+      imapSyncStatus: delivery.imapSyncStatus,
+      imapSyncError: delivery.imapSyncError
+    });
+  }
+
+  async syncThreadDeletion(context: RequestContext, threadId: string, deleted: boolean): Promise<boolean> {
+    requirePermission(context, "crm.write");
+    const thread = await this.repository.getEmailThread(context, threadId);
+    const account = await this.repository.getEmailAccount(context, thread.accountId);
+    if (account.provider !== "smtp_imap") return false;
+    if (!deleted && !thread.remoteDeleted) return false;
+    const config = await this.repository.getEmailAccountConnectionConfig(context, account.id);
+    if (!config) throw new Error("Email account IMAP connection is not configured");
+    const messages = await this.repository.listEmailMessages(context, thread.id);
+    const outboundService = getDefaultOutboundService(config);
+    const from = outboundService?.fromEmail ?? account.emailAddress;
+    try {
+      for (let message of messages.filter(isRemoteMailboxMessage)) {
+        let locator;
+        let originalMailbox = "";
+        if (deleted) {
+          if (message.direction === "outbound" && !message.imapUid) {
+            const sentInput: EmailSendInput = {
+              accountId: account.id,
+              threadId: thread.id,
+              messageId: message.id,
+              ...(await this.buildThreadingHeaders(context, message)),
+              to: message.to,
+              cc: message.cc,
+              bcc: message.bcc,
+              subject: message.subject,
+              bodyText: message.bodyText,
+              bodyHtml: message.bodyHtml,
+              attachments: message.attachments
+            };
+            const sentLocator = await appendImapSentMessage(config, buildRfc822Message(sentInput, from), message.id, message.sentAt ? new Date(message.sentAt) : new Date());
+            message = { ...message, imapMailbox: sentLocator.mailbox, imapUid: sentLocator.uid, imapUidValidity: sentLocator.uidValidity, imapSyncStatus: "synced", imapSyncError: undefined };
+            await this.repository.updateEmailMessageImapMetadata(context, message.id, message);
+          }
+          const moved = await moveImapMessageToTrash(config, message);
+          locator = moved;
+          originalMailbox = moved.originalMailbox;
+        } else {
+          locator = await restoreImapMessage(config, message);
+        }
+        await this.repository.updateEmailMessageImapMetadata(context, message.id, {
+          imapMailbox: locator.mailbox,
+          imapUid: locator.uid,
+          imapUidValidity: locator.uidValidity,
+          imapOriginalMailbox: originalMailbox,
+          imapSyncStatus: "synced",
+          imapSyncError: ""
+        });
+      }
+      await this.repository.setEmailThreadRemoteDeleted(context, thread.id, deleted);
+      await this.repository.markEmailAccountConnectionError(context, account.id, null);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "IMAP Trash synchronization failed";
+      await this.repository.markEmailAccountConnectionError(context, account.id, message);
+      throw new Error(message);
+    }
+  }
+
+  async permanentlyDeleteThread(context: RequestContext, threadId: string): Promise<void> {
+    requirePermission(context, "crm.write");
+    const thread = await this.repository.getEmailThread(context, threadId);
+    const account = await this.repository.getEmailAccount(context, thread.accountId);
+    if (account.provider !== "smtp_imap") return;
+    const config = await this.repository.getEmailAccountConnectionConfig(context, account.id);
+    if (!config) throw new Error("Email account IMAP connection is not configured");
+    try {
+      const messages = await this.repository.listEmailMessages(context, thread.id);
+      for (const message of messages.filter(isRemoteMailboxMessage)) {
+        await permanentlyDeleteImapMessage(config, message);
+      }
+      await this.repository.markEmailAccountConnectionError(context, account.id, null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Permanent IMAP deletion failed";
+      await this.repository.markEmailAccountConnectionError(context, account.id, message);
+      throw new Error(message);
+    }
   }
 
   async sendQueued(context: RequestContext, messageId: string): Promise<EmailMessage> {
@@ -160,7 +249,14 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
     try {
       const delivery = await this.deliver(context, account, input);
-      return this.repository.updateEmailMessageStatus(context, message.id, "sent", { externalMessageId: delivery.externalMessageId });
+      return this.repository.updateEmailMessageStatus(context, message.id, "sent", {
+        externalMessageId: delivery.externalMessageId,
+        imapMailbox: delivery.imapMailbox,
+        imapUid: delivery.imapUid,
+        imapUidValidity: delivery.imapUidValidity,
+        imapSyncStatus: delivery.imapSyncStatus,
+        imapSyncError: delivery.imapSyncError
+      });
     } catch (error) {
       await this.repository.updateEmailMessageStatus(context, message.id, "failed", { failureReason: error instanceof Error ? error.message : "Email delivery failed" });
       throw error;
@@ -220,6 +316,7 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
     }
 
     try {
+      await this.reconcileImapSentCopies(context, account, config);
       const inbound = syncOptions.fullResync
         ? await this.fetchFullMailboxEmailBatches(context, account, config, syncLimit, syncDeadlineAt)
         : undefined;
@@ -415,11 +512,12 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         throw new Error("Email account connection is not configured");
       }
       const outboundService = getDefaultOutboundService(config);
+      const from = outboundService?.fromEmail ?? account.emailAddress;
+      const rawMessage = buildRfc822Message(input, from);
       if (outboundService?.type === "resend") {
         try {
           const result = await sendResendEmail(outboundService, input, account.emailAddress);
-          await this.repository.markEmailAccountConnectionError(context, input.accountId, null);
-          return result;
+          return await this.appendSentCopyAfterDelivery(context, account, config, input, rawMessage, result);
         } catch (error) {
           const message = error instanceof Error ? error.message : "Resend send failed";
           await this.repository.markEmailAccountConnectionError(context, input.accountId, message);
@@ -427,9 +525,8 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         }
       }
       try {
-        const result = await sendSmtpEmail(getOutboundSmtpConnectionConfig(config, outboundService), input, outboundService?.fromEmail ?? account.emailAddress);
-        await this.repository.markEmailAccountConnectionError(context, input.accountId, null);
-        return result;
+        const result = await sendSmtpEmail(getOutboundSmtpConnectionConfig(config, outboundService), input, from, rawMessage);
+        return await this.appendSentCopyAfterDelivery(context, account, config, input, rawMessage, result);
       } catch (error) {
         const message = error instanceof Error ? error.message : "SMTP send failed";
         await this.repository.markEmailAccountConnectionError(context, input.accountId, message);
@@ -450,6 +547,29 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       }
     }
     return {};
+  }
+
+  private async appendSentCopyAfterDelivery(
+    context: RequestContext,
+    account: EmailAccount,
+    config: EmailConnectionConfig,
+    input: EmailSendInput,
+    rawMessage: string,
+    delivery: MailSendResult
+  ): Promise<MailSendResult> {
+    if (!input.messageId) {
+      await this.repository.markEmailAccountConnectionError(context, account.id, null);
+      return delivery;
+    }
+    try {
+      const locator = await appendImapSentMessage(config, rawMessage, input.messageId);
+      await this.repository.markEmailAccountConnectionError(context, account.id, null);
+      return { ...delivery, imapMailbox: locator.mailbox, imapUid: locator.uid, imapUidValidity: locator.uidValidity, imapSyncStatus: "synced" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "IMAP Sent synchronization failed";
+      await this.repository.markEmailAccountConnectionError(context, account.id, message);
+      return { ...delivery, imapSyncStatus: "failed", imapSyncError: message };
+    }
   }
 
   private async buildThreadingHeaders(context: RequestContext, message: EmailMessage): Promise<Pick<EmailSendInput, "inReplyTo" | "references">> {
@@ -489,6 +609,14 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
         if (message.externalMessageId) {
           const existing = await this.repository.findEmailMessageByExternalId(context, account.id, message.externalMessageId);
           if (existing) {
+            if (message.imapMailbox && (!existing.imapUid || existing.imapUidValidity !== message.imapUidValidity) && this.repository.updateEmailMessageImapMetadata) {
+              await this.repository.updateEmailMessageImapMetadata(context, existing.id, {
+                imapMailbox: message.imapMailbox,
+                imapUid: message.imapUid,
+                imapUidValidity: message.imapUidValidity,
+                imapSyncStatus: existing.imapSyncStatus
+              });
+            }
             if (options.fullResync) {
               await this.restoreThreadVisibilityForFullResync(context, existing.threadId);
             }
@@ -509,7 +637,10 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
           attachments: message.attachments,
           externalMessageId: message.externalMessageId,
           receivedAt: message.receivedAt,
-          inboundMetadata: message.inboundMetadata
+          inboundMetadata: message.inboundMetadata,
+          imapMailbox: message.imapMailbox,
+          imapUid: message.imapUid,
+          imapUidValidity: message.imapUidValidity
         });
         importedCount += 1;
       } catch (error) {
@@ -520,6 +651,42 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       }
     }
     return { importedCount, scannedCount: messages.length, skippedDuplicateCount };
+  }
+
+  private async reconcileImapSentCopies(context: RequestContext, account: EmailAccount, config: EmailConnectionConfig): Promise<void> {
+    if (!this.repository.listEmailMessagesNeedingImapSentSync || !this.repository.updateEmailMessageImapMetadata) return;
+    const messages = await this.repository.listEmailMessagesNeedingImapSentSync(context, account.id, 25);
+    const outboundService = getDefaultOutboundService(config);
+    const from = outboundService?.fromEmail ?? account.emailAddress;
+    for (const message of messages) {
+      const input: EmailSendInput = {
+        accountId: account.id,
+        threadId: message.threadId,
+        messageId: message.id,
+        ...(await this.buildThreadingHeaders(context, message)),
+        to: message.to,
+        cc: message.cc,
+        bcc: message.bcc,
+        subject: message.subject,
+        bodyText: message.bodyText,
+        bodyHtml: message.bodyHtml,
+        attachments: message.attachments
+      };
+      try {
+        const locator = await appendImapSentMessage(config, buildRfc822Message(input, from), message.id, message.sentAt ? new Date(message.sentAt) : new Date());
+        await this.repository.updateEmailMessageImapMetadata(context, message.id, {
+          imapMailbox: locator.mailbox,
+          imapUid: locator.uid,
+          imapUidValidity: locator.uidValidity,
+          imapSyncStatus: "synced",
+          imapSyncError: ""
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "IMAP Sent synchronization failed";
+        await this.repository.updateEmailMessageImapMetadata(context, message.id, { imapSyncStatus: "failed", imapSyncError: errorMessage });
+        // SMTP delivery has already succeeded. Keep inbound sync running and retry this copy on the next cycle.
+      }
+    }
   }
 
   private async restoreThreadVisibilityForFullResync(context: RequestContext, threadId: string): Promise<void> {
@@ -534,7 +701,14 @@ class RepositoryEmailProviderAdapter implements EmailProviderAdapter {
       deleted: false,
       snoozedUntil: null
     });
+    if (repository.setEmailThreadRemoteDeleted) {
+      await repository.setEmailThreadRemoteDeleted(context, threadId, false);
+    }
   }
+}
+
+function isRemoteMailboxMessage(message: EmailMessage): boolean {
+  return (message.status === "received" || message.status === "sent") && Boolean(message.externalMessageId || (message.imapMailbox && message.imapUid));
 }
 
 function normalizeEmailSyncLimit(limit: number | undefined): number {

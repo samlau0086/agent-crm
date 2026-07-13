@@ -1212,6 +1212,16 @@ export class CrmStore {
     return clone(this.mergeEmailThreadState(context, thread));
   }
 
+  setEmailThreadRemoteDeleted(context: RequestContext, threadId: string, deleted: boolean): EmailThread {
+    requirePermission(context, "crm.write");
+    const thread = this.assertEmailThread(context, threadId);
+    thread.remoteDeleted = deleted || undefined;
+    for (const state of this.data.emailThreadStates ?? []) {
+      if (state.workspaceId === context.workspaceId && state.threadId === thread.id) state.deleted = false;
+    }
+    return clone(this.mergeEmailThreadState(context, thread));
+  }
+
   listEmailMessages(context: RequestContext, threadId: string): EmailMessage[] {
     requirePermission(context, "crm.read");
     this.assertEmailThread(context, threadId);
@@ -1229,6 +1239,33 @@ export class CrmStore {
       throw new Error("Email message not found");
     }
     this.assertEmailThread(context, message.threadId);
+    return clone(message);
+  }
+
+  listEmailMessagesNeedingImapSentSync(context: RequestContext, accountId: string, limit = 25): EmailMessage[] {
+    requirePermission(context, "crm.admin");
+    return clone((this.data.emailMessages ?? []).filter((message) =>
+      message.workspaceId === context.workspaceId && message.accountId === accountId && message.direction === "outbound" &&
+      message.status === "sent" && (message.imapSyncStatus === "pending" || message.imapSyncStatus === "failed")
+    ).slice(0, limit));
+  }
+
+  updateEmailMessageImapMetadata(
+    context: RequestContext,
+    messageId: string,
+    input: Pick<EmailMessage, "imapMailbox" | "imapUid" | "imapUidValidity" | "imapOriginalMailbox" | "imapSyncStatus" | "imapSyncError">
+  ): EmailMessage {
+    requirePermission(context, "crm.write");
+    const message = (this.data.emailMessages ?? []).find((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
+    if (!message) throw new Error("Email message not found");
+    if (input.imapMailbox) message.imapMailbox = input.imapMailbox;
+    if (input.imapUid) message.imapUid = input.imapUid;
+    if (input.imapUidValidity) message.imapUidValidity = input.imapUidValidity;
+    if (input.imapOriginalMailbox === "") delete message.imapOriginalMailbox;
+    else if (input.imapOriginalMailbox) message.imapOriginalMailbox = input.imapOriginalMailbox;
+    if (input.imapSyncStatus) message.imapSyncStatus = input.imapSyncStatus;
+    if (input.imapSyncError === "") delete message.imapSyncError;
+    else if (input.imapSyncError) message.imapSyncError = input.imapSyncError;
     return clone(message);
   }
 
@@ -1318,7 +1355,15 @@ export class CrmStore {
     context: RequestContext,
     messageId: string,
     status: EmailMessage["status"],
-    options: { externalMessageId?: string; failureReason?: string | null } = {}
+    options: {
+      externalMessageId?: string;
+      failureReason?: string | null;
+      imapMailbox?: string;
+      imapUid?: string;
+      imapUidValidity?: string;
+      imapSyncStatus?: EmailMessage["imapSyncStatus"];
+      imapSyncError?: string;
+    } = {}
   ): EmailMessage {
     requirePermission(context, "crm.write");
     const message = (this.data.emailMessages ?? []).find((candidate) => candidate.id === messageId && candidate.workspaceId === context.workspaceId);
@@ -1331,6 +1376,11 @@ export class CrmStore {
     if (options.externalMessageId?.trim()) {
       message.externalMessageId = options.externalMessageId.trim();
     }
+    if (options.imapMailbox?.trim()) message.imapMailbox = options.imapMailbox.trim();
+    if (options.imapUid?.trim()) message.imapUid = options.imapUid.trim();
+    if (options.imapUidValidity?.trim()) message.imapUidValidity = options.imapUidValidity.trim();
+    if (options.imapSyncStatus) message.imapSyncStatus = options.imapSyncStatus;
+    message.imapSyncError = options.imapSyncStatus === "synced" ? undefined : options.imapSyncError;
     if (status === "failed") {
       message.failureReason = options.failureReason?.trim() || "Delivery failed";
     } else if (status === "queued" || status === "sending" || status === "sent") {
@@ -1411,7 +1461,7 @@ export class CrmStore {
   recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "imapMailbox" | "imapUid" | "imapUidValidity" | "imapOriginalMailbox" | "imapSyncStatus" | "imapSyncError" | "groupSendMode" | "createdById">> & {
         recordId?: string;
         skipAutoLink?: boolean;
       }
@@ -1509,6 +1559,12 @@ export class CrmStore {
       trackingId,
       trackingEvents: input.trackingEvents,
       inboundMetadata: input.inboundMetadata,
+      imapMailbox: input.imapMailbox,
+      imapUid: input.imapUid,
+      imapUidValidity: input.imapUidValidity,
+      imapOriginalMailbox: input.imapOriginalMailbox,
+      imapSyncStatus: input.imapSyncStatus,
+      imapSyncError: input.imapSyncError,
       groupSendMode: input.groupSendMode || undefined,
       createdById,
       createdAt: now
@@ -5207,7 +5263,7 @@ export class CrmStore {
       ...thread,
       archived: state?.archived ?? false,
       category: normalizeEmailThreadCategory(state?.category),
-      deleted: state?.deleted ?? false,
+      deleted: thread.remoteDeleted || (state?.deleted ?? false),
       important: state?.important ?? false,
       labels: normalizeEmailThreadLabels(state?.labels),
       read: state?.read ?? false,

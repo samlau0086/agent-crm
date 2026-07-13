@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { emailThreadUpdateSchema } from "@/lib/crm/api-schemas";
 import { getRequestContext, handleApiError, ok, parseJson, withApiMetrics } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
+import { createEmailProviderAdapter } from "@/lib/email/provider";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,9 @@ export const PATCH = withApiMetrics("PATCH /api/email/threads/[id]", patchApiMet
 async function deleteApiMetricsHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
-    await getCrmRepository().deleteEmailThread(context, params.id);
+    const repository = getCrmRepository();
+    await createEmailProviderAdapter(repository).permanentlyDeleteThread(context, params.id);
+    await repository.deleteEmailThread(context, params.id);
     return ok({ deleted: true });
   } catch (error) {
     return handleApiError(error, request);

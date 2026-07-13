@@ -71,6 +71,9 @@ The built-in SMTP/IMAP adapter supports:
 - To, CC, and BCC recipients for outbound mail.
 - RFC822/MIME headers encode non-ASCII subjects and attachment names for multilingual sales email.
 - IMAP sync from a configured mailbox, importing recent messages into CRM email threads while preserving both plain text and available HTML bodies.
+- For SMTP/IMAP accounts, successful SMTP or Resend delivery appends an idempotent RFC822 copy to the mapped IMAP Sent mailbox. If that append fails, delivery remains `sent`, the message exposes `imapSyncStatus=failed` and `imapSyncError`, and a later mailbox sync retries the Sent copy without resending SMTP.
+- Moving a CRM thread to Trash moves its remote IMAP messages to the mapped Trash mailbox; restore moves them back to their recorded original mailboxes, and permanent deletion removes the matching remote UIDs before deleting CRM history. These actions are mailbox-wide and therefore use a shared thread deletion state for all CRM users.
+- Sent and Trash mappings are discovered from IMAP special-use folders when not configured. If discovery or safe UID/Message-ID lookup is unavailable, the operation fails instead of guessing a mailbox or deleting an unverified UID.
 - Adapter-level failure recording on the email account.
 
 Sync requires provider connection configuration. Active accounts without SMTP/IMAP or OAuth credentials fail sync explicitly and record a connection error instead of reporting a zero-message success.

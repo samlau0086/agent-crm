@@ -793,6 +793,7 @@ function mapEmailThread(thread: {
   aiAnalysisSources: Prisma.JsonValue | null;
   aiAnalysisUpdatedAt: Date | null;
   lastMessageAt: Date | null;
+  remoteDeleted: boolean;
   createdAt: Date;
   updatedAt: Date;
 }, state?: {
@@ -820,7 +821,8 @@ function mapEmailThread(thread: {
     lastMessageAt: thread.lastMessageAt?.toISOString(),
     archived: state?.archived ?? false,
     category: normalizeEmailThreadCategory(state?.category),
-    deleted: state?.deleted ?? false,
+    remoteDeleted: thread.remoteDeleted || undefined,
+    deleted: thread.remoteDeleted || (state?.deleted ?? false),
     important: state?.important ?? false,
     labels: normalizeEmailThreadLabels(state?.labels),
     read: state?.read ?? false,
@@ -866,6 +868,12 @@ function mapEmailMessage(message: {
   trackingId: string | null;
   trackingEvents: Prisma.JsonValue | null;
   inboundMetadata: Prisma.JsonValue | null;
+  imapMailbox: string | null;
+  imapUid: string | null;
+  imapUidValidity: string | null;
+  imapOriginalMailbox: string | null;
+  imapSyncStatus: string | null;
+  imapSyncError: string | null;
   groupSendMode: boolean;
   createdById: string | null;
   createdAt: Date;
@@ -905,6 +913,12 @@ function mapEmailMessage(message: {
     trackingId: message.trackingId ?? undefined,
     trackingEvents: normalizeEmailTrackingEvents(message.trackingEvents),
     inboundMetadata: normalizeEmailInboundMetadata(message.inboundMetadata),
+    imapMailbox: message.imapMailbox ?? undefined,
+    imapUid: message.imapUid ?? undefined,
+    imapUidValidity: message.imapUidValidity ?? undefined,
+    imapOriginalMailbox: message.imapOriginalMailbox ?? undefined,
+    imapSyncStatus: (message.imapSyncStatus as EmailMessage["imapSyncStatus"]) ?? undefined,
+    imapSyncError: message.imapSyncError ?? undefined,
     groupSendMode: message.groupSendMode || undefined,
     createdById: message.createdById ?? undefined,
     createdAt: message.createdAt.toISOString()
@@ -3091,7 +3105,7 @@ export class PrismaCrmRepository {
   async recordEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "direction" | "from" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "groupSendMode" | "createdById">> & {
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "status" | "sendAttemptedAt" | "scheduledSendAt" | "sentAt" | "receivedAt" | "trackingEnabled" | "trackingId" | "trackingEvents" | "inboundMetadata" | "imapMailbox" | "imapUid" | "imapUidValidity" | "imapOriginalMailbox" | "imapSyncStatus" | "imapSyncError" | "groupSendMode" | "createdById">> & {
         recordId?: string;
         skipAutoLink?: boolean;
     }
@@ -3215,6 +3229,12 @@ export class PrismaCrmRepository {
           trackingId,
           trackingEvents: input.trackingEvents ? ((normalizeEmailTrackingEvents(input.trackingEvents) as unknown) as Prisma.InputJsonValue) : Prisma.JsonNull,
           inboundMetadata: input.inboundMetadata ? (normalizeEmailInboundMetadata(input.inboundMetadata) as Prisma.InputJsonValue) : Prisma.JsonNull,
+          imapMailbox: input.imapMailbox?.trim() || undefined,
+          imapUid: input.imapUid?.trim() || undefined,
+          imapUidValidity: input.imapUidValidity?.trim() || undefined,
+          imapOriginalMailbox: input.imapOriginalMailbox?.trim() || undefined,
+          imapSyncStatus: input.imapSyncStatus,
+          imapSyncError: input.imapSyncError?.trim() || undefined,
           groupSendMode: input.groupSendMode ?? false,
           createdById
         }
@@ -3293,7 +3313,7 @@ export class PrismaCrmRepository {
   async sendEmailMessage(
     context: RequestContext,
     input: Pick<EmailMessage, "accountId" | "to" | "subject" | "bodyText"> &
-      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "trackingEnabled" | "trackingId" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
+      Partial<Pick<EmailMessage, "threadId" | "cc" | "bcc" | "bodyHtml" | "attachments" | "translatedBodyText" | "translatedLocale" | "translatedSources" | "translatedAt" | "aiAssisted" | "aiPurpose" | "aiSourceMessageId" | "aiSources" | "aiGeneratedAt" | "externalMessageId" | "clientRequestId" | "trackingEnabled" | "trackingId" | "imapMailbox" | "imapUid" | "imapUidValidity" | "imapSyncStatus" | "imapSyncError" | "groupSendMode">> & { recordId?: string; skipAutoLink?: boolean }
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const account = await this.assertEmailAccount(context, input.accountId);
@@ -3361,6 +3381,22 @@ export class PrismaCrmRepository {
     return message ? mapEmailMessage(message) : undefined;
   }
 
+  async setEmailThreadRemoteDeleted(context: RequestContext, threadId: string, deleted: boolean): Promise<EmailThread> {
+    requirePermission(context, "crm.write");
+    const thread = await this.assertEmailThread(context, threadId);
+    const [updated] = await this.db.$transaction([
+      this.db.emailThread.update({ where: { id: thread.id }, data: { remoteDeleted: deleted } }),
+      this.db.emailThreadState.updateMany({
+        where: { workspaceId: context.workspaceId, threadId: thread.id },
+        data: { deleted: false }
+      })
+    ]);
+    const state = await this.db.emailThreadState.findUnique({
+      where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: thread.id, userId: context.user.id } }
+    });
+    return mapEmailThread(updated, state);
+  }
+
   async isEmailExternalMessageDeleted(context: RequestContext, accountId: string, externalMessageId: string): Promise<boolean> {
     requirePermission(context, "crm.read");
     await this.assertEmailAccount(context, accountId);
@@ -3413,7 +3449,15 @@ export class PrismaCrmRepository {
     context: RequestContext,
     messageId: string,
     status: EmailMessage["status"],
-    options: { externalMessageId?: string; failureReason?: string | null } = {}
+    options: {
+      externalMessageId?: string;
+      failureReason?: string | null;
+      imapMailbox?: string;
+      imapUid?: string;
+      imapUidValidity?: string;
+      imapSyncStatus?: EmailMessage["imapSyncStatus"];
+      imapSyncError?: string;
+    } = {}
   ): Promise<EmailMessage> {
     requirePermission(context, "crm.write");
     const existing = await this.getEmailMessage(context, messageId);
@@ -3426,6 +3470,11 @@ export class PrismaCrmRepository {
         sendAttemptedAt: status === "sending" ? now : status === "queued" ? null : undefined,
         scheduledSendAt: status === "sent" ? null : undefined,
         externalMessageId: options.externalMessageId?.trim() || undefined,
+        imapMailbox: options.imapMailbox?.trim() || undefined,
+        imapUid: options.imapUid?.trim() || undefined,
+        imapUidValidity: options.imapUidValidity?.trim() || undefined,
+        imapSyncStatus: options.imapSyncStatus,
+        imapSyncError: options.imapSyncError?.trim() || (options.imapSyncStatus === "synced" ? null : undefined),
         failureReason:
           status === "failed"
             ? options.failureReason?.trim() || "Delivery failed"
@@ -3551,6 +3600,43 @@ export class PrismaCrmRepository {
       skippedDuplicateCount: 0
     });
     return { account, importedCount: 0, status: "synced" };
+  }
+
+  async listEmailMessagesNeedingImapSentSync(context: RequestContext, accountId: string, limit = 25): Promise<EmailMessage[]> {
+    requirePermission(context, "crm.admin");
+    const messages = await this.db.emailMessage.findMany({
+      where: {
+        workspaceId: context.workspaceId,
+        accountId,
+        direction: "outbound",
+        status: "sent",
+        imapSyncStatus: { in: ["pending", "failed"] }
+      },
+      orderBy: { sentAt: "asc" },
+      take: normalizeIntegerLimit(limit, 1, 100)
+    });
+    return messages.map(mapEmailMessage);
+  }
+
+  async updateEmailMessageImapMetadata(
+    context: RequestContext,
+    messageId: string,
+    input: Pick<EmailMessage, "imapMailbox" | "imapUid" | "imapUidValidity" | "imapOriginalMailbox" | "imapSyncStatus" | "imapSyncError">
+  ): Promise<EmailMessage> {
+    requirePermission(context, "crm.write");
+    const existing = await this.getEmailMessage(context, messageId);
+    const updated = await this.db.emailMessage.update({
+      where: { id: existing.id },
+      data: {
+        imapMailbox: input.imapMailbox?.trim() || undefined,
+        imapUid: input.imapUid?.trim() || undefined,
+        imapUidValidity: input.imapUidValidity?.trim() || undefined,
+        imapOriginalMailbox: input.imapOriginalMailbox === "" ? null : input.imapOriginalMailbox?.trim() || undefined,
+        imapSyncStatus: input.imapSyncStatus,
+        imapSyncError: input.imapSyncError === "" ? null : input.imapSyncError?.trim() || undefined
+      }
+    });
+    return mapEmailMessage(updated);
   }
 
   async markEmailAccountSyncQueued(context: RequestContext, accountId: string): Promise<EmailAccount> {

@@ -20,6 +20,9 @@ export interface InboundEmail {
   attachments?: EmailAttachment[];
   receivedAt?: string;
   inboundMetadata?: ReturnType<typeof extractInboundMetadata>;
+  imapMailbox?: string;
+  imapUid?: string;
+  imapUidValidity?: string;
 }
 
 export interface MailConnectionTestResult {
@@ -32,6 +35,26 @@ export interface MailConnectionTestResult {
 
 export interface MailSendResult {
   externalMessageId?: string;
+  imapMailbox?: string;
+  imapUid?: string;
+  imapUidValidity?: string;
+  imapSyncStatus?: "synced" | "failed";
+  imapSyncError?: string;
+}
+
+export interface ImapMessageLocator {
+  mailbox: string;
+  uid?: string;
+  uidValidity?: string;
+}
+
+export interface ImapRemoteMessage {
+  id?: string;
+  externalMessageId?: string;
+  imapMailbox?: string;
+  imapUid?: string;
+  imapUidValidity?: string;
+  imapOriginalMailbox?: string;
 }
 
 export interface MailboxFetchOptions {
@@ -140,7 +163,7 @@ export async function testMailConnection(config: EmailConnectionConfig, options:
   return result;
 }
 
-export async function sendSmtpEmail(config: EmailConnectionConfig, input: EmailSendInput, from: string): Promise<MailSendResult> {
+export async function sendSmtpEmail(config: EmailConnectionConfig, input: EmailSendInput, from: string, rawMessage = buildRfc822Message(input, from)): Promise<MailSendResult> {
   assertSmtpConfig(config);
   const client = await SmtpClient.connect(config);
   try {
@@ -153,7 +176,7 @@ export async function sendSmtpEmail(config: EmailConnectionConfig, input: EmailS
       await client.command(`RCPT TO:<${recipient}>`, [250, 251]);
     }
     await client.command("DATA", 354);
-    await client.writeData(buildRfc822Message(input, from));
+    await client.writeData(rawMessage);
     await client.command("QUIT", 221).catch(() => undefined);
     return { externalMessageId: input.messageId ? formatOutboundMessageId(input.messageId) : undefined };
   } finally {
@@ -185,7 +208,12 @@ export async function fetchRecentImapEmailBatch(config: EmailConnectionConfig, l
       const fetchedUid = uid;
       const parsed = source ? parseRawEmailMessage(source.toString("utf8")) : undefined;
       if (parsed) {
-        messages.push(withInboundMailboxSource(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", fetchedUid), config.mailbox ?? "INBOX"));
+        messages.push({
+          ...withInboundMailboxSource(withImapFallbackExternalMessageId(parsed, config.mailbox ?? "INBOX", fetchedUid), config.mailbox ?? "INBOX"),
+          imapMailbox: config.mailbox ?? "INBOX",
+          imapUid: fetchedUid,
+          imapUidValidity: uidValidity
+        });
       }
       lastSeenUid = maxImapUid(lastSeenUid, fetchedUid);
       if (options.fullResync) {
@@ -230,6 +258,115 @@ export async function listImapMailboxes(config: EmailConnectionConfig): Promise<
     await client.logout().catch(() => undefined);
     return { mailboxes, suggestedMapping: suggestMailboxMapping(mailboxes, config.mailbox) };
   } finally {
+    client.close();
+  }
+}
+
+export async function appendImapSentMessage(
+  config: EmailConnectionConfig,
+  rawMessage: string,
+  messageId: string,
+  sentAt = new Date()
+): Promise<ImapMessageLocator> {
+  const inbound = getInboundConnectionConfig(config);
+  assertImapConfig(inbound);
+  const client = createImapFlowClient(inbound);
+  try {
+    await client.connect();
+    const mailbox = await resolveRequiredImapMailbox(client, inbound, "sent");
+    const opened = await client.mailboxOpen(mailbox);
+    const normalizedMessageId = formatOutboundMessageId(messageId);
+    const existing = await client.search({ header: { "message-id": normalizedMessageId } }, { uid: true });
+    if (existing && existing.length) {
+      await client.logout().catch(() => undefined);
+      return { mailbox, uid: String(existing[0]), uidValidity: opened.uidValidity?.toString() };
+    }
+    const appended = await client.append(mailbox, rawMessage, ["\\Seen"], sentAt);
+    if (!appended) {
+      throw new Error("IMAP server did not confirm the Sent message append");
+    }
+    await client.logout().catch(() => undefined);
+    return { mailbox, uid: appended.uid?.toString(), uidValidity: appended.uidValidity?.toString() ?? opened.uidValidity?.toString() };
+  } finally {
+    client.close();
+  }
+}
+
+export async function moveImapMessageToTrash(config: EmailConnectionConfig, message: ImapRemoteMessage): Promise<ImapMessageLocator & { originalMailbox: string }> {
+  const inbound = getInboundConnectionConfig(config);
+  assertImapConfig(inbound);
+  const client = createImapFlowClient(inbound);
+  try {
+    await client.connect();
+    const source = await locateImapMessage(client, inbound, message);
+    if (!source) {
+      throw new Error("Remote IMAP message could not be located; run mailbox sync before deleting it");
+    }
+    const trash = await resolveRequiredImapMailbox(client, inbound, "trash");
+    if (source.mailbox === trash) {
+      return {
+        ...source,
+        originalMailbox: message.imapOriginalMailbox ?? (message.imapMailbox && message.imapMailbox !== trash ? message.imapMailbox : source.mailbox)
+      };
+    }
+    assertSafeImapMoveSupport(client);
+    const moved = await client.messageMove(Number(source.uid), trash, { uid: true });
+    if (!moved) throw new Error("IMAP server did not confirm moving the message to Trash");
+    const nextUid = moved ? moved.uidMap?.get(Number(source.uid)) : undefined;
+    return {
+      mailbox: trash,
+      uid: nextUid?.toString(),
+      uidValidity: moved ? moved.uidValidity?.toString() : undefined,
+      originalMailbox: message.imapOriginalMailbox ?? source.mailbox
+    };
+  } finally {
+    await client.logout().catch(() => undefined);
+    client.close();
+  }
+}
+
+export async function restoreImapMessage(config: EmailConnectionConfig, message: ImapRemoteMessage): Promise<ImapMessageLocator> {
+  const inbound = getInboundConnectionConfig(config);
+  assertImapConfig(inbound);
+  if (!message.imapOriginalMailbox) {
+    throw new Error("Remote IMAP message has no original mailbox; run mailbox sync before restoring it");
+  }
+  const client = createImapFlowClient(inbound);
+  try {
+    await client.connect();
+    const source = await locateImapMessage(client, inbound, message);
+    if (!source) {
+      throw new Error("Remote IMAP message could not be located for restore");
+    }
+    if (source.mailbox === message.imapOriginalMailbox) {
+      return source;
+    }
+    assertSafeImapMoveSupport(client);
+    const moved = await client.messageMove(Number(source.uid), message.imapOriginalMailbox, { uid: true });
+    if (!moved) throw new Error("IMAP server did not confirm restoring the message");
+    const nextUid = moved ? moved.uidMap?.get(Number(source.uid)) : undefined;
+    return { mailbox: message.imapOriginalMailbox, uid: nextUid?.toString(), uidValidity: moved ? moved.uidValidity?.toString() : undefined };
+  } finally {
+    await client.logout().catch(() => undefined);
+    client.close();
+  }
+}
+
+export async function permanentlyDeleteImapMessage(config: EmailConnectionConfig, message: ImapRemoteMessage): Promise<void> {
+  const inbound = getInboundConnectionConfig(config);
+  assertImapConfig(inbound);
+  const client = createImapFlowClient(inbound);
+  try {
+    await client.connect();
+    const source = await locateImapMessage(client, inbound, message);
+    if (!source) return;
+    if (!client.capabilities.has("UIDPLUS")) {
+      throw new Error("IMAP server does not support UIDPLUS; refusing permanent deletion because targeted expunge cannot be guaranteed");
+    }
+    const deleted = await client.messageDelete(Number(source.uid), { uid: true });
+    if (!deleted) throw new Error("IMAP server did not confirm permanent deletion");
+  } finally {
+    await client.logout().catch(() => undefined);
     client.close();
   }
 }
@@ -483,7 +620,7 @@ function readUntil(socket: net.Socket, done: () => boolean, read: () => string, 
   });
 }
 
-function buildRfc822Message(input: EmailSendInput, from: string): string {
+export function buildRfc822Message(input: EmailSendInput, from: string): string {
   const attachments = normalizeOutboundAttachments(input.attachments);
   const bodyContentType = input.bodyHtml ? "text/html" : "text/plain";
   const headers = [
@@ -516,6 +653,60 @@ function buildRfc822Message(input: EmailSendInput, from: string): string {
     `--${boundary}--`
   ];
   return `${headers.join("\r\n")}\r\n\r\n${parts.join("\r\n")}`;
+}
+
+async function resolveRequiredImapMailbox(client: ImapFlow, config: EmailConnectionConfig, role: "sent" | "trash"): Promise<string> {
+  const configured = config.mailboxMapping?.[role]?.trim();
+  if (configured) return configured;
+  const listed = (await client.list()) as Array<{ path?: string; name?: string; delimiter?: string; flags?: Set<string> | string[]; specialUse?: string }>;
+  const mailboxes = listed.map((item) => ({
+    path: item.path?.trim() || item.name?.trim() || "",
+    name: item.name?.trim() || item.path?.trim() || "",
+    delimiter: item.delimiter,
+    flags: Array.isArray(item.flags) ? item.flags : Array.from(item.flags ?? []),
+    specialUse: item.specialUse
+  })).filter((item) => item.path);
+  const discovered = suggestMailboxMapping(mailboxes, config.mailbox)[role];
+  if (!discovered) {
+    throw new Error(`IMAP ${role === "sent" ? "Sent" : "Trash"} mailbox is not mapped and could not be discovered`);
+  }
+  return discovered;
+}
+
+async function locateImapMessage(client: ImapFlow, config: EmailConnectionConfig, message: ImapRemoteMessage): Promise<ImapMessageLocator | undefined> {
+  const preferred = message.imapMailbox?.trim();
+  if (preferred && message.imapUid && message.imapUidValidity) {
+    try {
+      const opened = await client.mailboxOpen(preferred);
+      if (opened.uidValidity?.toString() === message.imapUidValidity) {
+        const matches = await client.search({ uid: message.imapUid }, { uid: true });
+        if (matches && matches.some((uid) => uid.toString() === message.imapUid)) {
+          return { mailbox: preferred, uid: message.imapUid, uidValidity: message.imapUidValidity };
+        }
+      }
+    } catch {}
+  }
+  const messageIds = [message.externalMessageId?.trim(), message.id ? formatOutboundMessageId(message.id) : undefined]
+    .filter((value): value is string => Boolean(value && !value.startsWith("imap:")));
+  if (!messageIds.length) return undefined;
+  const listed = (await client.list()) as Array<{ path?: string; name?: string }>;
+  const candidates = Array.from(new Set([preferred, message.imapOriginalMailbox, ...Object.values(config.mailboxMapping ?? {}), ...listed.map((item) => item.path ?? item.name)].filter((value): value is string => Boolean(value))));
+  for (const mailbox of candidates) {
+    try {
+      const opened = await client.mailboxOpen(mailbox);
+      for (const messageId of messageIds) {
+        const matches = await client.search({ header: { "message-id": messageId } }, { uid: true });
+        if (matches && matches.length) return { mailbox, uid: String(matches[0]), uidValidity: opened.uidValidity?.toString() };
+      }
+    } catch {}
+  }
+  return undefined;
+}
+
+function assertSafeImapMoveSupport(client: ImapFlow): void {
+  if (!client.capabilities.has("MOVE") && !client.capabilities.has("UIDPLUS")) {
+    throw new Error("IMAP server supports neither MOVE nor UIDPLUS; refusing a move that could expunge unrelated messages");
+  }
 }
 
 function buildAttachmentPart(boundary: string, attachment: EmailAttachment): string {
