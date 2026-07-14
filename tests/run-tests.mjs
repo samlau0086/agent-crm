@@ -64,6 +64,9 @@ import { resolveCountry } from "../src/lib/crm/countries.ts";
 import { nextSmartReminderPriority, smartReminderCooldownDays, smartReminderNextEligibleAt } from "../src/lib/crm/smart-reminder-lifecycle.ts";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "../src/lib/crm/languages.ts";
 import { CrmStore } from "../src/lib/crm/store.ts";
+import { buildDiscussionTargetKey, parseDiscussionTarget } from "../src/lib/discussions/target.ts";
+import { decodeDiscussionCursor, encodeDiscussionCursor } from "../src/lib/discussions/service.ts";
+import { validateDiscussionFile } from "../src/lib/discussions/storage.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
 import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, getDefaultOutboundService, getInboundConnectionConfig, normalizeEmailConnectionConfig } from "../src/lib/email/connection-config.ts";
 import { testEmailAccountConnections } from "../src/lib/email/connection-tests.ts";
@@ -3786,7 +3789,7 @@ await run("contact and company communication preferences drive compose translati
   assert.match(styles, /\.preferred-window-editor/);
 });
 
-await run("contact detail uses the shared timeline-first detail workspace", () => {
+await run("contact detail uses the shared AI-first detail workspace", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
 
@@ -3833,7 +3836,7 @@ await run("contact detail uses the shared timeline-first detail workspace", () =
   assert.match(source, /<EditableFieldRow[\s\S]*onSave=\{\(nextValue\) => onSaveField\(field, nextValue\)\}/);
   assert.match(source, /<EditableOwnerRow[\s\S]*onSave=\{onSaveOwner\}/);
   assert.match(source, /<RecordDetailWorkspace/);
-  assert.match(source, /const \[recordDetailTab, setRecordDetailTab\] = useState<RecordDetailTab>\("activities"\)/);
+  assert.match(source, /const \[recordDetailTab, setRecordDetailTab\] = useState<RecordDetailTab>\("ai"\)/);
   assert.match(source, /const \[recordDetailEditing, setRecordDetailEditing\] = useState\(false\)/);
   assert.match(source, /const selectedRecordUsesActivityTabs = selectedRecord \? \["contacts", "companies", "deals"\]\.includes\(selectedRecord\.objectKey\) : false/);
   assert.match(source, /showContactEmailSections/);
@@ -3843,9 +3846,11 @@ await run("contact detail uses the shared timeline-first detail workspace", () =
   assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(!selectedRecordUsesActivityTabs \|\| showContactDetailSections\)/);
   assert.match(source, /selectedRecordEmailAddresses\.length > 0 \|\| selectedRecordEmailThreads\.length > 0\) && \(!selectedRecordUsesActivityTabs \|\| showContactEmailSections\)/);
   const detailWorkspace = readFileSync("src/components/record-detail-workspace.tsx", "utf8");
+  assert.ok(detailWorkspace.indexOf('{ key: "ai"') < detailWorkspace.indexOf('{ key: "activities"'));
   assert.match(detailWorkspace, /data-testid=\{`record-detail-tab-\$\{tab\.key\}`\}/);
   assert.match(detailWorkspace, /aria-selected=\{activeTab === tab\.key\}/);
   assert.match(detailWorkspace, /data-testid="record-detail-tabs"/);
+  assert.match(source, /selectedRecordUsesActivityTabs && showContactAiSections \? \([\s\S]*data-testid="record-detail-reminder-card"[\s\S]*title="AI 跟进提醒"/);
   assert.match(source, /function ContactProfileEditor/);
   assert.match(source, /function ContactProfileInfoStrip/);
   assert.match(source, /function RecordDetailSummaryCard/);
@@ -15847,6 +15852,23 @@ function restoreEnv(name, value) {
   }
   process.env[name] = value;
 }
+
+await run("discussion targets and cursors are stable and validated", () => {
+  assert.equal(buildDiscussionTargetKey({ type: "record", objectKey: "custom_records", targetId: "record-1" }), "record:custom_records:record-1");
+  assert.deepEqual(parseDiscussionTarget({ type: "activity", targetId: "activity-1" }), { type: "activity", targetId: "activity-1" });
+  assert.throws(() => parseDiscussionTarget({ type: "record", objectKey: "bad:key", targetId: "record-1" }), /object key/i);
+  const source = { createdAt: new Date("2026-07-14T12:00:00.000Z"), id: "message-1" };
+  assert.deepEqual(decodeDiscussionCursor(encodeDiscussionCursor(source)), source);
+  assert.throws(() => decodeDiscussionCursor("bad"), /cursor/i);
+});
+
+await run("discussion attachment policy accepts safe files and rejects risky files", () => {
+  assert.doesNotThrow(() => validateDiscussionFile("photo.webp", "image/webp", 1024));
+  assert.doesNotThrow(() => validateDiscussionFile("proposal.pdf", "application/pdf", 1024));
+  assert.throws(() => validateDiscussionFile("payload.exe", "application/octet-stream", 1024), /not allowed/i);
+  assert.throws(() => validateDiscussionFile("preview.svg", "image/svg+xml", 1024), /not allowed/i);
+  assert.throws(() => validateDiscussionFile("large.pdf", "application/pdf", 21 * 1024 * 1024), /20 MB/i);
+});
 
 await runMcpTests(run);
 

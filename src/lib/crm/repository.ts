@@ -159,6 +159,7 @@ import {
 } from "@/lib/workflows/core";
 import { generateWorkflowWithAiDesigner } from "@/lib/workflows/ai-designer";
 import { validatePdfFileNamePattern } from "@/lib/crm/pdf-file-name";
+import { purgeDiscussionTargets } from "@/lib/discussions/cleanup";
 import {
   higherSmartReminderPriority,
   localCalendarDayKey,
@@ -3048,6 +3049,7 @@ export class PrismaCrmRepository {
       this.db.emailThreadState.deleteMany({ where: { workspaceId: context.workspaceId, threadId: thread.id } }),
       this.db.emailThread.delete({ where: { id: thread.id } })
     ]);
+    await purgeDiscussionTargets(context.workspaceId, [`email_thread:${thread.id}`]);
     await this.writeAuditLog(context, "delete", "email_thread", thread.id, {
       summary: `Deleted email thread ${thread.subject}`,
       details: { threadId: thread.id, subject: thread.subject }
@@ -6653,6 +6655,7 @@ export class PrismaCrmRepository {
   async deleteRecord(context: RequestContext, objectKey: string, recordId: string): Promise<void> {
     requirePermission(context, "crm.write");
     const record = await this.getRecord(context, objectKey, recordId);
+    const deletedActivities = await this.db.activity.findMany({ where: { workspaceId: context.workspaceId, recordId }, select: { id: true } });
     await this.db.$transaction(async (tx) => {
       await tx.emailThread.updateMany({
         where: { workspaceId: context.workspaceId, recordId },
@@ -6673,6 +6676,10 @@ export class PrismaCrmRepository {
       });
       await tx.crmRecord.delete({ where: { id: recordId, workspaceId: context.workspaceId, objectKey } });
     });
+    await purgeDiscussionTargets(context.workspaceId, [
+      `record:${objectKey}:${recordId}`,
+      ...deletedActivities.map((activity) => `activity:${activity.id}`)
+    ]);
     await this.writeAuditLog(context, "delete", "record", recordId, {
       objectKey,
       summary: `Deleted ${objectKey} record ${record.title}`,
@@ -7243,6 +7250,7 @@ export class PrismaCrmRepository {
     }
 
     await this.db.activity.delete({ where: { id: activityId } });
+    await purgeDiscussionTargets(context.workspaceId, [`activity:${activityId}`]);
     await this.writeAuditLog(context, "delete", "activity", existing.id, {
       summary: `Deleted activity ${existing.title}`,
       details: { recordId: existing.recordId, type: existing.type, title: existing.title }

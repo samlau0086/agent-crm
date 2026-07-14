@@ -7,25 +7,27 @@ import {
   CheckCircle2,
   FileText,
   Mail,
+  MessageCircle,
   Phone,
   UserRound,
   type LucideIcon
 } from "lucide-react";
 import type { ReactNode } from "react";
 
-export type RecordDetailTab = "activities" | "emails" | "notes" | "tasks" | "calls" | "meetings" | "details" | "ai";
+export type RecordDetailTab = "activities" | "emails" | "notes" | "tasks" | "calls" | "meetings" | "details" | "ai" | "discussions";
 
 export type RecordDetailTabCounts = Partial<Record<RecordDetailTab, number>>;
 
 const recordDetailTabs = [
+  { key: "ai", label: "AI 协作", icon: Bot },
+  { key: "discussions", label: "团队讨论", icon: MessageCircle },
   { key: "activities", label: "活动时间线", icon: Activity },
   { key: "emails", label: "邮件", icon: Mail },
   { key: "notes", label: "备注", icon: FileText },
   { key: "tasks", label: "任务", icon: CheckCircle2 },
   { key: "calls", label: "电话", icon: Phone },
   { key: "meetings", label: "会议", icon: CalendarClock },
-  { key: "details", label: "资料详情", icon: UserRound },
-  { key: "ai", label: "AI 协作", icon: Bot }
+  { key: "details", label: "资料详情", icon: UserRound }
 ] satisfies Array<{ key: RecordDetailTab; label: string; icon: LucideIcon }>;
 
 export function RecordDetailWorkspace({

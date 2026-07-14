@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createCompany, loginAsAdmin, type CrmRecordPayload } from "./helpers";
 
-test("contact company and deal share the timeline-first responsive detail workspace", async ({ page }) => {
+test("contact company and deal share the AI-first responsive detail workspace", async ({ page }) => {
   const suffix = `${Date.now()}`;
   const company = await (async () => {
     await loginAsAdmin(page);
@@ -27,7 +27,8 @@ test("contact company and deal share the timeline-first responsive detail worksp
   const deal = (await dealResponse.json()) as CrmRecordPayload;
 
   await page.goto(`/contacts?recordId=${encodeURIComponent(contact.id)}`);
-  await expect(page.getByTestId("record-detail-workspace")).toHaveAttribute("data-active-tab", "activities");
+  await expect(page.getByTestId("record-detail-workspace")).toHaveAttribute("data-active-tab", "ai");
+  await expect(page.getByTestId("record-detail-reminder-card")).toBeVisible();
   await expect(page.getByTestId("record-detail-summary")).toContainText(contact.title);
   await expect(page.getByTestId("record-detail-context-rail")).toBeVisible();
   await page.getByTestId("record-detail-tab-details").click();

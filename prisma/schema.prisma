@@ -57,6 +57,12 @@ model Workspace {
   workflowRuns        WorkflowRun[]
   workflowResumes     WorkflowResume[]
   workflowActionApprovals WorkflowActionApproval[]
+  discussionThreads   DiscussionThread[]
+  discussionMessages  DiscussionMessage[]
+  discussionAttachments DiscussionAttachment[]
+  discussionMentions  DiscussionMention[]
+  discussionReadStates DiscussionReadState[]
+  discussionNotifications DiscussionNotification[]
 }
 
 model User {
@@ -88,6 +94,11 @@ model User {
   mediaAssetsCreated  MediaAsset[]
   smartReminders      SmartReminder[]
   smartReminderRuns   SmartReminderRun[]
+  discussionMessages  DiscussionMessage[]       @relation("DiscussionMessageAuthor")
+  discussionAttachments DiscussionAttachment[]  @relation("DiscussionAttachmentUploader")
+  discussionMentions  DiscussionMention[]        @relation("DiscussionMentionUser")
+  discussionReadStates DiscussionReadState[]
+  discussionNotifications DiscussionNotification[] @relation("DiscussionNotificationRecipient")
 
   @@unique([workspaceId, email])
   @@index([workspaceId, avatarMediaAssetId])
@@ -954,6 +965,115 @@ model MediaAsset {
 
   @@index([workspaceId, createdAt])
   @@index([workspaceId, contentType])
+}
+
+model DiscussionThread {
+  id          String    @id @default(cuid())
+  workspaceId String
+  targetKey   String
+  targetType  String
+  objectKey   String?
+  targetId    String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages    DiscussionMessage[]
+  attachments DiscussionAttachment[]
+  readStates  DiscussionReadState[]
+
+  @@unique([workspaceId, targetKey])
+  @@index([workspaceId, targetType, targetId])
+}
+
+model DiscussionMessage {
+  id          String    @id @default(cuid())
+  workspaceId String
+  threadId    String
+  authorId    String
+  replyToId   String?
+  body        String
+  editedAt    DateTime?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  thread      DiscussionThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author      User      @relation("DiscussionMessageAuthor", fields: [authorId], references: [id])
+  replyTo     DiscussionMessage? @relation("DiscussionMessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies     DiscussionMessage[] @relation("DiscussionMessageReplies")
+  attachments DiscussionAttachment[]
+  mentions    DiscussionMention[]
+  notifications DiscussionNotification[]
+
+  @@index([workspaceId, threadId, createdAt, id])
+  @@index([workspaceId, authorId, createdAt])
+}
+
+model DiscussionAttachment {
+  id          String    @id @default(cuid())
+  workspaceId String
+  threadId    String
+  messageId   String?
+  uploadedById String
+  fileName    String
+  contentType String
+  size        Int
+  storageKey  String
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  thread      DiscussionThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  message     DiscussionMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  uploadedBy  User      @relation("DiscussionAttachmentUploader", fields: [uploadedById], references: [id])
+
+  @@index([workspaceId, threadId, createdAt])
+  @@index([workspaceId, messageId])
+  @@index([workspaceId, uploadedById, createdAt])
+}
+
+model DiscussionMention {
+  id          String    @id @default(cuid())
+  workspaceId String
+  messageId   String
+  userId      String
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  message     DiscussionMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user        User      @relation("DiscussionMentionUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([workspaceId, userId, createdAt])
+}
+
+model DiscussionReadState {
+  id          String    @id @default(cuid())
+  workspaceId String
+  threadId    String
+  userId      String
+  lastReadAt  DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  thread      DiscussionThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, threadId, userId])
+  @@index([workspaceId, userId, updatedAt])
+}
+
+model DiscussionNotification {
+  id          String    @id @default(cuid())
+  workspaceId String
+  recipientId String
+  messageId   String
+  type        String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  recipient   User      @relation("DiscussionNotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  message     DiscussionMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([recipientId, messageId, type])
+  @@index([workspaceId, recipientId, readAt, createdAt])
 }
 
 model DocumentTemplate {

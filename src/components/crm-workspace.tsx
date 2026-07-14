@@ -84,6 +84,8 @@ import { AutomationWorkspace } from "@/components/automation-workspace";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
 import { MediaAssetPreview, MediaLibraryModal } from "@/components/media-library";
 import { RecordDetailWorkspace, type RecordDetailTab } from "@/components/record-detail-workspace";
+import { TeamDiscussionPanel } from "@/components/team-discussion-panel";
+import type { DiscussionNotificationDto } from "@/lib/discussions/types";
 import { formatParsedAddressText, parseAddressWithLocalAi, type ParsedAddressDraft } from "@/lib/crm/address-parser";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "@/lib/crm/languages";
@@ -2033,6 +2035,8 @@ type HeaderNotification = {
   intent: HeaderNotificationIntent;
   event: NotificationEvent;
   syncedChannels: Array<Pick<NotificationChannel, "id" | "name" | "type">>;
+  onClick?: () => void;
+  discussion?: boolean;
 };
 
 function StandaloneModuleHeader({
@@ -2189,15 +2193,19 @@ function HeaderNotificationsMenu({
               {notifications.map((notification) => {
                 const Icon = notification.icon;
                 return (
-                  <div className={`notification-item notification-${notification.intent}`} key={notification.id}>
+                  <button className={`notification-item notification-${notification.intent}`} key={notification.id} type="button" onClick={notification.onClick}>
                     <span className="notification-item-icon"><Icon size={15} /></span>
                     <span className="notification-item-body">
                       <strong>{notification.title}</strong>
                       <span>{notification.description}</span>
                       {notification.time ? <small>{formatDateTimeSeconds(notification.time)}</small> : null}
-                      <small className="notification-sync">同步到 {formatNotificationChannelSummary(notification.syncedChannels)}</small>
+                      {notification.discussion ? (
+                        <small className="notification-sync">站内团队讨论</small>
+                      ) : (
+                        <small className="notification-sync">同步到 {formatNotificationChannelSummary(notification.syncedChannels)}</small>
+                      )}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -2270,8 +2278,12 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordPanelMode, setRecordPanelMode] = useState<RecordPanelMode>(routeRecordId ? "detail" : "closed");
   const [recordReturnEmailThreadId, setRecordReturnEmailThreadId] = useState(routeReturnEmailThreadId);
   const [recordEmailActivityFilter, setRecordEmailActivityFilter] = useState("");
-  const [recordDetailTab, setRecordDetailTab] = useState<RecordDetailTab>("activities");
+  const [recordDetailTab, setRecordDetailTab] = useState<RecordDetailTab>("ai");
   const [recordDetailEditing, setRecordDetailEditing] = useState(false);
+  const [discussionUnreadCounts, setDiscussionUnreadCounts] = useState<Record<string, number>>({});
+  const [discussionActivity, setDiscussionActivity] = useState<Activity>();
+  const [discussionEmailThread, setDiscussionEmailThread] = useState<EmailThread>();
+  const [discussionNotifications, setDiscussionNotifications] = useState<DiscussionNotificationDto[]>([]);
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
   const [contactMethodEditingRecordId, setContactMethodEditingRecordId] = useState("");
   const [contactMethodEditingValue, setContactMethodEditingValue] = useState("");
@@ -2358,6 +2370,26 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     usersById.set(currentUser.id, { ...(usersById.get(currentUser.id) ?? currentUser), ...currentUser });
     return [...usersById.values()];
   }, [currentUser, props.users]);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => fetchJson<DiscussionNotificationDto[]>("/api/discussion-notifications", { method: "GET" })
+      .then((notifications) => { if (active) setDiscussionNotifications(notifications); })
+      .catch(() => undefined);
+    void refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
+  useEffect(() => {
+    const targets = activeNav === "email"
+      ? emailThreads.slice(0, 100).map((thread) => ({ type: "email_thread" as const, targetId: thread.id }))
+      : activeNav === "activities" || activeNav === "tasks"
+        ? activities.slice(0, 100).map((activity) => ({ type: "activity" as const, targetId: activity.id }))
+        : [];
+    if (!targets.length) return;
+    void fetchJson<Record<string, number>>("/api/discussions/unread", { method: "POST", body: { targets } })
+      .then((counts) => setDiscussionUnreadCounts((current) => ({ ...current, ...counts })))
+      .catch(() => undefined);
+  }, [activeNav, activities, emailThreads]);
   const currentUserAvatarAsset = currentUser.avatarMediaAssetId ? mediaAssets.find((asset) => asset.id === currentUser.avatarMediaAssetId) : undefined;
   const currentUserAvatarUrl = currentUserAvatarAsset ? mediaAssetDataUrl(currentUserAvatarAsset) : "";
   const [smartReminders, setSmartReminders] = useState<SmartReminder[]>(props.dashboardSummary.smartReminders);
@@ -2679,7 +2711,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     [records, selectedRecord]
   );
   const selectedRecordUsesActivityTabs = selectedRecord ? ["contacts", "companies", "deals"].includes(selectedRecord.objectKey) : false;
-  const contactDetailTab = selectedRecordUsesActivityTabs ? recordDetailTab : "details";
+  const contactDetailTab = recordDetailTab === "discussions" ? "discussions" : selectedRecordUsesActivityTabs ? recordDetailTab : "details";
   const showContactEmailSections = contactDetailTab === "emails";
   const showContactActivityTimeline = contactDetailTab === "activities";
   const showContactTaskSections = contactDetailTab === "tasks";
@@ -2688,6 +2720,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const showContactMeetingSections = contactDetailTab === "meetings";
   const showContactDetailSections = contactDetailTab === "details";
   const showContactAiSections = contactDetailTab === "ai";
+  const showContactDiscussionSections = contactDetailTab === "discussions";
   const openTasks = useMemo(
     () =>
       activities
@@ -2734,9 +2767,20 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         .some((value) => String(value).toLowerCase().includes(normalizedQuery));
     });
   }, [activities, activityQuery, deletedActivityIds, workspaceUsers, records]);
-  const headerNotifications = useMemo(
-    () =>
-      buildHeaderNotifications({
+  const headerNotifications: HeaderNotification[] = [
+      ...discussionNotifications.filter((notification) => !notification.readAt).map((notification): HeaderNotification => ({
+        id: `discussion-${notification.id}`,
+        title: notification.type === "mention" ? `${notification.authorName} 提及了你` : `${notification.authorName} 回复了你`,
+        description: notification.preview || "查看团队讨论",
+        time: notification.createdAt,
+        icon: MessageCircle,
+        intent: "info",
+        event: "record.updated",
+        syncedChannels: [],
+        discussion: true,
+        onClick: () => { void openDiscussionNotification(notification); }
+      })),
+      ...buildHeaderNotifications({
         activities,
         deletedActivityIds,
         importJobs,
@@ -2746,9 +2790,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         records,
         smartReminders,
         workflowApprovals: props.workflowApprovals
-      }),
-    [activities, deletedActivityIds, importJobs, props.notificationChannels, props.objects, props.workflowApprovals, recordChangeRequests, records, smartReminders]
-  );
+      })];
   const deals = useMemo(() => records.filter((record) => record.objectKey === "deals"), [records]);
   const currencyRecords = useMemo(() => records.filter((record) => record.objectKey === "currencies"), [records]);
   const currencies = useMemo(() => getCurrencyDefinitions(currencyRecords), [currencyRecords]);
@@ -3009,7 +3051,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setContactMethodEditingValue("");
     setCompanyAddressEditing(null);
     setRecordActivityComposerType("");
-    setRecordDetailTab("activities");
+    setRecordDetailTab("ai");
     setRecordDetailEditing(false);
   }, [selectedRecord?.id]);
 
@@ -3375,7 +3417,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       setEditTagColors({});
       setEditValues({});
       setDealCloseReason("");
-      setRecordDetailTab("activities");
+      setRecordDetailTab("ai");
       setRecordDetailEditing(false);
       setRecordActivityComposerType("");
       return;
@@ -3391,7 +3433,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEditTagColors(normalizeUiTagColors(selectedRecord.tagColors ?? {}, selectedRecord.tags ?? []));
     setEditValues(buildRecordValues(selectedFields, selectedRecord));
     setDealCloseReason(String(selectedRecord.data.lostReason ?? selectedRecord.data.wonReason ?? ""));
-    setRecordDetailTab("activities");
+    setRecordDetailTab("ai");
     setRecordDetailEditing(false);
     setRecordActivityComposerType("");
   }, [selectedFields, selectedRecord, selectedRecordFormResetKey]);
@@ -3504,6 +3546,30 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setSelectedRecordId(record.id);
     setRecordReturnEmailThreadId(options.returnEmailThreadId ?? "");
     setRecordPanelMode("detail");
+  }
+
+  async function openDiscussionNotification(notification: DiscussionNotificationDto) {
+    await fetchJson("/api/discussion-notifications", { method: "PATCH", body: { ids: [notification.id] } }).catch(() => undefined);
+    setDiscussionNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item));
+    setNotificationMenuOpen(false);
+    if (notification.target.type === "record") {
+      const target = notification.target;
+      const record = records.find((item) => item.id === target.targetId && item.objectKey === target.objectKey)
+        ?? await fetchJson<CrmRecord>(`/api/records/${target.objectKey}/${target.targetId}`, { method: "GET" });
+      openRecord(record);
+      window.setTimeout(() => setRecordDetailTab("discussions"), 50);
+      return;
+    }
+    if (notification.target.type === "activity") {
+      const activity = activities.find((item) => item.id === notification.target.targetId)
+        ?? await fetchJson<Activity>(`/api/activities/${notification.target.targetId}`, { method: "GET" });
+      setDiscussionActivity(activity);
+      return;
+    }
+    const thread = emailThreads.find((item) => item.id === notification.target.targetId)
+      ?? await fetchJson<EmailThread>(`/api/email/threads/${notification.target.targetId}`, { method: "GET" });
+    setDiscussionEmailThread(thread);
+    selectEmailThread(thread.id);
   }
 
   function openAutomationForRecord(record: CrmRecord, workflowId?: string) {
@@ -6490,26 +6556,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
           )}
         </section>
-        <div className="record-detail-rail-card record-detail-reminder-card" data-testid="record-detail-reminder-card">
-          <SmartReminderPanel
-            compact
-            generating={isGeneratingSmartReminders}
-            reminders={selectedRecordSmartReminders}
-            title="AI 跟进提醒"
-            emptyMessage="暂无当前记录提醒。"
-            onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
-            onBulkDelete={(reminders) => runImmediateAction(() => requestSmartReminderBulkDelete(reminders)).then(Boolean)}
-            onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
-            onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
-            onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
-            onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
-            onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
-            onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
-            onSnooze={(reminder, days) => runImmediateAction(() => snoozeSmartReminder(reminder, days))}
-            pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
-            onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
-          />
-        </div>
       </>
     );
   }
@@ -7159,7 +7205,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       notes: selectedNotes.length,
                       tasks: selectedTasks.length,
                       calls: selectedCalls.length,
-                      meetings: selectedMeetings.length
+                      meetings: selectedMeetings.length,
+                      discussions: selectedRecord ? discussionUnreadCounts[`record:${selectedRecord.objectKey}:${selectedRecord.id}`] ?? 0 : 0
                     }}
                     notices={(
                       <>
@@ -7191,6 +7238,37 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       setRecordDetailTab(tab);
                     }}
                   >
+                    {showContactDiscussionSections ? (
+                      <TeamDiscussionPanel
+                        currentUserId={currentUser.id}
+                        target={{ type: "record", objectKey: selectedRecord.objectKey, targetId: selectedRecord.id }}
+                        users={workspaceUsers}
+                        onUnreadChange={(count) => setDiscussionUnreadCounts((current) => ({ ...current, [`record:${selectedRecord.objectKey}:${selectedRecord.id}`]: count }))}
+                      />
+                    ) : (
+                    <>
+                    {selectedRecordUsesActivityTabs && showContactAiSections ? (
+                      <div className="record-detail-reminder-card" data-testid="record-detail-reminder-card">
+                        <SmartReminderPanel
+                          compact
+                          generating={isGeneratingSmartReminders}
+                          reminders={selectedRecordSmartReminders}
+                          title="AI 跟进提醒"
+                          emptyMessage="暂无当前记录提醒。"
+                          onComplete={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "done" }))}
+                          onBulkDelete={(reminders) => runImmediateAction(() => requestSmartReminderBulkDelete(reminders)).then(Boolean)}
+                          onDelete={(reminder) => runImmediateAction(() => requestSmartReminderDelete(reminder))}
+                          onConvertTask={(reminder) => runImmediateAction(() => convertSmartReminderToTask(reminder))}
+                          onDismiss={(reminder) => runImmediateAction(() => updateSmartReminder(reminder, { status: "dismissed" }))}
+                          onGenerate={() => runAction(() => generateSmartReminders({ objectKey: selectedRecord.objectKey, recordId: selectedRecord.id }))}
+                          onOpenRecord={(reminder) => runImmediateAction(() => openSmartReminderRecord(reminder))}
+                          onRestore={(reminder) => runImmediateAction(() => restoreSmartReminder(reminder))}
+                          onSnooze={(reminder, days) => runImmediateAction(() => snoozeSmartReminder(reminder, days))}
+                          pendingDeleteRequestsById={pendingSmartReminderDeleteRequestsById}
+                          onCancelDeleteRequest={(request) => runImmediateAction(() => cancelRecordChangeRequest(request))}
+                        />
+                      </div>
+                    ) : null}
                     {showContactDetailSections && isPoolEnabledForObject(selectedRecord.objectKey, props.poolSettings) ? (
                       <RecordPoolPanel
                         currentUserId={props.contextUser.id}
@@ -7978,6 +8056,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                       onShowToast={showToast}
                     />
                     ) : null}
+                    </>
+                    )}
                   </RecordDetailWorkspace>
                 ) : (
                   <div className="empty-state">请先从左侧列表选择一条记录</div>
@@ -8170,6 +8250,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             providerProfiles={emailAiSettings.providerProfiles}
             knowledgeDraft={knowledgeDraft}
             mediaAssets={mediaAssets}
+            currentUser={currentUser}
+            users={workspaceUsers}
             disabled={isPending}
             canManageEmailSettings={canManageEmailSettings}
             canManageAiSettings={canManageAiSettings}
@@ -8266,6 +8348,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onShowSuccess={showSuccess}
             onRequestConfirm={requestConfirm}
             onRequestPrompt={requestPrompt}
+            onDiscuss={setDiscussionEmailThread}
+            discussionUnreadCounts={discussionUnreadCounts}
             sidebarCollapsed={appSidebarCollapsed}
             onToggleAppSidebar={toggleAppSidebar}
           />
@@ -8286,6 +8370,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUploadMediaAssets={uploadMediaAssets}
             onRequestPrompt={requestPrompt}
             onShowToast={showToast}
+            onDiscuss={setDiscussionActivity}
+            discussionUnreadCounts={discussionUnreadCounts}
           />
         )}
         {activeNav === "activities" && (
@@ -8295,6 +8381,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
             records={records}
             onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
+            onDiscuss={setDiscussionActivity}
+            discussionUnreadCounts={discussionUnreadCounts}
           />
         )}
         {activeNav === "automation" && (
@@ -8360,6 +8448,36 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
 
       </main>
+      {discussionActivity ? (
+        <>
+          <div className="discussion-drawer-backdrop" role="presentation" onClick={() => setDiscussionActivity(undefined)} />
+          <aside className="discussion-drawer" aria-label={`团队讨论 ${discussionActivity.title}`}>
+            <TeamDiscussionPanel
+              currentUserId={currentUser.id}
+              target={{ type: "activity", targetId: discussionActivity.id }}
+              title={`团队讨论 · ${discussionActivity.title}`}
+              users={workspaceUsers}
+              onClose={() => setDiscussionActivity(undefined)}
+              onUnreadChange={(count) => setDiscussionUnreadCounts((current) => ({ ...current, [`activity:${discussionActivity.id}`]: count }))}
+            />
+          </aside>
+        </>
+      ) : null}
+      {discussionEmailThread ? (
+        <>
+          <div className="discussion-drawer-backdrop" role="presentation" onClick={() => setDiscussionEmailThread(undefined)} />
+          <aside className="discussion-drawer" aria-label={`团队讨论 ${discussionEmailThread.subject}`}>
+            <TeamDiscussionPanel
+              currentUserId={currentUser.id}
+              target={{ type: "email_thread", targetId: discussionEmailThread.id }}
+              title={`团队讨论 · ${discussionEmailThread.subject}`}
+              users={workspaceUsers}
+              onClose={() => setDiscussionEmailThread(undefined)}
+              onUnreadChange={(count) => setDiscussionUnreadCounts((current) => ({ ...current, [`email_thread:${discussionEmailThread.id}`]: count }))}
+            />
+          </aside>
+        </>
+      ) : null}
       {exportDialogOpen && activeObject ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setExportDialogOpen(false)}>
           <div className="modal-card module-export-modal" role="dialog" aria-modal="true" aria-label={`导出${activeObjectDisplay.pluralLabel}`} onMouseDown={(event) => event.stopPropagation()}>
@@ -9506,6 +9624,8 @@ function EmailWorkspace({
   providerProfiles,
   knowledgeDraft,
   mediaAssets,
+  currentUser,
+  users,
   disabled,
   canManageEmailSettings,
   canManageAiSettings,
@@ -9575,7 +9695,9 @@ function EmailWorkspace({
   onRequestConfirm,
   onRequestPrompt,
   sidebarCollapsed,
-  onToggleAppSidebar
+  onToggleAppSidebar,
+  onDiscuss,
+  discussionUnreadCounts
 }: {
   accounts: EmailAccount[];
   accountActionKey: EmailAccountActionKey;
@@ -9614,6 +9736,8 @@ function EmailWorkspace({
   providerProfiles: EmailAiSettings["providerProfiles"];
   knowledgeDraft: KnowledgeArticleDraft;
   mediaAssets: MediaAsset[];
+  currentUser: User;
+  users: User[];
   disabled: boolean;
   canManageEmailSettings: boolean;
   canManageAiSettings: boolean;
@@ -9688,6 +9812,8 @@ function EmailWorkspace({
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
   sidebarCollapsed: boolean;
   onToggleAppSidebar: () => void;
+  onDiscuss: (thread: EmailThread) => void;
+  discussionUnreadCounts: Record<string, number>;
 }) {
   const selectedThread = threads.find((thread) => thread.id === selectedThreadId);
   const selectedMessages = selectedThread ? messagesByThread[selectedThread.id] ?? [] : [];
@@ -12167,6 +12293,11 @@ function EmailWorkspace({
                   <div className="gmail-detail-header">
                     <h2>{selectedDetailHeadingMessage?.subject || selectedThread.subject}</h2>
                     <div className="toolbar">
+                      <button className="secondary-button" data-testid="email-thread-discussion" type="button" onClick={() => onDiscuss(selectedThread)}>
+                        <MessageCircle size={14} />
+                        团队讨论
+                        {(discussionUnreadCounts[`email_thread:${selectedThread.id}`] ?? 0) > 0 ? <span className="badge">{discussionUnreadCounts[`email_thread:${selectedThread.id}`]}</span> : null}
+                      </button>
                       <span className="badge">类别：{getEmailCategoryLabel((threadUiState[selectedThread.id]?.category ?? inferEmailThreadCategory(selectedThread, selectedMessages)) as EmailCategoryKey)}</span>
                       {threadUiState[selectedThread.id]?.starred ? <span className="badge">星标</span> : null}
                       {threadUiState[selectedThread.id]?.important ? <span className="badge">重要</span> : null}
@@ -14124,7 +14255,9 @@ function TaskView({
   onUpdateTask,
   onUploadMediaAssets,
   onRequestPrompt,
-  onShowToast
+  onShowToast,
+  onDiscuss,
+  discussionUnreadCounts
 }: {
   activities: Activity[];
   mediaAssets: MediaAsset[];
@@ -14140,6 +14273,8 @@ function TaskView({
   onUploadMediaAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
   onShowToast: (toast: ToastState) => void;
+  onDiscuss: (activity: Activity) => void;
+  discussionUnreadCounts: Record<string, number>;
 }) {
   const [status, setStatus] = useState<"todo" | "completed" | "archived">("todo");
   const [calendarCursor, setCalendarCursor] = useState(() => startOfCalendarDay(new Date()));
@@ -14289,6 +14424,8 @@ function TaskView({
           onDelete={onDelete}
           onEdit={openTaskEditor}
           onToggle={onToggle}
+          onDiscuss={onDiscuss}
+          discussionUnreadCounts={discussionUnreadCounts}
         />
       ) : (
         <div className="task-calendar" data-testid={`task-calendar-${view}`}>
@@ -14374,7 +14511,9 @@ function TaskList({
   onArchive,
   onDelete,
   onEdit,
-  onToggle
+  onToggle,
+  onDiscuss,
+  discussionUnreadCounts = {}
 }: {
   activities: Activity[];
   emptyMessage: string;
@@ -14386,6 +14525,8 @@ function TaskList({
   onDelete?: (activity: Activity) => void;
   onEdit?: (activity: Activity) => void;
   onToggle: (activity: Activity, completed: boolean) => void;
+  onDiscuss?: (activity: Activity) => void;
+  discussionUnreadCounts?: Record<string, number>;
 }) {
   if (activities.length === 0) {
     return <div className="empty-state">{emptyMessage}</div>;
@@ -14420,6 +14561,13 @@ function TaskList({
             {taskDetails.text && <div className="subtle">{taskDetails.text}</div>}
             <TaskAttachmentPreview attachments={taskDetails.attachments} mediaAssets={mediaAssets} />
             <div className="toolbar" style={{ marginTop: 10 }}>
+              {onDiscuss ? (
+                <button className="secondary-button" data-testid={testIdPrefix ? `${testIdPrefix}-discussion-${activity.id}` : undefined} type="button" onClick={() => onDiscuss(activity)}>
+                  <MessageCircle size={16} />
+                  团队讨论
+                  {(discussionUnreadCounts[`activity:${activity.id}`] ?? 0) > 0 ? <span className="badge">{discussionUnreadCounts[`activity:${activity.id}`]}</span> : null}
+                </button>
+              ) : null}
               {onEdit && (
                 <button
                   className="secondary-button"
@@ -15107,7 +15255,9 @@ function ActivityTimeline({
   pendingDeleteRequestsById,
   records,
   testIdPrefix = "activity-view-activity",
-  onDelete
+  onDelete,
+  onDiscuss,
+  discussionUnreadCounts = {}
 }: {
   activities: Activity[];
   emptyMessage?: string;
@@ -15116,6 +15266,8 @@ function ActivityTimeline({
   records: CrmRecord[];
   testIdPrefix?: string;
   onDelete: (activity: Activity) => void;
+  onDiscuss?: (activity: Activity) => void;
+  discussionUnreadCounts?: Record<string, number>;
 }) {
   const sortedActivities = [...activities].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
   if (sortedActivities.length === 0) {
@@ -15185,8 +15337,14 @@ function ActivityTimeline({
                   </div>
                   {body ? <div className="activity-timeline-body">{body}</div> : null}
                   <TaskAttachmentPreview attachments={details.attachments} mediaAssets={mediaAssets} />
-                  {onDelete ? (
+                  {onDelete || onDiscuss ? (
                     <div className="activity-timeline-footer">
+                      {onDiscuss ? (
+                        <button className="secondary-button" data-testid={`${testIdPrefix}-discussion-${activity.id}`} type="button" onClick={() => onDiscuss(activity)}>
+                          <MessageCircle size={16} />团队讨论
+                          {(discussionUnreadCounts[`activity:${activity.id}`] ?? 0) > 0 ? <span className="badge">{discussionUnreadCounts[`activity:${activity.id}`]}</span> : null}
+                        </button>
+                      ) : null}
                       <button
                         className="secondary-button danger-button"
                         data-testid={`${testIdPrefix}-delete-${activity.id}`}
