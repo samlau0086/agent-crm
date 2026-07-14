@@ -224,9 +224,47 @@ jobs:
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/ai_agent_crm_deploy_key
-          chmod 600 ~/.ssh/ai_agent_crm_deploy_key
-          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+          key_path="$HOME/.ssh/ai_agent_crm_deploy_key"
+          known_hosts_path="$HOME/.ssh/known_hosts"
+          scan_output="$(mktemp)"
+          scan_error="$(mktemp)"
+          trap 'rm -f "$scan_output" "$scan_error"' EXIT
+
+          # GitHub secrets copied from Windows may contain CRLF. Removing CR keeps
+          # the PEM/OpenSSH payload intact without ever printing the secret.
+          printf '%s\n' "$VPS_SSH_KEY" | tr -d '\r' > "$key_path"
+          chmod 600 "$key_path"
+          if ! ssh-keygen -y -f "$key_path" >/dev/null 2>"$scan_error"; then
+            echo "::error title=Invalid VPS_SSH_KEY::The secret is not a readable unencrypted OpenSSH/PEM private key. Store the complete multiline private key, including BEGIN/END lines."
+            sed 's/^/ssh-keygen: /' "$scan_error"
+            exit 1
+          fi
+
+          if [[ "$VPS_HOST" == *"://"* || "$VPS_HOST" == */* ]]; then
+            echo "::error title=Invalid VPS_HOST::Use only a hostname or IP address, without http://, https://, a path, or a port. Configure the port separately in VPS_PORT."
+            exit 1
+          fi
+
+          scan_ok=false
+          for attempt in 1 2 3; do
+            : > "$scan_output"
+            : > "$scan_error"
+            if ssh-keyscan -T 15 -p "$VPS_PORT" "$VPS_HOST" >"$scan_output" 2>"$scan_error" && [ -s "$scan_output" ]; then
+              scan_ok=true
+              break
+            fi
+            echo "::warning title=SSH host scan retry::Attempt ${attempt}/3 could not read an SSH host key from ${VPS_HOST}:${VPS_PORT}."
+            [ "$attempt" -eq 3 ] || sleep $((attempt * 2))
+          done
+          if [ "$scan_ok" != "true" ]; then
+            echo "::error title=Cannot reach VPS SSH::No SSH host key was returned by ${VPS_HOST}:${VPS_PORT}. Verify sshd is listening, the cloud security group/firewall allows this port from GitHub-hosted runners, and VPS_HOST contains only the hostname or IP."
+            sed 's/^/ssh-keyscan: /' "$scan_error"
+            exit 1
+          fi
+
+          touch "$known_hosts_path"
+          chmod 600 "$known_hosts_path"
+          sort -u "$scan_output" >> "$known_hosts_path"
 
       - name: Create remote deployment directory
         shell: bash

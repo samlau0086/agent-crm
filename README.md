@@ -407,9 +407,9 @@ npm run deploy:verify:dry-run
 
 GitHub Actions Secrets：
 
-- `VPS_HOST`：VPS IP 或域名。
+- `VPS_HOST`：VPS IP 或域名；不要包含 `http://`、`https://`、路径或端口。
 - `VPS_USER`：SSH 用户。
-- `VPS_SSH_KEY`：SSH 私钥。
+- `VPS_SSH_KEY`：完整的未加密 OpenSSH/PEM 私钥，需保留 `BEGIN`/`END` 行和原始多行格式；不要填写 `.pub` 公钥。
 - `VPS_PORT`：SSH 端口，默认 `22`，可选；优先建议放在 Variables，同名 Secret 仍兼容。
 - `POSTGRES_PASSWORD`：外部 Postgres 密码；workflow 渲染 `DATABASE_URL` 时会自动 URL encode，手写 `DATABASE_URL` 时才需要自己编码。
 - `EMAIL_CONFIG_SECRET`：邮箱 SMTP/IMAP/OAuth 凭据加密密钥。至少 16 字符，建议 32 字符以上；必须长期稳定保存，不能每次部署重新生成。更换它会导致已有邮箱配置无法解密，除非先做密钥轮换迁移。
