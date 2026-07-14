@@ -7,6 +7,7 @@ out
 dist
 coverage
 backups
+discussion-uploads
 playwright-report
 test-results
 *.tsbuildinfo

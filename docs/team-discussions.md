@@ -2,18 +2,13 @@
 
 Team discussions are available on every CRM record (including custom objects), activity/task, and email thread. They inherit the target's CRM permissions and support replies, mentions, unread state, images, files, and 10-second incremental polling.
 
-## Object storage
+## VPS file storage
 
-Attachments are private S3-compatible objects. Configure these variables for the web service:
+Attachments are stored directly on the VPS in a private persistent directory. Configure the web service with:
 
-- `DISCUSSION_STORAGE_ENDPOINT`
-- `DISCUSSION_STORAGE_REGION`
-- `DISCUSSION_STORAGE_BUCKET`
-- `DISCUSSION_STORAGE_ACCESS_KEY`
-- `DISCUSSION_STORAGE_SECRET_KEY`
-- `DISCUSSION_STORAGE_FORCE_PATH_STYLE`
+- `DISCUSSION_STORAGE_DIR=/app/discussion-uploads`
 
-The bucket must already exist. The CRM needs permission to put, get, and delete objects in the bucket. Browsers never receive object-storage credentials or direct public object URLs; authenticated downloads go through `/api/discussions/attachments/[id]`.
+Docker Compose mounts this directory from `${CRM_DATA_DIR}/discussion-uploads` (normally `/opt/ai-agent-crm/discussion-uploads`) so files survive container replacement and application upgrades. The directory must be included in VPS backups. It must not be exposed as a public static directory; authenticated downloads go through `/api/discussions/attachments/[id]`.
 
 Each file is limited to 20 MB. A message can contain at most 10 files and 50 MB total. Executable, script, HTML, and SVG files are rejected.
 

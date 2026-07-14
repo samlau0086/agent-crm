@@ -66,7 +66,7 @@ import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions 
 import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildDiscussionTargetKey, parseDiscussionTarget } from "../src/lib/discussions/target.ts";
 import { decodeDiscussionCursor, encodeDiscussionCursor } from "../src/lib/discussions/service.ts";
-import { validateDiscussionFile } from "../src/lib/discussions/storage.ts";
+import { deleteDiscussionObject, getDiscussionObject, putDiscussionObject, validateDiscussionFile } from "../src/lib/discussions/storage.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
 import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, getDefaultOutboundService, getInboundConnectionConfig, normalizeEmailConnectionConfig } from "../src/lib/email/connection-config.ts";
 import { testEmailAccountConnections } from "../src/lib/email/connection-tests.ts";
@@ -15868,6 +15868,23 @@ await run("discussion attachment policy accepts safe files and rejects risky fil
   assert.throws(() => validateDiscussionFile("payload.exe", "application/octet-stream", 1024), /not allowed/i);
   assert.throws(() => validateDiscussionFile("preview.svg", "image/svg+xml", 1024), /not allowed/i);
   assert.throws(() => validateDiscussionFile("large.pdf", "application/pdf", 21 * 1024 * 1024), /20 MB/i);
+});
+
+await run("discussion attachments persist on the configured local filesystem", async () => {
+  const previous = process.env.DISCUSSION_STORAGE_DIR;
+  const directory = join(tmpdir(), `crm-discussion-storage-${Date.now()}`);
+  process.env.DISCUSSION_STORAGE_DIR = directory;
+  try {
+    const key = "workspace/thread/file-id";
+    const source = new TextEncoder().encode("local-vps-storage");
+    await putDiscussionObject(key, source, "text/plain");
+    assert.equal(new TextDecoder().decode(await getDiscussionObject(key)), "local-vps-storage");
+    await deleteDiscussionObject(key);
+    await assert.rejects(() => getDiscussionObject(key), /not found/i);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    restoreEnv("DISCUSSION_STORAGE_DIR", previous);
+  }
 });
 
 await runMcpTests(run);
