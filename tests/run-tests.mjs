@@ -66,6 +66,7 @@ import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions 
 import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildDiscussionTargetKey, parseDiscussionTarget } from "../src/lib/discussions/target.ts";
 import { decodeDiscussionCursor, encodeDiscussionCursor } from "../src/lib/discussions/service.ts";
+import { buildDiscussionTree, discussionAncestorIds, groupDiscussionMessageIdsByRoot } from "../src/lib/discussions/tree.ts";
 import { deleteDiscussionObject, getDiscussionObject, putDiscussionObject, validateDiscussionFile } from "../src/lib/discussions/storage.ts";
 import { createMediaStorageKey, deleteMediaObject, getMediaObject, putMediaObject, validateMediaFile } from "../src/lib/media/storage.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
@@ -15942,6 +15943,36 @@ await run("discussion targets and cursors are stable and validated", () => {
   const source = { createdAt: new Date("2026-07-14T12:00:00.000Z"), id: "message-1" };
   assert.deepEqual(decodeDiscussionCursor(encodeDiscussionCursor(source)), source);
   assert.throws(() => decodeDiscussionCursor("bad"), /cursor/i);
+});
+
+await run("discussion comments build a stable unlimited tree with visual depth capped at four", () => {
+  const comments = [
+    { id: "reply-b", parentId: "root", createdAt: "2026-01-01T00:02:00.000Z" },
+    { id: "deep-5", parentId: "deep-4", createdAt: "2026-01-01T00:06:00.000Z" },
+    { id: "root", createdAt: "2026-01-01T00:00:00.000Z" },
+    { id: "deep-3", parentId: "reply-a", createdAt: "2026-01-01T00:03:00.000Z" },
+    { id: "reply-a", parentId: "root", createdAt: "2026-01-01T00:01:00.000Z" },
+    { id: "deep-4", parentId: "deep-3", createdAt: "2026-01-01T00:04:00.000Z" }
+  ];
+  const tree = buildDiscussionTree(comments);
+  assert.equal(tree.length, 1);
+  assert.deepEqual(tree[0].children.map((node) => node.message.id), ["reply-a", "reply-b"]);
+  const deepest = tree[0].children[0].children[0].children[0].children[0];
+  assert.equal(deepest.depth, 4);
+  assert.equal(deepest.visualDepth, 4);
+  assert.equal(buildDiscussionTree([{ id: "orphan", parentId: "missing", createdAt: "2026-01-01T00:00:00.000Z" }])[0].message.id, "orphan");
+});
+
+await run("discussion root grouping and incremental ancestor context preserve reply threads", () => {
+  const comments = [
+    { id: "root", createdAt: "2026-01-01T00:00:00.000Z" },
+    { id: "reply", parentId: "root", createdAt: "2026-01-01T00:01:00.000Z" },
+    { id: "deep", parentId: "reply", createdAt: "2026-01-01T00:02:00.000Z" },
+    { id: "other", createdAt: "2026-01-01T00:03:00.000Z" }
+  ];
+  assert.deepEqual(groupDiscussionMessageIdsByRoot(comments).get("root"), ["root", "reply", "deep"]);
+  assert.deepEqual(new Set(discussionAncestorIds(comments, ["deep"])), new Set(["reply", "root"]));
+  assert.deepEqual(discussionAncestorIds(comments, ["reply", "deep"]), ["root"]);
 });
 
 await run("discussion attachment policy accepts safe files and rejects risky files", () => {

@@ -12,6 +12,7 @@ import {
 import { createMediaAsset, assertMediaAssetAccess } from "@/lib/media/service";
 import { deleteMediaObject } from "@/lib/media/storage";
 import type { DiscussionMessageDto, DiscussionMessagesPage, DiscussionNotificationDto, DiscussionTarget } from "@/lib/discussions/types";
+import { discussionAncestorIds, groupDiscussionMessageIdsByRoot } from "@/lib/discussions/tree";
 
 const messageInclude = {
   author: { select: { id: true, name: true, avatarMediaAssetId: true } },
@@ -68,25 +69,22 @@ function cursorWhere(cursor: { createdAt: Date; id: string }, direction: "before
 export async function listDiscussionMessages(
   context: RequestContext,
   target: DiscussionTarget,
-  options: { before?: string; after?: string; limit?: number }
+  options: { before?: string; after?: string; focusId?: string; limit?: number }
 ): Promise<DiscussionMessagesPage> {
   await assertDiscussionTargetAccess(context, target);
   const thread = await getThread(context, target, false);
   if (!thread) return { messages: [], unreadCount: 0 };
-  const requestedLimit = options.limit ?? 50;
-  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.trunc(requestedLimit), 100)) : 50;
+  const requestedLimit = options.limit ?? 20;
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.trunc(requestedLimit), 100)) : 20;
   const after = options.after ? decodeDiscussionCursor(options.after) : undefined;
   const before = options.before ? decodeDiscussionCursor(options.before) : undefined;
   if (after && before) throw new ApiError(400, "VALIDATION_ERROR", "Use either before or after cursor");
-  const rows = await prisma.discussionMessage.findMany({
-    where: { workspaceId: context.workspaceId, threadId: thread.id, ...(after ? cursorWhere(after, "after") : before ? cursorWhere(before, "before") : {}) },
-    include: messageInclude,
-    orderBy: [{ createdAt: after ? "asc" : "desc" }, { id: after ? "asc" : "desc" }],
-    take: after ? limit : limit + 1
+  const metadata = await prisma.discussionMessage.findMany({
+    where: { workspaceId: context.workspaceId, threadId: thread.id },
+    select: { id: true, replyToId: true, createdAt: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }]
   });
-  const hasMore = !after && rows.length > limit;
-  if (hasMore) rows.pop();
-  if (!after) rows.reverse();
+  const treeItems = metadata.map((message) => ({ id: message.id, parentId: message.replyToId ?? undefined, createdAt: message.createdAt.toISOString() }));
   const readState = await prisma.discussionReadState.findUnique({
     where: { workspaceId_threadId_userId: { workspaceId: context.workspaceId, threadId: thread.id, userId: context.user.id } }
   });
@@ -99,11 +97,44 @@ export async function listDiscussionMessages(
       ...(readState ? { createdAt: { gt: readState.lastReadAt } } : {})
     }
   });
+  if (after) {
+    const rows = await prisma.discussionMessage.findMany({
+      where: { workspaceId: context.workspaceId, threadId: thread.id, ...cursorWhere(after, "after") },
+      include: messageInclude,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: limit
+    });
+    const ancestorIds = discussionAncestorIds(treeItems, rows.map((row) => row.id));
+    const contextRows = ancestorIds.length ? await prisma.discussionMessage.findMany({ where: { id: { in: ancestorIds }, workspaceId: context.workspaceId, threadId: thread.id }, include: messageInclude, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }) : [];
+    return {
+      messages: rows.map(mapMessage),
+      contextMessages: contextRows.map(mapMessage),
+      unreadCount,
+      ...(rows.at(-1) ? { latestCursor: encodeDiscussionCursor(rows.at(-1)!) } : {})
+    };
+  }
+
+  const metadataById = new Map(metadata.map((message) => [message.id, message]));
+  const rootGroups = groupDiscussionMessageIdsByRoot(treeItems);
+  let roots = [...rootGroups.entries()].map(([rootId, messageIds]) => {
+    const lastMessage = messageIds.map((id) => metadataById.get(id)!).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))[0]!;
+    return { rootId, messageIds, createdAt: lastMessage.createdAt };
+  }).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.rootId.localeCompare(left.rootId));
+  if (before) roots = roots.filter((root) => root.createdAt < before.createdAt || (root.createdAt.getTime() === before.createdAt.getTime() && root.rootId < before.id));
+  const normalRootPage = roots.slice(0, limit + 1);
+  const hasMore = normalRootPage.length > limit;
+  if (hasMore) normalRootPage.pop();
+  const focusedRoot = !before && options.focusId ? roots.find((root) => root.messageIds.includes(options.focusId!)) : undefined;
+  const rootPage = focusedRoot && !normalRootPage.some((root) => root.rootId === focusedRoot.rootId) ? [...normalRootPage, focusedRoot] : normalRootPage;
+  const selectedIds = rootPage.flatMap((root) => root.messageIds);
+  const rows = selectedIds.length ? await prisma.discussionMessage.findMany({ where: { id: { in: selectedIds }, workspaceId: context.workspaceId, threadId: thread.id }, include: messageInclude, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }) : [];
+  const newest = metadata.at(-1);
+  const oldestRoot = normalRootPage.at(-1);
   return {
     messages: rows.map(mapMessage),
     unreadCount,
-    ...(hasMore && rows[0] ? { nextBefore: encodeDiscussionCursor(rows[0]) } : {}),
-    ...(rows.at(-1) ? { latestCursor: encodeDiscussionCursor(rows.at(-1)!) } : {})
+    ...(hasMore && oldestRoot ? { nextBefore: encodeDiscussionCursor({ createdAt: oldestRoot.createdAt, id: oldestRoot.rootId }) } : {}),
+    ...(newest ? { latestCursor: encodeDiscussionCursor(newest) } : {})
   };
 }
 
@@ -325,6 +356,7 @@ function mapMessage(message: MessageWithRelations): DiscussionMessageDto {
     threadId: message.threadId,
     author: { id: message.author.id, name: message.author.name, avatarMediaAssetId: message.author.avatarMediaAssetId ?? undefined },
     body: message.deletedAt ? "" : message.body,
+    parentId: message.replyToId ?? undefined,
     ...(message.replyTo ? { replyTo: { id: message.replyTo.id, authorName: message.replyTo.author.name, body: message.replyTo.deletedAt ? "" : message.replyTo.body.slice(0, 300), deleted: Boolean(message.replyTo.deletedAt) } } : {}),
     attachments: message.deletedAt ? [] : message.attachments.map(mapAttachment),
     mentionUserIds: message.mentions.map((mention) => mention.userId),

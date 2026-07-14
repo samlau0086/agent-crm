@@ -19,7 +19,11 @@ test("record, activity, and email surfaces expose team discussions", async ({ pa
   const discussionButton = page.getByTestId(/activity-view-activity-discussion-/).first();
   if (await discussionButton.count()) {
     await discussionButton.click();
-    await expect(page.getByTestId("team-discussion-panel")).toBeVisible();
+    await expect(discussionButton).toHaveAttribute("aria-expanded", "true");
+    const activityId = (await discussionButton.getAttribute("data-testid"))?.replace("activity-view-activity-discussion-", "");
+    await expect(page.locator(`#activity-discussion-${activityId}`)).toBeVisible();
+    await discussionButton.click();
+    await expect(discussionButton).toHaveAttribute("aria-expanded", "false");
   }
 
   await page.goto("/email");

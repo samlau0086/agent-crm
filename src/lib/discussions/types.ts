@@ -17,6 +17,7 @@ export interface DiscussionMessageDto {
   threadId: string;
   author: { id: string; name: string; avatarMediaAssetId?: string };
   body: string;
+  parentId?: string;
   replyTo?: { id: string; authorName: string; body: string; deleted: boolean };
   attachments: DiscussionAttachmentDto[];
   mentionUserIds: string[];
@@ -27,6 +28,7 @@ export interface DiscussionMessageDto {
 
 export interface DiscussionMessagesPage {
   messages: DiscussionMessageDto[];
+  contextMessages?: DiscussionMessageDto[];
   nextBefore?: string;
   latestCursor?: string;
   unreadCount: number;

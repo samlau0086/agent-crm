@@ -20,7 +20,7 @@ async function getHandler(request: NextRequest) {
     const context = await getRequestContext(request);
     const params = request.nextUrl.searchParams;
     const target = parseDiscussionTarget({ type: params.get("type"), objectKey: params.get("objectKey"), targetId: params.get("targetId") });
-    return ok(await listDiscussionMessages(context, target, { before: params.get("before") ?? undefined, after: params.get("after") ?? undefined, limit: params.get("limit") ? Number(params.get("limit")) : undefined }));
+    return ok(await listDiscussionMessages(context, target, { before: params.get("before") ?? undefined, after: params.get("after") ?? undefined, focusId: params.get("focus") ?? undefined, limit: params.get("limit") ? Number(params.get("limit")) : undefined }));
   } catch (error) {
     return handleApiError(error, request);
   }

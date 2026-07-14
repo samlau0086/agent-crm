@@ -2282,7 +2282,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [recordDetailTab, setRecordDetailTab] = useState<RecordDetailTab>("ai");
   const [recordDetailEditing, setRecordDetailEditing] = useState(false);
   const [discussionUnreadCounts, setDiscussionUnreadCounts] = useState<Record<string, number>>({});
-  const [discussionActivity, setDiscussionActivity] = useState<Activity>();
+  const [expandedDiscussionActivityId, setExpandedDiscussionActivityId] = useState<string>();
+  const [discussionFocusMessageId, setDiscussionFocusMessageId] = useState<string>();
   const [discussionEmailThread, setDiscussionEmailThread] = useState<EmailThread>();
   const [discussionNotifications, setDiscussionNotifications] = useState<DiscussionNotificationDto[]>([]);
   const [contactMethodEditingId, setContactMethodEditingId] = useState("");
@@ -3557,6 +3558,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       const target = notification.target;
       const record = records.find((item) => item.id === target.targetId && item.objectKey === target.objectKey)
         ?? await fetchJson<CrmRecord>(`/api/records/${target.objectKey}/${target.targetId}`, { method: "GET" });
+      setDiscussionFocusMessageId(notification.messageId);
       openRecord(record);
       window.setTimeout(() => setRecordDetailTab("discussions"), 50);
       return;
@@ -3564,13 +3566,25 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     if (notification.target.type === "activity") {
       const activity = activities.find((item) => item.id === notification.target.targetId)
         ?? await fetchJson<Activity>(`/api/activities/${notification.target.targetId}`, { method: "GET" });
-      setDiscussionActivity(activity);
+      const destination = activity.type === "task" ? "tasks" : "activities";
+      if (destination === "tasks") setTaskQuery("");
+      else setActivityQuery("");
+      setActiveNav(destination);
+      router.push(crmPathForNav(destination));
+      setDiscussionFocusMessageId(notification.messageId);
+      setExpandedDiscussionActivityId(activity.id);
       return;
     }
     const thread = emailThreads.find((item) => item.id === notification.target.targetId)
       ?? await fetchJson<EmailThread>(`/api/email/threads/${notification.target.targetId}`, { method: "GET" });
     setDiscussionEmailThread(thread);
+    setDiscussionFocusMessageId(notification.messageId);
     selectEmailThread(thread.id);
+  }
+
+  function toggleActivityDiscussion(activity: Activity) {
+    setDiscussionFocusMessageId(undefined);
+    setExpandedDiscussionActivityId((current) => current === activity.id ? undefined : activity.id);
   }
 
   function openAutomationForRecord(record: CrmRecord, workflowId?: string) {
@@ -7242,6 +7256,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                     {showContactDiscussionSections ? (
                       <TeamDiscussionPanel
                         currentUserId={currentUser.id}
+                        focusMessageId={discussionFocusMessageId}
                         target={{ type: "record", objectKey: selectedRecord.objectKey, targetId: selectedRecord.id }}
                         users={workspaceUsers}
                         onUnreadChange={(count) => setDiscussionUnreadCounts((current) => ({ ...current, [`record:${selectedRecord.objectKey}:${selectedRecord.id}`]: count }))}
@@ -7856,6 +7871,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         ) : null}
                         <TaskList
                           activities={selectedTasks}
+                          currentUserId={currentUser.id}
+                          expandedDiscussionActivityId={expandedDiscussionActivityId}
+                          discussionFocusMessageId={discussionFocusMessageId}
                           emptyMessage="暂无任务"
                           mediaAssets={mediaAssets}
                           pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
@@ -7868,6 +7886,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                             showToast({ intent: "info", message: `请在任务工作台中编辑“${activity.title}”。` });
                           }}
                           onToggle={(activity, completed) => runAction(() => toggleTaskCompletion(activity, completed))}
+                          onDiscuss={toggleActivityDiscussion}
+                          onDiscussionUnreadChange={(activityId, count) => setDiscussionUnreadCounts((current) => ({ ...current, [`activity:${activityId}`]: count }))}
                         />
                       </section>
                       ) : null}
@@ -8024,12 +8044,18 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
                         />
                         <ActivityTimeline
                           activities={selectedActivities}
+                          currentUserId={currentUser.id}
+                          users={workspaceUsers}
+                          expandedDiscussionActivityId={expandedDiscussionActivityId}
+                          discussionFocusMessageId={discussionFocusMessageId}
                           emptyMessage="暂无活动"
                           mediaAssets={mediaAssets}
                           pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
                           records={records}
                           testIdPrefix="record-activity"
                           onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
+                          onDiscuss={toggleActivityDiscussion}
+                          onDiscussionUnreadChange={(activityId, count) => setDiscussionUnreadCounts((current) => ({ ...current, [`activity:${activityId}`]: count }))}
                         />
                       </>
                     ) : null}
@@ -8349,7 +8375,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onShowSuccess={showSuccess}
             onRequestConfirm={requestConfirm}
             onRequestPrompt={requestPrompt}
-            onDiscuss={setDiscussionEmailThread}
+            onDiscuss={(thread) => { setDiscussionFocusMessageId(undefined); setDiscussionEmailThread(thread); }}
             discussionUnreadCounts={discussionUnreadCounts}
             sidebarCollapsed={appSidebarCollapsed}
             onToggleAppSidebar={toggleAppSidebar}
@@ -8358,6 +8384,9 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         {activeNav === "tasks" && (
           <TaskView
             activities={filteredTaskActivities}
+            currentUserId={currentUser.id}
+            expandedDiscussionActivityId={expandedDiscussionActivityId}
+            discussionFocusMessageId={discussionFocusMessageId}
             mediaAssets={mediaAssets}
             pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
             tagSuggestions={taskTagSuggestions}
@@ -8371,18 +8400,24 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onUploadMediaAssets={uploadMediaAssets}
             onRequestPrompt={requestPrompt}
             onShowToast={showToast}
-            onDiscuss={setDiscussionActivity}
+            onDiscuss={toggleActivityDiscussion}
+            onDiscussionUnreadChange={(activityId, count) => setDiscussionUnreadCounts((current) => ({ ...current, [`activity:${activityId}`]: count }))}
             discussionUnreadCounts={discussionUnreadCounts}
           />
         )}
         {activeNav === "activities" && (
           <ActivityTimeline
             activities={filteredActivities}
+            currentUserId={currentUser.id}
+            users={workspaceUsers}
+            expandedDiscussionActivityId={expandedDiscussionActivityId}
+            discussionFocusMessageId={discussionFocusMessageId}
             mediaAssets={mediaAssets}
             pendingDeleteRequestsById={pendingActivityDeleteRequestsById}
             records={records}
             onDelete={(activity) => { void runImmediateAction(() => deleteTask(activity)); }}
-            onDiscuss={setDiscussionActivity}
+            onDiscuss={toggleActivityDiscussion}
+            onDiscussionUnreadChange={(activityId, count) => setDiscussionUnreadCounts((current) => ({ ...current, [`activity:${activityId}`]: count }))}
             discussionUnreadCounts={discussionUnreadCounts}
           />
         )}
@@ -8449,27 +8484,13 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         )}
 
       </main>
-      {discussionActivity ? (
-        <>
-          <div className="discussion-drawer-backdrop" role="presentation" onClick={() => setDiscussionActivity(undefined)} />
-          <aside className="discussion-drawer" aria-label={`团队讨论 ${discussionActivity.title}`}>
-            <TeamDiscussionPanel
-              currentUserId={currentUser.id}
-              target={{ type: "activity", targetId: discussionActivity.id }}
-              title={`团队讨论 · ${discussionActivity.title}`}
-              users={workspaceUsers}
-              onClose={() => setDiscussionActivity(undefined)}
-              onUnreadChange={(count) => setDiscussionUnreadCounts((current) => ({ ...current, [`activity:${discussionActivity.id}`]: count }))}
-            />
-          </aside>
-        </>
-      ) : null}
       {discussionEmailThread ? (
         <>
           <div className="discussion-drawer-backdrop" role="presentation" onClick={() => setDiscussionEmailThread(undefined)} />
           <aside className="discussion-drawer" aria-label={`团队讨论 ${discussionEmailThread.subject}`}>
             <TeamDiscussionPanel
               currentUserId={currentUser.id}
+              focusMessageId={discussionFocusMessageId}
               target={{ type: "email_thread", targetId: discussionEmailThread.id }}
               title={`团队讨论 · ${discussionEmailThread.subject}`}
               users={workspaceUsers}
@@ -14250,6 +14271,9 @@ function sanitizeTestId(value: string): string {
 
 function TaskView({
   activities,
+  currentUserId,
+  expandedDiscussionActivityId,
+  discussionFocusMessageId,
   mediaAssets,
   pendingDeleteRequestsById,
   tagSuggestions,
@@ -14264,9 +14288,13 @@ function TaskView({
   onRequestPrompt,
   onShowToast,
   onDiscuss,
+  onDiscussionUnreadChange,
   discussionUnreadCounts
 }: {
   activities: Activity[];
+  currentUserId: string;
+  expandedDiscussionActivityId?: string;
+  discussionFocusMessageId?: string;
   mediaAssets: MediaAsset[];
   pendingDeleteRequestsById: Map<string, RecordChangeRequest>;
   tagSuggestions: string[];
@@ -14281,6 +14309,7 @@ function TaskView({
   onRequestPrompt: (options: PromptDialogState) => Promise<string | null>;
   onShowToast: (toast: ToastState) => void;
   onDiscuss: (activity: Activity) => void;
+  onDiscussionUnreadChange: (activityId: string, count: number) => void;
   discussionUnreadCounts: Record<string, number>;
 }) {
   const [status, setStatus] = useState<"todo" | "completed" | "archived">("todo");
@@ -14422,6 +14451,9 @@ function TaskView({
       {view === "list" ? (
         <TaskList
           activities={visibleTasks}
+          currentUserId={currentUserId}
+          expandedDiscussionActivityId={expandedDiscussionActivityId}
+          discussionFocusMessageId={discussionFocusMessageId}
           emptyMessage={emptyMessage}
           mediaAssets={mediaAssets}
           pendingDeleteRequestsById={pendingDeleteRequestsById}
@@ -14432,6 +14464,7 @@ function TaskView({
           onEdit={openTaskEditor}
           onToggle={onToggle}
           onDiscuss={onDiscuss}
+          onDiscussionUnreadChange={onDiscussionUnreadChange}
           discussionUnreadCounts={discussionUnreadCounts}
         />
       ) : (
@@ -14510,6 +14543,9 @@ function TaskView({
 
 function TaskList({
   activities,
+  currentUserId,
+  expandedDiscussionActivityId,
+  discussionFocusMessageId,
   emptyMessage,
   mediaAssets = [],
   pendingDeleteRequestsById,
@@ -14520,9 +14556,13 @@ function TaskList({
   onEdit,
   onToggle,
   onDiscuss,
+  onDiscussionUnreadChange,
   discussionUnreadCounts = {}
 }: {
   activities: Activity[];
+  currentUserId: string;
+  expandedDiscussionActivityId?: string;
+  discussionFocusMessageId?: string;
   emptyMessage: string;
   mediaAssets?: MediaAsset[];
   pendingDeleteRequestsById?: Map<string, RecordChangeRequest>;
@@ -14533,6 +14573,7 @@ function TaskList({
   onEdit?: (activity: Activity) => void;
   onToggle: (activity: Activity, completed: boolean) => void;
   onDiscuss?: (activity: Activity) => void;
+  onDiscussionUnreadChange?: (activityId: string, count: number) => void;
   discussionUnreadCounts?: Record<string, number>;
 }) {
   if (activities.length === 0) {
@@ -14569,9 +14610,8 @@ function TaskList({
             <TaskAttachmentPreview attachments={taskDetails.attachments} mediaAssets={mediaAssets} />
             <div className="toolbar" style={{ marginTop: 10 }}>
               {onDiscuss ? (
-                <button className="secondary-button" data-testid={testIdPrefix ? `${testIdPrefix}-discussion-${activity.id}` : undefined} type="button" onClick={() => onDiscuss(activity)}>
+                <button className="icon-button activity-discussion-toggle" aria-controls={`activity-discussion-${activity.id}`} aria-expanded={expandedDiscussionActivityId === activity.id} aria-label={`评论 ${activity.title}`} title="团队评论" data-testid={testIdPrefix ? `${testIdPrefix}-discussion-${activity.id}` : undefined} type="button" onClick={() => onDiscuss(activity)}>
                   <MessageCircle size={16} />
-                  团队讨论
                   {(discussionUnreadCounts[`activity:${activity.id}`] ?? 0) > 0 ? <span className="badge">{discussionUnreadCounts[`activity:${activity.id}`]}</span> : null}
                 </button>
               ) : null}
@@ -14620,6 +14660,7 @@ function TaskList({
                 </button>
               )}
             </div>
+            {onDiscuss && expandedDiscussionActivityId === activity.id ? <div className="activity-inline-discussion" id={`activity-discussion-${activity.id}`}><TeamDiscussionPanel embedded currentUserId={currentUserId} focusMessageId={discussionFocusMessageId} target={{ type: "activity", targetId: activity.id }} title="评论" users={users} onClose={() => onDiscuss(activity)} onUnreadChange={(count) => onDiscussionUnreadChange?.(activity.id, count)} /></div> : null}
           </div>
         );
       })}
@@ -15257,6 +15298,10 @@ function downloadTextFile(filename: string, text: string, contentType = "text/pl
 
 function ActivityTimeline({
   activities,
+  currentUserId,
+  users,
+  expandedDiscussionActivityId,
+  discussionFocusMessageId,
   emptyMessage = "暂无活动",
   mediaAssets,
   pendingDeleteRequestsById,
@@ -15264,9 +15309,14 @@ function ActivityTimeline({
   testIdPrefix = "activity-view-activity",
   onDelete,
   onDiscuss,
+  onDiscussionUnreadChange,
   discussionUnreadCounts = {}
 }: {
   activities: Activity[];
+  currentUserId: string;
+  users: User[];
+  expandedDiscussionActivityId?: string;
+  discussionFocusMessageId?: string;
   emptyMessage?: string;
   mediaAssets: MediaAsset[];
   pendingDeleteRequestsById: Map<string, RecordChangeRequest>;
@@ -15274,6 +15324,7 @@ function ActivityTimeline({
   testIdPrefix?: string;
   onDelete: (activity: Activity) => void;
   onDiscuss?: (activity: Activity) => void;
+  onDiscussionUnreadChange?: (activityId: string, count: number) => void;
   discussionUnreadCounts?: Record<string, number>;
 }) {
   const sortedActivities = [...activities].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
@@ -15347,8 +15398,8 @@ function ActivityTimeline({
                   {onDelete || onDiscuss ? (
                     <div className="activity-timeline-footer">
                       {onDiscuss ? (
-                        <button className="secondary-button" data-testid={`${testIdPrefix}-discussion-${activity.id}`} type="button" onClick={() => onDiscuss(activity)}>
-                          <MessageCircle size={16} />团队讨论
+                        <button className="icon-button activity-discussion-toggle" aria-controls={`activity-discussion-${activity.id}`} aria-expanded={expandedDiscussionActivityId === activity.id} aria-label={`评论 ${activity.title}`} title="团队评论" data-testid={`${testIdPrefix}-discussion-${activity.id}`} type="button" onClick={() => onDiscuss(activity)}>
+                          <MessageCircle size={16} />
                           {(discussionUnreadCounts[`activity:${activity.id}`] ?? 0) > 0 ? <span className="badge">{discussionUnreadCounts[`activity:${activity.id}`]}</span> : null}
                         </button>
                       ) : null}
@@ -15363,6 +15414,7 @@ function ActivityTimeline({
                       </button>
                     </div>
                   ) : null}
+                  {onDiscuss && expandedDiscussionActivityId === activity.id ? <div className="activity-inline-discussion" id={`activity-discussion-${activity.id}`}><TeamDiscussionPanel embedded currentUserId={currentUserId} focusMessageId={discussionFocusMessageId} target={{ type: "activity", targetId: activity.id }} title="评论" users={users} onClose={() => onDiscuss(activity)} onUnreadChange={(count) => onDiscussionUnreadChange?.(activity.id, count)} /></div> : null}
                 </div>
               </div>
             </article>
