@@ -511,7 +511,13 @@ export interface MediaAsset {
   name: string;
   contentType: string;
   size: number;
-  contentBase64: string;
+  contentBase64?: string;
+  storageKey?: string;
+  scope?: "WORKSPACE" | "TARGET";
+  targetKey?: string;
+  archivedAt?: string;
+  contentUrl?: string;
+  referenceCount?: number;
   createdById: string;
   createdAt: string;
   updatedAt: string;

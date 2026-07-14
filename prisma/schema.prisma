@@ -955,16 +955,27 @@ model MediaAsset {
   name          String
   contentType   String
   size          Int
-  contentBase64 String
+  contentBase64 String?
+  storageKey    String?
+  scope         MediaAssetScope @default(WORKSPACE)
+  targetKey     String?
+  archivedAt    DateTime?
   createdById   String
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy     User      @relation(fields: [createdById], references: [id])
   avatarUsers   User[]    @relation("UserAvatarMediaAsset")
+  discussionAttachments DiscussionAttachment[]
 
   @@index([workspaceId, createdAt])
   @@index([workspaceId, contentType])
+  @@index([workspaceId, scope, targetKey, archivedAt, createdAt])
+}
+
+enum MediaAssetScope {
+  WORKSPACE
+  TARGET
 }
 
 model DiscussionThread {
@@ -1015,6 +1026,7 @@ model DiscussionAttachment {
   threadId    String
   messageId   String?
   uploadedById String
+  mediaAssetId String?
   fileName    String
   contentType String
   size        Int
@@ -1024,10 +1036,12 @@ model DiscussionAttachment {
   thread      DiscussionThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   message     DiscussionMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
   uploadedBy  User      @relation("DiscussionAttachmentUploader", fields: [uploadedById], references: [id])
+  mediaAsset  MediaAsset? @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, threadId, createdAt])
   @@index([workspaceId, messageId])
   @@index([workspaceId, uploadedById, createdAt])
+  @@index([workspaceId, mediaAssetId])
 }
 
 model DiscussionMention {

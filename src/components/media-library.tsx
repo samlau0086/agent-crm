@@ -10,7 +10,7 @@ export function isImageMediaAsset(asset: Pick<MediaAsset, "contentType">): boole
 }
 
 export function mediaAssetDataUrl(asset: MediaAsset): string {
-  return `data:${asset.contentType};base64,${asset.contentBase64}`;
+  return asset.contentBase64 ? `data:${asset.contentType};base64,${asset.contentBase64}` : asset.contentUrl ?? `/api/media-assets/${encodeURIComponent(asset.id)}/content`;
 }
 
 export function MediaAssetPreview({ asset }: { asset: MediaAsset }) {

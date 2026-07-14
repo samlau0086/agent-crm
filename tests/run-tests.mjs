@@ -67,6 +67,7 @@ import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildDiscussionTargetKey, parseDiscussionTarget } from "../src/lib/discussions/target.ts";
 import { decodeDiscussionCursor, encodeDiscussionCursor } from "../src/lib/discussions/service.ts";
 import { deleteDiscussionObject, getDiscussionObject, putDiscussionObject, validateDiscussionFile } from "../src/lib/discussions/storage.ts";
+import { createMediaStorageKey, deleteMediaObject, getMediaObject, putMediaObject, validateMediaFile } from "../src/lib/media/storage.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
 import { decryptEmailConnectionConfig, encryptEmailConnectionConfig, getDefaultOutboundService, getInboundConnectionConfig, normalizeEmailConnectionConfig } from "../src/lib/email/connection-config.ts";
 import { testEmailAccountConnections } from "../src/lib/email/connection-tests.ts";
@@ -15868,6 +15869,25 @@ await run("discussion attachment policy accepts safe files and rejects risky fil
   assert.throws(() => validateDiscussionFile("payload.exe", "application/octet-stream", 1024), /not allowed/i);
   assert.throws(() => validateDiscussionFile("preview.svg", "image/svg+xml", 1024), /not allowed/i);
   assert.throws(() => validateDiscussionFile("large.pdf", "application/pdf", 21 * 1024 * 1024), /20 MB/i);
+});
+
+await run("unified VPS media policy and storage reject unsafe input", async () => {
+  assert.doesNotThrow(() => validateMediaFile("photo.webp", "image/webp", 1024));
+  assert.throws(() => validateMediaFile("page.html", "text/html", 1024), /not allowed/i);
+  assert.throws(() => validateMediaFile("large.pdf", "application/pdf", 21 * 1024 * 1024), /20 MB/i);
+  const previous = process.env.MEDIA_STORAGE_DIR;
+  const directory = join(tmpdir(), `crm-media-storage-${Date.now()}`);
+  process.env.MEDIA_STORAGE_DIR = directory;
+  const key = createMediaStorageKey("workspace-test");
+  try {
+    await putMediaObject(key, new TextEncoder().encode("vps-media"));
+    assert.equal(new TextDecoder().decode(await getMediaObject(key)), "vps-media");
+    await assert.rejects(() => getMediaObject("../outside"), /storage key/i);
+    await deleteMediaObject(key);
+  } finally {
+    if (previous === undefined) delete process.env.MEDIA_STORAGE_DIR; else process.env.MEDIA_STORAGE_DIR = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 await run("discussion attachments persist on the configured local filesystem", async () => {

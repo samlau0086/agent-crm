@@ -4,6 +4,8 @@ import { AtSign, Download, File, Image as ImageIcon, Loader2, MessageCircle, Pap
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@/lib/crm/types";
 import type { DiscussionAttachmentDto, DiscussionMessageDto, DiscussionMessagesPage, DiscussionTarget } from "@/lib/discussions/types";
+import type { MediaAssetDto } from "@/lib/media/service";
+import { MediaManagerModal } from "@/components/media-manager-modal";
 
 export function TeamDiscussionPanel({
   target,
@@ -24,14 +26,14 @@ export function TeamDiscussionPanel({
   const [body, setBody] = useState("");
   const [replyTo, setReplyTo] = useState<DiscussionMessageDto>();
   const [editing, setEditing] = useState<DiscussionMessageDto>();
-  const [attachments, setAttachments] = useState<DiscussionAttachmentDto[]>([]);
+  const [attachments, setAttachments] = useState<MediaAssetDto[]>([]);
+  const [mediaManagerOpen, setMediaManagerOpen] = useState(false);
   const [mentionIds, setMentionIds] = useState<string[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string>();
   const [nextBefore, setNextBefore] = useState<string>();
   const [latestCursor, setLatestCursor] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string>();
   const listRef = useRef<HTMLDivElement>(null);
   const targetKey = target.type === "record" ? `${target.type}:${target.objectKey}:${target.targetId}` : `${target.type}:${target.targetId}`;
@@ -116,28 +118,6 @@ export function TeamDiscussionPanel({
     }
   }
 
-  async function uploadFiles(files: FileList | null) {
-    if (!files?.length) return;
-    setUploading(true);
-    setError(undefined);
-    try {
-      const remaining = Math.max(0, 10 - attachments.length);
-      for (const file of Array.from(files).slice(0, remaining)) {
-        const form = new FormData();
-        form.set("file", file);
-        form.set("type", target.type);
-        form.set("targetId", target.targetId);
-        if (target.type === "record") form.set("objectKey", target.objectKey);
-        const uploaded = await discussionFetch<DiscussionAttachmentDto>("/api/discussions/attachments", { method: "POST", form });
-        setAttachments((current) => [...current, uploaded]);
-      }
-    } catch (uploadError) {
-      setError(errorMessage(uploadError));
-    } finally {
-      setUploading(false);
-    }
-  }
-
   async function submit() {
     if (pending || (!body.trim() && !attachments.length)) return;
     setPending(true);
@@ -151,7 +131,7 @@ export function TeamDiscussionPanel({
         const updated = await discussionFetch<DiscussionMessageDto>(`/api/discussions/messages/${encodeURIComponent(editing.id)}`, { method: "PATCH", body: { body, mentionUserIds: validMentionIds } });
         setMessages((current) => current.map((message) => message.id === updated.id ? updated : message));
       } else {
-        const created = await discussionFetch<DiscussionMessageDto>("/api/discussions/messages", { method: "POST", body: { target, body, replyToId: replyTo?.id, attachmentIds: attachments.map((item) => item.id), mentionUserIds: validMentionIds } });
+        const created = await discussionFetch<DiscussionMessageDto>("/api/discussions/messages", { method: "POST", body: { target, body, replyToId: replyTo?.id, mediaAssetIds: attachments.map((item) => item.id), mentionUserIds: validMentionIds } });
         setMessages((current) => mergeMessages(current, [created]));
         setLatestCursor(BufferlessCursor(created));
       }
@@ -222,16 +202,17 @@ export function TeamDiscussionPanel({
       </div>
       <div className="team-discussion-composer">
         {replyTo || editing ? <div className="discussion-compose-context"><span>{editing ? "编辑消息" : `回复 ${replyTo?.author.name}`}</span><button type="button" onClick={() => { setReplyTo(undefined); setEditing(undefined); setBody(""); setMentionIds([]); }}><X size={14} /></button></div> : null}
-        {attachments.length ? <div className="discussion-pending-attachments">{attachments.map((attachment) => <span key={attachment.id}>{attachment.fileName}<button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div> : null}
+        {attachments.length ? <div className="discussion-pending-attachments">{attachments.map((attachment) => <span key={attachment.id}>{attachment.name}<button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div> : null}
         <textarea value={body} maxLength={10_000} placeholder="输入消息，使用 @ 提及成员…" onChange={(event) => updateBody(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void submit(); }} />
         {mentionSuggestions.length ? <div className="discussion-mention-menu">{mentionSuggestions.map((user) => <button type="button" key={user.id} onClick={() => addMention(user)}><AtSign size={14} /><span><strong>{user.name}</strong><small>{user.email}</small></span></button>)}</div> : null}
         {error ? <div className="discussion-error">{error}</div> : null}
         <div className="discussion-composer-actions">
-          <label className="secondary-button discussion-upload-button"><Paperclip size={14} />{uploading ? "上传中…" : "图片/附件"}<input type="file" multiple disabled={uploading || attachments.length >= 10} onChange={(event) => { void uploadFiles(event.target.files); event.currentTarget.value = ""; }} /></label>
+          <button className="secondary-button discussion-upload-button" type="button" disabled={attachments.length >= 10} onClick={() => setMediaManagerOpen(true)}><Paperclip size={14} />图片/附件</button>
           <span>Ctrl/⌘ + Enter 发送</span>
-          <button className="primary-button" type="button" disabled={pending || uploading || (!body.trim() && !attachments.length)} onClick={() => void submit()}>{pending ? <Loader2 className="spin-icon" size={14} /> : <Send size={14} />}{editing ? "保存" : "发送"}</button>
+          <button className="primary-button" type="button" disabled={pending || (!body.trim() && !attachments.length)} onClick={() => void submit()}>{pending ? <Loader2 className="spin-icon" size={14} /> : <Send size={14} />}{editing ? "保存" : "发送"}</button>
         </div>
       </div>
+      {mediaManagerOpen ? <MediaManagerModal target={target} initialSelected={attachments} onClose={() => setMediaManagerOpen(false)} onConfirm={(assets) => { setAttachments(assets); setMediaManagerOpen(false); }} /> : null}
     </section>
   );
 }

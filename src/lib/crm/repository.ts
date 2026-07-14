@@ -15,6 +15,7 @@ import { destroyOtherSessionsForUser, destroySessionsForUser } from "@/lib/auth/
 import { prisma } from "@/lib/db";
 import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
 import { ApiError } from "@/lib/api-error";
+import { createMediaStorageKey, deleteMediaObject, putMediaObject, validateMediaFile } from "@/lib/media/storage";
 import { buildCsv } from "@/lib/crm/csv";
 import { buildCsvImportIssuesCsv } from "@/lib/crm/import-issues";
 import { defaultSalesDocumentNumberSetting, previewSalesDocumentNumber, renderSalesDocumentNumber, salesDocumentLocalDate, validateSalesDocumentNumberRule } from "@/lib/crm/document-numbering";
@@ -1040,7 +1041,11 @@ function mapMediaAsset(asset: {
   name: string;
   contentType: string;
   size: number;
-  contentBase64: string;
+  contentBase64: string | null;
+  storageKey?: string | null;
+  scope?: "WORKSPACE" | "TARGET";
+  targetKey?: string | null;
+  archivedAt?: Date | null;
   createdById: string;
   createdAt: Date;
   updatedAt: Date;
@@ -1051,7 +1056,12 @@ function mapMediaAsset(asset: {
     name: asset.name,
     contentType: asset.contentType,
     size: asset.size,
-    contentBase64: asset.contentBase64,
+    contentBase64: asset.contentBase64 ?? undefined,
+    storageKey: asset.storageKey ?? undefined,
+    scope: asset.scope,
+    targetKey: asset.targetKey ?? undefined,
+    archivedAt: asset.archivedAt?.toISOString(),
+    contentUrl: `/api/media-assets/${encodeURIComponent(asset.id)}/content`,
     createdById: asset.createdById,
     createdAt: asset.createdAt.toISOString(),
     updatedAt: asset.updatedAt.toISOString()
@@ -4124,7 +4134,7 @@ export class PrismaCrmRepository {
   async listMediaAssets(context: RequestContext): Promise<MediaAsset[]> {
     requirePermission(context, "crm.read");
     const assets = await this.db.mediaAsset.findMany({
-      where: { workspaceId: context.workspaceId },
+      where: { workspaceId: context.workspaceId, scope: "WORKSPACE", archivedAt: null },
       orderBy: [{ createdAt: "desc" }, { name: "asc" }],
       take: 200
     });
@@ -4144,13 +4154,18 @@ export class PrismaCrmRepository {
     input: Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">
   ): Promise<MediaAsset> {
     requirePermission(context, "crm.write");
+    const bytes = Buffer.from(input.contentBase64 ?? "", "base64");
+    validateMediaFile(input.name, input.contentType, bytes.byteLength);
+    const storageKey = createMediaStorageKey(context.workspaceId);
+    await putMediaObject(storageKey, bytes);
     const asset = await this.db.mediaAsset.create({
       data: {
         workspaceId: context.workspaceId,
         name: normalizeRequiredText(input.name, "Media name"),
         contentType: input.contentType,
         size: input.size,
-        contentBase64: input.contentBase64,
+        contentBase64: null,
+        storageKey,
         createdById: context.user.id
       }
     });
@@ -4158,7 +4173,7 @@ export class PrismaCrmRepository {
       summary: `Created media asset ${asset.name}`,
       details: { contentType: asset.contentType, size: asset.size }
     });
-    return mapMediaAsset(asset);
+    return { ...mapMediaAsset(asset), contentBase64: input.contentBase64 };
   }
 
   async createCurrentUserAvatarMediaAsset(
@@ -4168,13 +4183,18 @@ export class PrismaCrmRepository {
     if (!input.contentType.toLowerCase().startsWith("image/")) {
       throw new ApiError(400, "VALIDATION_ERROR", "Avatar must be an image");
     }
+    const bytes = Buffer.from(input.contentBase64 ?? "", "base64");
+    validateMediaFile(input.name, input.contentType, bytes.byteLength);
+    const storageKey = createMediaStorageKey(context.workspaceId);
+    await putMediaObject(storageKey, bytes);
     const asset = await this.db.mediaAsset.create({
       data: {
         workspaceId: context.workspaceId,
         name: normalizeRequiredText(input.name, "Avatar name"),
         contentType: input.contentType,
         size: input.size,
-        contentBase64: input.contentBase64,
+        contentBase64: null,
+        storageKey,
         createdById: context.user.id
       }
     });
@@ -4182,7 +4202,7 @@ export class PrismaCrmRepository {
       summary: `Uploaded avatar asset ${asset.name}`,
       details: { contentType: asset.contentType, size: asset.size, purpose: "user_avatar" }
     });
-    return mapMediaAsset(asset);
+    return { ...mapMediaAsset(asset), contentBase64: input.contentBase64 };
   }
 
   async updateMediaAsset(
@@ -4197,20 +4217,29 @@ export class PrismaCrmRepository {
     if (!existing) {
       throw new Error("Media asset not found");
     }
+    let replacementKey: string | undefined;
+    if (patch.contentBase64) {
+      const bytes = Buffer.from(patch.contentBase64, "base64");
+      validateMediaFile(patch.name ?? existing.name, patch.contentType ?? existing.contentType, bytes.byteLength);
+      replacementKey = createMediaStorageKey(context.workspaceId);
+      await putMediaObject(replacementKey, bytes);
+    }
     const asset = await this.db.mediaAsset.update({
       where: { id: assetId },
       data: {
         name: patch.name !== undefined ? normalizeRequiredText(patch.name, "Media name") : undefined,
         contentType: patch.contentType,
         size: patch.size,
-        contentBase64: patch.contentBase64
+        contentBase64: patch.contentBase64 ? null : undefined,
+        storageKey: replacementKey
       }
     });
     await this.writeAuditLog(context, "update", "media_asset", asset.id, {
       summary: `Updated media asset ${asset.name}`,
       details: { contentType: asset.contentType, size: asset.size }
     });
-    return mapMediaAsset(asset);
+    if (replacementKey && existing.storageKey) await deleteMediaObject(existing.storageKey).catch(() => undefined);
+    return { ...mapMediaAsset(asset), ...(patch.contentBase64 ? { contentBase64: patch.contentBase64 } : {}) };
   }
 
   async deleteMediaAsset(context: RequestContext, assetId: string): Promise<void> {
@@ -4222,6 +4251,7 @@ export class PrismaCrmRepository {
       throw new Error("Media asset not found");
     }
     await this.db.mediaAsset.delete({ where: { id: assetId } });
+    if (existing.storageKey) await deleteMediaObject(existing.storageKey).catch(() => undefined);
     await this.writeAuditLog(context, "delete", "media_asset", existing.id, {
       summary: `Deleted media asset ${existing.name}`,
       details: { contentType: existing.contentType, size: existing.size }

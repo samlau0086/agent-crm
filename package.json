@@ -16,6 +16,7 @@
     "db:seed": "node --experimental-strip-types prisma/seed.ts",
     "db:backup": "node scripts/db-backup.mjs",
     "db:restore": "node scripts/db-restore.mjs",
+    "media:migrate-vps": "node scripts/migrate-media-to-vps.mjs",
     "db:explain:crm": "node --experimental-strip-types --import ./scripts/register-alias.mjs scripts/crm-explain-analyze.ts",
     "config:init": "node scripts/init-env.mjs",
     "config:secrets": "node scripts/generate-secrets.mjs",

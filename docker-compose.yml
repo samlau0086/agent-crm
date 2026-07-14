@@ -23,6 +23,7 @@ services:
       MAIL_IMAP_FETCH_BYTES: ${MAIL_IMAP_FETCH_BYTES:-262144}
       EMAIL_CONFIG_SECRET: "${EMAIL_CONFIG_SECRET:?Set EMAIL_CONFIG_SECRET in .env}"
       EMAIL_OAUTH_STATE_SECRET: "${EMAIL_OAUTH_STATE_SECRET:?Set EMAIL_OAUTH_STATE_SECRET in .env}"
+      MEDIA_STORAGE_DIR: /app/media-uploads
       DISCUSSION_STORAGE_DIR: /app/discussion-uploads
       GMAIL_OAUTH_CLIENT_ID: ${GMAIL_OAUTH_CLIENT_ID:-}
       GMAIL_OAUTH_CLIENT_SECRET: ${GMAIL_OAUTH_CLIENT_SECRET:-}
@@ -44,6 +45,7 @@ services:
       - "3000:3000"
     volumes:
       - ./backups:/app/backups
+      - ./media-uploads:/app/media-uploads
       - ./discussion-uploads:/app/discussion-uploads
     depends_on:
       postgres:

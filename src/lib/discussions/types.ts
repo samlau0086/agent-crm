@@ -5,6 +5,7 @@ export type DiscussionTarget =
 
 export interface DiscussionAttachmentDto {
   id: string;
+  mediaAssetId?: string;
   fileName: string;
   contentType: string;
   size: number;

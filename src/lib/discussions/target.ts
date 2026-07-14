@@ -36,6 +36,13 @@ export function parseDiscussionTarget(input: Record<string, unknown>): Discussio
   throw new ApiError(400, "VALIDATION_ERROR", "Discussion target type is invalid");
 }
 
+export function parseDiscussionTargetKey(targetKey: string): DiscussionTarget {
+  const [type, first, ...rest] = targetKey.split(":");
+  if (type === "record" && first && rest.length === 1) return parseDiscussionTarget({ type, objectKey: first, targetId: rest[0] });
+  if ((type === "activity" || type === "email_thread") && first && rest.length === 0) return parseDiscussionTarget({ type, targetId: first });
+  throw new ApiError(400, "VALIDATION_ERROR", "Media target key is invalid");
+}
+
 export async function assertDiscussionTargetAccess(context: RequestContext, target: DiscussionTarget, write = false): Promise<void> {
   requirePermission(context, write ? "crm.write" : "crm.read");
   const repository = getCrmRepository();

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBranch, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, XCircle } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBranch, Images, LayoutList, Link2, Plus, RefreshCw, Save, ShieldCheck, Trash2, Upload, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
@@ -17,6 +17,7 @@ import { pdfFileNameVariables, previewPdfFileName } from "@/lib/crm/pdf-file-nam
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
 import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SalesDocumentNumberSetting, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
+import type { MediaAssetDto } from "@/lib/media/service";
 
 const TOAST_AUTO_DISMISS_MS = 5_000;
 
@@ -295,7 +296,7 @@ const fieldTypes: FieldDefinition["type"][] = [
   "reference"
 ];
 
-type SettingsTabKey = "profile" | "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations";
+type SettingsTabKey = "profile" | "access" | "crm" | "pool" | "smartReminders" | "aiAgents" | "workflows" | "integrations" | "operations" | "media";
 type AiAgentConfigTabKey = "providers" | "agents" | "knowledge";
 type AccessSectionTabKey = "members" | "roles" | "matrix";
 type CrmSectionTabKey = "documents" | "finance" | "customers" | "dataModel" | "salesWorkspace";
@@ -309,6 +310,7 @@ const settingsTabs: Array<{ key: SettingsTabKey; label: string; description: str
   { key: "profile", label: "个人资料", description: "头像、显示名称与登录密码" },
   { key: "access", label: "成员权限", description: "用户、团队、角色与权限矩阵" },
   { key: "crm", label: "CRM 配置", description: "对象、字段、关系、管道、视图与货币" },
+  { key: "media", label: "媒体管理", description: "VPS 图片、附件、引用与存储治理" },
   { key: "aiAgents", label: "AI Agents", description: "agent.md、模型、上下文、工具权限与测试运行" },
   { key: "integrations", label: "集成接口", description: "API Key、Webhook 与外部系统连接" },
   { key: "operations", label: "运维审计", description: "导入队列、备份与审计日志" }
@@ -318,6 +320,7 @@ const settingsTabSlugs: Record<SettingsTabKey, string> = {
   profile: "profile",
   access: "access",
   crm: "crm",
+  media: "media",
   pool: "pool",
   smartReminders: "smart-reminders",
   aiAgents: "ai-agents",
@@ -2133,6 +2136,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           onDeleteMediaAsset={props.onDeleteMediaAsset}
         />
       ) : null}
+
+      {activeSettingsTab === "media" ? <AdminMediaManagerPanel /> : null}
 
       {activeSettingsTab === "access" ? (
         <div className="settings-tab-panel" role="tabpanel">
@@ -4437,6 +4442,75 @@ function SettingsSectionTabs<T extends string>({
   );
 }
 
+function AdminMediaManagerPanel() {
+  const [assets, setAssets] = useState<MediaAssetDto[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState("");
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [dragActive, setDragActive] = useState(false);
+  const [error, setError] = useState("");
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [editingId, setEditingId] = useState("");
+  const [nameDraft, setNameDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ scope: "WORKSPACE", limit: "100" });
+      if (query.trim()) params.set("q", query.trim());
+      if (kind) params.set("type", kind);
+      if (includeArchived) params.set("archived", "true");
+      const payload = await fetchJson<{ assets: MediaAssetDto[] }>(`/api/media-assets?${params}`, { method: "GET" });
+      setAssets(payload.assets);
+      setError("");
+    } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "加载失败"); } finally { setLoading(false); }
+  }, [includeArchived, kind, query]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function upload(files: FileList | null) {
+    if (!files?.length) return;
+    const form = new FormData(); form.set("scope", "WORKSPACE"); Array.from(files).slice(0, 20).forEach((file) => form.append("files", file));
+    try {
+      const response = await fetch("/api/media-assets", { method: "POST", body: form });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "上传失败");
+      const failures = (payload.results ?? []).filter((item: { ok: boolean }) => !item.ok);
+      if (failures.length) setError(`${failures.length} 个文件上传失败`); else setError("");
+      await load();
+    } catch (uploadError) { setError(uploadError instanceof Error ? uploadError.message : "上传失败"); }
+  }
+
+  async function removeSelected() {
+    if (!selected.length) return;
+    await fetchJson("/api/media-assets/bulk-delete", { method: "POST", body: { ids: selected } });
+    setSelected([]); setDeleteConfirmOpen(false); await load();
+  }
+
+  async function saveName(asset: MediaAssetDto) {
+    const name = nameDraft.trim();
+    if (!name || name === asset.name) { setEditingId(""); return; }
+    await fetchJson(`/api/media-assets/${asset.id}`, { method: "PATCH", body: { name } }); setEditingId(""); await load();
+  }
+
+  return <div className="settings-tab-panel" role="tabpanel" data-testid="admin-media-manager">
+    <section className="settings-panel">
+      <div className="settings-panel-header"><div><h2 className="page-title">媒体管理</h2><div className="subtle">集中管理 VPS 中的工作区图片和附件；有引用的素材删除时会自动归档。</div></div><div className="toolbar"><button className="secondary-button" onClick={() => inputRef.current?.click()}><Upload size={15} />上传</button><button className="danger-button" disabled={!selected.length} onClick={() => setDeleteConfirmOpen(true)}><Trash2 size={15} />删除/归档</button></div></div>
+      <input ref={inputRef} hidden multiple type="file" onChange={(event) => { void upload(event.target.files); event.target.value = ""; }} />
+      <div className={`media-manager-dropzone ${dragActive ? "active" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragActive(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); void upload(event.dataTransfer.files); }}><Images size={22} /><span><strong>拖拽批量上传到工作区媒体库</strong><small>文件存储于 VPS 的 MEDIA_STORAGE_DIR</small></span><button className="secondary-button" onClick={() => inputRef.current?.click()}>选择文件</button></div>
+      <div className="media-manager-tools"><label><input value={query} placeholder="搜索文件名" onChange={(event) => setQuery(event.target.value)} /></label><select value={kind} onChange={(event) => setKind(event.target.value)}><option value="">全部类型</option><option value="image">图片</option><option value="file">其他文件</option></select><label className="settings-toggle"><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />包含已归档</label><button className="secondary-button" onClick={() => void load()}><RefreshCw size={14} />刷新</button></div>
+      {error ? <div className="discussion-error">{error}</div> : null}
+      <div className="media-manager-assets grid">{loading ? <div className="empty-state">加载中…</div> : assets.map((asset) => <article className={`media-manager-asset ${selected.includes(asset.id) ? "selected" : ""}`} key={asset.id} onClick={() => setSelected((current) => current.includes(asset.id) ? current.filter((id) => id !== asset.id) : [...current, asset.id])}>{asset.contentType.startsWith("image/") ? <img src={asset.contentUrl} alt={asset.name} /> : <span className="media-manager-file-icon"><Images size={28} /></span>}<span>{editingId === asset.id ? <input className="input" value={nameDraft} onClick={(event) => event.stopPropagation()} onChange={(event) => setNameDraft(event.target.value)} /> : <strong>{asset.name}</strong>}<small>{formatMediaSize(asset.size)} · 引用 {asset.referenceCount}{asset.archivedAt ? " · 已归档" : ""}</small></span><div className="toolbar compact-toolbar">{editingId === asset.id ? <button className="secondary-button" onClick={(event) => { event.stopPropagation(); void saveName(asset); }}><Save size={13} />保存</button> : <button className="secondary-button" onClick={(event) => { event.stopPropagation(); setEditingId(asset.id); setNameDraft(asset.name); }}>重命名</button>}<a className="secondary-button" href={`${asset.contentUrl}?download=1`} onClick={(event) => event.stopPropagation()}><Download size={13} />下载</a></div></article>)}</div>
+      {deleteConfirmOpen ? <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="app-dialog"><h3>删除或归档媒体</h3><p>将处理所选 {selected.length} 个素材。仍被引用的素材会归档，未引用素材会从 VPS 永久删除。</p><div className="toolbar"><button className="secondary-button" onClick={() => setDeleteConfirmOpen(false)}>取消</button><button className="danger-button" onClick={() => void removeSelected()}>确认处理</button></div></div></div> : null}
+    </section>
+  </div>;
+}
+
+function formatMediaSize(bytes: number) { return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
+
 function ProfileSettingsPanel({
   currentUser,
   role,
@@ -4580,6 +4654,7 @@ function ProfileSettingsPanel({
           title="头像媒体库"
         />
       ) : null}
+
     </div>
   );
 }

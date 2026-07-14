@@ -10710,13 +10710,19 @@ function EmailWorkspace({
     updateComposeBodyFromEditor();
   }
 
-  function insertMediaAssetInline(asset: MediaAsset) {
+  async function insertMediaAssetInline(asset: MediaAsset) {
+    let contentBase64 = asset.contentBase64;
+    if (!contentBase64) {
+      const response = await fetch(asset.contentUrl ?? `/api/media-assets/${encodeURIComponent(asset.id)}/content`);
+      if (!response.ok) throw new Error("读取媒体文件失败");
+      contentBase64 = await readFileAsBase64(new File([await response.blob()], asset.name, { type: asset.contentType }));
+    }
     const contentId = `${inlineImageContentIdPrefix}${asset.id}`;
     composeEditorRef.current?.focus();
     document.execCommand(
       "insertHTML",
       false,
-      `<img src="${mediaAssetDataUrl(asset)}" data-content-id="${escapeHtml(contentId)}" data-file-name="${escapeHtml(asset.name)}" data-content-type="${escapeHtml(asset.contentType)}" data-size="${asset.size}" data-content-base64="${asset.contentBase64}" alt="${escapeHtml(asset.name)}">`
+      `<img src="data:${asset.contentType};base64,${contentBase64}" data-content-id="${escapeHtml(contentId)}" data-file-name="${escapeHtml(asset.name)}" data-content-type="${escapeHtml(asset.contentType)}" data-size="${asset.size}" data-content-base64="${contentBase64}" alt="${escapeHtml(asset.name)}">`
     );
     updateComposeBodyFromEditor();
     setMediaLibraryOpen(false);
@@ -22662,7 +22668,7 @@ function formatBytes(value: number): string {
 }
 
 function mediaAssetDataUrl(asset: MediaAsset): string {
-  return `data:${asset.contentType};base64,${asset.contentBase64}`;
+  return asset.contentBase64 ? `data:${asset.contentType};base64,${asset.contentBase64}` : asset.contentUrl ?? `/api/media-assets/${encodeURIComponent(asset.id)}/content`;
 }
 
 async function readEmailAttachmentFile(file: File, onProgress?: (progress: number) => void): Promise<EmailAttachment> {

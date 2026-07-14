@@ -6,9 +6,12 @@ Team discussions are available on every CRM record (including custom objects), a
 
 Attachments are stored directly on the VPS in a private persistent directory. Configure the web service with:
 
-- `DISCUSSION_STORAGE_DIR=/app/discussion-uploads`
+- `MEDIA_STORAGE_DIR=/app/media-uploads`
+- `DISCUSSION_STORAGE_DIR=/app/discussion-uploads`（仅用于读取迁移前的旧讨论附件）
 
-Docker Compose mounts this directory from `${CRM_DATA_DIR}/discussion-uploads` (normally `/opt/ai-agent-crm/discussion-uploads`) so files survive container replacement and application upgrades. The directory must be included in VPS backups. It must not be exposed as a public static directory; authenticated downloads go through `/api/discussions/attachments/[id]`.
+Docker Compose mounts the unified media directory from `${CRM_DATA_DIR}/media-uploads` (normally `/opt/ai-agent-crm/media-uploads`) so files survive container replacement and application upgrades. Include it in the same recovery point as the PostgreSQL backup. Never expose it as a public static directory; authenticated downloads go through `/api/media-assets/[id]/content`.
+
+After deploying the schema migration, run `npm run media:migrate-vps` once. The command is idempotent: it moves Base64 `MediaAsset` data and legacy discussion files into the unified VPS directory while retaining failed rows for a later retry.
 
 Each file is limited to 20 MB. A message can contain at most 10 files and 50 MB total. Executable, script, HTML, and SVG files are rejected.
 

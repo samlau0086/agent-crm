@@ -11,6 +11,7 @@ const createSchema = z.object({
   body: z.string().max(10_000).optional(),
   replyToId: z.string().trim().min(1).max(200).optional(),
   attachmentIds: z.array(z.string().trim().min(1).max(200)).max(10).optional(),
+  mediaAssetIds: z.array(z.string().trim().min(1).max(200)).max(10).optional(),
   mentionUserIds: z.array(z.string().trim().min(1).max(200)).max(100).optional()
 }).strict();
 

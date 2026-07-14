@@ -2,12 +2,13 @@ import type { NextRequest } from "next/server";
 import { getRequestContext, handleApiError, withApiMetrics } from "@/lib/api";
 import { getDiscussionAttachment } from "@/lib/discussions/service";
 import { getDiscussionObject, isInlineDiscussionImage } from "@/lib/discussions/storage";
+import { getMediaObject } from "@/lib/media/storage";
 
 async function getHandler(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const context = await getRequestContext(request);
     const attachment = await getDiscussionAttachment(context, params.id);
-    const bytes = await getDiscussionObject(attachment.storageKey);
+    const bytes = attachment.mediaAsset?.storageKey ? await getMediaObject(attachment.mediaAsset.storageKey) : await getDiscussionObject(attachment.storageKey);
     const fallbackName = attachment.fileName.replace(/["\r\n\\]/g, "_");
     const disposition = isInlineDiscussionImage(attachment.contentType) ? "inline" : "attachment";
     return new Response(bytes, {

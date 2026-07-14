@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { ApiError } from "@/lib/api-error";
 import { hasPermission } from "@/lib/auth/rbac";
@@ -6,18 +5,18 @@ import type { RequestContext } from "@/lib/crm/types";
 import { prisma } from "@/lib/db";
 import { assertDiscussionTargetAccess, buildDiscussionTargetKey, targetFromThread } from "@/lib/discussions/target";
 import {
-  deleteDiscussionObject,
   MAX_DISCUSSION_ATTACHMENTS,
   MAX_DISCUSSION_MESSAGE_ATTACHMENT_BYTES,
-  putDiscussionObject,
   validateDiscussionFile
 } from "@/lib/discussions/storage";
+import { createMediaAsset, assertMediaAssetAccess } from "@/lib/media/service";
+import { deleteMediaObject } from "@/lib/media/storage";
 import type { DiscussionMessageDto, DiscussionMessagesPage, DiscussionNotificationDto, DiscussionTarget } from "@/lib/discussions/types";
 
 const messageInclude = {
   author: { select: { id: true, name: true, avatarMediaAssetId: true } },
   replyTo: { include: { author: { select: { name: true } } } },
-  attachments: { orderBy: { createdAt: "asc" as const } },
+  attachments: { include: { mediaAsset: true }, orderBy: { createdAt: "asc" as const } },
   mentions: { select: { userId: true } }
 } satisfies Prisma.DiscussionMessageInclude;
 
@@ -118,9 +117,8 @@ export async function uploadDiscussionAttachment(
   await cleanupExpiredDiscussionAttachments(context.workspaceId);
   const thread = await getThread(context, target, true);
   if (!thread) throw new ApiError(500, "INTERNAL_ERROR", "Discussion thread could not be created");
-  const storageKey = `${context.workspaceId}/${thread.id}/${randomUUID()}`;
   const contentType = file.type || "application/octet-stream";
-  await putDiscussionObject(storageKey, file.bytes, contentType);
+  const asset = await createMediaAsset(context, { name: file.name, contentType, bytes: file.bytes, scope: "TARGET", targetKey: thread.targetKey });
   try {
     const attachment = await prisma.discussionAttachment.create({
       data: {
@@ -130,12 +128,13 @@ export async function uploadDiscussionAttachment(
         fileName: file.name.trim(),
         contentType,
         size: file.size,
-        storageKey
-      }
+        storageKey: asset.id,
+        mediaAssetId: asset.id
+      }, include: { mediaAsset: true }
     });
     return mapAttachment(attachment);
   } catch (error) {
-    await deleteDiscussionObject(storageKey).catch(() => undefined);
+    await prisma.mediaAsset.delete({ where: { id: asset.id } }).catch(() => undefined);
     throw error;
   }
 }
@@ -143,24 +142,28 @@ export async function uploadDiscussionAttachment(
 export async function createDiscussionMessage(
   context: RequestContext,
   target: DiscussionTarget,
-  input: { body?: string; replyToId?: string; attachmentIds?: string[]; mentionUserIds?: string[] }
+  input: { body?: string; replyToId?: string; attachmentIds?: string[]; mediaAssetIds?: string[]; mentionUserIds?: string[] }
 ): Promise<DiscussionMessageDto> {
   await assertDiscussionTargetAccess(context, target, true);
   const body = (input.body ?? "").trim();
   if (body.length > 10_000) throw new ApiError(400, "VALIDATION_ERROR", "Discussion message is too long");
   const attachmentIds = [...new Set(input.attachmentIds ?? [])];
+  const mediaAssetIds = [...new Set(input.mediaAssetIds ?? [])];
   const mentionUserIds = [...new Set(input.mentionUserIds ?? [])].filter((id) => id !== context.user.id);
-  if (!body && !attachmentIds.length) throw new ApiError(400, "VALIDATION_ERROR", "Message text or an attachment is required");
-  if (attachmentIds.length > MAX_DISCUSSION_ATTACHMENTS) throw new ApiError(400, "VALIDATION_ERROR", "A message can contain at most 10 attachments");
+  if (!body && !attachmentIds.length && !mediaAssetIds.length) throw new ApiError(400, "VALIDATION_ERROR", "Message text or an attachment is required");
+  if (attachmentIds.length + mediaAssetIds.length > MAX_DISCUSSION_ATTACHMENTS) throw new ApiError(400, "VALIDATION_ERROR", "A message can contain at most 10 attachments");
   const thread = await getThread(context, target, true);
   if (!thread) throw new ApiError(500, "INTERNAL_ERROR", "Discussion thread could not be created");
-  const [attachments, mentionedUsers, replyTo] = await Promise.all([
+  const [attachments, mediaAssets, mentionedUsers, replyTo] = await Promise.all([
     prisma.discussionAttachment.findMany({ where: { id: { in: attachmentIds }, workspaceId: context.workspaceId, threadId: thread.id, uploadedById: context.user.id, messageId: null } }),
+    prisma.mediaAsset.findMany({ where: { id: { in: mediaAssetIds }, workspaceId: context.workspaceId, archivedAt: null } }),
     prisma.user.findMany({ where: { id: { in: mentionUserIds }, workspaceId: context.workspaceId, active: true }, select: { id: true } }),
     input.replyToId ? prisma.discussionMessage.findFirst({ where: { id: input.replyToId, workspaceId: context.workspaceId, threadId: thread.id } }) : Promise.resolve(null)
   ]);
   if (attachments.length !== attachmentIds.length) throw new ApiError(400, "VALIDATION_ERROR", "One or more attachments are invalid");
-  if (attachments.reduce((total, item) => total + item.size, 0) > MAX_DISCUSSION_MESSAGE_ATTACHMENT_BYTES) {
+  if (mediaAssets.length !== mediaAssetIds.length) throw new ApiError(400, "VALIDATION_ERROR", "One or more media assets are invalid");
+  for (const asset of mediaAssets) await assertMediaAssetAccess(context, asset, true);
+  if ([...attachments, ...mediaAssets].reduce((total, item) => total + item.size, 0) > MAX_DISCUSSION_MESSAGE_ATTACHMENT_BYTES) {
     throw new ApiError(400, "VALIDATION_ERROR", "Message attachments must total 50 MB or less");
   }
   if (mentionedUsers.length !== mentionUserIds.length) throw new ApiError(400, "VALIDATION_ERROR", "One or more mentioned users are invalid");
@@ -171,6 +174,7 @@ export async function createDiscussionMessage(
       data: { workspaceId: context.workspaceId, threadId: thread.id, authorId: context.user.id, replyToId: replyTo?.id, body }
     });
     if (attachmentIds.length) await tx.discussionAttachment.updateMany({ where: { id: { in: attachmentIds } }, data: { messageId: created.id } });
+    if (mediaAssets.length) await tx.discussionAttachment.createMany({ data: mediaAssets.map((asset) => ({ workspaceId: context.workspaceId, threadId: thread.id, messageId: created.id, uploadedById: context.user.id, mediaAssetId: asset.id, fileName: asset.name, contentType: asset.contentType, size: asset.size, storageKey: asset.id })) });
     if (mentionUserIds.length) await tx.discussionMention.createMany({ data: mentionUserIds.map((userId) => ({ workspaceId: context.workspaceId, messageId: created.id, userId })) });
     const notifications = [
       ...mentionUserIds.map((recipientId) => ({ workspaceId: context.workspaceId, recipientId, messageId: created.id, type: "mention" })),
@@ -214,7 +218,7 @@ export async function deleteDiscussionMessage(context: RequestContext, messageId
   if (!existing) throw new ApiError(404, "NOT_FOUND", "Discussion message not found");
   await assertDiscussionTargetAccess(context, targetFromThread(existing.thread), true);
   if (existing.authorId !== context.user.id && !hasPermission(context, "crm.admin")) throw new ApiError(403, "FORBIDDEN", "Only the author or an administrator can delete this message");
-  await Promise.all(existing.attachments.map((attachment) => deleteDiscussionObject(attachment.storageKey).catch(() => undefined)));
+  const mediaAssetIds = existing.attachments.flatMap((attachment) => attachment.mediaAssetId ? [attachment.mediaAssetId] : []);
   await prisma.$transaction(async (tx) => {
     await tx.discussionAttachment.deleteMany({ where: { messageId: existing.id } });
     await tx.discussionMention.deleteMany({ where: { messageId: existing.id } });
@@ -222,6 +226,13 @@ export async function deleteDiscussionMessage(context: RequestContext, messageId
     await tx.discussionMessage.update({ where: { id: existing.id }, data: { body: "", deletedAt: new Date() } });
     await tx.auditLog.create({ data: { workspaceId: context.workspaceId, actorId: context.user.id, action: "delete", entityType: "discussion_message", entityId: existing.id, summary: "Deleted team discussion message" } });
   });
+  for (const mediaAssetId of mediaAssetIds) {
+    const asset = await prisma.mediaAsset.findUnique({ where: { id: mediaAssetId }, include: { _count: { select: { discussionAttachments: true } } } });
+    if (asset?.scope === "TARGET" && asset._count.discussionAttachments === 0) {
+      await prisma.mediaAsset.delete({ where: { id: asset.id } });
+      if (asset.storageKey) await deleteMediaObject(asset.storageKey).catch(() => undefined);
+    }
+  }
 }
 
 export async function markDiscussionRead(context: RequestContext, target: DiscussionTarget): Promise<void> {
@@ -280,7 +291,7 @@ export async function markDiscussionNotificationsRead(context: RequestContext, i
 }
 
 export async function getDiscussionAttachment(context: RequestContext, attachmentId: string) {
-  const attachment = await prisma.discussionAttachment.findFirst({ where: { id: attachmentId, workspaceId: context.workspaceId }, include: { thread: true } });
+  const attachment = await prisma.discussionAttachment.findFirst({ where: { id: attachmentId, workspaceId: context.workspaceId }, include: { thread: true, mediaAsset: true } });
   if (!attachment || !attachment.messageId) throw new ApiError(404, "NOT_FOUND", "Discussion attachment not found");
   await assertDiscussionTargetAccess(context, targetFromThread(attachment.thread));
   return attachment;
@@ -289,13 +300,23 @@ export async function getDiscussionAttachment(context: RequestContext, attachmen
 export async function cleanupExpiredDiscussionAttachments(workspaceId?: string): Promise<number> {
   const expiresBefore = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const attachments = await prisma.discussionAttachment.findMany({ where: { ...(workspaceId ? { workspaceId } : {}), messageId: null, createdAt: { lt: expiresBefore } }, take: 100 });
-  await Promise.all(attachments.map((attachment) => deleteDiscussionObject(attachment.storageKey).catch(() => undefined)));
-  if (attachments.length) await prisma.discussionAttachment.deleteMany({ where: { id: { in: attachments.map((item) => item.id) } } });
+  if (attachments.length) {
+    await prisma.discussionAttachment.deleteMany({ where: { id: { in: attachments.map((item) => item.id) } } });
+    for (const item of attachments) {
+      if (!item.mediaAssetId) continue;
+      const asset = await prisma.mediaAsset.findUnique({ where: { id: item.mediaAssetId }, include: { _count: { select: { discussionAttachments: true } } } });
+      if (asset?.scope === "TARGET" && asset._count.discussionAttachments === 0) {
+        await prisma.mediaAsset.delete({ where: { id: asset.id } });
+        if (asset.storageKey) await deleteMediaObject(asset.storageKey).catch(() => undefined);
+      }
+    }
+  }
   return attachments.length;
 }
 
-function mapAttachment(attachment: { id: string; fileName: string; contentType: string; size: number }) {
-  return { id: attachment.id, fileName: attachment.fileName, contentType: attachment.contentType, size: attachment.size, downloadUrl: `/api/discussions/attachments/${encodeURIComponent(attachment.id)}` };
+function mapAttachment(attachment: { id: string; fileName: string; contentType: string; size: number; mediaAsset?: { id: string; name: string; contentType: string; size: number } | null }) {
+  const asset = attachment.mediaAsset;
+  return { id: attachment.id, mediaAssetId: asset?.id, fileName: asset?.name ?? attachment.fileName, contentType: asset?.contentType ?? attachment.contentType, size: asset?.size ?? attachment.size, downloadUrl: asset ? `/api/media-assets/${encodeURIComponent(asset.id)}/content` : `/api/discussions/attachments/${encodeURIComponent(attachment.id)}` };
 }
 
 function mapMessage(message: MessageWithRelations): DiscussionMessageDto {
