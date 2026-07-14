@@ -57,6 +57,7 @@ import type {
   CustomerLevel,
   CustomerLevelSettings,
   CustomerLevelSuggestion,
+  CustomerLevelUsage,
   CrmPoolLevelKey,
   CrmPoolLevelRule,
   CsvImportConflict,
@@ -162,6 +163,16 @@ import { generateWorkflowWithAiDesigner } from "@/lib/workflows/ai-designer";
 import { validatePdfFileNamePattern } from "@/lib/crm/pdf-file-name";
 import { purgeDiscussionTargets } from "@/lib/discussions/cleanup";
 import {
+  allCustomerLevelCodes,
+  customerLevelFieldOptions,
+  enabledCustomerLevelCodes,
+  isCustomerLevelCode,
+  MAX_CUSTOMER_LEVELS,
+  normalizeCustomerLevelCode,
+  UNRATED_POOL_LEVEL,
+  validateEnabledCustomerLevelCoverage
+} from "@/lib/crm/customer-levels";
+import {
   higherSmartReminderPriority,
   localCalendarDayKey,
   nextSmartReminderPriority,
@@ -196,11 +207,12 @@ type SmartReminderGenerationContext = {
   recentActivities: Activity[];
   emailThreads: EmailThread[];
   knowledge: KnowledgeArticle[];
+  customerLevelSettings: CustomerLevelSettings;
   portfolioMetrics: SmartReminderPortfolioMetrics;
 };
 type SmartReminderPortfolioMetrics = {
   totals: { contacts: number; companies: number; deals: number; activeDeals: number; publicPool: number; privatePool: number; unowned: number };
-  customerLevels: Record<"A" | "B" | "C" | "D" | "unrated", number>;
+  customerLevels: Record<string, number>;
   dataQuality: {
     lowCompletenessContacts: number;
     lowCompletenessCompanies: number;
@@ -1116,8 +1128,6 @@ function mapEmailSyncSettings(settings: {
   };
 }
 
-const crmPoolLevelKeys: CrmPoolLevelKey[] = ["A", "B", "C", "D", "unrated"];
-
 const defaultCrmPoolLevelRules: CrmPoolLevelRule[] = [
   { level: "A", enabled: true, privateLimit: 20, autoReclaimDays: 60 },
   { level: "B", enabled: true, privateLimit: 40, autoReclaimDays: 45 },
@@ -1126,10 +1136,14 @@ const defaultCrmPoolLevelRules: CrmPoolLevelRule[] = [
   { level: "unrated", enabled: true, privateLimit: 100, autoReclaimDays: 21 }
 ];
 
-function normalizeCrmPoolLevelRules(value: Prisma.JsonValue | unknown): CrmPoolLevelRule[] {
+function normalizeCrmPoolLevelRules(
+  value: Prisma.JsonValue | unknown,
+  customerLevelCodes: CustomerLevel[] = ["A", "B", "C", "D"]
+): CrmPoolLevelRule[] {
   const raw = Array.isArray(value) ? value : [];
-  return crmPoolLevelKeys.map((level) => {
-    const fallback = defaultCrmPoolLevelRules.find((rule) => rule.level === level) ?? { level, enabled: true };
+  const orderedLevels = [...customerLevelCodes.slice(0, MAX_CUSTOMER_LEVELS), UNRATED_POOL_LEVEL];
+  return orderedLevels.map((level) => {
+    const fallback = defaultCrmPoolLevelRules.find((rule) => rule.level === level) ?? { level, enabled: false };
     const candidate = raw.find((item) => isJsonRecord(item) && item.level === level);
     if (!isJsonRecord(candidate)) {
       return { ...fallback };
@@ -1174,16 +1188,19 @@ function getEffectivePoolLevelReclaimDays(settings: CrmPoolSettings, level: CrmP
   return normalizeIntegerLimit(getCrmPoolLevelRule(settings, level)?.autoReclaimDays ?? settings.autoReclaimDays, 1, 3650);
 }
 
-function getCrmPoolLevelFromRecord(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {
-  return getRecordCustomerLevel(record) ?? "unrated";
+function getCrmPoolLevelFromRecord(record: Pick<CrmRecord, "data">, allowedLevels: Set<string>): CrmPoolLevelKey {
+  const level = normalizeCustomerLevelCode(record.data.customerLevel);
+  return allowedLevels.has(level) ? level : UNRATED_POOL_LEVEL;
 }
 
 function getValidCustomerLevelValue(value: unknown): CustomerLevel | undefined {
-  return value === "A" || value === "B" || value === "C" || value === "D" ? value : undefined;
+  const normalized = normalizeCustomerLevelCode(value);
+  return isCustomerLevelCode(normalized) ? normalized : undefined;
 }
 
-function getContactTempCustomerLevel(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {
-  return getValidCustomerLevelValue(record.data.contactTempCustomerLevel) ?? "unrated";
+function getContactTempCustomerLevel(record: Pick<CrmRecord, "data">, allowedLevels?: Set<string>): CrmPoolLevelKey {
+  const level = getValidCustomerLevelValue(record.data.contactTempCustomerLevel);
+  return level && (!allowedLevels || allowedLevels.has(level)) ? level : UNRATED_POOL_LEVEL;
 }
 
 function normalizeContactCustomerLevelData(data: Record<string, unknown>): Record<string, unknown> {
@@ -1214,7 +1231,7 @@ function mapCrmPoolSettings(settings: {
   lastAutoReclaimAt: Date | null;
   lastAutoReclaimCount: number;
   updatedAt: Date;
-}): CrmPoolSettings {
+}, customerLevelCodes: CustomerLevel[] = ["A", "B", "C", "D"]): CrmPoolSettings {
   const privateLimit = normalizeIntegerLimit(settings.privateLimit, 1, 100000);
   const autoReclaimDays = normalizeIntegerLimit(settings.autoReclaimDays, 1, 3650);
   return {
@@ -1224,7 +1241,7 @@ function mapCrmPoolSettings(settings: {
     privateLimit,
     autoReclaimEnabled: settings.autoReclaimEnabled,
     autoReclaimDays,
-    levelRules: normalizeCrmPoolLevelRules(settings.levelRules),
+    levelRules: normalizeCrmPoolLevelRules(settings.levelRules, customerLevelCodes),
     lastAutoReclaimAt: settings.lastAutoReclaimAt?.toISOString(),
     lastAutoReclaimCount: settings.lastAutoReclaimCount,
     updatedAt: settings.updatedAt.toISOString()
@@ -1265,17 +1282,27 @@ function mapCustomerLevelSettings(settings: {
 
 function normalizeCustomerLevelDefinitions(value: Prisma.JsonValue | unknown): CustomerLevelSettings["levels"] {
   const raw = Array.isArray(value) ? value : [];
-  const byValue = new Map(defaultCustomerLevelDefinitions.map((level) => [level.value, level]));
-  for (const item of raw) {
+  const levels: CustomerLevelSettings["levels"] = [];
+  const seen = new Set<string>();
+  for (const item of raw.slice(0, MAX_CUSTOMER_LEVELS)) {
     if (!isJsonRecord(item)) {
       continue;
     }
-    const levelValue = typeof item.value === "string" && ["A", "B", "C", "D"].includes(item.value) ? (item.value as CustomerLevel) : undefined;
-    if (!levelValue) {
+    const levelValue = normalizeCustomerLevelCode(item.value);
+    if (!isCustomerLevelCode(levelValue) || seen.has(levelValue)) {
       continue;
     }
-    const fallback = byValue.get(levelValue) ?? defaultCustomerLevelDefinitions[0];
-    byValue.set(levelValue, {
+    seen.add(levelValue);
+    const fallback = defaultCustomerLevelDefinitions.find((level) => level.value === levelValue) ?? {
+      value: levelValue,
+      label: levelValue,
+      color: "#64748b",
+      position: levels.length + 1,
+      enabled: true,
+      minScore: 0,
+      maxScore: 100
+    };
+    levels.push({
       value: levelValue,
       label: typeof item.label === "string" && item.label.trim() ? item.label.trim().slice(0, 80) : fallback.label,
       color: typeof item.color === "string" && item.color.trim() ? item.color.trim().slice(0, 40) : fallback.color,
@@ -1285,7 +1312,7 @@ function normalizeCustomerLevelDefinitions(value: Prisma.JsonValue | unknown): C
       maxScore: normalizeScoreNumber(item.maxScore, fallback.maxScore)
     });
   }
-  return [...byValue.values()].sort((a, b) => a.position - b.position);
+  return (levels.length ? levels : defaultCustomerLevelDefinitions.map((level) => ({ ...level }))).sort((a, b) => a.position - b.position);
 }
 
 function normalizeCustomerLevelRules(value: Prisma.JsonValue | unknown): CustomerLevelSettings["rules"] {
@@ -4511,7 +4538,16 @@ export class PrismaCrmRepository {
 
   async updatePoolSettings(context: RequestContext, patch: Partial<Omit<CrmPoolSettings, "workspaceId" | "objectKeys" | "lastAutoReclaimAt" | "lastAutoReclaimCount" | "updatedAt">>): Promise<CrmPoolSettings> {
     requirePermission(context, "crm.pool.manage");
-    const current = await this.ensureCrmPoolSettings(context.workspaceId);
+    const [current, customerLevelSettings] = await Promise.all([
+      this.ensureCrmPoolSettings(context.workspaceId),
+      this.ensureCustomerLevelSettings(context.workspaceId)
+    ]);
+    const allowedLevels = allCustomerLevelCodes(customerLevelSettings.levels);
+    const unknownRule = patch.levelRules?.find((rule) => rule.level !== UNRATED_POOL_LEVEL && !allowedLevels.has(rule.level));
+    if (unknownRule) {
+      throw new ApiError(400, "VALIDATION_ERROR", `客户等级 ${unknownRule.level} 不存在`);
+    }
+    const levelCodes = customerLevelSettings.levels.map((level) => level.value);
     const updated = await this.db.crmPoolSettings.update({
       where: { workspaceId: context.workspaceId },
       data: {
@@ -4519,7 +4555,7 @@ export class PrismaCrmRepository {
         privateLimit: normalizeIntegerLimit(patch.privateLimit ?? current.privateLimit, 1, 100000),
         autoReclaimEnabled: patch.autoReclaimEnabled ?? current.autoReclaimEnabled,
         autoReclaimDays: normalizeIntegerLimit(patch.autoReclaimDays ?? current.autoReclaimDays, 1, 3650),
-        levelRules: crmPoolLevelRulesToJson(normalizeCrmPoolLevelRules(patch.levelRules ?? current.levelRules))
+        levelRules: crmPoolLevelRulesToJson(normalizeCrmPoolLevelRules(patch.levelRules ?? current.levelRules, levelCodes))
       }
     });
     await this.writeAuditLog(context, "update", "crm_pool_settings", context.workspaceId, {
@@ -4532,7 +4568,7 @@ export class PrismaCrmRepository {
         levelRules: updated.levelRules
       }
     });
-    return mapCrmPoolSettings(updated);
+    return mapCrmPoolSettings(updated, levelCodes);
   }
 
   async buildEmailAssistantContext(
@@ -5213,23 +5249,80 @@ export class PrismaCrmRepository {
     return this.ensureCustomerLevelSettings(context.workspaceId);
   }
 
+  async getCustomerLevelUsage(context: RequestContext, levelInput: string): Promise<CustomerLevelUsage> {
+    requirePermission(context, "crm.admin");
+    const level = normalizeCustomerLevelCode(levelInput);
+    if (!isCustomerLevelCode(level)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "客户等级编码无效");
+    }
+    const [companies, contacts, suggestions, pendingCompanyRequests, pendingContactRequests] = await Promise.all([
+      this.db.crmRecord.count({ where: { workspaceId: context.workspaceId, objectKey: "companies", data: { path: ["customerLevel"], equals: level } } }),
+      this.db.crmRecord.count({ where: { workspaceId: context.workspaceId, objectKey: "contacts", data: { path: ["contactTempCustomerLevel"], equals: level } } }),
+      this.db.crmRecord.count({ where: { workspaceId: context.workspaceId, objectKey: "companies", data: { path: ["customerLevelSuggested"], equals: level } } }),
+      this.db.recordChangeRequest.count({ where: { workspaceId: context.workspaceId, status: "pending", patch: { path: ["data", "customerLevel"], equals: level } } }),
+      this.db.recordChangeRequest.count({ where: { workspaceId: context.workspaceId, status: "pending", patch: { path: ["data", "contactTempCustomerLevel"], equals: level } } })
+    ]);
+    const pendingRequests = pendingCompanyRequests + pendingContactRequests;
+    return { level, companies, contacts, suggestions, pendingRequests, total: companies + contacts + suggestions + pendingRequests };
+  }
+
   async updateCustomerLevelSettings(
     context: RequestContext,
     patch: Partial<Pick<CustomerLevelSettings, "enabled" | "levels" | "rules">>
   ): Promise<CustomerLevelSettings> {
     requirePermission(context, "crm.admin");
     const current = await this.ensureCustomerLevelSettings(context.workspaceId);
-    const updated = await this.db.customerLevelSettings.update({
-      where: { workspaceId: context.workspaceId },
-      data: {
-        enabled: patch.enabled ?? current.enabled,
-        levels: normalizeCustomerLevelDefinitions(patch.levels ?? current.levels) as unknown as Prisma.InputJsonValue,
-        rules: normalizeCustomerLevelRules(patch.rules ?? current.rules) as unknown as Prisma.InputJsonValue
+    const nextLevels = normalizeCustomerLevelDefinitions(patch.levels ?? current.levels).map((level, index) => ({ ...level, position: index + 1 }));
+    const coverageError = validateEnabledCustomerLevelCoverage(nextLevels);
+    if (coverageError) {
+      throw new ApiError(400, "VALIDATION_ERROR", coverageError);
+    }
+    const nextCodes = allCustomerLevelCodes(nextLevels);
+    const removedCodes = current.levels.map((level) => level.value).filter((level) => !nextCodes.has(level));
+    for (const removedCode of removedCodes) {
+      const usage = await this.getCustomerLevelUsage(context, removedCode);
+      if (usage.total > 0) {
+        throw new ApiError(409, "CUSTOMER_LEVEL_IN_USE", `客户等级 ${removedCode} 仍被引用，不能删除`, usage);
       }
-    });
-    await this.writeAuditLog(context, "update", "customer_level_settings", context.workspaceId, {
-      summary: "Updated customer level settings",
-      details: { patch }
+    }
+    const options = customerLevelFieldOptions(nextLevels);
+    const updated = await this.db.$transaction(async (tx) => {
+      const saved = await tx.customerLevelSettings.update({
+        where: { workspaceId: context.workspaceId },
+        data: {
+          enabled: patch.enabled ?? current.enabled,
+          levels: nextLevels as unknown as Prisma.InputJsonValue,
+          rules: normalizeCustomerLevelRules(patch.rules ?? current.rules) as unknown as Prisma.InputJsonValue
+        }
+      });
+      await tx.fieldDefinition.updateMany({
+        where: {
+          workspaceId: context.workspaceId,
+          key: { in: ["contactTempCustomerLevel", "customerLevel", "customerLevelSuggested"] }
+        },
+        data: { options: options as unknown as Prisma.InputJsonValue }
+      });
+      const poolSettings = await tx.crmPoolSettings.findUnique({ where: { workspaceId: context.workspaceId } });
+      if (poolSettings) {
+        await tx.crmPoolSettings.update({
+          where: { workspaceId: context.workspaceId },
+          data: {
+            levelRules: crmPoolLevelRulesToJson(normalizeCrmPoolLevelRules(poolSettings.levelRules, nextLevels.map((level) => level.value)))
+          }
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          workspaceId: context.workspaceId,
+          actorId: context.user.id,
+          action: "update",
+          entityType: "customer_level_settings",
+          entityId: context.workspaceId,
+          summary: "Updated customer level settings",
+          details: { levels: nextLevels, removedCodes, enabled: patch.enabled ?? current.enabled } as unknown as Prisma.InputJsonValue
+        }
+      });
+      return saved;
     });
     return mapCustomerLevelSettings(updated);
   }
@@ -5293,8 +5386,13 @@ export class PrismaCrmRepository {
     if (!isCustomerLevelObjectKey(objectKey)) {
       throw new Error("客户等级仅支持联系人和公司");
     }
+    const normalizedLevel = input.level ? normalizeCustomerLevelCode(input.level) : "";
+    const customerLevelSettings = await this.ensureCustomerLevelSettings(context.workspaceId);
+    if (normalizedLevel && !enabledCustomerLevelCodes(customerLevelSettings.levels).has(normalizedLevel)) {
+      throw new ApiError(400, "VALIDATION_ERROR", `客户等级 ${normalizedLevel} 不存在或已停用`);
+    }
     const record = await this.getRecord(context, objectKey, recordId);
-    const nextLevel = input.level || null;
+    const nextLevel = normalizedLevel || null;
     const levelKey = objectKey === "contacts" ? "contactTempCustomerLevel" : "customerLevel";
     if (objectKey === "contacts" && typeof record.data.companyId === "string" && record.data.companyId.trim()) {
       throw new Error("联系人已关联公司，请到公司记录修改客户等级");
@@ -6304,6 +6402,7 @@ export class PrismaCrmRepository {
     if (isSalesDocumentObjectKey(objectKey)) {
       validateSalesDocumentRecordData(objectKey, data, await this.listRecordsForValidation(context, "products"));
     }
+    await this.assertEnabledCustomerLevelSelection(context, objectKey, data);
     const existing = await this.listRecordsForUniqueValidation(context, objectKey, fields, data);
     validateRecordPayload(fields, data, existing);
     await this.assertRecordReferences(context, fields, data, true);
@@ -6430,6 +6529,7 @@ export class PrismaCrmRepository {
         : objectKey === "contacts"
           ? normalizeContactCustomerLevelData(mergedData)
           : mergedData;
+    await this.assertEnabledCustomerLevelSelection(context, objectKey, nextData, current.data);
     const fields = await this.listFieldDefinitions(context, objectKey);
     if (isSalesDocumentObjectKey(objectKey)) {
       validateSalesDocumentRecordData(objectKey, nextData, await this.listRecordsForValidation(context, "products"));
@@ -6437,6 +6537,22 @@ export class PrismaCrmRepository {
     validateRecordPayload(fields, nextData, await this.listRecordsForUniqueValidation(context, objectKey, fields, nextData, recordId), recordId);
     await this.assertRecordReferences(context, fields, nextData, true);
     return { nextData, fields };
+  }
+
+  private async assertEnabledCustomerLevelSelection(
+    context: RequestContext,
+    objectKey: string,
+    nextData: Record<string, unknown>,
+    currentData?: Record<string, unknown>
+  ): Promise<void> {
+    const levelKey = objectKey === "companies" ? "customerLevel" : objectKey === "contacts" ? "contactTempCustomerLevel" : undefined;
+    if (!levelKey) return;
+    const nextLevel = normalizeCustomerLevelCode(nextData[levelKey]);
+    if (!nextLevel || nextLevel === normalizeCustomerLevelCode(currentData?.[levelKey])) return;
+    const settings = await this.ensureCustomerLevelSettings(context.workspaceId);
+    if (!enabledCustomerLevelCodes(settings.levels).has(nextLevel)) {
+      throw new ApiError(400, "VALIDATION_ERROR", `客户等级 ${nextLevel} 不存在或已停用`);
+    }
   }
 
   private async resolveEffectivePoolLevelForRecord(
@@ -6450,6 +6566,8 @@ export class PrismaCrmRepository {
     context: RequestContext,
     records: Array<Pick<CrmRecord, "id" | "objectKey" | "data">>
   ): Promise<Map<string, CrmPoolLevelKey>> {
+    const customerLevelSettings = await this.ensureCustomerLevelSettings(context.workspaceId);
+    const allowedLevels = allCustomerLevelCodes(customerLevelSettings.levels);
     const companyIds = Array.from(
       new Set(
         records
@@ -6467,16 +6585,16 @@ export class PrismaCrmRepository {
     const companyLevels = new Map(
       companies.map((company) => [
         company.id,
-        getCrmPoolLevelFromRecord({ data: isJsonRecord(company.data) ? company.data : {} })
+        getCrmPoolLevelFromRecord({ data: isJsonRecord(company.data) ? company.data : {} }, allowedLevels)
       ])
     );
     return new Map(
       records.map((record) => {
         if (record.objectKey === "contacts") {
           const companyId = typeof record.data.companyId === "string" ? record.data.companyId.trim() : "";
-          return [record.id, companyId ? companyLevels.get(companyId) ?? "unrated" : getContactTempCustomerLevel(record)];
+          return [record.id, companyId ? companyLevels.get(companyId) ?? UNRATED_POOL_LEVEL : getContactTempCustomerLevel(record, allowedLevels)];
         }
-        return [record.id, getCrmPoolLevelFromRecord(record)];
+        return [record.id, getCrmPoolLevelFromRecord(record, allowedLevels)];
       })
     );
   }
@@ -9286,7 +9404,7 @@ export class PrismaCrmRepository {
       ...(input.recordId ? { id: input.recordId } : {}),
       ...accessWhere
     };
-    const [records, tasks, recentActivities, emailThreads, knowledge] = await Promise.all([
+    const [records, tasks, recentActivities, emailThreads, knowledge, customerLevelSettings] = await Promise.all([
       this.db.crmRecord.findMany({ where: recordWhere, orderBy: { updatedAt: "asc" }, take: 80 }),
       enabledKeys.has("tasks")
         ? this.db.activity.findMany({
@@ -9306,7 +9424,8 @@ export class PrismaCrmRepository {
             take: 40
           })
         : Promise.resolve([]),
-      this.db.knowledgeArticle.findMany({ where: { workspaceId: context.workspaceId, active: true }, orderBy: { updatedAt: "desc" }, take: 6 })
+      this.db.knowledgeArticle.findMany({ where: { workspaceId: context.workspaceId, active: true }, orderBy: { updatedAt: "desc" }, take: 6 }),
+      this.ensureCustomerLevelSettings(context.workspaceId)
     ]);
     const mappedRecords = records.map(mapRecord);
     const visibleRecordIds = new Set(mappedRecords.map((record) => record.id));
@@ -9320,11 +9439,13 @@ export class PrismaCrmRepository {
       recentActivities: mappedRecentActivities,
       emailThreads: mappedEmailThreads,
       knowledge: knowledge.map(mapKnowledgeArticle),
+      customerLevelSettings,
       portfolioMetrics: buildSmartReminderPortfolioMetrics({
         records: mappedRecords,
         tasks: mappedTasks,
         recentActivities: mappedRecentActivities,
-        emailThreads: mappedEmailThreads
+        emailThreads: mappedEmailThreads,
+        customerLevelSettings
       })
     };
   }
@@ -9883,9 +10004,11 @@ export class PrismaCrmRepository {
   }
 
   private async ensureCrmPoolSettings(workspaceId: string): Promise<CrmPoolSettings> {
+    const customerLevelSettings = await this.ensureCustomerLevelSettings(workspaceId);
+    const levelCodes = customerLevelSettings.levels.map((level) => level.value);
     const settings = await this.db.crmPoolSettings.findUnique({ where: { workspaceId } });
     if (settings) {
-      return mapCrmPoolSettings(settings);
+      return mapCrmPoolSettings(settings, levelCodes);
     }
     const created = await this.db.crmPoolSettings.create({
       data: {
@@ -9897,7 +10020,7 @@ export class PrismaCrmRepository {
         levelRules: defaultCrmPoolLevelRules as unknown as Prisma.InputJsonValue
       }
     });
-    return mapCrmPoolSettings(created);
+    return mapCrmPoolSettings(created, levelCodes);
   }
 
   private async ensureDefaultEmailSignatures(context: RequestContext): Promise<void> {
@@ -10439,11 +10562,11 @@ function compareSmartReminders(a: SmartReminder, b: SmartReminder): number {
 }
 
 
-function buildSmartReminderPortfolioMetrics(payload: Pick<SmartReminderGenerationContext, "records" | "tasks" | "recentActivities" | "emailThreads">): SmartReminderPortfolioMetrics {
+function buildSmartReminderPortfolioMetrics(payload: Pick<SmartReminderGenerationContext, "records" | "tasks" | "recentActivities" | "emailThreads" | "customerLevelSettings">): SmartReminderPortfolioMetrics {
   const now = Date.now();
   const metrics: SmartReminderPortfolioMetrics = {
     totals: { contacts: 0, companies: 0, deals: 0, activeDeals: 0, publicPool: 0, privatePool: 0, unowned: 0 },
-    customerLevels: { A: 0, B: 0, C: 0, D: 0, unrated: 0 },
+    customerLevels: Object.fromEntries([...payload.customerLevelSettings.levels.map((level) => level.value), UNRATED_POOL_LEVEL].map((level) => [level, 0])),
     dataQuality: { lowCompletenessContacts: 0, lowCompletenessCompanies: 0, averageContactCompleteness: 0, averageCompanyCompleteness: 0 },
     stale: { noActivity7Days: 0, noActivity14Days: 0, noActivity30Days: 0, stalePrivateRecords: 0 },
     deals: { highValueStalled: 0, closingSoon: 0, totalOpenAmount: 0 }
@@ -10461,9 +10584,9 @@ function buildSmartReminderPortfolioMetrics(payload: Pick<SmartReminderGeneratio
       if (record.ownerId) metrics.totals.privatePool += 1;
       else metrics.totals.publicPool += 1;
       if (!record.ownerId) metrics.totals.unowned += 1;
-      const level = getEffectiveRecordCustomerLevel(record, payload.records);
-      metrics.customerLevels[level ?? "unrated"] += 1;
-      const completeness = calculateRecordCompleteness(record, payload.records);
+      const level = getEffectiveRecordCustomerLevel(record, payload.records, payload.customerLevelSettings);
+      metrics.customerLevels[level ?? UNRATED_POOL_LEVEL] = (metrics.customerLevels[level ?? UNRATED_POOL_LEVEL] ?? 0) + 1;
+      const completeness = calculateRecordCompleteness(record, payload.records, payload.customerLevelSettings);
       if (record.objectKey === "contacts") {
         contactScores.push(completeness.score);
         if (completeness.score < 70) metrics.dataQuality.lowCompletenessContacts += 1;
@@ -10507,37 +10630,41 @@ function getStringField(data: Record<string, unknown> | undefined, key: string):
   return typeof value === "string" ? value.trim() : "";
 }
 
-function getRecordCustomerLevel(record: Pick<CrmRecord, "data">): "A" | "B" | "C" | "D" | undefined {
-  const level = getStringField(record.data, "customerLevel").toUpperCase();
-  return ["A", "B", "C", "D"].includes(level) ? (level as "A" | "B" | "C" | "D") : undefined;
+function getRecordCustomerLevel(record: Pick<CrmRecord, "data">, settings: CustomerLevelSettings): CustomerLevel | undefined {
+  const level = normalizeCustomerLevelCode(getStringField(record.data, "customerLevel"));
+  return allCustomerLevelCodes(settings.levels).has(level) ? level : undefined;
 }
 
 function getEffectiveRecordCustomerLevel(
   record: Pick<CrmRecord, "objectKey" | "data">,
-  records: Array<Pick<CrmRecord, "id" | "objectKey" | "data">> = []
-): "A" | "B" | "C" | "D" | undefined {
+  records: Array<Pick<CrmRecord, "id" | "objectKey" | "data">>,
+  settings: CustomerLevelSettings
+): CustomerLevel | undefined {
   if (record.objectKey !== "contacts") {
-    return getRecordCustomerLevel(record);
+    return getRecordCustomerLevel(record, settings);
   }
   const companyId = getStringField(record.data, "companyId");
   if (companyId) {
     const company = records.find((candidate) => candidate.objectKey === "companies" && candidate.id === companyId);
-    return company ? getRecordCustomerLevel(company) : undefined;
+    return company ? getRecordCustomerLevel(company, settings) : undefined;
   }
-  const level = getStringField(record.data, "contactTempCustomerLevel").toUpperCase();
-  return ["A", "B", "C", "D"].includes(level) ? (level as "A" | "B" | "C" | "D") : undefined;
+  const level = normalizeCustomerLevelCode(getStringField(record.data, "contactTempCustomerLevel"));
+  return allCustomerLevelCodes(settings.levels).has(level) ? level : undefined;
 }
 
 function isHighCustomerLevel(
   record: Pick<CrmRecord, "objectKey" | "data">,
-  records: Array<Pick<CrmRecord, "id" | "objectKey" | "data">> = []
+  records: Array<Pick<CrmRecord, "id" | "objectKey" | "data">>,
+  settings: CustomerLevelSettings
 ): boolean {
-  return ["A", "B"].includes(getEffectiveRecordCustomerLevel(record, records) ?? "");
+  const highValueLevels = settings.levels.filter((level) => level.enabled).sort((left, right) => left.position - right.position).slice(0, 2).map((level) => level.value);
+  return highValueLevels.includes(getEffectiveRecordCustomerLevel(record, records, settings) ?? "");
 }
 
 function calculateRecordCompleteness(
   record: Pick<CrmRecord, "objectKey" | "title" | "data">,
-  records: Array<Pick<CrmRecord, "id" | "objectKey" | "data">> = []
+  records: Array<Pick<CrmRecord, "id" | "objectKey" | "data">>,
+  settings: CustomerLevelSettings
 ): { score: number; missing: string[] } {
   const data = record.data ?? {};
   const contactMethods = Array.isArray(data.contactMethods) ? data.contactMethods : [];
@@ -10549,7 +10676,7 @@ function calculateRecordCompleteness(
           ["域名/行业", Boolean(getStringField(data, "domain") || getStringField(data, "industry"))],
           ["地址", Boolean(getStringField(data, "address") || companyAddresses.length)],
           ["主联系人", Boolean(getStringField(data, "primaryContactId") || getStringField(data, "primaryContactEmail"))],
-          ["客户等级", Boolean(getEffectiveRecordCustomerLevel(record, records))]
+          ["客户等级", Boolean(getEffectiveRecordCustomerLevel(record, records, settings))]
         ]
       : [
           ["名称", Boolean(record.title)],
@@ -10557,7 +10684,7 @@ function calculateRecordCompleteness(
           ["主联系方式", Boolean(getStringField(data, "email") || getStringField(data, "phone") || contactMethods.length)],
           ["国家/地区", Boolean(getStringField(data, "country"))],
           ["偏好语言", Boolean(getStringField(data, "preferredLanguage"))],
-          ["客户等级", Boolean(getEffectiveRecordCustomerLevel(record, records))]
+          ["客户等级", Boolean(getEffectiveRecordCustomerLevel(record, records, settings))]
         ];
   const passed = checks.filter(([, ok]) => ok).length;
   return { score: Math.round((passed / checks.length) * 100), missing: checks.filter(([, ok]) => !ok).map(([label]) => String(label)) };
@@ -10666,12 +10793,12 @@ function buildFallbackSmartReminderCandidates(context: RequestContext, payload: 
         });
       }
     } else if (["contacts", "companies"].includes(record.objectKey) && lastTouchedAt < sevenDaysAgo) {
-      const highLevel = isHighCustomerLevel(record, payload.records);
+      const highLevel = isHighCustomerLevel(record, payload.records, payload.customerLevelSettings);
       candidates.push({
         kind: highLevel ? "customer_level" : "follow_up",
         priority: highLevel ? "high" : record.ownerId === context.user.id ? "medium" : "low",
         title: highLevel ? `高等级客户久未跟进：${record.title}` : `客户久未跟进：${record.title}`,
-        body: highLevel ? "该 A/B 级客户最近缺少活动记录，建议今天优先确认需求、预算或下一步。" : "该客户最近缺少活动记录，建议查看邮件历史并安排一次低打扰跟进。",
+        body: highLevel ? "该高等级客户最近缺少活动记录，建议今天优先确认需求、预算或下一步。" : "该客户最近缺少活动记录，建议查看邮件历史并安排一次低打扰跟进。",
         actionLabel: highLevel ? "优先跟进高等级客户" : "安排客户跟进",
         objectKey: record.objectKey,
         recordId: record.id,
@@ -10704,13 +10831,13 @@ function buildFallbackSmartReminderCandidates(context: RequestContext, payload: 
 
   const contactRecords = payload.records.filter((record) => record.objectKey === "contacts");
   const companyRecords = payload.records.filter((record) => record.objectKey === "companies");
-  const unratedContacts = contactRecords.filter((record) => !getEffectiveRecordCustomerLevel(record, payload.records));
-  const unratedCompanies = companyRecords.filter((record) => !getRecordCustomerLevel(record));
+  const unratedContacts = contactRecords.filter((record) => !getEffectiveRecordCustomerLevel(record, payload.records, payload.customerLevelSettings));
+  const unratedCompanies = companyRecords.filter((record) => !getRecordCustomerLevel(record, payload.customerLevelSettings));
   const lowCompletenessContacts = contactRecords
-    .map((record) => ({ record, completeness: calculateRecordCompleteness(record, payload.records) }))
+    .map((record) => ({ record, completeness: calculateRecordCompleteness(record, payload.records, payload.customerLevelSettings) }))
     .filter((item) => item.completeness.score < 70);
   const lowCompletenessCompanies = companyRecords
-    .map((record) => ({ record, completeness: calculateRecordCompleteness(record, payload.records) }))
+    .map((record) => ({ record, completeness: calculateRecordCompleteness(record, payload.records, payload.customerLevelSettings) }))
     .filter((item) => item.completeness.score < 70);
   const stalePrivateRecords = [...contactRecords, ...companyRecords].filter((record) => {
     if (!record.ownerId) return false;

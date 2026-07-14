@@ -96,6 +96,7 @@ import { crmPathForNav, resolveCrmRoute } from "@/lib/crm/navigation";
 import { buildPaymentTermSchedule, getPaymentTermDefinitions, normalizePaymentTermCode } from "@/lib/crm/payment-terms";
 import { calculateQuoteTotals, isSalesDocumentObjectKey, normalizeQuoteFees, normalizeQuoteLineItems, quoteLineItemFromProductForCurrency, salesDocumentCurrencyField, salesDocumentNextObjectKey, salesDocumentNumberField, salesDocumentTitles, type QuoteFee, type QuoteLineItem } from "@/lib/crm/quotes";
 import { hasRecordPatchChanges, previousRecordApprovalPatch, splitRecordApprovalPatch, type RecordApprovalPatch } from "@/lib/crm/record-approval";
+import { isCustomerLevelCode, normalizeCustomerLevelCode } from "@/lib/crm/customer-levels";
 import { parseEmailThreadSearchCommand } from "@/lib/email/search-command";
 import type {
   Activity,
@@ -18885,7 +18886,8 @@ function customerLevelColor(settings: CustomerLevelSettings, level: CustomerLeve
 }
 
 function normalizeCustomerLevelValue(value: unknown): CustomerLevel | "" {
-  return value === "A" || value === "B" || value === "C" || value === "D" ? value : "";
+  const normalized = normalizeCustomerLevelCode(value);
+  return isCustomerLevelCode(normalized) ? normalized : "";
 }
 
 function customerLevelReasons(value: unknown): string[] {

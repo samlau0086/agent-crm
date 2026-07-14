@@ -580,7 +580,7 @@ export interface EmailSyncSettings {
 
 export type RecordPool = "public" | "private" | "all";
 
-export type CrmPoolLevelKey = "A" | "B" | "C" | "D" | "unrated";
+export type CrmPoolLevelKey = string;
 
 export interface CrmPoolLevelRule {
   level: CrmPoolLevelKey;
@@ -809,7 +809,7 @@ export interface CrmRecord {
   updatedAt: string;
 }
 
-export type CustomerLevel = "A" | "B" | "C" | "D";
+export type CustomerLevel = string;
 
 export interface CustomerLevelDefinition {
   value: CustomerLevel;
@@ -836,6 +836,15 @@ export interface CustomerLevelSettings {
   levels: CustomerLevelDefinition[];
   rules: CustomerLevelRuleWeights;
   updatedAt: string;
+}
+
+export interface CustomerLevelUsage {
+  level: CustomerLevel;
+  companies: number;
+  contacts: number;
+  suggestions: number;
+  pendingRequests: number;
+  total: number;
 }
 
 export interface CustomerLevelSuggestion {

@@ -4,6 +4,7 @@ import { MAX_OUTBOUND_EMAIL_RECIPIENTS, validateOutboundEmailRecipientPolicy } f
 import { isValidWebhookEvent } from "@/lib/integrations/webhook";
 import type { WebhookEvent } from "@/lib/crm/types";
 import { PdfTemplateValidationError, validatePdfTemplate } from "@/lib/crm/pdf-template-layout";
+import { CUSTOMER_LEVEL_CODE_PATTERN, MAX_CUSTOMER_LEVELS, normalizeCustomerLevelCode, validateEnabledCustomerLevelCoverage } from "@/lib/crm/customer-levels";
 
 export const MAX_CSV_IMPORT_CHARS = 5_000_000;
 export const MAX_IMPORT_MAPPING_FIELDS = 200;
@@ -238,7 +239,11 @@ export const salesDocumentNumberSettingsUpdateSchema = z
     path: ["settings"]
   });
 
-export const customerLevelSchema = z.enum(["A", "B", "C", "D"]);
+export const customerLevelSchema = z
+  .string()
+  .trim()
+  .transform(normalizeCustomerLevelCode)
+  .refine((value) => value !== "UNRATED" && CUSTOMER_LEVEL_CODE_PATTERN.test(value), "客户等级编码必须以字母开头，且只能包含大写字母、数字、下划线或短横线");
 
 export const customerLevelDefinitionSchema = z
   .object({
@@ -266,10 +271,24 @@ export const customerLevelRulesSchema = z
 export const customerLevelSettingsUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
-    levels: z.array(customerLevelDefinitionSchema).min(1).max(4).optional(),
+    levels: z.array(customerLevelDefinitionSchema).min(1).max(MAX_CUSTOMER_LEVELS).optional(),
     rules: customerLevelRulesSchema.optional()
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.levels) return;
+    const seen = new Set<string>();
+    for (const [index, level] of value.levels.entries()) {
+      if (seen.has(level.value)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["levels", index, "value"], message: "客户等级编码不能重复" });
+      }
+      seen.add(level.value);
+    }
+    const coverageError = validateEnabledCustomerLevelCoverage(value.levels);
+    if (coverageError) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["levels"], message: coverageError });
+    }
+  });
 
 export const customerLevelChangeRequestSchema = z
   .object({
@@ -400,7 +419,7 @@ export const roleCreateSchema = z
 
 export const roleUpdateSchema = roleCreateSchema.partial().strict();
 
-const crmPoolLevelKeySchema = z.enum(["A", "B", "C", "D", "unrated"]);
+const crmPoolLevelKeySchema = z.union([customerLevelSchema, z.literal("unrated")]);
 
 const crmPoolLevelRuleSchema = z
   .object({
@@ -417,9 +436,19 @@ export const poolSettingsUpdateSchema = z
     privateLimit: z.number().int().min(1).max(100000).optional(),
     autoReclaimEnabled: z.boolean().optional(),
     autoReclaimDays: z.number().int().min(1).max(3650).optional(),
-    levelRules: z.array(crmPoolLevelRuleSchema).max(5).optional()
+    levelRules: z.array(crmPoolLevelRuleSchema).max(MAX_CUSTOMER_LEVELS + 1).optional()
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.levelRules) return;
+    const seen = new Set<string>();
+    for (const [index, rule] of value.levelRules.entries()) {
+      if (seen.has(rule.level)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["levelRules", index, "level"], message: "同一客户等级只能配置一条公海规则" });
+      }
+      seen.add(rule.level);
+    }
+  });
 
 export const recordPoolTransferSchema = z
   .object({

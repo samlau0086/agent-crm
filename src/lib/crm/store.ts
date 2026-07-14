@@ -132,6 +132,7 @@ import {
   workflowNodeToCondition,
   workflowMatchesEvent
 } from "@/lib/workflows/core";
+import { isCustomerLevelCode, normalizeCustomerLevelCode, UNRATED_POOL_LEVEL } from "@/lib/crm/customer-levels";
 
 type GlobalStore = typeof globalThis & { __crmStore?: CrmStore };
 type EmailThreadCommandScope = { recordIds: Set<string>; emails: Set<string> };
@@ -140,7 +141,6 @@ type StoredApiKey = ApiKey & { tokenHash: string };
 type StoredWebhookEndpoint = WebhookEndpoint & { secret: string };
 type EmailAssistantInput = Parameters<typeof buildEmailAssistantContext>[0];
 const POOL_OBJECT_KEYS = ["contacts", "companies"] as const;
-const crmPoolLevelKeys: CrmPoolLevelKey[] = ["A", "B", "C", "D", "unrated"];
 const defaultCrmPoolLevelRules: CrmPoolLevelRule[] = [
   { level: "A", enabled: true, privateLimit: 20, autoReclaimDays: 60 },
   { level: "B", enabled: true, privateLimit: 40, autoReclaimDays: 45 },
@@ -201,7 +201,13 @@ function isPoolObjectKey(objectKey: string): boolean {
 
 function normalizeCrmPoolLevelRules(value: unknown, globalPrivateLimit = 100, globalAutoReclaimDays = 30): CrmPoolLevelRule[] {
   const inputRules = Array.isArray(value) ? value : [];
-  return crmPoolLevelKeys.map((level) => {
+  const inputLevels = inputRules
+    .map((candidate) => isJsonRecord(candidate) ? String(candidate.level ?? "") : "")
+    .map((level) => level === UNRATED_POOL_LEVEL ? level : normalizeCustomerLevelCode(level))
+    .filter((level) => level === UNRATED_POOL_LEVEL || isCustomerLevelCode(level));
+  const levelKeys = Array.from(new Set(inputLevels.length ? inputLevels : defaultCrmPoolLevelRules.map((rule) => rule.level)));
+  if (!levelKeys.includes(UNRATED_POOL_LEVEL)) levelKeys.push(UNRATED_POOL_LEVEL);
+  return levelKeys.map((level) => {
     const defaultRule = defaultCrmPoolLevelRules.find((candidate) => candidate.level === level);
     const inputRule = inputRules.find(
       (candidate): candidate is Partial<CrmPoolLevelRule> & { level: CrmPoolLevelKey } =>
@@ -239,12 +245,12 @@ function getEffectivePoolLevelReclaimDays(settings: CrmPoolSettings, level: CrmP
 }
 
 function getCrmPoolLevelFromRecord(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {
-  const value = record.data.customerLevel;
-  return value === "A" || value === "B" || value === "C" || value === "D" ? value : "unrated";
+  return getValidCustomerLevelValue(record.data.customerLevel) ?? UNRATED_POOL_LEVEL;
 }
 
 function getValidCustomerLevelValue(value: unknown): CustomerLevel | undefined {
-  return value === "A" || value === "B" || value === "C" || value === "D" ? value : undefined;
+  const normalized = normalizeCustomerLevelCode(value);
+  return isCustomerLevelCode(normalized) ? normalized : undefined;
 }
 
 function getContactTempCustomerLevel(record: Pick<CrmRecord, "data">): CrmPoolLevelKey {

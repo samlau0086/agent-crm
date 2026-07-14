@@ -15,7 +15,8 @@ import { buildImportJobObservability } from "@/lib/crm/import-observability";
 import { previewSalesDocumentNumber, salesDocumentNumberVariables } from "@/lib/crm/document-numbering";
 import { pdfFileNameVariables, previewPdfFileName } from "@/lib/crm/pdf-file-name";
 import { previousRecordApprovalPatch } from "@/lib/crm/record-approval";
-import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SalesDocumentNumberSetting, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
+import { isCustomerLevelCode, MAX_CUSTOMER_LEVELS, normalizeCustomerLevelCode, validateEnabledCustomerLevelCoverage } from "@/lib/crm/customer-levels";
+import type { Activity, AiAgentDefinition, AiAgentRunLog, AiAgentRunResult, AiAgentSetting, AiProviderProfile, ApiKey, AuditLog, CreatedApiKey, CreatedWebhookEndpoint, CrmPoolSettings, CrmRecord, CsvImportJob, CustomerLevelSettings, CustomerLevelUsage, DocumentTemplate, EmailAccount, EmailAiSettings, FieldDefinition, ImportJobQueueSummary, KnowledgeArticle, KnowledgeVectorSettings, MediaAsset, NotificationChannel, NotificationChannelType, ObjectDefinition, Permission, Pipeline, RecordChangeRequest, RelationDefinition, Role, SalesDocumentNumberSetting, SavedView, SmartReminderSettings, Team, User, WebhookDelivery, WebhookDeliveryStatus, WebhookEndpoint, WebhookEvent, WorkflowActionApproval, WorkflowAiGenerationResult, WorkflowDefinition, WorkflowRun } from "@/lib/crm/types";
 import type { BackupFile, BackupRunResult } from "@/lib/ops/backups";
 import type { MediaAssetDto } from "@/lib/media/service";
 
@@ -220,7 +221,7 @@ type SmartReminderSettingsDraft = {
 };
 type CustomerLevelSettingsDraft = {
   enabled: boolean;
-  levels: CustomerLevelSettings["levels"];
+  levels: Array<CustomerLevelSettings["levels"][number] & { isNew?: boolean }>;
   rules: Record<keyof CustomerLevelSettings["rules"], string>;
 };
 type DocumentTemplateDraft = {
@@ -443,7 +444,7 @@ export function SettingsAdmin(props: SettingsAdminProps) {
     privateLimit: String(props.poolSettings.privateLimit),
     autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
     autoReclaimDays: String(props.poolSettings.autoReclaimDays),
-    levelRules: poolLevelRulesToDraft(props.poolSettings)
+    levelRules: poolLevelRulesToDraft(props.poolSettings, props.customerLevelSettings)
   }));
   const [smartReminderSettingsDraft, setSmartReminderSettingsDraft] = useState<SmartReminderSettingsDraft>(() => ({
     enabled: props.smartReminderSettings.enabled,
@@ -560,9 +561,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       privateLimit: String(props.poolSettings.privateLimit),
       autoReclaimEnabled: props.poolSettings.autoReclaimEnabled,
       autoReclaimDays: String(props.poolSettings.autoReclaimDays),
-      levelRules: poolLevelRulesToDraft(props.poolSettings)
+      levelRules: poolLevelRulesToDraft(props.poolSettings, props.customerLevelSettings)
     });
-  }, [props.poolSettings]);
+  }, [props.customerLevelSettings, props.poolSettings]);
   useEffect(() => {
     setSmartReminderSettingsDraft({
       enabled: props.smartReminderSettings.enabled,
@@ -1801,11 +1802,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       const autoReclaimDaysValue = rule.autoReclaimDays.trim();
       const rulePrivateLimit = privateLimitValue ? Number.parseInt(privateLimitValue, 10) : undefined;
       const ruleAutoReclaimDays = autoReclaimDaysValue ? Number.parseInt(autoReclaimDaysValue, 10) : undefined;
-      if (rulePrivateLimit !== undefined && (!Number.isFinite(rulePrivateLimit) || rulePrivateLimit < 1)) {
-        throw new Error("Level private limit must be blank or greater than 0");
+      if (rulePrivateLimit !== undefined && (!Number.isFinite(rulePrivateLimit) || rulePrivateLimit < 1 || rulePrivateLimit > 100000)) {
+        throw new Error(`${poolLevelLabel(rule.level, customerLevelSettingsDraft)}的每人私海上限必须留空或填写 1–100000 的整数`);
       }
-      if (ruleAutoReclaimDays !== undefined && (!Number.isFinite(ruleAutoReclaimDays) || ruleAutoReclaimDays < 1)) {
-        throw new Error("Level auto reclaim days must be blank or greater than 0");
+      if (ruleAutoReclaimDays !== undefined && (!Number.isFinite(ruleAutoReclaimDays) || ruleAutoReclaimDays < 1 || ruleAutoReclaimDays > 3650)) {
+        throw new Error(`${poolLevelLabel(rule.level, customerLevelSettingsDraft)}的未跟进回收天数必须留空或填写 1–3650 的整数`);
       }
       return {
         level: rule.level,
@@ -1858,16 +1859,20 @@ export function SettingsAdmin(props: SettingsAdminProps) {
   }
 
   async function saveCustomerLevelSettings() {
-    const levels = customerLevelSettingsDraft.levels.map((level) => ({
-      ...level,
+    const levels = customerLevelSettingsDraft.levels.map((level, index) => ({
+      value: normalizeCustomerLevelCode(level.value),
       label: level.label.trim() || level.value,
       color: level.color.trim() || "#64748b",
       minScore: Number(level.minScore),
       maxScore: Number(level.maxScore),
-      position: Number(level.position)
+      position: index + 1,
+      enabled: level.enabled
     }));
     const seenLevels = new Set<string>();
     for (const level of levels) {
+      if (!isCustomerLevelCode(level.value)) {
+        throw new Error("等级编码必须以字母开头，只能包含大写字母、数字、下划线或短横线，且不能使用 UNRATED");
+      }
       if (seenLevels.has(level.value)) {
         throw new Error("客户等级不能重复");
       }
@@ -1876,6 +1881,8 @@ export function SettingsAdmin(props: SettingsAdminProps) {
         throw new Error(`${level.value} 级评分区间必须在 0-100 内，且最小值不能大于最大值`);
       }
     }
+    const coverageError = validateEnabledCustomerLevelCoverage(levels);
+    if (coverageError) throw new Error(coverageError);
     const rules = Object.fromEntries(
       Object.entries(customerLevelSettingsDraft.rules).map(([key, value]) => {
         const parsed = Number.parseInt(value, 10);
@@ -1894,8 +1901,59 @@ export function SettingsAdmin(props: SettingsAdminProps) {
       }
     });
     setCustomerLevelSettingsDraft(customerLevelSettingsToDraft(updated));
+    setPoolSettingsDraft((current) => ({ ...current, levelRules: poolLevelRulesToDraftFromDraft(current.levelRules, updated) }));
     props.onCustomerLevelSettingsUpdated?.(updated);
     setMessage("客户等级配置已保存");
+  }
+
+  function addCustomerLevel() {
+    setCustomerLevelSettingsDraft((current) => {
+      if (current.levels.length >= MAX_CUSTOMER_LEVELS) return current;
+      return {
+        ...current,
+        levels: [
+          ...current.levels,
+          {
+            value: "",
+            label: "新客户等级",
+            color: "#64748b",
+            position: current.levels.length + 1,
+            enabled: false,
+            minScore: 0,
+            maxScore: 0,
+            isNew: true
+          }
+        ]
+      };
+    });
+  }
+
+  function moveCustomerLevel(index: number, direction: -1 | 1) {
+    setCustomerLevelSettingsDraft((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.levels.length) return current;
+      const levels = [...current.levels];
+      [levels[index], levels[target]] = [levels[target], levels[index]];
+      return { ...current, levels: levels.map((level, position) => ({ ...level, position: position + 1 })) };
+    });
+  }
+
+  async function deleteCustomerLevel(index: number) {
+    const level = customerLevelSettingsDraft.levels[index];
+    if (!level || customerLevelSettingsDraft.levels.length <= 1) {
+      throw new Error("至少需要保留一个客户等级");
+    }
+    if (!level.isNew) {
+      const usage = await fetchJson<CustomerLevelUsage>(`/api/customer-level-settings/usage?level=${encodeURIComponent(level.value)}`, { method: "GET" });
+      if (usage.total > 0) {
+        throw new Error(`等级 ${level.label} 仍被引用：公司 ${usage.companies} 条、联系人 ${usage.contacts} 条、系统建议 ${usage.suggestions} 条、待审批 ${usage.pendingRequests} 条。请先迁移或处理这些数据。`);
+      }
+    }
+    if (!(await requestConfirm({ title: "删除客户等级", message: `确定删除“${level.label || level.value}”吗？保存配置后生效。`, confirmLabel: "删除", danger: true }))) return;
+    setCustomerLevelSettingsDraft((current) => ({
+      ...current,
+      levels: current.levels.filter((_, candidateIndex) => candidateIndex !== index).map((candidate, position) => ({ ...candidate, position: position + 1 }))
+    }));
   }
 
   function toggleSmartReminderObjectKey(objectKey: string, enabled: boolean) {
@@ -2317,17 +2375,26 @@ export function SettingsAdmin(props: SettingsAdminProps) {
               </label>
             </div>
             <div className="settings-subsection">
-              <h3>等级定义</h3>
+              <div className="settings-subsection-title">
+                <div>
+                  <h3>等级定义</h3>
+                  <p className="subtle">编码会写入客户数据，首次保存后不可修改；启用等级的评分区间需连续覆盖 0–100 分。</p>
+                </div>
+                <button className="secondary-button" type="button" onClick={addCustomerLevel} disabled={isPending || customerLevelSettingsDraft.levels.length >= MAX_CUSTOMER_LEVELS}>
+                  <Plus size={15} />新增等级
+                </button>
+              </div>
               <div className="record-review-diff-table customer-level-settings-table">
                 <div className="record-review-diff-head">
-                  <span>等级</span>
+                  <span>启用 / 编码</span>
                   <span>名称 / 颜色</span>
                   <span>评分区间</span>
+                  <span>顺序</span>
                 </div>
                 {customerLevelSettingsDraft.levels.map((level, index) => (
-                  <div className="record-review-diff-row" key={level.value}>
-                    <strong>
-                      <label className="toolbar compact-toolbar">
+                  <div className="record-review-diff-row" key={`${level.value || "new"}-${index}`}>
+                    <span className="customer-level-code-cell">
+                      <label className="settings-toggle inline-toggle">
                         <input
                           type="checkbox"
                           checked={level.enabled}
@@ -2340,9 +2407,21 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                             }))
                           }
                         />
-                        {level.value}
+                        <span>{level.enabled ? "启用" : "停用"}</span>
                       </label>
-                    </strong>
+                      {level.isNew ? (
+                        <input
+                          className="input customer-level-code-input"
+                          value={level.value}
+                          placeholder="例如 VIP"
+                          maxLength={24}
+                          onChange={(event) => setCustomerLevelSettingsDraft((current) => ({
+                            ...current,
+                            levels: current.levels.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, value: normalizeCustomerLevelCode(event.target.value) } : candidate)
+                          }))}
+                        />
+                      ) : <strong className="customer-level-code">{level.value}</strong>}
+                    </span>
                     <span className="record-review-value">
                       <input
                         className="input"
@@ -2373,8 +2452,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                     </span>
                     <span className="record-review-value">
                       <input
+                        aria-label={`${level.value || "新等级"} 最低评分`}
                         className="input"
-                        inputMode="numeric"
+                        type="number"
+                        min={0}
+                        max={100}
                         value={String(level.minScore)}
                         onChange={(event) =>
                           setCustomerLevelSettingsDraft((current) => ({
@@ -2386,8 +2468,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                         }
                       />
                       <input
+                        aria-label={`${level.value || "新等级"} 最高评分`}
                         className="input"
-                        inputMode="numeric"
+                        type="number"
+                        min={0}
+                        max={100}
                         value={String(level.maxScore)}
                         onChange={(event) =>
                           setCustomerLevelSettingsDraft((current) => ({
@@ -2398,6 +2483,11 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                           }))
                         }
                       />
+                    </span>
+                    <span className="customer-level-row-actions">
+                      <button className="icon-button" type="button" aria-label={`上移 ${level.label}`} onClick={() => moveCustomerLevel(index, -1)} disabled={index === 0 || isPending}><ArrowUp size={15} /></button>
+                      <button className="icon-button" type="button" aria-label={`下移 ${level.label}`} onClick={() => moveCustomerLevel(index, 1)} disabled={index === customerLevelSettingsDraft.levels.length - 1 || isPending}><ArrowDown size={15} /></button>
+                      <button className="icon-button danger" type="button" aria-label={`删除 ${level.label}`} onClick={() => runAction(() => deleteCustomerLevel(index))} disabled={customerLevelSettingsDraft.levels.length <= 1 || isPending}><Trash2 size={15} /></button>
                     </span>
                   </div>
                 ))}
@@ -2462,7 +2552,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 <span className="subtle">每人私海上限</span>
                 <input
                   className="input"
-                  inputMode="numeric"
+                  type="number"
+                  min={1}
+                  max={100000}
                   value={poolSettingsDraft.privateLimit}
                   onChange={(event) => setPoolSettingsDraft((current) => ({ ...current, privateLimit: event.target.value }))}
                 />
@@ -2482,7 +2574,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                 <span className="subtle">未跟进回收天数</span>
                 <input
                   className="input"
-                  inputMode="numeric"
+                  type="number"
+                  min={1}
+                  max={3650}
                   value={poolSettingsDraft.autoReclaimDays}
                   onChange={(event) => setPoolSettingsDraft((current) => ({ ...current, autoReclaimDays: event.target.value }))}
                 />
@@ -2490,16 +2584,17 @@ export function SettingsAdmin(props: SettingsAdminProps) {
             </div>
             <div className="settings-subsection">
               <h3>按客户等级规则</h3>
-              <p className="subtle">等级规则是每人每等级上限，并且仍受上方全局私海总上限约束。留空则回退全局值。</p>
-              <div className="settings-table">
-                <div className="settings-table-row settings-table-head">
+              <p className="subtle">开启独立规则后，可限制每名负责人持有该等级客户的数量，并设置连续未跟进多少天后自动回到公海；留空会继承上方全局值。</p>
+              {!poolSettingsDraft.autoReclaimEnabled ? <div className="settings-inline-notice">自动回收当前已关闭，下面的回收天数会保存，但暂不生效。</div> : null}
+              <div className="settings-table pool-level-rules-table">
+                <div className="settings-table-row settings-table-head pool-level-rule-row">
                   <span>客户等级</span>
-                  <span>启用</span>
-                  <span>等级私海上限</span>
-                  <span>自动回收天数</span>
+                  <span>独立规则</span>
+                  <span>每人私海上限（个）</span>
+                  <span>未跟进回收（天）</span>
                 </div>
                 {poolSettingsDraft.levelRules.map((rule, index) => (
-                  <div className="settings-table-row" key={rule.level}>
+                  <div className="settings-table-row pool-level-rule-row" key={rule.level}>
                     <span>
                       <span
                         className="badge"
@@ -2522,15 +2617,19 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                             }))
                           }
                         />
-                        <span>{rule.enabled ? "启用" : "停用"}</span>
+                        <span>{rule.enabled ? "使用独立值" : "继承全局"}</span>
                       </label>
                     </span>
-                    <span>
+                    <label className="pool-rule-number-field">
                       <input
                         className="input"
-                        inputMode="numeric"
-                        placeholder={poolSettingsDraft.privateLimit}
-                        value={rule.privateLimit}
+                        type="number"
+                        min={1}
+                        max={100000}
+                        aria-label={`${poolLevelLabel(rule.level, customerLevelSettingsDraft)}每人私海上限`}
+                        placeholder={`继承 ${poolSettingsDraft.privateLimit}`}
+                        disabled={!rule.enabled}
+                        value={rule.enabled ? rule.privateLimit : ""}
                         onChange={(event) =>
                           setPoolSettingsDraft((current) => ({
                             ...current,
@@ -2540,13 +2639,19 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                           }))
                         }
                       />
-                    </span>
-                    <span>
+                      <span className="input-unit">个</span>
+                      <small>{rule.enabled && !rule.privateLimit ? `继承全局：${poolSettingsDraft.privateLimit} 个` : "每名负责人"}</small>
+                    </label>
+                    <label className="pool-rule-number-field">
                       <input
                         className="input"
-                        inputMode="numeric"
-                        placeholder={poolSettingsDraft.autoReclaimDays}
-                        value={rule.autoReclaimDays}
+                        type="number"
+                        min={1}
+                        max={3650}
+                        aria-label={`${poolLevelLabel(rule.level, customerLevelSettingsDraft)}未跟进回收天数`}
+                        placeholder={`继承 ${poolSettingsDraft.autoReclaimDays}`}
+                        disabled={!rule.enabled}
+                        value={rule.enabled ? rule.autoReclaimDays : ""}
                         onChange={(event) =>
                           setPoolSettingsDraft((current) => ({
                             ...current,
@@ -2556,7 +2661,9 @@ export function SettingsAdmin(props: SettingsAdminProps) {
                           }))
                         }
                       />
-                    </span>
+                      <span className="input-unit">天</span>
+                      <small>{rule.enabled && !rule.autoReclaimDays ? `继承全局：${poolSettingsDraft.autoReclaimDays} 天` : poolSettingsDraft.autoReclaimEnabled ? "连续未跟进" : "当前不生效"}</small>
+                    </label>
                   </div>
                 ))}
               </div>
@@ -7000,21 +7107,30 @@ function customerLevelSettingsToDraft(settings: CustomerLevelSettings): Customer
   };
 }
 
-const poolLevelOrder: CrmPoolSettings["levelRules"][number]["level"][] = ["unrated", "A", "B", "C", "D"];
-
-function poolLevelRulesToDraft(settings: CrmPoolSettings): PoolSettingsDraft["levelRules"] {
+function poolLevelRulesToDraft(settings: CrmPoolSettings, customerLevelSettings: Pick<CustomerLevelSettings, "levels">): PoolSettingsDraft["levelRules"] {
   const existingRules = new Map(settings.levelRules.map((rule) => [rule.level, rule]));
+  const poolLevelOrder = ["unrated", ...customerLevelSettings.levels.slice().sort((left, right) => left.position - right.position).map((level) => level.value)];
 
   return poolLevelOrder.map((level) => {
     const rule = existingRules.get(level);
 
     return {
       level,
-      enabled: rule?.enabled ?? true,
+      enabled: rule?.enabled ?? level === "unrated",
       privateLimit: rule?.privateLimit === undefined ? "" : String(rule.privateLimit),
       autoReclaimDays: rule?.autoReclaimDays === undefined ? "" : String(rule.autoReclaimDays)
     };
   });
+}
+
+function poolLevelRulesToDraftFromDraft(
+  existing: PoolSettingsDraft["levelRules"],
+  customerLevelSettings: Pick<CustomerLevelSettings, "levels">
+): PoolSettingsDraft["levelRules"] {
+  const byLevel = new Map(existing.map((rule) => [rule.level, rule]));
+  return ["unrated", ...customerLevelSettings.levels.slice().sort((left, right) => left.position - right.position).map((level) => level.value)].map((level) =>
+    byLevel.get(level) ?? { level, enabled: level === "unrated", privateLimit: "", autoReclaimDays: "" }
+  );
 }
 
 function poolLevelLabel(level: CrmPoolSettings["levelRules"][number]["level"], settings: CustomerLevelSettingsDraft): string {

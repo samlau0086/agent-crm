@@ -4,6 +4,7 @@ export type ApiErrorCode =
   | "NOT_FOUND"
   | "INVALID_JSON"
   | "VALIDATION_ERROR"
+  | "CUSTOMER_LEVEL_IN_USE"
   | "PAYLOAD_TOO_LARGE"
   | "BAD_REQUEST"
   | "REQUEST_FAILED";

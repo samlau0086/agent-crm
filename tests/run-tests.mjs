@@ -1344,13 +1344,30 @@ await run("customer level schemas accept settings and approval changes", () => {
     }
   });
   assert.equal(settings.levels?.length, 4);
+  const dynamic = customerLevelSettingsUpdateSchema.parse({
+    levels: [
+      { value: "vip", label: "VIP 客户", color: "#7c3aed", position: 1, enabled: true, minScore: 80, maxScore: 100 },
+      { value: "NORMAL", label: "普通客户", color: "#64748b", position: 2, enabled: true, minScore: 0, maxScore: 79 }
+    ]
+  });
+  assert.deepEqual(dynamic.levels?.map((level) => level.value), ["VIP", "NORMAL"]);
   assert.equal(customerLevelChangeRequestSchema.parse({ level: "A", changeReason: "重要客户" }).level, "A");
+  assert.equal(customerLevelChangeRequestSchema.parse({ level: "vip", changeReason: "重要客户" }).level, "VIP");
   assert.equal(customerLevelChangeRequestSchema.parse({ level: "", changeReason: "重新评级" }).level, "");
   assert.deepEqual(customerLevelSuggestionGenerateSchema.parse({ objectKey: "companies", recordId: "company-acme" }), {
     objectKey: "companies",
     recordId: "company-acme"
   });
   assert.throws(() => customerLevelSuggestionGenerateSchema.parse({ objectKey: "contacts", recordId: "contact-lin" }), /Invalid enum value|validation/i);
+  assert.throws(() => customerLevelSettingsUpdateSchema.parse({ levels: [
+    { value: "VIP", label: "VIP", color: "#000", position: 1, enabled: true, minScore: 51, maxScore: 100 },
+    { value: "NORMAL", label: "普通", color: "#111", position: 2, enabled: true, minScore: 0, maxScore: 49 }
+  ] }), /连续|validation/i);
+  assert.throws(() => customerLevelSettingsUpdateSchema.parse({ levels: [
+    { value: "VIP", label: "VIP", color: "#000", position: 1, enabled: true, minScore: 0, maxScore: 100 },
+    { value: "vip", label: "重复", color: "#111", position: 2, enabled: false, minScore: 0, maxScore: 0 }
+  ] }), /重复|validation/i);
+  assert.throws(() => customerLevelChangeRequestSchema.parse({ level: "1VIP", changeReason: "非法编码" }), /编码|validation/i);
 });
 
 await run("contact and company details keep customer level explanations visible", () => {
@@ -1386,7 +1403,9 @@ await run("pool settings schema accepts level rules and rejects invalid level ru
 
   assert.equal(settings.levelRules?.[0]?.level, "A");
   assert.equal(settings.levelRules?.[1]?.level, "unrated");
-  assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "VIP", enabled: true }] }), /Invalid enum value|validation/i);
+  assert.equal(poolSettingsUpdateSchema.parse({ levelRules: [{ level: "VIP", enabled: true }] }).levelRules?.[0]?.level, "VIP");
+  assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "1VIP", enabled: true }] }), /编码|validation/i);
+  assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "VIP" }, { level: "vip" }] }), /只能配置一条|validation/i);
   assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "A", privateLimit: 0 }] }), /too_small|greater than|validation/i);
   assert.throws(() => poolSettingsUpdateSchema.parse({ levelRules: [{ level: "B", autoReclaimDays: -1 }] }), /too_small|greater than|validation/i);
 });
@@ -1460,6 +1479,19 @@ await run("record approval patch splits empty-value additions from non-empty cha
   const patchWithMetadata = { ...approvalPatch, previous: previousPatch };
   assert.deepEqual(previousRecordApprovalPatch(patchWithMetadata), previousPatch);
   assert.deepEqual(stripRecordApprovalMetadata(patchWithMetadata), approvalPatch);
+});
+
+await run("customer level repository protects referenced deletions and synchronizes dependents", () => {
+  const repository = readFileSync("src/lib/crm/repository.ts", "utf8");
+  const usageRoute = readFileSync("src/app/api/customer-level-settings/usage/route.ts", "utf8");
+  assert.match(repository, /async getCustomerLevelUsage/);
+  assert.match(repository, /CUSTOMER_LEVEL_IN_USE/);
+  assert.match(repository, /fieldDefinition\.updateMany/);
+  assert.match(repository, /crmPoolSettings\.update/);
+  assert.match(repository, /this\.db\.\$transaction/);
+  assert.match(repository, /assertEnabledCustomerLevelSelection/);
+  assert.match(repository, /不存在或已停用/);
+  assert.match(usageRoute, /getCustomerLevelUsage/);
 });
 
 await run("record approval patch keeps tag additions and colors immediate but requires approval for deletions", () => {
@@ -3055,6 +3087,14 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(source, /公海规则/);
   assert.match(source, /\/api\/pool-settings/);
   assert.match(source, /activeSettingsTab === "pool"[\s\S]*保存公海规则/);
+  assert.match(source, /function addCustomerLevel/);
+  assert.match(source, /function moveCustomerLevel/);
+  assert.match(source, /function deleteCustomerLevel/);
+  assert.match(source, /customer-level-settings\/usage\?level=/);
+  assert.match(source, /编码会写入客户数据，首次保存后不可修改/);
+  assert.match(source, /每人私海上限（个）/);
+  assert.match(source, /未跟进回收（天）/);
+  assert.match(source, /继承全局/);
   assert.match(source, /activeSettingsTab === "workflows"/);
   assert.match(source, /\/api\/workflows\/generate/);
   assert.match(source, /role="tablist"/);
@@ -3080,6 +3120,9 @@ await run("settings admin groups configuration panels by tabs", () => {
   assert.match(styles, /\.tag-select-token/);
   assert.match(styles, /\.pipeline-stage-editor/);
   assert.match(styles, /\.pipeline-stage-row/);
+  assert.match(styles, /\.pool-level-rule-row/);
+  assert.match(styles, /\.pool-rule-number-field/);
+  assert.match(styles, /\.customer-level-settings-table/);
 });
 
 await run("workspace and settings use friendly feedback instead of browser dialogs", () => {
@@ -6528,6 +6571,44 @@ await run("public pool claim respects customer level private limits", () => {
   assert.equal(claimed.record.ownerId, "user-sales");
   assert.equal(claimed.record.data.companyId, "company-b-limit");
   assert.equal(claimed.record.data.customerLevel, undefined);
+});
+
+await run("in-memory public pool keeps dynamic customer level rules", () => {
+  const snapshot = structuredClone(seedData);
+  snapshot.records.push(
+    {
+      id: "company-vip-limit",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "companies",
+      title: "VIP Company",
+      data: { customerLevel: "VIP" },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    },
+    {
+      id: "contact-public-vip-limit",
+      workspaceId: defaultWorkspaceId,
+      objectKey: "contacts",
+      title: "Public VIP Contact",
+      data: { email: "public-vip@example.com", companyId: "company-vip-limit" },
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    }
+  );
+  const store = new CrmStore(snapshot);
+  const adminContext = store.getContext("user-admin");
+  const salesContext = store.getContext("user-sales");
+  store.updatePoolSettings(adminContext, {
+    privateLimit: 100,
+    levelRules: [
+      { level: "VIP", enabled: true, privateLimit: 1, autoReclaimDays: 90 },
+      { level: "unrated", enabled: true, privateLimit: 100, autoReclaimDays: 30 }
+    ]
+  });
+  const settings = store.getPoolSettings(adminContext);
+  assert.equal(settings.levelRules.find((rule) => rule.level === "VIP")?.privateLimit, 1);
+  const claimed = store.claimRecord(salesContext, "contacts", "contact-public-vip-limit");
+  assert.equal(claimed.record.ownerId, "user-sales");
 });
 
 await run("public pool auto reclaim uses customer level reclaim days", () => {
