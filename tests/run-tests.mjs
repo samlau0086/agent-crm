@@ -3391,7 +3391,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /function getQuickContactMethodsForRecord\(record: CrmRecord, records: CrmRecord\[\]\): ContactMethodDraft\[\]/);
   assert.match(source, /sourceRecordId: primaryContact\.id/);
   assert.match(source, /sourceRecordId: contact\.id/);
-  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(!selectedRecordUsesActivityTabs \|\| showContactAllSections\) \? \([\s\S]*<ContactMethodsQuickActions/);
+  assert.match(source, /selectedRecordQuickContactMethods\.length > 0 && \(!selectedRecordUsesActivityTabs \|\| showContactDetailSections\) \? \([\s\S]*<ContactMethodsQuickActions/);
   assert.match(source, /const \[contactMethodEditingId, setContactMethodEditingId\] = useState\(""\)/);
   assert.match(source, /const \[contactMethodEditingRecordId, setContactMethodEditingRecordId\] = useState\(""\)/);
   assert.match(source, /const \[contactMethodEditingValue, setContactMethodEditingValue\] = useState\(""\)/);
