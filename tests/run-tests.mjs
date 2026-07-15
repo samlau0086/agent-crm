@@ -4101,6 +4101,15 @@ await run("email thread state updates do not reorder the visible list", () => {
   assert.match(source, /setEmailThreads\(\(current\) => replaceEmailThreadsInPlace\(current, \[thread\]\)\)/);
 });
 
+await run("new outbound email threads survive stale server props until refresh catches up", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+
+  assert.match(source, /const locallyCreatedEmailThreadIdsRef = useRef<Set<string>>\(new Set\(\)\)/);
+  assert.match(source, /sentThreadIds\.forEach\(\(threadId\) => locallyCreatedEmailThreadIdsRef\.current\.add\(threadId\)\)/);
+  assert.match(source, /incomingThreadIds\.forEach\(\(threadId\) => locallyCreatedEmailThreadIdsRef\.current\.delete\(threadId\)\)/);
+  assert.match(source, /const pendingCreatedThreads = current\.filter\([\s\S]*locallyCreatedEmailThreadIdsRef\.current\.has\(thread\.id\)[\s\S]*return \[\.\.\.visibleEmailThreads, \.\.\.pendingCreatedThreads\]/);
+});
+
 await run("email category tabs only apply to inbox", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
 

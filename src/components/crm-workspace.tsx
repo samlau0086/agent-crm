@@ -2482,6 +2482,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const handledRouteEmailComposeRef = useRef("");
   const previousCommandEmailSearchRef = useRef("");
   const locallyDeletedEmailThreadIdsRef = useRef<Set<string>>(new Set());
+  const locallyCreatedEmailThreadIdsRef = useRef<Set<string>>(new Set());
   const confirmResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const promptResolverRef = useRef<((value: string | null) => void) | null>(null);
 
@@ -3121,7 +3122,14 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailAccounts(props.emailAccounts);
     setEmailSignatures(props.emailSignatures);
     const visibleEmailThreads = props.emailThreads.filter((thread) => !locallyDeletedEmailThreadIdsRef.current.has(thread.id));
-    setEmailThreads(visibleEmailThreads);
+    const incomingThreadIds = new Set(visibleEmailThreads.map((thread) => thread.id));
+    incomingThreadIds.forEach((threadId) => locallyCreatedEmailThreadIdsRef.current.delete(threadId));
+    setEmailThreads((current) => {
+      const pendingCreatedThreads = current.filter(
+        (thread) => locallyCreatedEmailThreadIdsRef.current.has(thread.id) && !incomingThreadIds.has(thread.id)
+      );
+      return [...visibleEmailThreads, ...pendingCreatedThreads];
+    });
     setEmailAiSettings(props.emailAiSettings);
     setEmailSyncSettings(props.emailSyncSettings ?? defaultEmailSyncSettings);
     setKnowledgeArticles(props.knowledgeArticles);
@@ -5638,6 +5646,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     const messages = (await Promise.all(drafts.map((draft) => sendSingleEmailDraft(draft)))).flat();
     const message = messages[0];
     const sentThreadIds = Array.from(new Set(messages.map((item) => item.threadId).filter(Boolean)));
+    sentThreadIds.forEach((threadId) => locallyCreatedEmailThreadIdsRef.current.add(threadId));
     const resultMailbox: EmailMailboxKey = messages.some((item) => item.status === "queued" || item.status === "sending") ? "scheduled" : "sent";
     setEmailMessagesByThread((current) => {
       const next = { ...current };
