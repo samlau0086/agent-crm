@@ -32,6 +32,17 @@ export function buildDiscussionTree<T extends DiscussionTreeItem>(messages: T[])
   return roots;
 }
 
+export function pruneDiscussionTree<T extends DiscussionTreeItem>(
+  tree: DiscussionTreeNode<T>[],
+  isVisible: (message: T) => boolean
+): DiscussionTreeNode<T>[] {
+  return tree.flatMap((node) => {
+    const children = pruneDiscussionTree(node.children, isVisible);
+    if (!isVisible(node.message) && children.length === 0) return [];
+    return [{ ...node, children }];
+  });
+}
+
 export function groupDiscussionMessageIdsByRoot(messages: DiscussionTreeItem[]): Map<string, string[]> {
   const byId = new Map(messages.map((message) => [message.id, message]));
   const rootMemo = new Map<string, string>();

@@ -2324,6 +2324,57 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
   const [emailSignatures, setEmailSignatures] = useState<EmailSignature[]>(props.emailSignatures);
   const [emailThreads, setEmailThreads] = useState<EmailThread[]>(props.emailThreads);
   const [emailMessagesByThread, setEmailMessagesByThread] = useState<Record<string, EmailMessage[]>>({});
+  const emailMessageRequestsRef = useRef<Map<string, Promise<EmailMessage[]>>>(new Map());
+  const emailMessageRequestControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const emailMessageBackgroundFailureAtRef = useRef<Map<string, number>>(new Map());
+  const loadEmailMessages = useCallback(async (threadId: string, options: { background?: boolean } = {}) => {
+    const existingRequest = emailMessageRequestsRef.current.get(threadId);
+    if (existingRequest) {
+      await existingRequest;
+      return;
+    }
+
+    const lastBackgroundFailureAt = emailMessageBackgroundFailureAtRef.current.get(threadId) ?? 0;
+    if (options.background && Date.now() - lastBackgroundFailureAt < 10_000) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let didTimeout = false;
+    const timeoutId = window.setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, 15_000);
+    emailMessageRequestControllersRef.current.set(threadId, controller);
+
+    const request = fetchJson<EmailMessage[]>(`/api/email/threads/${threadId}/messages`, {
+      method: "GET",
+      signal: controller.signal
+    })
+      .then((messages) => {
+        emailMessageBackgroundFailureAtRef.current.delete(threadId);
+        setEmailMessagesByThread((current) => ({ ...current, [threadId]: messages }));
+        return messages;
+      })
+      .catch((loadError) => {
+        emailMessageBackgroundFailureAtRef.current.set(threadId, Date.now());
+        if (didTimeout && loadError instanceof DOMException && loadError.name === "AbortError") {
+          throw new Error("邮件内容加载超时，请稍后重试。");
+        }
+        if (loadError instanceof TypeError && /failed to fetch/i.test(loadError.message)) {
+          throw new Error("邮件内容网络请求失败，请检查连接后重试。");
+        }
+        throw loadError;
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+        emailMessageRequestsRef.current.delete(threadId);
+        emailMessageRequestControllersRef.current.delete(threadId);
+      });
+
+    emailMessageRequestsRef.current.set(threadId, request);
+    await request;
+  }, []);
   const [selectedEmailThreadId, setSelectedEmailThreadId] = useState(routeEmailThreadId || props.emailThreads[0]?.id || "");
   const [emailDetailThreadId, setEmailDetailThreadId] = useState(routeEmailThreadId);
   const [emailWorkspaceView, setEmailWorkspaceView] = useState<EmailWorkspaceView>(routeEmailView);
@@ -2372,6 +2423,15 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     usersById.set(currentUser.id, { ...(usersById.get(currentUser.id) ?? currentUser), ...currentUser });
     return [...usersById.values()];
   }, [currentUser, props.users]);
+  useEffect(() => {
+    const requestControllers = emailMessageRequestControllersRef.current;
+    const messageRequests = emailMessageRequestsRef.current;
+    return () => {
+      requestControllers.forEach((controller) => controller.abort());
+      requestControllers.clear();
+      messageRequests.clear();
+    };
+  }, []);
   useEffect(() => {
     let active = true;
     const refresh = () => fetchJson<DiscussionNotificationDto[]>("/api/discussion-notifications", { method: "GET" })
@@ -3136,12 +3196,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     setEmailWorkspaceView(routeEmailView);
     if (!emailMessagesByThread[routeEmailThreadId]) {
       let didCancel = false;
-      fetchJson<EmailMessage[]>(`/api/email/threads/${routeEmailThreadId}/messages`, { method: "GET" })
-        .then((messages) => {
-          if (!didCancel) {
-            setEmailMessagesByThread((current) => ({ ...current, [routeEmailThreadId]: messages }));
-          }
-        })
+      loadEmailMessages(routeEmailThreadId)
         .catch((loadError) => {
           if (!didCancel) {
             setError(loadError instanceof Error ? loadError.message : "邮件详情加载失败");
@@ -3151,7 +3206,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         didCancel = true;
       };
     }
-  }, [emailMessagesByThread, routeEmailThreadId, routeEmailView, selectedEmailThreadId]);
+  }, [emailMessagesByThread, loadEmailMessages, routeEmailThreadId, routeEmailView, selectedEmailThreadId]);
 
   useEffect(() => {
     if (activeNav !== "email" || !routeEmailCompose) {
@@ -4975,11 +5030,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       }
     });
     window.location.assign(result.authorizationUrl);
-  }
-
-  async function loadEmailMessages(threadId: string) {
-    const messages = await fetchJson<EmailMessage[]>(`/api/email/threads/${threadId}/messages`, { method: "GET" });
-    setEmailMessagesByThread((current) => ({ ...current, [threadId]: messages }));
   }
 
   async function refreshEmailThreadsByIds(threadIds: string[]): Promise<EmailThread[]> {
@@ -8310,7 +8360,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
               const nextPath = buildEmailRoutePath(patch);
               pushEmailHistoryRoute(nextPath);
             }}
-            onLoadThreadMessages={(threadId) => loadEmailMessages(threadId)}
+            onLoadThreadMessages={loadEmailMessages}
             onSelectThread={(threadId) => {
               selectEmailThread(threadId);
               if (!emailMessagesByThread[threadId]) {
@@ -9774,7 +9824,7 @@ function EmailWorkspace({
   onAiPromptChange: (prompt: string) => void;
   onViewChange: (view: EmailWorkspaceView) => void;
   onRouteChange: (patch: EmailRoutePatch) => void;
-  onLoadThreadMessages: (threadId: string) => Promise<void>;
+  onLoadThreadMessages: (threadId: string, options?: { background?: boolean }) => Promise<void>;
   onSelectThread: (threadId: string) => void;
   onUpdateThread: (threadId: string, recordId: string) => void;
   onUpdateThreadState: (threadId: string, patch: Partial<EmailThreadUiState>) => Promise<EmailThread>;
@@ -10068,9 +10118,9 @@ function EmailWorkspace({
     }
     accountFilteredThreads
       .filter((thread) => !messagesByThread[thread.id])
-      .slice(0, 50)
+      .slice(0, 6)
       .forEach((thread) => {
-        void onLoadThreadMessages(thread.id);
+        void onLoadThreadMessages(thread.id, { background: true }).catch(() => undefined);
       });
   }, [accountFilteredThreads, mailbox, messagesByThread, onLoadThreadMessages]);
   const selectedMailboxAccount = selectedMailboxAccountId === allEmailAccountsKey ? undefined : accounts.find((account) => account.id === selectedMailboxAccountId);

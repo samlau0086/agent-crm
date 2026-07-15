@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MediaManagerModal } from "@/components/media-manager-modal";
 import type { User } from "@/lib/crm/types";
 import type { DiscussionAttachmentDto, DiscussionMessageDto, DiscussionMessagesPage, DiscussionTarget } from "@/lib/discussions/types";
-import { buildDiscussionTree, type DiscussionTreeNode } from "@/lib/discussions/tree";
+import { buildDiscussionTree, pruneDiscussionTree, type DiscussionTreeNode } from "@/lib/discussions/tree";
 import type { MediaAssetDto } from "@/lib/media/service";
 
 export function TeamDiscussionPanel({ target, currentUserId, users, title = "团队讨论", embedded = false, focusMessageId, onClose, onUnreadChange }: { target: DiscussionTarget; currentUserId: string; users: User[]; title?: string; embedded?: boolean; focusMessageId?: string; onClose?: () => void; onUnreadChange?: (count: number) => void }) {
@@ -19,7 +19,7 @@ export function TeamDiscussionPanel({ target, currentUserId, users, title = "团
   const [error, setError] = useState<string>();
   const listRef = useRef<HTMLDivElement>(null);
   const targetKey = target.type === "record" ? `${target.type}:${target.objectKey}:${target.targetId}` : `${target.type}:${target.targetId}`;
-  const tree = useMemo(() => buildDiscussionTree(messages), [messages]);
+  const tree = useMemo(() => pruneDiscussionTree(buildDiscussionTree(messages), (message) => !message.deletedAt), [messages]);
   const flattenedTree = useMemo(() => flattenTree(tree), [tree]);
 
   const markRead = useCallback(async () => {
@@ -102,7 +102,7 @@ export function TeamDiscussionPanel({ target, currentUserId, users, title = "团
       <div className="team-discussion-list" ref={listRef}>
         {nextBefore ? <button className="discussion-load-older" type="button" disabled={pending} onClick={() => void loadOlder()}>加载更早评论</button> : null}
         {loading ? <div className="discussion-state"><Loader2 className="spin-icon" size={18} />加载评论…</div> : null}
-        {!loading && !messages.length ? <div className="discussion-state">还没有评论，发送第一条吧。</div> : null}
+        {!loading && !flattenedTree.length ? <div className="discussion-state">还没有评论，发送第一条吧。</div> : null}
         {flattenedTree.map(({ node, depth }) => {
           const message = node.message;
           return <div className={`discussion-tree-node ${depth ? "reply" : "root"} depth-${Math.min(depth, 4)}`} data-depth={depth} key={message.id}>

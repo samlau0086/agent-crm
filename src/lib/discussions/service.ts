@@ -81,7 +81,7 @@ export async function listDiscussionMessages(
   if (after && before) throw new ApiError(400, "VALIDATION_ERROR", "Use either before or after cursor");
   const metadata = await prisma.discussionMessage.findMany({
     where: { workspaceId: context.workspaceId, threadId: thread.id },
-    select: { id: true, replyToId: true, createdAt: true },
+    select: { id: true, replyToId: true, createdAt: true, deletedAt: true },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }]
   });
   const treeItems = metadata.map((message) => ({ id: message.id, parentId: message.replyToId ?? undefined, createdAt: message.createdAt.toISOString() }));
@@ -116,7 +116,7 @@ export async function listDiscussionMessages(
 
   const metadataById = new Map(metadata.map((message) => [message.id, message]));
   const rootGroups = groupDiscussionMessageIdsByRoot(treeItems);
-  let roots = [...rootGroups.entries()].map(([rootId, messageIds]) => {
+  let roots = [...rootGroups.entries()].filter(([, messageIds]) => messageIds.some((id) => !metadataById.get(id)?.deletedAt)).map(([rootId, messageIds]) => {
     const lastMessage = messageIds.map((id) => metadataById.get(id)!).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))[0]!;
     return { rootId, messageIds, createdAt: lastMessage.createdAt };
   }).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.rootId.localeCompare(left.rootId));

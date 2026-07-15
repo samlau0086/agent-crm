@@ -66,7 +66,7 @@ import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions 
 import { CrmStore } from "../src/lib/crm/store.ts";
 import { buildDiscussionTargetKey, parseDiscussionTarget } from "../src/lib/discussions/target.ts";
 import { decodeDiscussionCursor, encodeDiscussionCursor } from "../src/lib/discussions/service.ts";
-import { buildDiscussionTree, discussionAncestorIds, groupDiscussionMessageIdsByRoot } from "../src/lib/discussions/tree.ts";
+import { buildDiscussionTree, discussionAncestorIds, groupDiscussionMessageIdsByRoot, pruneDiscussionTree } from "../src/lib/discussions/tree.ts";
 import { deleteDiscussionObject, getDiscussionObject, putDiscussionObject, validateDiscussionFile } from "../src/lib/discussions/storage.ts";
 import { createMediaStorageKey, deleteMediaObject, getMediaObject, putMediaObject, validateMediaFile } from "../src/lib/media/storage.ts";
 import { buildEmailModelPrompt, generateEmailAiOutput, MAX_EMAIL_AI_OUTPUT_CHARS, MAX_EMAIL_AI_SUBJECT_CHARS, MAX_EMAIL_MODEL_PROMPT_CHARS } from "../src/lib/email/ai-generation.ts";
@@ -3361,7 +3361,7 @@ await run("email thread contact linking is driven by sender email and can return
   assert.match(source, /const preferredThreadId = routeEmailThreadId \|\| selectedEmailThreadId/);
   assert.match(source, /const preserveComposeDraft = Boolean\(emailComposeOpenRequestKey && !routeEmailThreadId\)/);
   assert.match(source, /if \(!preserveComposeDraft && nextSelectedThreadId !== selectedEmailThreadId\)/);
-  assert.match(source, /if \(!routeEmailThreadId\) \{[\s\S]*return;[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*fetchJson<EmailMessage\[\]>\(`\/api\/email\/threads\/\$\{routeEmailThreadId\}\/messages`/);
+  assert.match(source, /if \(!routeEmailThreadId\) \{[\s\S]*return;[\s\S]*setSelectedEmailThreadId\(routeEmailThreadId\)[\s\S]*loadEmailMessages\(routeEmailThreadId\)/);
   assert.match(source, /pendingRecordOpen\?\.objectKey === nextObjectKey[\s\S]*setSelectedRecordId\(pendingRecordOpen\.recordId\)[\s\S]*setRecordPanelMode\("detail"\)/);
   assert.match(source, /async function closeRecordPanel\(\)[\s\S]*await openEmailThread\(threadId\)/);
   assert.match(source, /async function openEmailThread\(threadId: string\)[\s\S]*void updateEmailThreadState\(threadId, \{ read: true \}\)/);
@@ -4006,6 +4006,15 @@ await run("email workspace refreshes threads and selected messages after sync", 
   assert.match(source, /await loadEmailMessages\(threadId\)/);
   assert.match(source, /async function syncEmailAccount[\s\S]*await refreshEmailThreads\(\{ reloadSelectedMessages: true \}\)[\s\S]*router\.refresh\(\)/);
   assert.match(source, /async function syncAllEmailAccounts[\s\S]*await refreshEmailThreads\(\{ reloadSelectedMessages: true \}\)[\s\S]*router\.refresh\(\)/);
+});
+
+await run("email mailbox background loading deduplicates requests and limits concurrency", () => {
+  const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
+  assert.match(source, /const emailMessageRequestsRef = useRef<Map<string, Promise<EmailMessage\[\]>>>\(new Map\(\)\)/);
+  assert.match(source, /const existingRequest = emailMessageRequestsRef\.current\.get\(threadId\)[\s\S]*await existingRequest/);
+  assert.match(source, /emailMessageRequestsRef\.current\.set\(threadId, request\)/);
+  assert.match(source, /\.filter\(\(thread\) => !messagesByThread\[thread\.id\]\)[\s\S]*\.slice\(0, 6\)[\s\S]*onLoadThreadMessages\(thread\.id, \{ background: true \}\)\.catch/);
+  assert.match(source, /onLoadThreadMessages=\{loadEmailMessages\}/);
 });
 
 await run("email workspace supports multiple mailbox account filters", () => {
@@ -5102,7 +5111,7 @@ await run("email workspace exposes scheduled send group send tracking and label 
   assert.match(workspace, /await refreshEmailThreadsByIds\(messages\.map\(\(item\) => item\.threadId\)\)/);
   assert.match(workspace, /for \(const delayMs of \[2500, 8000\]\)/);
   assert.match(workspace, /\["inbox", "all", "sent", "scheduled", "drafts", "spam", "trash"\]\.includes\(mailbox\)/);
-  assert.match(workspace, /void onLoadThreadMessages\(thread\.id\)/);
+  assert.match(workspace, /void onLoadThreadMessages\(thread\.id, \{ background: true \}\)\.catch/);
   assert.match(workspace, /function getEmailThreadDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
   assert.match(workspace, /function getEmailThreadListDisplayMessage\(messages: EmailMessage\[\], mailbox: EmailMailboxKey, preferredMessageId\?: string\): EmailMessage \| undefined/);
   assert.match(workspace, /if \(mailbox === "inbox" \|\| mailbox === "all" \|\| mailbox === "sent"\) \{[\s\S]*return \[\.\.\.messages\]\.sort\(\(left, right\) => emailMessageTimeValue\(right\)\.localeCompare\(emailMessageTimeValue\(left\)\)\)\[0\]/);
@@ -15973,6 +15982,19 @@ await run("discussion root grouping and incremental ancestor context preserve re
   assert.deepEqual(groupDiscussionMessageIdsByRoot(comments).get("root"), ["root", "reply", "deep"]);
   assert.deepEqual(new Set(discussionAncestorIds(comments, ["deep"])), new Set(["reply", "root"]));
   assert.deepEqual(discussionAncestorIds(comments, ["reply", "deep"]), ["root"]);
+});
+
+await run("deleted discussion leaves disappear while deleted ancestors with visible replies remain", () => {
+  const comments = [
+    { id: "deleted-root", createdAt: "2026-01-01T00:00:00.000Z", deletedAt: "2026-01-02T00:00:00.000Z" },
+    { id: "visible-reply", parentId: "deleted-root", createdAt: "2026-01-01T00:01:00.000Z" },
+    { id: "deleted-reply", parentId: "deleted-root", createdAt: "2026-01-01T00:02:00.000Z", deletedAt: "2026-01-02T00:00:00.000Z" },
+    { id: "deleted-branch", createdAt: "2026-01-01T00:03:00.000Z", deletedAt: "2026-01-02T00:00:00.000Z" },
+    { id: "deleted-child", parentId: "deleted-branch", createdAt: "2026-01-01T00:04:00.000Z", deletedAt: "2026-01-02T00:00:00.000Z" }
+  ];
+  const visibleTree = pruneDiscussionTree(buildDiscussionTree(comments), (comment) => !comment.deletedAt);
+  assert.deepEqual(visibleTree.map((node) => node.message.id), ["deleted-root"]);
+  assert.deepEqual(visibleTree[0].children.map((node) => node.message.id), ["visible-reply"]);
 });
 
 await run("discussion attachment policy accepts safe files and rejects risky files", () => {
