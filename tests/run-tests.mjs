@@ -2798,7 +2798,6 @@ await run("email workspace exposes sync-all control backed by the sync-all api",
 
 await run("email workspace treats queued sync as background work and polls for imported mail", () => {
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
-  const mediaLibrary = readFileSync("src/components/media-library.tsx", "utf8");
   assert.match(source, /result\.status === "queued"/);
   assert.match(source, /lastSyncStatus:\s*"running"/);
   assert.match(source, /accountActionKey === `sync:\$\{account\.id\}`/);
@@ -3049,7 +3048,7 @@ await run("PDF template visual editor phase two supports resize blocks images co
   const previewRoute = readFileSync("src/app/api/document-templates/preview/route.ts", "utf8");
   assert.match(editor, /ColumnResizeHandle/);
   assert.match(editor, /templateBlocks/);
-  assert.match(editor, /mediaAssetDataUrl/);
+  assert.match(editor, /mediaAssetContentUrl/);
   assert.match(editor, /type: "condition"/);
   assert.match(editor, /type: "pageBreak"/);
   assert.match(editor, /\/api\/document-templates\/preview/);
@@ -4481,7 +4480,7 @@ await run("media library stores reusable images for product main images and emai
   const store = readFileSync("src/lib/crm/store.ts", "utf8");
   const page = readFileSync("src/app/crm-page.tsx", "utf8");
   const source = readFileSync("src/components/crm-workspace.tsx", "utf8");
-  const mediaLibrary = readFileSync("src/components/media-library.tsx", "utf8");
+  const mediaManager = readFileSync("src/components/media-manager-modal.tsx", "utf8");
   const styles = readFileSync("src/app/globals.css", "utf8");
   assert.match(schema, /model MediaAsset/);
   assert.match(migration, /CREATE TABLE "MediaAsset"/);
@@ -4502,29 +4501,25 @@ await run("media library stores reusable images for product main images and emai
   assert.match(source, /async function deleteMediaAsset/);
   assert.match(source, /function MediaImageFieldInput/);
   assert.match(source, /field\.objectKey === "products" && field\.key === "mainImageUrl"/);
-  assert.match(source, /import \{ MediaAssetPreview, MediaLibraryModal \} from "@\/components\/media-library"/);
-  assert.match(mediaLibrary, /function MediaLibraryModal/);
-  assert.match(mediaLibrary, /canSelectAsset\?: \(asset: MediaAsset\) => boolean/);
-  assert.match(mediaLibrary, /function MediaAssetPreview/);
-  assert.match(source, /function isImageMediaAsset/);
+  assert.match(source, /MediaAssetPreview, MediaManagerModal, mediaAssetContentUrl, mediaAssetToDto/);
+  assert.match(mediaManager, /function MediaManagerModal/);
+  assert.match(mediaManager, /assetKind\?: MediaManagerAssetKind/);
+  assert.match(mediaManager, /scopeMode\?: MediaManagerScopeMode/);
+  assert.match(mediaManager, /selectionMode\?: MediaManagerSelectionMode/);
+  assert.match(mediaManager, /function MediaAssetPreview/);
+  assert.match(mediaManager, /function isImageMediaAsset/);
   assert.match(source, /testId="email-media-library-modal"/);
   assert.match(source, /testId=\{testId \? `\$\{testId\}-media-library-modal` : "record-media-library-modal"\}/);
-  assert.match(source, /function insertMediaAssetInline\(asset: MediaAsset\)/);
-  assert.match(mediaLibrary, /data-testid=\{`media-asset-edit-\$\{asset\.id\}`\}/);
-  assert.match(mediaLibrary, /data-testid=\{`media-asset-delete-\$\{asset\.id\}`\}/);
-  assert.match(mediaLibrary, /function saveEditingAssetName/);
-  assert.match(mediaLibrary, /function replaceEditingAsset/);
-  assert.match(mediaLibrary, /onDrop=\{\(event\) => \{/);
-  assert.match(source, /selectFirstUploaded/);
-  assert.match(source, /onDeleteMediaAsset=\{\(asset\) => \{ void runImmediateAction\(\(\) => deleteMediaAsset\(asset\)\); \}\}/);
-  assert.match(source, /onUpdateMediaAsset=\{\(assetId, patch\) => runAction\(\(\) => updateMediaAsset\(assetId, patch\)\)\}/);
-  assert.match(mediaLibrary, /event\.stopPropagation\(\);[\s\S]*onDeleteMediaAsset\?\.\(asset\)/);
-  assert.match(styles, /\.media-library-grid/);
-  assert.match(styles, /\.media-library-card/);
-  assert.match(styles, /\.media-library-select/);
-  assert.match(styles, /\.media-library-edit/);
+  assert.match(source, /function insertMediaAssetInline\(asset: MediaAssetDto\)/);
+  assert.match(source, /assetKind="image"[\s\S]{0,160}scopeMode="workspace"[\s\S]{0,160}selectionMode="single"/);
+  assert.match(mediaManager, /accept=\{imageOnly \? "image\/\*" : undefined\}/);
+  assert.match(mediaManager, /candidates\.filter\(\(file\) => file\.type\.toLowerCase\(\)\.startsWith\("image\/"\)\)/);
+  assert.match(mediaManager, /if \(imageOnly\) params\.set\("type", "image"\)/);
+  assert.match(mediaManager, /scopeMode === "target-and-workspace"/);
+  assert.match(mediaManager, /selectionMode === "single"/);
+  assert.doesNotMatch(source, /MediaLibraryModal/);
   assert.match(styles, /\.media-field-preview/);
-  assert.match(styles, /\.media-file-preview/);
+  assert.doesNotMatch(styles, /\.media-library-grid/);
 });
 
 await run("activity records and product records support reusable file attachments", () => {
@@ -4703,14 +4698,12 @@ await run("current user profile settings support avatar name and password update
   assert.match(settings, /function ProfileSettingsPanel/);
   assert.match(settings, /data-testid="profile-settings-panel"/);
   assert.match(settings, /data-testid="profile-password-save"/);
-  assert.match(settings, /onUpdateMediaAsset=\{onUpdateMediaAsset\}/);
-  assert.match(settings, /onDeleteMediaAsset=\{onDeleteMediaAsset\}/);
-  assert.doesNotMatch(settings, /testId="profile-avatar-media-library-modal"[\s\S]{0,500}selectFirstUploaded/);
+  assert.match(settings, /testId="profile-avatar-media-library-modal"/);
+  assert.match(settings, /assetKind="image"[\s\S]{0,160}scopeMode="workspace"[\s\S]{0,160}selectionMode="single"/);
+  assert.doesNotMatch(settings, /MediaLibraryModal/);
   assert.match(workspace, /className="user-strip-profile"/);
   assert.match(workspace, /router\.push\("\/settings\/profile"\)/);
-  assert.match(workspace, /uploadCurrentUserAvatarAssets/);
-  assert.match(workspace, /onUpdateMediaAsset=\{\(assetId, patch\) => runAction\(\(\) => updateMediaAsset\(assetId, patch\)\)\}/);
-  assert.match(workspace, /onDeleteMediaAsset=\{\(asset\) => \{ void runImmediateAction\(\(\) => deleteMediaAsset\(asset\)\); \}\}/);
+  assert.doesNotMatch(workspace, /uploadCurrentUserAvatarAssets/);
   assert.match(page, /currentUserAvatarAsset/);
 });
 

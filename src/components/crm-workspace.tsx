@@ -82,10 +82,11 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AutomationWorkspace } from "@/components/automation-workspace";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
-import { MediaAssetPreview, MediaLibraryModal } from "@/components/media-library";
+import { isImageMediaAsset, MediaAssetPreview, MediaManagerModal, mediaAssetContentUrl, mediaAssetToDto } from "@/components/media-manager-modal";
 import { RecordDetailWorkspace, type RecordDetailTab } from "@/components/record-detail-workspace";
 import { TeamDiscussionPanel } from "@/components/team-discussion-panel";
 import type { DiscussionNotificationDto } from "@/lib/discussions/types";
+import type { MediaAssetDto } from "@/lib/media/service";
 import { formatParsedAddressText, parseAddressWithLocalAi, type ParsedAddressDraft } from "@/lib/crm/address-parser";
 import { getCountryLabel, getCountrySelectOptions } from "@/lib/crm/countries";
 import { getCountryOfficialLanguage, getLanguageLabel, getLanguageSelectOptions } from "@/lib/crm/languages";
@@ -607,6 +608,7 @@ type TaskAttachment = {
   name: string;
   contentType: string;
   size: number;
+  contentUrl?: string;
 };
 type ActivityAttachment = TaskAttachment;
 type ActivityDetailsPayload = {
@@ -2453,7 +2455,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
       .catch(() => undefined);
   }, [activeNav, activities, emailThreads]);
   const currentUserAvatarAsset = currentUser.avatarMediaAssetId ? mediaAssets.find((asset) => asset.id === currentUser.avatarMediaAssetId) : undefined;
-  const currentUserAvatarUrl = currentUserAvatarAsset ? mediaAssetDataUrl(currentUserAvatarAsset) : "";
+  const currentUserAvatarUrl = currentUserAvatarAsset ? mediaAssetContentUrl(currentUserAvatarAsset) : "";
   const [smartReminders, setSmartReminders] = useState<SmartReminder[]>(props.dashboardSummary.smartReminders);
   const [isGeneratingSmartReminders, setIsGeneratingSmartReminders] = useState(false);
   const [recordChangeRequests, setRecordChangeRequests] = useState<RecordChangeRequest[]>(props.recordChangeRequests);
@@ -6266,40 +6268,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     return createdAssets;
   }
 
-  async function uploadCurrentUserAvatarAssets(files: FileList | File[] | null): Promise<MediaAsset[]> {
-    const uploadFiles = Array.from(files ?? []);
-    if (!uploadFiles.length) {
-      showToast({ intent: "info", message: "请选择头像图片。" });
-      return [];
-    }
-    const createdAssets: MediaAsset[] = [];
-    for (const file of uploadFiles.slice(0, 10)) {
-      if (!file.type.toLowerCase().startsWith("image/")) {
-        showToast({ intent: "error", message: `${file.name} 不是图片文件，已跳过。` });
-        continue;
-      }
-      if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
-        showToast({ intent: "error", message: `${file.name} 超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}，已跳过。` });
-        continue;
-      }
-      const asset = await fetchJson<MediaAsset>("/api/users/me/avatar-assets", {
-        method: "POST",
-        body: {
-          name: file.name,
-          contentType: file.type || "image/png",
-          size: file.size,
-          contentBase64: await readFileAsBase64(file)
-        }
-      });
-      createdAssets.push(asset);
-    }
-    if (createdAssets.length) {
-      setMediaAssets((current) => mergeMediaAssets(createdAssets, current));
-      showSuccess(`已上传 ${createdAssets.length} 张头像图片`);
-    }
-    return createdAssets;
-  }
-
   async function updateMediaAsset(assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) {
     const updated = await fetchJson<MediaAsset>(`/api/media-assets/${assetId}`, {
       method: "PATCH",
@@ -8536,9 +8504,6 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             onSaveKnowledgeVectorSettings={(patch) => runAction(() => saveKnowledgeVectorSettings(patch))}
             onVectorizeKnowledgeArticle={(articleId) => runAction(() => vectorizeKnowledgeArticle(articleId))}
             onVectorizeKnowledge={() => runAction(vectorizeKnowledge)}
-            onUploadCurrentUserAvatarAssets={uploadCurrentUserAvatarAssets}
-            onUpdateMediaAsset={(assetId, patch) => runAction(() => updateMediaAsset(assetId, patch))}
-            onDeleteMediaAsset={(asset) => { void runImmediateAction(() => deleteMediaAsset(asset)); }}
           />
         )}
 
@@ -10008,7 +9973,6 @@ function EmailWorkspace({
   const composeEditorRef = useRef<HTMLDivElement>(null);
   const composeSubjectRef = useRef<HTMLInputElement>(null);
   const handledComposeOpenRequestRef = useRef("");
-  const composeInlineImageInputRef = useRef<HTMLInputElement>(null);
   const composeAttachmentInputRef = useRef<HTMLInputElement>(null);
   const emailSearchInputRef = useRef<HTMLInputElement>(null);
   const pendingEmailRouteRef = useRef<{
@@ -10767,37 +10731,10 @@ function EmailWorkspace({
     updateComposeBodyFromEditor();
   }
 
-  async function insertComposeInlineImage(file: File | undefined) {
-    if (!file) {
-      return;
-    }
-    if (!file.type.startsWith("image/")) {
-      onShowToast({ intent: "error", message: "只能插入图片文件。" });
-      return;
-    }
-    if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
-      onShowToast({ intent: "error", message: `图片不能超过 ${formatBytes(MAX_EMAIL_ATTACHMENT_BYTES)}。` });
-      return;
-    }
-    const contentBase64 = await readFileAsBase64(file);
-    const contentId = `${inlineImageContentIdPrefix}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const src = `data:${file.type || "image/png"};base64,${contentBase64}`;
-    composeEditorRef.current?.focus();
-    document.execCommand(
-      "insertHTML",
-      false,
-      `<img src="${src}" data-content-id="${escapeHtml(contentId)}" data-file-name="${escapeHtml(file.name)}" data-content-type="${escapeHtml(file.type || "image/png")}" data-size="${file.size}" data-content-base64="${contentBase64}" alt="${escapeHtml(file.name)}">`
-    );
-    updateComposeBodyFromEditor();
-  }
-
-  async function insertMediaAssetInline(asset: MediaAsset) {
-    let contentBase64 = asset.contentBase64;
-    if (!contentBase64) {
-      const response = await fetch(asset.contentUrl ?? `/api/media-assets/${encodeURIComponent(asset.id)}/content`);
-      if (!response.ok) throw new Error("读取媒体文件失败");
-      contentBase64 = await readFileAsBase64(new File([await response.blob()], asset.name, { type: asset.contentType }));
-    }
+  async function insertMediaAssetInline(asset: MediaAssetDto) {
+    const response = await fetch(asset.contentUrl);
+    if (!response.ok) throw new Error("读取媒体文件失败");
+    const contentBase64 = await readFileAsBase64(new File([await response.blob()], asset.name, { type: asset.contentType }));
     const contentId = `${inlineImageContentIdPrefix}${asset.id}`;
     composeEditorRef.current?.focus();
     document.execCommand(
@@ -12951,21 +12888,6 @@ function EmailWorkspace({
                     <button className="icon-button" aria-label="打开媒体库插入图片" type="button" onClick={() => setMediaLibraryOpen(true)}><ImageIcon size={15} /></button>
                     <button className="icon-button" aria-label="添加附件" type="button" onClick={() => setAttachmentModalOpen(true)}><Paperclip size={15} /></button>
                     <button className="email-compose-variable-button" data-testid="email-compose-body-variable" type="button" onClick={() => setComposeVariableTarget((current) => current === "body" ? null : "body")}><Plus size={14} /> 变量</button>
-                    <input
-                      ref={composeInlineImageInputRef}
-                      data-testid="email-compose-inline-image"
-                      hidden
-                      accept="image/*"
-                      type="file"
-                      onChange={(event) => {
-                        void onUploadMediaAssets(event.target.files).then((assets) => {
-                          if (assets[0]) {
-                            insertMediaAssetInline(assets[0]);
-                          }
-                        });
-                        event.target.value = "";
-                      }}
-                    />
                   </div>
                   {composeVariableTarget === "body" ? (
                     <EmailTemplateVariablePicker definitions={composeVariableDefinitions} onSelect={insertComposeVariable} />
@@ -13053,18 +12975,16 @@ function EmailWorkspace({
         ) : null}
 
         {mediaLibraryOpen ? (
-          <MediaLibraryModal
-            accept="image/*"
-            canSelectAsset={isImageMediaAsset}
+          <MediaManagerModal
+            assetKind="image"
+            scopeMode="workspace"
+            selectionMode="single"
             description="选择图片插入邮件正文，或上传新图片供产品主图和邮件复用。"
-            disabled={disabled}
-            mediaAssets={mediaAssets}
             onClose={() => setMediaLibraryOpen(false)}
-            onDeleteMediaAsset={onDeleteMediaAsset}
-            onSelect={insertMediaAssetInline}
-            onUpdateMediaAsset={onUpdateMediaAsset}
-            onUploadMediaAssets={onUploadMediaAssets}
-            selectLabel="插入"
+            onConfirm={(assets) => {
+              if (assets[0]) void insertMediaAssetInline(assets[0]).catch((error) => onShowToast({ intent: "error", message: error instanceof Error ? error.message : "插入图片失败" }));
+            }}
+            confirmLabel="插入图片"
             testId="email-media-library-modal"
             title="媒体库"
           />
@@ -14863,7 +14783,7 @@ function TaskAttachmentPreview({
         const asset = mediaAssets.find((candidate) => candidate.id === attachment.mediaAssetId);
         return (
           <div className="task-attachment-item" key={attachment.id}>
-            {asset && isImageMediaAsset(asset) ? <img alt={attachment.name} src={mediaAssetDataUrl(asset)} /> : <Paperclip size={18} />}
+            {isImageMediaAsset(attachment) && (asset || attachment.contentUrl) ? <img alt={attachment.name} src={asset ? mediaAssetContentUrl(asset) : attachment.contentUrl} /> : <Paperclip size={18} />}
             <div>
               <strong>{attachment.name}</strong>
               <span className="subtle">{attachment.contentType} · {formatBytes(attachment.size)}</span>
@@ -15699,10 +15619,6 @@ function AttachmentPicker({
 }) {
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
 
-  function addAsset(asset: MediaAsset) {
-    onChange(appendUniqueTaskAttachment(attachments, taskAttachmentFromMediaAsset(asset)));
-  }
-
   return (
     <div className="task-attachment-panel" data-testid={`${testIdPrefix}-panel`}>
       <div className="toolbar between">
@@ -15719,18 +15635,20 @@ function AttachmentPicker({
       />
       {!attachments.length ? <div className="subtle">可添加压缩包、文档、图片、视频等附件。</div> : null}
       {mediaLibraryOpen ? (
-        <MediaLibraryModal
+        <MediaManagerModal
+          assetKind="all"
+          scopeMode="workspace"
+          selectionMode="multiple"
           description="选择已有媒体文件，或拖拽上传压缩包、文档、图片、视频等附件。"
-          disabled={disabled}
-          mediaAssets={mediaAssets}
+          initialSelected={attachments.flatMap((attachment) => {
+            const asset = mediaAssets.find((candidate) => candidate.id === attachment.mediaAssetId);
+            return asset ? [mediaAssetToDto(asset)] : [];
+          })}
           onClose={() => setMediaLibraryOpen(false)}
-          onSelect={(asset) => {
-            addAsset(asset);
+          onConfirm={(assets) => {
+            onChange(assets.map((asset) => attachments.find((attachment) => attachment.mediaAssetId === asset.id) ?? taskAttachmentFromMediaAsset(asset)));
             setMediaLibraryOpen(false);
           }}
-          onUploadMediaAssets={onUploadMediaAssets}
-          selectFirstUploaded
-          selectLabel="添加"
           testId={`${testIdPrefix}-media-library-modal`}
           title="添加附件"
         />
@@ -16939,22 +16857,16 @@ function MediaImageFieldInput({
         </div>
       </div>
       {mediaLibraryOpen ? (
-        <MediaLibraryModal
-          accept="image/*"
-          canSelectAsset={isImageMediaAsset}
+        <MediaManagerModal
+          assetKind="image"
+          scopeMode="workspace"
+          selectionMode="single"
           description="选择图片作为当前字段，也可拖拽上传新图片并统一管理。"
-          disabled={!onUploadMediaAssets}
-          mediaAssets={mediaAssets}
           onClose={() => setMediaLibraryOpen(false)}
-          onDeleteMediaAsset={onDeleteMediaAsset}
-          onSelect={(asset) => {
-            onChange(mediaAssetDataUrl(asset));
+          onConfirm={(assets) => {
+            if (assets[0]) onChange(assets[0].contentUrl);
             setMediaLibraryOpen(false);
           }}
-          onUpdateMediaAsset={onUpdateMediaAsset}
-          onUploadMediaAssets={onUploadMediaAssets ?? (async () => [])}
-          selectFirstUploaded
-          selectLabel="使用"
           testId={testId ? `${testId}-media-library-modal` : "record-media-library-modal"}
           title={`${label}媒体库`}
         />
@@ -20196,21 +20108,16 @@ function CompanyLogoEditor({
         ) : null}
       </div>
       {mediaLibraryOpen ? (
-        <MediaLibraryModal
-          accept="image/*"
-          canSelectAsset={isImageMediaAsset}
+        <MediaManagerModal
+          assetKind="image"
+          scopeMode="workspace"
+          selectionMode="single"
           description="选择图片作为公司 Logo，也可拖拽上传新图片。"
-          mediaAssets={mediaAssets}
           onClose={() => setMediaLibraryOpen(false)}
-          onDeleteMediaAsset={onDeleteMediaAsset}
-          onSelect={(asset) => {
-            onChange(mediaAssetDataUrl(asset));
+          onConfirm={(assets) => {
+            if (assets[0]) onChange(assets[0].contentUrl);
             setMediaLibraryOpen(false);
           }}
-          onUpdateMediaAsset={onUpdateMediaAsset}
-          onUploadMediaAssets={onUploadMediaAssets}
-          selectFirstUploaded
-          selectLabel="使用"
           testId="company-logo-media-library-modal"
           title="Logo 媒体库"
         />
@@ -20264,21 +20171,16 @@ function ContactAvatarEditor({
         ) : null}
       </div>
       {mediaLibraryOpen ? (
-        <MediaLibraryModal
-          accept="image/*"
-          canSelectAsset={isImageMediaAsset}
+        <MediaManagerModal
+          assetKind="image"
+          scopeMode="workspace"
+          selectionMode="single"
           description="选择图片作为联系人头像，也可拖拽上传新图片。"
-          mediaAssets={mediaAssets}
           onClose={() => setMediaLibraryOpen(false)}
-          onDeleteMediaAsset={onDeleteMediaAsset}
-          onSelect={(asset) => {
-            onChange(mediaAssetDataUrl(asset));
+          onConfirm={(assets) => {
+            if (assets[0]) onChange(assets[0].contentUrl);
             setMediaLibraryOpen(false);
           }}
-          onUpdateMediaAsset={onUpdateMediaAsset}
-          onUploadMediaAssets={onUploadMediaAssets}
-          selectFirstUploaded
-          selectLabel="使用"
           testId="contact-avatar-media-library-modal"
           title="头像媒体库"
         />
@@ -21893,13 +21795,14 @@ function createTaskEditDraft(activity: Activity | null): TaskEditDraft {
   };
 }
 
-function taskAttachmentFromMediaAsset(asset: MediaAsset): ActivityAttachment {
+function taskAttachmentFromMediaAsset(asset: Pick<MediaAsset, "id" | "name" | "contentType" | "size"> | MediaAssetDto): ActivityAttachment {
   return {
     id: `${asset.id}-${Date.now()}`,
     mediaAssetId: asset.id,
     name: asset.name,
     contentType: asset.contentType,
-    size: asset.size
+    size: asset.size,
+    contentUrl: "contentUrl" in asset ? asset.contentUrl : undefined
   };
 }
 
@@ -21928,9 +21831,6 @@ function isTaskAttachment(value: unknown): value is TaskAttachment {
   return isActivityAttachment(value);
 }
 
-function isImageMediaAsset(asset: Pick<MediaAsset, "contentType">): boolean {
-  return asset.contentType.toLowerCase().startsWith("image/");
-}
 
 function mediaAssetExtension(name: string): string {
   const extension = name.split(".").pop()?.trim();
@@ -22778,10 +22678,6 @@ function formatBytes(value: number): string {
     return `${(value / 1024).toFixed(1)} KB`;
   }
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function mediaAssetDataUrl(asset: MediaAsset): string {
-  return asset.contentBase64 ? `data:${asset.contentType};base64,${asset.contentBase64}` : asset.contentUrl ?? `/api/media-assets/${encodeURIComponent(asset.id)}/content`;
 }
 
 async function readEmailAttachmentFile(file: File, onProgress?: (progress: number) => void): Promise<EmailAttachment> {

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Blocks, CalendarPlus, Columns3, Eye, FilePlus2, GripVertical, Image as ImageIcon, Redo2, Rows3, SeparatorHorizontal, Table2, TextCursorInput, Trash2, Undo2, XCircle } from "lucide-react";
 import type { MediaAsset } from "@/lib/crm/types";
-import { isImageMediaAsset, mediaAssetDataUrl } from "@/components/media-library";
+import { isImageMediaAsset, mediaAssetContentUrl } from "@/components/media-manager-modal";
 
 type JsonRecord = Record<string, unknown>;
 type Path = Array<string | number>;
@@ -139,7 +139,7 @@ export function DocumentTemplateVisualEditor({ value, onChange, mediaAssets = []
   }
 
   function selectImage(asset: MediaAsset) {
-    patchSelected({ image: mediaAssetDataUrl(asset), _mediaAssetId: asset.id, _mediaAssetName: asset.name });
+    patchSelected({ image: mediaAssetContentUrl(asset), _mediaAssetId: asset.id, _mediaAssetName: asset.name });
     setImagePickerOpen(false);
   }
 
@@ -260,7 +260,7 @@ export function DocumentTemplateVisualEditor({ value, onChange, mediaAssets = []
           <div className="pdf-image-picker">
             <div className="pdf-editor-properties-title"><strong>选择媒体库图片</strong><button type="button" onClick={() => setImagePickerOpen(false)}><XCircle size={16} /></button></div>
             <div className="pdf-image-picker-grid">
-              {mediaAssets.filter(isImageMediaAsset).map((asset) => <button key={asset.id} type="button" onClick={() => selectImage(asset)}><img alt={asset.name} src={mediaAssetDataUrl(asset)} /><span>{asset.name}</span></button>)}
+              {mediaAssets.filter(isImageMediaAsset).map((asset) => <button key={asset.id} type="button" onClick={() => selectImage(asset)}><img alt={asset.name} src={mediaAssetContentUrl(asset)} /><span>{asset.name}</span></button>)}
             </div>
             {!mediaAssets.some(isImageMediaAsset) ? <div className="empty-state">媒体库中暂无图片，请先在媒体库上传。</div> : null}
           </div>

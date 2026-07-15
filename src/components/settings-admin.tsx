@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, Bot, CheckCircle2, ClipboardList, Download, GitBran
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type KeyboardEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { KnowledgeBaseManager, type KnowledgeArticleDraft } from "@/components/knowledge-base-manager";
-import { isImageMediaAsset, MediaLibraryModal, mediaAssetDataUrl } from "@/components/media-library";
+import { MediaManagerModal, mediaAssetContentUrl, mediaAssetToDto } from "@/components/media-manager-modal";
 import { DocumentTemplateVisualEditor } from "@/components/document-template-visual-editor";
 import { permissionCatalog } from "@/lib/auth/permissions";
 import { getCurrencyDefinitions, normalizeCurrencyCode } from "@/lib/crm/currencies";
@@ -67,9 +67,6 @@ interface SettingsAdminProps {
   onSaveKnowledgeVectorSettings: (patch: Partial<Omit<KnowledgeVectorSettings, "workspaceId" | "updatedAt">>) => void;
   onVectorizeKnowledgeArticle: (articleId: string) => void;
   onVectorizeKnowledge: () => void;
-  onUploadCurrentUserAvatarAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
-  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
-  onDeleteMediaAsset: (asset: MediaAsset) => void;
 }
 
 type ObjectDraft = {
@@ -2062,9 +2059,6 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           onPasswordDraftChange={(patch) => setPasswordDraft((current) => ({ ...current, ...patch }))}
           onSaveProfile={() => runAction(saveCurrentUserProfile)}
           onSavePassword={() => runAction(saveCurrentUserPassword)}
-          onUploadAvatarAssets={props.onUploadCurrentUserAvatarAssets}
-          onUpdateMediaAsset={props.onUpdateMediaAsset}
-          onDeleteMediaAsset={props.onDeleteMediaAsset}
         />
       </div>
     );
@@ -2189,9 +2183,6 @@ export function SettingsAdmin(props: SettingsAdminProps) {
           onPasswordDraftChange={(patch) => setPasswordDraft((current) => ({ ...current, ...patch }))}
           onSaveProfile={() => runAction(saveCurrentUserProfile)}
           onSavePassword={() => runAction(saveCurrentUserPassword)}
-          onUploadAvatarAssets={props.onUploadCurrentUserAvatarAssets}
-          onUpdateMediaAsset={props.onUpdateMediaAsset}
-          onDeleteMediaAsset={props.onDeleteMediaAsset}
         />
       ) : null}
 
@@ -4628,10 +4619,7 @@ function ProfileSettingsPanel({
   onProfileDraftChange,
   onPasswordDraftChange,
   onSaveProfile,
-  onSavePassword,
-  onUploadAvatarAssets,
-  onUpdateMediaAsset,
-  onDeleteMediaAsset
+  onSavePassword
 }: {
   currentUser: User;
   role: Role;
@@ -4643,13 +4631,11 @@ function ProfileSettingsPanel({
   onPasswordDraftChange: (patch: Partial<PasswordDraft>) => void;
   onSaveProfile: () => void;
   onSavePassword: () => void;
-  onUploadAvatarAssets: (files: FileList | File[] | null) => Promise<MediaAsset[]>;
-  onUpdateMediaAsset: (assetId: string, patch: Partial<Pick<MediaAsset, "name" | "contentType" | "size" | "contentBase64">>) => void;
-  onDeleteMediaAsset: (asset: MediaAsset) => void;
 }) {
   const [mediaLibraryOpen, setMediaLibraryOpen] = useState(false);
+  const [selectedAvatarAsset, setSelectedAvatarAsset] = useState<MediaAssetDto>();
   const avatarAsset = profileDraft.avatarMediaAssetId ? mediaAssets.find((asset) => asset.id === profileDraft.avatarMediaAssetId) : undefined;
-  const avatarUrl = avatarAsset ? mediaAssetDataUrl(avatarAsset) : "";
+  const avatarUrl = selectedAvatarAsset?.id === profileDraft.avatarMediaAssetId ? selectedAvatarAsset.contentUrl : avatarAsset ? mediaAssetContentUrl(avatarAsset) : "";
   const passwordReady =
     Boolean(passwordDraft.currentPassword) &&
     passwordDraft.newPassword.length >= 8 &&
@@ -4681,7 +4667,7 @@ function ProfileSettingsPanel({
                 更换头像
               </button>
               {profileDraft.avatarMediaAssetId ? (
-                <button className="secondary-button" type="button" onClick={() => onProfileDraftChange({ avatarMediaAssetId: "" })} disabled={isPending}>
+                <button className="secondary-button" type="button" onClick={() => { setSelectedAvatarAsset(undefined); onProfileDraftChange({ avatarMediaAssetId: "" }); }} disabled={isPending}>
                   <XCircle size={15} />
                   清除
                 </button>
@@ -4743,20 +4729,20 @@ function ProfileSettingsPanel({
       </section>
 
       {mediaLibraryOpen ? (
-        <MediaLibraryModal
-          accept="image/*"
-          canSelectAsset={isImageMediaAsset}
+        <MediaManagerModal
+          assetKind="image"
+          scopeMode="workspace"
+          selectionMode="single"
           description="选择图片作为个人头像，也可拖拽上传新图片。"
-          mediaAssets={mediaAssets}
+          initialSelected={selectedAvatarAsset ? [selectedAvatarAsset] : avatarAsset ? [mediaAssetToDto(avatarAsset)] : []}
           onClose={() => setMediaLibraryOpen(false)}
-          onSelect={(asset) => {
-            onProfileDraftChange({ avatarMediaAssetId: asset.id });
+          onConfirm={(assets) => {
+            if (assets[0]) {
+              setSelectedAvatarAsset(assets[0]);
+              onProfileDraftChange({ avatarMediaAssetId: assets[0].id });
+            }
             setMediaLibraryOpen(false);
           }}
-          onDeleteMediaAsset={onDeleteMediaAsset}
-          onUpdateMediaAsset={onUpdateMediaAsset}
-          onUploadMediaAssets={onUploadAvatarAssets}
-          selectLabel="使用"
           testId="profile-avatar-media-library-modal"
           title="头像媒体库"
         />
