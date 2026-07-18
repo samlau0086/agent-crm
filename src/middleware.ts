@@ -1,8 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { shouldBlockCrossSiteMutation } from "@/lib/security/csrf";
 import { applySecurityHeaders } from "@/lib/security/headers";
+import { isWorkflowAutomationApiPath, isWorkflowAutomationEnabled } from "@/lib/workflows/availability";
 
 export function middleware(request: NextRequest) {
+  if (!isWorkflowAutomationEnabled() && isWorkflowAutomationApiPath(request.nextUrl.pathname)) {
+    const response = NextResponse.json({ error: "Workflow automation is currently unavailable", code: "MODULE_DISABLED" }, { status: 404 });
+    applySecurityHeaders(response.headers);
+    return response;
+  }
+
   if (
     shouldBlockCrossSiteMutation({
       method: request.method,

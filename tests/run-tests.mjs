@@ -101,6 +101,7 @@ import { buildPaymentTermSchedule, getPaymentTermDefinitions } from "../src/lib/
 import { salesDocumentNextObjectKey } from "../src/lib/crm/quotes.ts";
 import { generateWorkflowWithAiDesigner } from "../src/lib/workflows/ai-designer.ts";
 import { buildWorkflowDraftFromGoal, graphToLegacyWorkflow, legacyWorkflowToGraph, workflowMatchesEvent } from "../src/lib/workflows/core.ts";
+import { isWorkflowAutomationApiPath, isWorkflowAutomationEnabled } from "../src/lib/workflows/availability.ts";
 import { buildImportJobObservability } from "../src/lib/crm/import-observability.ts";
 import { parseAuditLogQuery } from "../src/lib/crm/audit-query.ts";
 import { hasRecordPatchChanges, isContactMethodsAdditionOnly, previousRecordApprovalPatch, splitRecordApprovalPatch, stripRecordApprovalMetadata } from "../src/lib/crm/record-approval.ts";
@@ -15946,6 +15947,43 @@ function restoreEnv(name, value) {
   }
   process.env[name] = value;
 }
+
+await run("workflow automation is disabled by default behind a reversible module flag", async () => {
+  assert.equal(isWorkflowAutomationEnabled({}), false);
+  assert.equal(isWorkflowAutomationEnabled({ WORKFLOW_AUTOMATION_ENABLED: "true" }), true);
+  assert.equal(isWorkflowAutomationEnabled({ WORKFLOW_AUTOMATION_ENABLED: " TRUE " }), true);
+  assert.equal(isWorkflowAutomationApiPath("/api/workflows"), true);
+  assert.equal(isWorkflowAutomationApiPath("/api/workflows/workflow-1/test"), true);
+  assert.equal(isWorkflowAutomationApiPath("/api/workflow-approvals/approval-1/approve"), true);
+  assert.equal(isWorkflowAutomationApiPath("/api/email/threads"), false);
+
+  const previous = process.env.WORKFLOW_AUTOMATION_ENABLED;
+  delete process.env.WORKFLOW_AUTOMATION_ENABLED;
+  let contextLoaded = false;
+  try {
+    const result = await processQueuedJobEnvelope(
+      {
+        type: "workflow_run",
+        workspaceId: "workspace-default",
+        userId: "user-admin",
+        payload: { event: "record.updated", data: {} },
+        enqueuedAt: new Date().toISOString(),
+        attempts: 0
+      },
+      {},
+      async () => {
+        contextLoaded = true;
+        throw new Error("disabled workflow jobs must not load a context");
+      }
+    );
+    assert.equal(result.processed, true);
+    assert.equal(result.jobType, "workflow_run");
+    assert.equal(contextLoaded, false);
+  } finally {
+    if (previous === undefined) delete process.env.WORKFLOW_AUTOMATION_ENABLED;
+    else process.env.WORKFLOW_AUTOMATION_ENABLED = previous;
+  }
+});
 
 await run("discussion targets and cursors are stable and validated", () => {
   assert.equal(buildDiscussionTargetKey({ type: "record", objectKey: "custom_records", targetId: "record-1" }), "record:custom_records:record-1");

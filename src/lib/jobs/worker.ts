@@ -8,6 +8,7 @@ import { summarizeEmailThreadWithAi } from "@/lib/email/summarization";
 import { translateEmailMessage } from "@/lib/email/translation";
 import { dequeueJob, enqueueJob, getDeadLetterQueueName, getJobQueueName } from "@/lib/jobs/redis-queue";
 import { buildFailedJobEnvelope, getMaxJobAttemptsForEnvelope } from "@/lib/jobs/worker-policy";
+import { isWorkflowAutomationEnabled } from "@/lib/workflows/availability";
 
 export interface JobWorkerResult {
   processed: boolean;
@@ -81,6 +82,9 @@ async function processDueQueuedEmailSend(repository: PrismaCrmRepository): Promi
 }
 
 async function processDueWorkflowAutomation(repository: PrismaCrmRepository): Promise<JobWorkerResult | undefined> {
+  if (!isWorkflowAutomationEnabled()) {
+    return undefined;
+  }
   const userId = process.env.WORKFLOW_AUTOMATION_USER_ID || process.env.EMAIL_SYNC_USER_ID || "user-admin";
   let context: Awaited<ReturnType<typeof getRequestContextByUserId>>;
   try {
@@ -104,6 +108,12 @@ export async function processQueuedJobEnvelope(
   repository: PrismaCrmRepository = getCrmRepository(),
   loadContext: (userId: string) => Promise<Awaited<ReturnType<typeof getRequestContextByUserId>>> = getRequestContextByUserId
 ): Promise<JobWorkerResult> {
+  if (
+    !isWorkflowAutomationEnabled() &&
+    (envelope.type === "workflow_run" || envelope.type === "workflow_resume_scan" || envelope.type === "workflow_schedule_scan")
+  ) {
+    return { processed: true, jobType: envelope.type };
+  }
   const context = await loadContext(envelope.userId);
   if (context.workspaceId !== envelope.workspaceId) {
     throw new Error("Queued job workspace does not match the requesting user");

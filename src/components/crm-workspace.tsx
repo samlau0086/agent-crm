@@ -216,6 +216,7 @@ interface CrmWorkspaceProps {
   workflows: WorkflowDefinition[];
   workflowRuns: WorkflowRun[];
   workflowApprovals: WorkflowActionApproval[];
+  workflowAutomationEnabled: boolean;
 }
 
 const recordListRequestTimeoutMs = 15_000;
@@ -2648,8 +2649,8 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
     [activeObject?.key, filteredRecords, objectRecords, records, selectedRecordId]
   );
   const selectedRecordWorkflows = useMemo(
-    () => (selectedRecord ? props.workflows.filter((workflow) => isWorkflowScopedToRecord(workflow, selectedRecord)) : []),
-    [props.workflows, selectedRecord]
+    () => (props.workflowAutomationEnabled && selectedRecord ? props.workflows.filter((workflow) => isWorkflowScopedToRecord(workflow, selectedRecord)) : []),
+    [props.workflowAutomationEnabled, props.workflows, selectedRecord]
   );
   const selectedRecordSmartReminders = useMemo(
     () =>
@@ -6572,7 +6573,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           ) : <div className="record-detail-rail-empty">暂无关联记录</div>}
         </section>
 
-        <section className="record-detail-rail-card" data-testid="record-detail-automation-card">
+        {props.workflowAutomationEnabled ? <section className="record-detail-rail-card" data-testid="record-detail-automation-card">
           <div className="stage-header">
             <div>
               <strong>自动化跟进</strong>
@@ -6597,7 +6598,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
           ) : (
             <div className="empty-state compact">暂无绑定到此记录的自动化流程。</div>
           )}
-        </section>
+        </section> : null}
       </>
     );
   }
@@ -6690,7 +6691,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
         </div>
 
         <nav className="nav-list" aria-label="主导航">
-          {navigationItems.map((item) => {
+          {navigationItems.filter((item) => props.workflowAutomationEnabled || item.key !== "automation").map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -8448,7 +8449,7 @@ export function CrmWorkspace(props: CrmWorkspaceProps) {
             discussionUnreadCounts={discussionUnreadCounts}
           />
         )}
-        {activeNav === "automation" && (
+        {props.workflowAutomationEnabled && activeNav === "automation" && (
           <AutomationWorkspace
             workflows={props.workflows}
             workflowRuns={props.workflowRuns}

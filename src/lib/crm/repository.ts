@@ -14,6 +14,7 @@ import { canManageAllRecords, requirePermission } from "@/lib/auth/rbac";
 import { destroyOtherSessionsForUser, destroySessionsForUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { getBackgroundJobExecutor } from "@/lib/jobs/executor";
+import { isWorkflowAutomationEnabled } from "@/lib/workflows/availability";
 import { ApiError } from "@/lib/api-error";
 import { createMediaStorageKey, deleteMediaObject, putMediaObject, validateMediaFile } from "@/lib/media/storage";
 import { buildCsv } from "@/lib/crm/csv";
@@ -8469,11 +8470,13 @@ export class PrismaCrmRepository {
       .catch((error) => {
         console.error(`Failed to enqueue webhook event ${event}`, error);
       });
-    void getBackgroundJobExecutor(this)
-      .runWorkflowJob(context, { event, data })
-      .catch((error) => {
-        console.error(`Failed to enqueue workflow event ${event}`, error);
-      });
+    if (isWorkflowAutomationEnabled()) {
+      void getBackgroundJobExecutor(this)
+        .runWorkflowJob(context, { event, data })
+        .catch((error) => {
+          console.error(`Failed to enqueue workflow event ${event}`, error);
+        });
+    }
     this.emitNotificationEvent(context, event, data);
   }
 

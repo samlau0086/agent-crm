@@ -11,6 +11,7 @@ services:
       JOB_QUEUE_NAME: crm:jobs
       JOB_DEAD_LETTER_QUEUE_NAME: crm:jobs:dead
       JOB_MAX_ATTEMPTS: "3"
+      WORKFLOW_AUTOMATION_ENABLED: ${WORKFLOW_AUTOMATION_ENABLED:-false}
       AI_PROVIDER: openai-compatible
       AI_BASE_URL: https://api.openai.com/v1
       AI_API_KEY: ${AI_API_KEY:-}
@@ -74,6 +75,7 @@ services:
       JOB_DEAD_LETTER_QUEUE_NAME: crm:jobs:dead
       JOB_MAX_ATTEMPTS: "3"
       JOB_WORKER_POLL_MS: "2000"
+      WORKFLOW_AUTOMATION_ENABLED: ${WORKFLOW_AUTOMATION_ENABLED:-false}
       AI_PROVIDER: openai-compatible
       AI_BASE_URL: https://api.openai.com/v1
       AI_API_KEY: ${AI_API_KEY:-}

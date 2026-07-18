@@ -1,10 +1,11 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { CrmWorkspace } from "@/components/crm-workspace";
 import { requireAppContext } from "@/lib/api";
 import { getCrmRepository } from "@/lib/crm/repository";
 import type { CrmRecord, FieldDefinition, RelationDefinition } from "@/lib/crm/types";
 import { isSalesDocumentRouteObjectKey, resolveCrmRoute } from "@/lib/crm/navigation";
 import { listBackupFiles } from "@/lib/ops/backups";
+import { isWorkflowAutomationEnabled } from "@/lib/workflows/availability";
 
 type CrmPageProps = {
   moduleSegments?: string[];
@@ -23,6 +24,11 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
 
   if (!route) {
     notFound();
+  }
+
+  const workflowAutomationEnabled = isWorkflowAutomationEnabled();
+  if (!workflowAutomationEnabled && route.navKey === "automation") {
+    redirect("/dashboard");
   }
 
   const relations = await repository.listRelationDefinitions(context);
@@ -57,7 +63,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
   const importJobs = context.role.permissions.includes("crm.import") ? await repository.listImportJobs(context) : [];
   const importPresets = context.role.permissions.includes("crm.import") ? await repository.listImportPresets(context) : [];
   const importJobQueueSummary = context.role.permissions.includes("crm.admin") ? await repository.getImportJobQueueSummary(context) : undefined;
-  const workflows = context.role.permissions.some((permission) => permission === "workflow.read" || permission === "workflow.write" || permission === "workflow.admin" || permission === "crm.admin")
+  const workflows = workflowAutomationEnabled && context.role.permissions.some((permission) => permission === "workflow.read" || permission === "workflow.write" || permission === "workflow.admin" || permission === "crm.admin")
     ? await repository.listWorkflows(context)
     : [];
   const workflowRuns = workflows.length > 0 ? await repository.listWorkflowRuns(context) : [];
@@ -133,6 +139,7 @@ export async function CrmPage({ moduleSegments = [], searchParams = {} }: CrmPag
       workflows={workflows}
       workflowRuns={workflowRuns}
       workflowApprovals={workflowApprovals}
+      workflowAutomationEnabled={workflowAutomationEnabled}
     />
   );
 }
